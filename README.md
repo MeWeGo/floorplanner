@@ -54,8 +54,10 @@
 
 ### 🚪 Objects
 - **7 door / window types** (single, double, sliding, opening, window, wide window, small window) that snap onto walls with hinge-side and swing-direction controls.
+- **Click a door to open / close it (90°)** — works in 2D and in the 3D view; the swing stays visible as a dashed arc.
 - **~48 furniture & structure items** in 6 categories with search (living, bedroom, kitchen, bath, office, structure & outdoor — stairs, columns, trees, pool…).
 - Furniture **magnets to walls** and rotates to face the room.
+- **Group furniture** — select 2+ items and press **Group** (or `Ctrl+G`); grouped items select and move together, `Ctrl+Shift+G` ungroups.
 - Resize / rotate with on-canvas handles; edit numeric properties in the side panel.
 - Dimension lines, text labels, and live wall-length labels.
 
@@ -63,7 +65,7 @@
 - **Multiple floors** — add, duplicate, rename, delete; the floor below is shown faintly for alignment.
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
 - Layer visibility toggles, floor patterns (wood, tile, carpet), room colors.
-- Unlimited **undo / redo**, copy / paste / duplicate, box & multi-select.
+- Unlimited **undo / redo**, copy / paste / duplicate, box & multi-select with a **box-select scope** (All / Walls / Furniture) in the footer.
 - Starter templates: Blank · Studio 1+0 · 2+1 Apartment · Office.
 
 ### 💾 Storage — fully local
