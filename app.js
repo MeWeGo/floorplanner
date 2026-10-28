@@ -316,16 +316,17 @@ function fit() {
 const isLight = () => document.documentElement.dataset.theme === 'light';
 function pal(forceLight = ui.exporting) {
   const lt = forceLight || isLight();
+  const paper = forceLight ? '#ffffff' : '#faf8f5';
   return lt ? {
-    lt: true, bg: '#ffffff', wall: '#1f2937', stroke: '#475569', furnStroke: '#475569',
-    gMin: '#cbd5e1', gMaj: '#94a3b8', dotMaj: '#64748b',
-    text: '#1e293b', sub: '#475569', halo: '#ffffff',
-    dim: '#0f766e', glass: '#e0f2fe', swing: '#94a3b8',
+    lt: true, bg: paper, wall: '#181d24', stroke: '#475569', furnStroke: '#334155',
+    gMin: forceLight ? '#cbd5e1' : '#dcd6ca', gMaj: forceLight ? '#94a3b8' : '#b8b0a0', dotMaj: '#64748b',
+    text: '#151921', sub: '#475569', halo: paper, accent: '#1d4ed8',
+    dim: '#0f766e', glass: '#e0f2fe', swing: '#8696ab',
     roomOp: 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280'
   } : {
-    lt: false, bg: '#0b1220', wall: '#cbd5e1', stroke: '#94a3b8', furnStroke: '#1e293b',
-    gMin: '#1e293b', gMaj: '#334155', dotMaj: '#475569',
-    text: '#f1f5f9', sub: '#cbd5e1', halo: '#0b1220',
+    lt: false, bg: '#0b0f14', wall: '#d5dee8', stroke: '#94a3b8', furnStroke: '#161e29',
+    gMin: '#161f2c', gMaj: '#243244', dotMaj: '#475569',
+    text: '#e6edf5', sub: '#b8c5d6', halo: '#0b0f14', accent: '#d99b26',
     dim: '#2dd4bf', glass: '#0369a1', swing: '#64748b',
     roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af'
   };
@@ -751,31 +752,31 @@ function startPlace(type, def) {
 
 /* ---------- Önizleme ---------- */
 function drawPreview() {
-  const C = pal(), g = $('#gPv'), z = view.z, cur = ui.cur; let s = '';
+  const C = pal(), ac = C.accent, g = $('#gPv'), z = view.z, cur = ui.cur; let s = '';
   const lbl = (x, y, t) => `<text x="${x}" y="${y}" font-size="${13 / z}" font-weight="700" fill="${C.text}" stroke="${C.halo}" stroke-width="${3.5 / z}" paint-order="stroke" text-anchor="middle" pointer-events="none">${t}</text>`;
   if (cur && cur.hit === 'end') s += `<circle cx="${cur.x}" cy="${cur.y}" r="${8 / z}" fill="none" stroke="#10b981" stroke-width="${2 / z}"/>`;
   if (tool === 'wall' && cur) {
     if (ui.draw) {
       const a = ui.draw.start;
-      s += `<line x1="${a.x}" y1="${a.y}" x2="${cur.x}" y2="${cur.y}" stroke="#6366f1" stroke-opacity=".6" stroke-width="${P.wallT}" stroke-linecap="square"/>`;
+      s += `<line x1="${a.x}" y1="${a.y}" x2="${cur.x}" y2="${cur.y}" stroke="${ac}" stroke-opacity=".65" stroke-width="${P.wallT}" stroke-linecap="square"/>`;
       const L = dist(a, cur), ang = (Math.atan2(cur.y - a.y, cur.x - a.x) * 180 / Math.PI + 360) % 360;
       s += lbl((a.x + cur.x) / 2, (a.y + cur.y) / 2 - P.wallT / 2 - 8 / z, ui.typed ? `[${ui.typed} cm]` : `${fmtLen(L)}  •  ${Math.round(ang)}°`);
-      s += `<circle cx="${a.x}" cy="${a.y}" r="${4 / z}" fill="#6366f1"/>`;
-    } else s += `<circle cx="${cur.x}" cy="${cur.y}" r="${4 / z}" fill="#6366f1"/>`;
+      s += `<circle cx="${a.x}" cy="${a.y}" r="${4 / z}" fill="${ac}"/>`;
+    } else s += `<circle cx="${cur.x}" cy="${cur.y}" r="${4 / z}" fill="${ac}"/>`;
   }
   const d = ui.drag;
   if (d && d.type === 'rect' && cur) {
     const x0 = Math.min(d.start.x, cur.x), y0 = Math.min(d.start.y, cur.y), w = Math.abs(cur.x - d.start.x), h = Math.abs(cur.y - d.start.y);
-    s += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="#6366f1" fill-opacity=".1" stroke="#6366f1" stroke-width="${P.wallT}" stroke-opacity=".5"/>`;
+    s += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="${ac}" fill-opacity=".1" stroke="${ac}" stroke-width="${P.wallT}" stroke-opacity=".55"/>`;
     s += lbl(x0 + w / 2, y0 - P.wallT / 2 - 8 / z, `${fmtLen(w)} × ${fmtLen(h)} = ${fmtArea(w * h)}`);
   }
   if (d && d.type === 'box') {
-    s += `<rect x="${Math.min(d.start.x, d.cur.x)}" y="${Math.min(d.start.y, d.cur.y)}" width="${Math.abs(d.cur.x - d.start.x)}" height="${Math.abs(d.cur.y - d.start.y)}" fill="#6366f1" fill-opacity=".1" stroke="#6366f1" stroke-width="${1.5 / z}" stroke-dasharray="${5 / z}"/>`;
+    s += `<rect x="${Math.min(d.start.x, d.cur.x)}" y="${Math.min(d.start.y, d.cur.y)}" width="${Math.abs(d.cur.x - d.start.x)}" height="${Math.abs(d.cur.y - d.start.y)}" fill="${ac}" fill-opacity=".1" stroke="${ac}" stroke-width="${1.5 / z}" stroke-dasharray="${5 / z}"/>`;
   }
   if (tool === 'poly' && ui.polyPts && cur) {
     const pts = [...ui.polyPts, cur];
-    s += `<polygon points="${pts.map(p => p.x + ',' + p.y).join(' ')}" fill="#6366f1" fill-opacity=".12" stroke="#6366f1" stroke-width="${2 / z}"/>`;
-    ui.polyPts.forEach(p => s += `<circle cx="${p.x}" cy="${p.y}" r="${4 / z}" fill="#6366f1"/>`);
+    s += `<polygon points="${pts.map(p => p.x + ',' + p.y).join(' ')}" fill="${ac}" fill-opacity=".12" stroke="${ac}" stroke-width="${2 / z}"/>`;
+    ui.polyPts.forEach(p => s += `<circle cx="${p.x}" cy="${p.y}" r="${4 / z}" fill="${ac}"/>`);
     if (pts.length > 2) s += lbl(cur.x, cur.y - 14 / z, fmtArea(polyArea(pts)));
   }
   if (tool === 'dim' && ui.dimStart && cur) s += `<line x1="${ui.dimStart.x}" y1="${ui.dimStart.y}" x2="${cur.x}" y2="${cur.y}" stroke="#0f766e" stroke-width="${2 / z}" stroke-dasharray="${5 / z}"/>` + lbl((ui.dimStart.x + cur.x) / 2, (ui.dimStart.y + cur.y) / 2 - 8 / z, fmtLen(dist(ui.dimStart, cur)));
@@ -1485,7 +1486,7 @@ function resize3D() { const el = $('#v3d'); T3.r.setSize(el.clientWidth, el.clie
 function loop3D() { if (!T3 || !T3.run) return; requestAnimationFrame(loop3D); T3.ctl.update(); T3.r.render(T3.scene, T3.cam); }
 function build3D() {
   const lt = isLight(), S = T3.scene; while (S.children.length) S.remove(S.children[0]);
-  S.background = new THREE.Color(lt ? 0xdbe5f1 : 0x0b1220);
+  S.background = new THREE.Color(lt ? 0xe8e3d9 : 0x0b0f14);
   S.add(new THREE.HemisphereLight(0xffffff, lt ? 0x667788 : 0x1e293b, lt ? 0.55 : 0.65));
   const dl = new THREE.DirectionalLight(0xffffff, 0.45); dl.position.set(600, 1500, 400); S.add(dl);
   const matCache = {}, mat = (c, o) => { const k = c + (o || ''); return matCache[k] || (matCache[k] = new THREE.MeshLambertMaterial({ color: c, ...(o ? { transparent: true, opacity: o } : {}), side: THREE.DoubleSide })); };
@@ -1497,11 +1498,11 @@ function build3D() {
   let elev = 0, all = null;
   P.floors.forEach(f => {
     const b = contentBounds(f); if (b) all = all ? { x0: Math.min(all.x0, b.x0), y0: Math.min(all.y0, b.y0), x1: Math.max(all.x1, b.x1), y1: Math.max(all.y1, b.y1) } : b;
-    if (b) box(S, b.x1 - b.x0 + 200, 20, b.y1 - b.y0 + 200, lt ? 0xe2e8f0 : 0x1e293b, (b.x0 + b.x1) / 2, elev - 10, (b.y0 + b.y1) / 2);
+    if (b) box(S, b.x1 - b.x0 + 200, 20, b.y1 - b.y0 + 200, lt ? 0xded8cc : 0x171e29, (b.x0 + b.x1) / 2, elev - 10, (b.y0 + b.y1) / 2);
     f.rooms.forEach(r => { const sh = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y))); const m = new THREE.Mesh(new THREE.ShapeGeometry(sh), mat(r.color, lt ? undefined : 0.78)); m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6; S.add(m); });
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, g = new THREE.Group(); g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
-      const seg = (s, e, y0, y1) => { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, lt ? 0xf8fafc : 0xe2e8f0, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); };
+      const seg = (s, e, y0, y1) => { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, lt ? 0xfaf8f5 : 0xe2e8f0, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); };
       const ops = f.ops.filter(o => o.wall === w.id).sort((a, c) => a.d - c.d); let pos = 0;
       ops.forEach(o => {
         const s = Math.max(pos, o.d - o.w / 2), e = Math.min(L, o.d + o.w / 2); seg(pos, s, 0, H);
@@ -1526,7 +1527,7 @@ function build3D() {
   });
   if (!all) all = { x0: 0, y0: 0, x1: 1000, y1: 700 };
   const cx = (all.x0 + all.x1) / 2, cz = (all.y0 + all.y1) / 2, sz = Math.max(all.x1 - all.x0, all.y1 - all.y0, 400);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xc7d2c0 : 0x111c33)); ground.rotation.x = -Math.PI / 2; ground.position.y = -21; S.add(ground);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xd8d2c5 : 0x11161e)); ground.rotation.x = -Math.PI / 2; ground.position.y = -21; S.add(ground);
   T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); T3.ctl.update();
 }
 
