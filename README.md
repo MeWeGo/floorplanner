@@ -38,6 +38,7 @@
 - **Room-from-rectangle** tool (4 walls + room in one drag).
 - **Automatic room detection** — click inside any closed area and get its polygon, area (m²) and perimeter.
 - **Polygon room** tool for irregular spaces.
+- **Adjustable-angle (hinged) walls** — fix a wall at either endpoint (`Point A` or `Point B`), define **3 (or any number of) angle positions**, add or delete positions, adjust angles via the on-canvas rotation handle (`wrot`) or numeric inputs, and **click the wall in 2D or 3D** to cycle through `Position 1 → Position 2 → Position 3`.
 - Wall endpoints stay **connected** when you drag a wall or a corner.
 
 ### 🧲 Grids & Snapping

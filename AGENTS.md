@@ -61,7 +61,7 @@ P = {
 
 Floor = {
   "id": "…", "name": "Zemin Kat",
-  "walls":  [ { id, a:{x,y}, b:{x,y}, t, h } ],
+  "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
   "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1 } ],   // doors & windows
   "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label } ],
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet", pts:[{x,y},…] } ],
@@ -72,7 +72,8 @@ Floor = {
 
 Key semantics:
 
-- **Openings (`ops`)** are *parametric on a wall*: `d` = distance in cm from the wall's `a` end to the opening's **centre**. Moving/resizing a wall moves its openings automatically. Deleting a wall deletes its openings (`deleteIds`).
+- **Adjustable-angle (hinged) walls:** any wall may have `pivot` (`'a'` default or `'b'`) as its fixed point, `angles` (array of preset angles in degrees `0..360`), and `posIdx` (active position index). Clicking a hinged wall in 2D (`pointerup` without drag) or 3D (`Raycaster`) cycles `posIdx` (`1 → 2 → 3 → 1`) via `cycleWallPos(w)`. Dragging the `wrot` handle rotates the free end around `w[wallPivot(w)]` at constant length and updates `w.angles[w.posIdx]`.
+- **Openings (`ops`)** are *parametric on a wall*: `d` = distance in cm from the wall's `a` end to the opening's **centre**. Moving/resizing/rotating a wall moves its openings automatically. Deleting a wall deletes its openings (`deleteIds`).
 - `op.type` ∈ `door | double | slide | arch | window`. `side` (+1/−1) = which side the door swings to (local +Y = wall normal `(-uy, ux)`); `flip` mirrors the hinge.
 - **Furniture** `k` ∈ `rect | round | stairs | bed | sofa` selects the 2D/3D shape. `rot` is degrees, clockwise on screen. "Back" of an item is local −Y (used by `magnet()`).
 - **Rooms** are independent polygons — they do **not** follow walls when walls move. `redetect` in the room panel re-runs `detectRoom`.

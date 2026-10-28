@@ -123,6 +123,29 @@ function segProj(p, a, b) {
 }
 const wLen = w => dist(w.a, w.b);
 const wAng = w => Math.atan2(w.b.y - w.a.y, w.b.x - w.a.x);
+const wallPivot = w => w.pivot === 'b' ? 'b' : 'a';
+const wallFree = w => w.pivot === 'b' ? 'a' : 'b';
+function wallDeg(w) {
+  const pv = w[wallPivot(w)], fr = w[wallFree(w)];
+  const d = Math.atan2(fr.y - pv.y, fr.x - pv.x) * 180 / Math.PI;
+  return Math.round(((d % 360) + 360) % 360 * 10) / 10;
+}
+function setWallDeg(w, deg, syncPos = false) {
+  const L = wLen(w) || 100, pv = w[wallPivot(w)], fk = wallFree(w);
+  const norm = Math.round((((+deg || 0) % 360) + 360) % 360 * 10) / 10;
+  const rad = norm * Math.PI / 180;
+  w[fk] = { x: Math.round((pv.x + Math.cos(rad) * L) * 100) / 100, y: Math.round((pv.y + Math.sin(rad) * L) * 100) / 100 };
+  if (syncPos && Array.isArray(w.angles) && w.angles.length) {
+    const idx = clamp(w.posIdx ?? 0, 0, w.angles.length - 1);
+    w.posIdx = idx; w.angles[idx] = norm;
+  }
+}
+function cycleWallPos(w) {
+  if (!Array.isArray(w.angles) || w.angles.length < 2) return false;
+  w.posIdx = ((w.posIdx ?? 0) + 1) % w.angles.length;
+  setWallDeg(w, w.angles[w.posIdx], false);
+  return true;
+}
 function polyArea(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; s += p.x * q.y - q.x * p.y; } return Math.abs(s) / 2; }
 function polyCentroid(pts) {
   let a = 0, cx = 0, cy = 0;
@@ -379,8 +402,32 @@ function roomSvg(r, live) {
   return [s, lab];
 }
 function wallSvg(w, live) {
-  const C = pal();
-  let s = `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
+  const C = pal(); let s = '';
+  const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
+  if (hasPos) {
+    const pv = w[wallPivot(w)], L = wLen(w), curIdx = clamp(w.posIdx ?? 0, 0, w.angles.length - 1), fs = clamp(11 / view.z, 8, 24);
+    const rArc = Math.min(L * 0.4, 55);
+    if (rArc > 12) s += `<circle cx="${pv.x}" cy="${pv.y}" r="${rArc}" fill="none" stroke="${C.accent}" stroke-opacity="0.28" stroke-width="1.4" stroke-dasharray="4 4" pointer-events="none"/>`;
+    w.angles.forEach((ang, idx) => {
+      const rad = ang * Math.PI / 180, gx = pv.x + Math.cos(rad) * L, gy = pv.y + Math.sin(rad) * L;
+      if (idx !== curIdx) {
+        s += `<line x1="${pv.x}" y1="${pv.y}" x2="${gx}" y2="${gy}" stroke="${C.accent}" stroke-opacity="0.32" stroke-width="${Math.max(2, w.t * 0.28)}" stroke-dasharray="7 5" stroke-linecap="round" pointer-events="none"/>`;
+        s += `<circle cx="${gx}" cy="${gy}" r="${Math.max(4, 5 / view.z)}" fill="${C.bg}" stroke="${C.accent}" stroke-width="${1.5 / view.z}" stroke-opacity="0.7" pointer-events="none"/>`;
+      }
+      const lx = pv.x + Math.cos(rad) * (L + 14 / view.z), ly = pv.y + Math.sin(rad) * (L + 14 / view.z);
+      s += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" font-size="${fs}" font-weight="700" fill="${idx === curIdx ? C.accent : C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" pointer-events="none">${idx + 1}</text>`;
+    });
+  }
+  s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
+  if (hasPos) {
+    const pv = w[wallPivot(w)], curIdx = clamp(w.posIdx ?? 0, 0, w.angles.length - 1);
+    const pr = Math.max(w.t * 0.46, 6 / view.z);
+    s += `<circle cx="${pv.x}" cy="${pv.y}" r="${pr}" fill="${C.bg}" stroke="${C.accent}" stroke-width="${Math.max(2, 2.2 / view.z)}" pointer-events="none"/><circle cx="${pv.x}" cy="${pv.y}" r="${pr * 0.38}" fill="${C.accent}" pointer-events="none"/>`;
+    if (live) {
+      const mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2, fs = clamp(11 / view.z, 8, 22), bw = fs * 3.1, bh = fs * 1.45;
+      s += `<g data-id="${w.id}" transform="translate(${mx} ${my})" style="cursor:pointer"><rect x="${-bw / 2}" y="${-bh / 2}" width="${bw}" height="${bh}" rx="${bh / 2}" fill="${C.bg}" stroke="${C.accent}" stroke-width="${1.5 / view.z}"/><text text-anchor="middle" dominant-baseline="central" font-size="${fs}" font-weight="700" fill="${C.accent}">↻ ${curIdx + 1}/${w.angles.length}</text></g>`;
+    }
+  }
   if (live) s += `<line data-id="${w.id}" x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="transparent" stroke-width="${Math.max(w.t, 12 / view.z)}" pointer-events="stroke" style="cursor:pointer"/>`;
   return s;
 }
@@ -494,7 +541,12 @@ function handleSvg() {
   }
   if (os.length === 1) {
     const { kind, o } = os[0];
-    if (kind === 'wall') s += hnd(o.a.x, o.a.y, 'wa', 'move') + hnd(o.b.x, o.b.y, 'wb', 'move');
+    if (kind === 'wall') {
+      const pv = o[wallPivot(o)], fr = o[wallFree(o)], L = wLen(o) || 1, ux = (fr.x - pv.x) / L, uy = (fr.y - pv.y) / L;
+      const rx = fr.x + ux * (28 / z), ry = fr.y + uy * (28 / z);
+      s += `<line x1="${fr.x}" y1="${fr.y}" x2="${rx}" y2="${ry}" stroke="#f59e0b" stroke-width="${1.5 / z}" pointer-events="none"/>`
+        + hnd(o.a.x, o.a.y, 'wa', 'move') + hnd(o.b.x, o.b.y, 'wb', 'move') + hnd(rx, ry, 'wrot', 'grab', 'circle');
+    }
     if (kind === 'room') o.pts.forEach((p, i) => s += hnd(p.x, p.y, 'v' + i, 'move'));
     if (kind === 'dim') {
       const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, off = o.off ?? 40;
@@ -867,6 +919,7 @@ cv.addEventListener('pointerdown', e => {
         if (e.shiftKey) { sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]; }
         else if (!sel.includes(id)) sel = [id];
         renderProps(); startMove(raw);
+        if (ui.drag) ui.drag.clickedId = id;
       } else { if (!e.shiftKey) sel = []; ui.drag = { type: 'box', start: raw, cur: raw, moved: false }; renderProps(); }
       render(); return;
     }
@@ -969,7 +1022,19 @@ cv.addEventListener('pointerup', e => {
     }
     refresh(); return;
   }
-  if (d.type === 'move' || d.type === 'handle') { if (d.moved) commit(); refresh(); }
+  if (d.type === 'move' || d.type === 'handle') {
+    if (!d.moved && d.type === 'move' && d.clickedId && !e.shiftKey) {
+      const fd = find(d.clickedId);
+      if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
+        cycleWallPos(fd.o);
+        commit(); refresh();
+        toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
+        return;
+      }
+    }
+    if (d.moved) commit();
+    refresh();
+  }
 });
 
 /* ---------- Taşıma ---------- */
@@ -979,7 +1044,10 @@ function startMove(raw) {
   const selWalls = objs.filter(x => x.kind === 'wall').map(x => x.o), sset = new Set(selWalls.map(w => w.id));
   if (selWalls.length) for (const w of F().walls) {
     if (sset.has(w.id)) continue;
-    for (const e of ['a', 'b']) for (const sw of selWalls) for (const se of ['a', 'b']) if (dist(w[e], sw[se]) < 1) { conn.push({ w, e, o: { x: w[e].x, y: w[e].y } }); }
+    for (const e of ['a', 'b']) for (const sw of selWalls) {
+      const ends = Array.isArray(sw.angles) && sw.angles.length ? [wallPivot(sw)] : ['a', 'b'];
+      for (const se of ends) if (dist(w[e], sw[se]) < 1) { conn.push({ w, e, o: { x: w[e].x, y: w[e].y } }); }
+    }
   }
   const first = objs[0]; let anchor = { x: raw.x, y: raw.y };
   if (first) { const o = orig.get(first.o.id); anchor = first.kind === 'wall' || first.kind === 'dim' ? o.a : first.kind === 'room' ? o.pts[0] : first.kind === 'op' ? anchor : { x: o.x, y: o.y }; }
@@ -1013,7 +1081,8 @@ function startHandle(h, raw) {
   const o = selObjs()[0].o, orig = JSON.parse(JSON.stringify(o)), conn = [];
   if (h === 'wa' || h === 'wb') {
     const e = h === 'wa' ? 'a' : 'b';
-    for (const w of F().walls) if (w.id !== o.id) for (const k of ['a', 'b']) if (dist(w[k], orig[e]) < 1) conn.push({ w, k });
+    const isHingedFree = Array.isArray(o.angles) && o.angles.length && e === wallFree(o);
+    if (!isHingedFree) for (const w of F().walls) if (w.id !== o.id) for (const k of ['a', 'b']) if (dist(w[k], orig[e]) < 1) conn.push({ w, k });
   }
   ui.drag = { type: 'handle', h, orig, conn, moved: false };
 }
@@ -1025,6 +1094,13 @@ function doHandle(raw, e) {
     const ign = new Set([o.id, ...d.conn.map(c => c.w.id)]);
     const p = snapPt(raw, other, e, ign);
     o[ek] = { x: p.x, y: p.y }; for (const c of d.conn) c.w[c.k] = { x: p.x, y: p.y };
+    if (Array.isArray(o.angles) && o.angles.length) { const idx = clamp(o.posIdx ?? 0, 0, o.angles.length - 1); o.posIdx = idx; o.angles[idx] = wallDeg(o); }
+  } else if (h === 'wrot') {
+    const pv = o[wallPivot(o)];
+    let a = Math.atan2(raw.y - pv.y, raw.x - pv.x) * 180 / Math.PI;
+    const step = (P.gridType === 'triangle') ? 30 : 15;
+    if (ui.snap && !sh) a = rnd(a, step);
+    setWallDeg(o, a, true);
   } else if (h[0] === 'v') {
     const i = +h.slice(1), p = snapPt(raw, null, e); o.pts[i] = { x: p.x, y: p.y };
   } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; }
@@ -1079,7 +1155,38 @@ function renderProps() {
   if (k === 'wall') {
     if (n === 1) h += fld(L('Uzunluk (cm)', 'Length (cm)'), 'wall', 'len', wLen(o), { step: 1, min: 1 });
     h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 });
-    if (n === 1) h += `<div class="stat"><span>${L('Üzerindeki açıklıklar', 'Openings on wall')}</span><b>${F().ops.filter(p => p.wall === o.id).length}</b></div>`;
+    if (n === 1) {
+      h += fld(L('Açı (°)', 'Angle (°)'), 'wall', 'deg', wallDeg(o), { step: 5, min: 0, max: 360 });
+      h += fld(L('Sabit Nokta (Menteşe)', 'Fixed Point (Pivot)'), 'wall', 'pivot', wallPivot(o), {
+        sel: {
+          a: L(`A Ucu (${Math.round(o.a.x)}, ${Math.round(o.a.y)})`, `Point A (${Math.round(o.a.x)}, ${Math.round(o.a.y)})`),
+          b: L(`B Ucu (${Math.round(o.b.x)}, ${Math.round(o.b.y)})`, `Point B (${Math.round(o.b.x)}, ${Math.round(o.b.y)})`)
+        }
+      });
+      h += `<div class="stat"><span>${L('Üzerindeki açıklıklar', 'Openings on wall')}</span><b>${F().ops.filter(p => p.wall === o.id).length}</b></div>`;
+      h += `<h4>📐 ${L('Açılı Konumlar (Tıkla & Değiştir)', 'Angle Positions (Click to Cycle)')}</h4>`;
+      if (Array.isArray(o.angles) && o.angles.length) {
+        const curIdx = clamp(o.posIdx ?? 0, 0, o.angles.length - 1);
+        h += `<p class="muted" style="margin:0 0 6px">${L('Tuvalde duvara her tıkladığınızda sıradaki konuma geçer. Konum açılarını aşağıdan veya döndürme kolundan ayarlayın:', 'Clicking the wall on canvas cycles through positions. Adjust angles below or via the rotation handle:')}</p>`;
+        o.angles.forEach((ang, idx) => {
+          const isCur = idx === curIdx;
+          h += `<div class="f" style="gap:4px">
+            <button class="btn sm ${isCur ? 'primary' : ''}" data-act="wallposGo" data-idx="${idx}" style="flex:1;justify-content:flex-start" title="${L('Bu konuma geç', 'Switch to this position')}">${isCur ? '● ' : '○ '}${L('Konum', 'Pos')} ${idx + 1}</button>
+            <input type="number" data-k="wallpos" data-p="${idx}" value="${Math.round(ang * 10) / 10}" step="5" min="0" max="360" style="width:68px" title="${L('Konum açısı (°)', 'Position angle (°)')}">
+            <button class="btn sm" data-act="wallposSetCur" data-idx="${idx}" title="${L('Duvarın mevcut açısını bu konuma kaydet', 'Save current wall angle to this position')}">📍</button>
+            <button class="btn sm" data-act="wallposDel" data-idx="${idx}" style="color:var(--danger)" title="${L('Bu konumu sil', 'Delete position')}">✕</button>
+          </div>`;
+        });
+        h += `<div class="row" style="margin-top:6px">
+          <button class="btn sm" data-act="wallposAdd">＋ ${L('Konum ekle', 'Add position')}</button>
+          <button class="btn sm" data-act="wallposNext">↻ ${L('Sonraki konum', 'Next position')}</button>
+          <button class="btn sm" data-act="wallposClear" style="color:var(--danger)">✕ ${L('Kaldır', 'Clear')}</button>
+        </div>`;
+      } else {
+        h += `<p class="muted" style="margin:0 0 6px">${L('Duvarı sabit noktasından dönen 3 konumlu (veya istediğiniz sayıda) hareketli duvara dönüştürün; duvara tıkladıkça Konum 1 → 2 → 3 değişir.', 'Turn this wall into a hinged multi-position wall; clicking the wall cycles Position 1 → 2 → 3.')}</p>
+        <div class="row"><button class="btn sm primary" data-act="wallposInit">📐 ${L('3 Konumlu Açılır Duvar Yap', 'Enable 3 Angle Positions')}</button></div>`;
+      }
+    }
     h += acts(`<button class="btn sm" data-act="split">${L('✂ Ortadan böl', '✂ Split in half')}</button>`);
   } else if (k === 'op') {
     h += fld(L('Tür', 'Type'), 'op', 'type', o.type, { sel: isEN() ? { door: 'Door', double: 'Double door', slide: 'Sliding', arch: 'Archway', window: 'Window' } : { door: 'Kapı', double: 'Çift kapı', slide: 'Sürgülü', arch: 'Açıklık', window: 'Pencere' } });
@@ -1126,13 +1233,35 @@ function applyProp(t, final) {
   if (k === 'layer') { layersVis[p] = v; render(); return; }
   if (k === 'proj') { P[p] = v; if (final) { commit(); } return; }
   if (k === 'bg' && P.bg) { P.bg[p] = v; if (p === 'lock' && v) sel = sel.filter(x => x !== 'bg'); render(); if (final) { commit(); if (p === 'lock') renderProps(); } return; }
+  if (k === 'wallpos') {
+    const w = selObjs().find(x => x.kind === 'wall')?.o, idx = +p;
+    if (w && Array.isArray(w.angles) && idx >= 0 && idx < w.angles.length) {
+      const norm = Math.round(((v % 360) + 360) % 360 * 10) / 10;
+      w.angles[idx] = norm; w.posIdx = idx; setWallDeg(w, norm, false);
+      render(); if (final) { commit(); renderProps(); }
+    }
+    return;
+  }
   const os = selObjs().filter(x => x.kind === k); if (!os.length) return;
   for (const { o } of os) {
-    if (k === 'wall' && p === 'len') { const L = wLen(o) || 1, ux = (o.b.x - o.a.x) / L, uy = (o.b.y - o.a.y) / L; o.b = { x: o.a.x + ux * v, y: o.a.y + uy * v }; }
-    else if (k === 'op' && p === 'type') { o[p] = v; if (v === 'window' && o.sill === 0) { o.sill = 90; o.h = 120; } if (v !== 'window' && o.sill > 0) { o.sill = 0; o.h = 210; } }
+    if (k === 'wall' && p === 'len') {
+      const pv = o[wallPivot(o)], fk = wallFree(o), L = wLen(o) || 1, ux = (o[fk].x - pv.x) / L, uy = (o[fk].y - pv.y) / L;
+      o[fk] = { x: pv.x + ux * v, y: pv.y + uy * v };
+    } else if (k === 'wall' && p === 'deg') {
+      setWallDeg(o, v, true);
+    } else if (k === 'wall' && p === 'pivot') {
+      if (o.pivot !== v) {
+        o.pivot = v === 'b' ? 'b' : 'a';
+        if (Array.isArray(o.angles) && o.angles.length) {
+          const curIdx = clamp(o.posIdx ?? 0, 0, o.angles.length - 1);
+          const diff = wallDeg(o) - o.angles[curIdx];
+          o.angles = o.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
+        }
+      }
+    } else if (k === 'op' && p === 'type') { o[p] = v; if (v === 'window' && o.sill === 0) { o.sill = 90; o.h = 120; } if (v !== 'window' && o.sill > 0) { o.sill = 0; o.h = 210; } }
     else o[p] = v;
   }
-  render(); if (final) { commit(); if (['type', 'floor', 'len'].includes(p)) renderProps(); }
+  render(); if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p)) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -1148,6 +1277,36 @@ $('#props').addEventListener('click', e => {
   if (a === 'bgremove') { P.bg = null; sel = sel.filter(x => x !== 'bg'); commit(); return refresh(); }
   if (a === 'calib') return setTool('calib');
   for (const { kind, o } of os) {
+    if (kind === 'wall') {
+      if (a === 'wallposInit') {
+        const a0 = Math.round(wallDeg(o));
+        o.pivot = o.pivot || 'a';
+        o.angles = [a0, (a0 + 45) % 360, (a0 + 90) % 360];
+        o.posIdx = 0;
+      } else if (a === 'wallposAdd') {
+        if (!Array.isArray(o.angles)) o.angles = [Math.round(wallDeg(o))];
+        const last = o.angles[o.angles.length - 1] ?? Math.round(wallDeg(o));
+        const nextAng = Math.round((last + 45) % 360);
+        o.angles.push(nextAng); o.posIdx = o.angles.length - 1; setWallDeg(o, nextAng, false);
+      } else if (a === 'wallposGo') {
+        const idx = +b.dataset.idx;
+        if (Array.isArray(o.angles) && idx >= 0 && idx < o.angles.length) { o.posIdx = idx; setWallDeg(o, o.angles[idx], false); }
+      } else if (a === 'wallposSetCur') {
+        const idx = +b.dataset.idx;
+        if (Array.isArray(o.angles) && idx >= 0 && idx < o.angles.length) { o.angles[idx] = wallDeg(o); o.posIdx = idx; }
+      } else if (a === 'wallposDel') {
+        const idx = +b.dataset.idx;
+        if (Array.isArray(o.angles)) {
+          o.angles.splice(idx, 1);
+          if (!o.angles.length) { delete o.angles; delete o.posIdx; }
+          else { o.posIdx = clamp(o.posIdx ?? 0, 0, o.angles.length - 1); setWallDeg(o, o.angles[o.posIdx], false); }
+        }
+      } else if (a === 'wallposNext') {
+        cycleWallPos(o);
+      } else if (a === 'wallposClear') {
+        delete o.angles; delete o.posIdx;
+      }
+    }
     if (a === 'rot90' && kind === 'furn') o.rot = (o.rot + 90) % 360;
     if (a === 'swapwd' && kind === 'furn') [o.w, o.d] = [o.d, o.w];
     if (a === 'front' && kind === 'furn') { f.furn = f.furn.filter(x => x !== o); f.furn.push(o); }
@@ -1266,7 +1425,15 @@ window.addEventListener('keydown', e => {
     if (k === 'r') { if (placing.type === 'furn') placing.rot = ((placing.rot || 0) + 90) % 360; else placing.flip = placing.flip ? 0 : 1; updateGhost(); drawPreview(); return; }
     if (k === 's' && placing.type === 'op') { placing.side = -(placing.side || 1); updateGhost(); drawPreview(); return; }
   }
-  if (e.key === '[' || e.key === ']') { const d = e.key === ']' ? 15 : -15; let ch = false; selObjs().forEach(({ kind, o }) => { if (kind === 'furn' || kind === 'text') { o.rot = ((o.rot || 0) + d + 360) % 360; ch = true; } }); if (ch) { commit(); refresh(); } return; }
+  if (e.key === '[' || e.key === ']') {
+    const d = e.key === ']' ? 15 : -15; let ch = false;
+    selObjs().forEach(({ kind, o }) => {
+      if (kind === 'furn' || kind === 'text') { o.rot = ((o.rot || 0) + d + 360) % 360; ch = true; }
+      else if (kind === 'wall') { setWallDeg(o, wallDeg(o) + d, true); ch = true; }
+    });
+    if (ch) { commit(); refresh(); }
+    return;
+  }
   if (e.key.startsWith('Arrow') && sel.length) {
     e.preventDefault(); const st = e.shiftKey ? 10 : 1; const dx = e.key === 'ArrowLeft' ? -st : e.key === 'ArrowRight' ? st : 0, dy = e.key === 'ArrowUp' ? -st : e.key === 'ArrowDown' ? st : 0;
     selObjs().forEach(({ kind, o }) => { if (kind === 'wall' || kind === 'dim') { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (kind === 'room') o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
@@ -1520,6 +1687,28 @@ function init3D() {
   r.setPixelRatio(Math.min(2, devicePixelRatio)); el.appendChild(r.domElement);
   const scene = new THREE.Scene(); scene.background = new THREE.Color(0xdbe5f1);
   const cam = new THREE.PerspectiveCamera(50, 1, 10, 50000), ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI / 2.02;
+  let downPt = null;
+  r.domElement.addEventListener('pointerdown', e => { if (e.button === 0) downPt = { x: e.clientX, y: e.clientY }; });
+  r.domElement.addEventListener('pointerup', e => {
+    if (!downPt || e.button !== 0 || Math.hypot(e.clientX - downPt.x, e.clientY - downPt.y) > 5) return;
+    downPt = null;
+    const rect = r.domElement.getBoundingClientRect();
+    const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    const rc = new THREE.Raycaster(); rc.setFromCamera(mouse, cam);
+    const hits = rc.intersectObjects(scene.children, true);
+    for (const h of hits) {
+      let cur = h.object;
+      while (cur && !cur.userData?.wallId) cur = cur.parent;
+      if (cur && cur.userData?.wallId) {
+        const fd = find(cur.userData.wallId);
+        if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
+          cycleWallPos(fd.o); sel = [fd.o.id]; commit(); refresh(); build3D(true);
+          toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
+        }
+        break;
+      }
+    }
+  });
   T3 = { r, scene, cam, ctl, run: false }; resize3D(); window.addEventListener('resize', () => { if (T3 && ui.view3d) resize3D(); });
 }
 function resize3D() { const el = $('#v3d'); T3.r.setSize(el.clientWidth, el.clientHeight); T3.cam.aspect = el.clientWidth / el.clientHeight; T3.cam.updateProjectionMatrix(); }
@@ -1542,7 +1731,7 @@ function loop3D() {
   }
   T3.ctl.update(); T3.r.render(T3.scene, T3.cam);
 }
-function build3D() {
+function build3D(keepCam = false) {
   const lt = isLight(), S = T3.scene; while (S.children.length) S.remove(S.children[0]);
   S.background = new THREE.Color(lt ? 0xe8e3d9 : 0x0b0f14);
   S.add(new THREE.HemisphereLight(0xffffff, lt ? 0x667788 : 0x1e293b, lt ? 0.55 : 0.65));
@@ -1559,8 +1748,10 @@ function build3D() {
     if (b) box(S, b.x1 - b.x0 + 200, 20, b.y1 - b.y0 + 200, lt ? 0xded8cc : 0x171e29, (b.x0 + b.x1) / 2, elev - 10, (b.y0 + b.y1) / 2);
     f.rooms.forEach(r => { const sh = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y))); const m = new THREE.Mesh(new THREE.ShapeGeometry(sh), mat(r.color, lt ? undefined : 0.78)); m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6; S.add(m); });
     f.walls.forEach(w => {
-      const L = wLen(w), H = w.h, g = new THREE.Group(); g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
-      const seg = (s, e, y0, y1) => { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, lt ? 0xfaf8f5 : 0xe2e8f0, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); };
+      const L = wLen(w), H = w.h, g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
+      const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
+      const wCol = hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0);
+      const seg = (s, e, y0, y1) => { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, wCol, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); };
       const ops = f.ops.filter(o => o.wall === w.id).sort((a, c) => a.d - c.d); let pos = 0;
       ops.forEach(o => {
         const s = Math.max(pos, o.d - o.w / 2), e = Math.min(L, o.d + o.w / 2); seg(pos, s, 0, H);
@@ -1570,10 +1761,14 @@ function build3D() {
         pos = Math.max(pos, e);
       });
       seg(pos, L, 0, H);
+      if (hasPos) {
+        const pv = w[wallPivot(w)], pin = new THREE.Mesh(new THREE.CylinderGeometry(w.t * 0.55, w.t * 0.55, H + 4, 20), mat(lt ? 0x1d4ed8 : 0xd99b26));
+        pin.position.set(pv.x, elev + H / 2, pv.y); pin.userData = { wallId: w.id }; S.add(pin);
+      }
     });
     f.furn.forEach(o => {
       const ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, elev, o.y); g.rotation.y = ry; S.add(g);
-      if (o.k === 'stairs') { const n = Math.max(6, Math.round(o.h / 18)); for (let i = 0; i < n; i++) { const sh = o.h / n * (i + 1); box(g, o.w, sh, o.d / n, o.color, 0, sh / 2, o.d / 2 - o.d / n * (i + .5)); } }
+      if (o.k === 'stairs') { const n = Math.max(6, Math.round(o.h / 18)); for (let i = 0; i < n; i++) { const sh = o.h / n * (i + 1); box(g, o.w, sh, o.d / n, o.color, 0, sh / 2, o.d / n * (n / 2 - i - .5)); } }
       else if (o.k === 'round') { const m = new THREE.Mesh(new THREE.CylinderGeometry(o.w / 2, o.w / 2, o.h, 28), mat(o.color)); m.scale.z = o.d / o.w; m.position.y = o.h / 2; g.add(m); }
       else {
         box(g, o.w, o.h, o.d, o.color, 0, o.h / 2, 0);
@@ -1586,7 +1781,8 @@ function build3D() {
   if (!all) all = { x0: 0, y0: 0, x1: 1000, y1: 700 };
   const cx = (all.x0 + all.x1) / 2, cz = (all.y0 + all.y1) / 2, sz = Math.max(all.x1 - all.x0, all.y1 - all.y0, 400);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xd8d2c5 : 0x11161e)); ground.rotation.x = -Math.PI / 2; ground.position.y = -21; S.add(ground);
-  T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); T3.ctl.update();
+  if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); }
+  T3.ctl.update();
 }
 
 /* ---------- Dil arayüzü & Başlatma ---------- */
