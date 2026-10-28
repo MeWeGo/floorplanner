@@ -1366,7 +1366,12 @@ function applyProp(t, final) {
     else if (k === 'op' && p === 'type') { o[p] = v; if (v === 'window' && o.sill === 0) { o.sill = 90; o.h = 120; } if (v !== 'window' && o.sill > 0) { o.sill = 0; o.h = 210; } }
     else o[p] = v;
   }
-  render(); if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p)) renderProps(); }
+  render();
+  if (ui.view3d && T3) {
+    if (k === 'furn' && p === 'rot') os.forEach(x => moveFurn3D(x.o));
+    else if (k !== 'furn-label' && k !== 'layer' && k !== 'bg' && !(k === 'furn' && p === 'label')) schedBuild3D();
+  }
+  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p)) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -1657,7 +1662,7 @@ window.addEventListener('keydown', e => {
       if (kind === 'furn' || kind === 'text') { o.rot = ((o.rot || 0) + d + 360) % 360; ch = true; }
       else if (kind === 'wall') { setWallDeg(o, wallDeg(o) + d, true); ch = true; }
     });
-    if (ch) { commit(); refresh(); }
+    if (ch) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
     return;
   }
   if (e.key.startsWith('Arrow') && sel.length) {
@@ -1699,6 +1704,7 @@ function helpModal() {
     ['S (while placing)', 'Flip door swing direction'],
     ['Arrow keys', 'Nudge selection / background image by 1 cm (Shift: 10 cm)'],
     ['WASD / Q / E (3D)', 'Walk around in 3D view (Q/E: down/up, Shift: faster)'],
+    ['3D: click / drag furniture', 'Select & highlight • drag to move on the floor (Shift: no grid snap) • resize via the side panel'],
     ['Ctrl+C/V/D', 'Copy / Paste / Duplicate'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'],
     ['Ctrl+A', 'Select all on current floor'],
@@ -1729,6 +1735,7 @@ function helpModal() {
     ['S (yerleştirirken)', 'Kapı açılış yönünü çevir'],
     ['Ok tuşları', 'Seçileni / arka plan görselini 1 cm kaydır (Shift: 10 cm)'],
     ['WASD / Q / E (3B)', '3B görünümde gezin (Q/E: alçal/yüksel, Shift: hızlı)'],
+    ['3B: mobilyaya tıkla / sürükle', 'Seç & vurgula • zeminde sürükle (Shift: ızgara yok) • boyutu sağ panelden değiştir'],
     ['Ctrl+C/V/D', 'Kopyala / Yapıştır / Çoğalt'],
     ['Ctrl+Z / Ctrl+Y', 'Geri al / Yinele'],
     ['Ctrl+A', 'Tümünü seç'],
@@ -1920,16 +1927,84 @@ function init3D() {
   const el = $('#v3d'), r = new THREE.WebGLRenderer({ antialias: true });
   r.setPixelRatio(Math.min(2, devicePixelRatio)); el.appendChild(r.domElement);
   const scene = new THREE.Scene(); scene.background = new THREE.Color(0xdbe5f1);
-  const cam = new THREE.PerspectiveCamera(50, 1, 10, 50000), ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI / 2.02;
+  const cam = new THREE.PerspectiveCamera(50, 1, 10, 50000);
+  // 3B mobilya etkileşimi: OrbitControls'ten ÖNCE kaydedilir ki sürüklerken yörünge devre dışı kalabilsin
+  let d3 = null;
+  const ray3 = e => {
+    cam.updateMatrixWorld(); scene.updateMatrixWorld(); // rAF durmuşsa da matrisler taze olsun (arka plan sekmesi/etkileşim)
+    const rect = r.domElement.getBoundingClientRect();
+    const rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1), cam);
+    return rc;
+  };
+  const floorPlane = elev => new THREE.Plane(new THREE.Vector3(0, 1, 0), -elev);
+  r.domElement.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || !ui.view3d) return;
+    const rc = ray3(e);
+    for (const h of rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh)) {
+      let cur = h.object;
+      while (cur && !(cur.userData && cur.userData.furnId)) cur = cur.parent;
+      if (!cur) continue;
+      const fd = find(cur.userData.furnId);
+      if (!fd || fd.kind !== 'furn') continue;
+      const o = fd.o, elev = cur.userData.elev || 0, p0 = new THREE.Vector3();
+      if (!rc.ray.intersectPlane(floorPlane(elev), p0)) return;
+      e.stopImmediatePropagation(); // orbit başlamasın
+      sel = o.grp ? groupMemberIds(o.grp) : [o.id];
+      d3 = { id: o.id, elev, sx: e.clientX, sy: e.clientY, moved: false, offX: p0.x - o.x, offZ: p0.z - o.y,
+        orig: new Map(sel.map(sid => { const fo = find(sid)?.o; return [sid, fo ? JSON.parse(JSON.stringify(fo)) : null]; })),
+        members: sel.slice() };
+      refreshSel3D(); renderProps();
+      return;
+    }
+  });
+  window.addEventListener('pointermove', e => {
+    if (!d3) return;
+    if (!d3.moved && Math.hypot(e.clientX - d3.sx, e.clientY - d3.sy) < 4) return;
+    d3.moved = true;
+    const o = find(d3.id)?.o; if (!o) { d3 = null; return; }
+    const p = new THREE.Vector3();
+    if (!ray3(e).ray.intersectPlane(floorPlane(d3.elev), p)) return;
+    let nx = p.x - d3.offX, ny = p.z - d3.offZ;
+    if (ui.snap && !e.shiftKey) { const sp = snapToGrid({ x: nx, y: ny }); nx = sp.x; ny = sp.y; }
+    const o0 = d3.orig.get(d3.id), dx = nx - o0.x, dy = ny - o0.y;
+    for (const sid of d3.members) {
+      const fd = find(sid); if (!fd) continue;
+      const fo = fd.o, g0 = d3.orig.get(sid); if (!g0) continue;
+      if (fd.kind === 'furn' || fd.kind === 'text') { fo.x = g0.x + dx; fo.y = g0.y + dy; }
+      else if (fd.kind === 'wall' || fd.kind === 'dim') { fo.a = { x: g0.a.x + dx, y: g0.a.y + dy }; fo.b = { x: g0.b.x + dx, y: g0.b.y + dy }; }
+    }
+    for (const sid of d3.members) {
+      const fd = find(sid); if (!fd) continue;
+      const g = T3.scene.children.find(c => c.userData && (c.userData.furnId === sid || c.userData.wallId === sid));
+      if (!g) continue;
+      const fo = fd.o;
+      if (fd.kind === 'furn') g.position.set(fo.x, d3.elev, fo.y);
+      else if (fd.kind === 'wall') g.position.set((fo.a.x + fo.b.x) / 2, d3.elev, (fo.a.y + fo.b.y) / 2);
+    }
+    if (h3) h3.update();
+  });
+  window.addEventListener('pointerup', e => {
+    if (!d3 || e.button !== 0) return;
+    const { id, moved } = d3; d3 = null;
+    const fd = find(id); if (!fd || fd.kind !== 'furn') return;
+    if (moved) {
+      if (sel.length === 1) magnet(fd.o); // 2B ile aynı: yakın duvara yapış, arkası duvara baksın
+      commit(); refresh();
+      schedBuild3D(); // tutkal/rotasyon değişimi olabilir -> sahne tazelensin
+    } else { refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
+  });
+  const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI / 2.02;
   let downPt = null;
   r.domElement.addEventListener('pointerdown', e => { if (e.button === 0) downPt = { x: e.clientX, y: e.clientY }; });
   r.domElement.addEventListener('pointerup', e => {
     if (!downPt || e.button !== 0 || Math.hypot(e.clientX - downPt.x, e.clientY - downPt.y) > 5) return;
     downPt = null;
+    cam.updateMatrixWorld(); scene.updateMatrixWorld();
     const rect = r.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     const rc = new THREE.Raycaster(); rc.setFromCamera(mouse, cam);
-    const hits = rc.intersectObjects(scene.children, true);
+    const hits = rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh); // kenar çizgileri (LineSegments) tık çalmasın
+    let hit3 = false;
     for (const h of hits) {
       let cur = h.object;
       while (cur && !cur.userData?.wallId && !cur.userData?.opId) cur = cur.parent;
@@ -1939,7 +2014,7 @@ function init3D() {
           fd.o.open = fd.o.open ? 0 : 90; sel = [fd.o.id]; commit(); refresh(); build3D(true);
           toast(fd.o.open ? L('Kapı açıldı (90°)', 'Door opened (90°)') : L('Kapı kapandı', 'Door closed'));
         }
-        break;
+        hit3 = true; break;
       }
       if (cur && cur.userData?.wallId) {
         const fd = find(cur.userData.wallId);
@@ -1949,9 +2024,10 @@ function init3D() {
           cycleWallPos(fd.o); sel = [fd.o.id]; commit(); refresh(); build3D(true);
           toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
         }
-        break;
+        hit3 = true; break;
       }
     }
+    if (!hit3 && sel.length) { sel = []; render(); refreshSel3D(); renderProps(); } // boşluğa tıkla -> seçimi bırak
   });
   T3 = { r, scene, cam, ctl, run: false }; resize3D(); window.addEventListener('resize', () => { if (T3 && ui.view3d) resize3D(); });
 }
@@ -2024,7 +2100,7 @@ function build3D(keepCam = false) {
       }
     });
     f.furn.forEach(o => {
-      const ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, elev, o.y); g.rotation.y = ry; S.add(g);
+      const ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, elev, o.y); g.rotation.y = ry; g.userData = { furnId: o.id, elev }; S.add(g);
       if (o.k === 'stairs') { const n = Math.max(6, Math.round(o.h / 18)); for (let i = 0; i < n; i++) { const sh = o.h / n * (i + 1); box(g, o.w, sh, o.d / n, o.color, 0, sh / 2, o.d / n * (n / 2 - i - .5)); } }
       else if (o.k === 'round') { const m = new THREE.Mesh(new THREE.CylinderGeometry(o.w / 2, o.w / 2, o.h, 28), mat(o.color)); m.scale.z = o.d / o.w; m.position.y = o.h / 2; g.add(m); }
       else {
@@ -2040,6 +2116,27 @@ function build3D(keepCam = false) {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xd8d2c5 : 0x11161e)); ground.rotation.x = -Math.PI / 2; ground.position.y = -21; S.add(ground);
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); }
   T3.ctl.update();
+  refreshSel3D();
+}
+
+/* ---------- 3B seçim vurgusu & canlı güncelleme ---------- */
+let h3 = null, b3t = null;
+function refreshSel3D() {
+  if (!T3 || !T3.scene) return;
+  if (h3) { T3.scene.remove(h3); h3.geometry.dispose(); h3.material.dispose(); h3 = null; }
+  if (!ui.view3d || sel.length !== 1) return;
+  const g = T3.scene.children.find(c => c.userData && c.userData.furnId === sel[0]);
+  if (g) { h3 = new THREE.BoxHelper(g, isLight() ? 0xd97706 : 0xfbbf24); T3.scene.add(h3); }
+}
+function moveFurn3D(o) {
+  if (!T3 || !ui.view3d) return;
+  const g = T3.scene.children.find(c => c.userData && c.userData.furnId === o.id);
+  if (g) { g.position.set(o.x, g.userData.elev || 0, o.y); g.rotation.y = -(o.rot || 0) * Math.PI / 180; }
+  if (h3) h3.update();
+}
+function schedBuild3D() {
+  if (!T3 || !ui.view3d) return;
+  clearTimeout(b3t); b3t = setTimeout(() => { if (T3 && ui.view3d) build3D(true); }, 90);
 }
 
 /* ---------- Dil arayüzü & Başlatma ---------- */
