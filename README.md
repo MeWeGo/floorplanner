@@ -1,6 +1,6 @@
 <div align="center">
 
-# 📐 Kat Planı Çizici
+# 📐 Floor Planner · Kat Planı Çizici
 
 ### Interactive 2D / 3D Floor Planner — runs entirely in your browser
 
@@ -12,7 +12,7 @@
 ![Three.js](https://img.shields.io/badge/3D-Three.js_r128-black?logo=threedotjs)
 ![Storage](https://img.shields.io/badge/Storage-IndexedDB_+_JSON-6366f1)
 ![Hosting](https://img.shields.io/badge/Hosting-GitHub_Pages-222?logo=github)
-![UI](https://img.shields.io/badge/UI-Türkçe-e30a17)
+![UI](https://img.shields.io/badge/UI-English_%7C_Türkçe-10b981)
 
 </div>
 
@@ -27,7 +27,7 @@
 | **Developer / AI-agent guide** | [`AGENTS.md`](AGENTS.md) |
 | **Original prototype** | [`legacy-index.html`](legacy-index.html) |
 
-> The interface language is **Turkish**. Shortcuts and tool names are listed below in English with the Turkish label in parentheses.
+> **Bilingual UI (English & Turkish):** Automatically detects your browser language (`en` / `tr`) on first visit, and lets you switch anytime with the **🌐 EN / TR** button in the top bar.
 
 ---
 

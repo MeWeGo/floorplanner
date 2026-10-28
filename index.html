@@ -9,7 +9,7 @@
 <body>
 <div id="app">
   <header>
-    <span class="logo">📐 Kat Planı</span>
+    <span class="logo" id="logoTxt">📐 Kat Planı</span>
     <input id="pname" title="Proje adı" value="Yeni Proje">
     <button class="btn" id="bNew">📄 Yeni</button>
     <button class="btn" id="bProjects">📁 Projelerim</button>
@@ -27,6 +27,7 @@
     <button class="btn on" id="b2d">2B</button>
     <button class="btn" id="b3d">3B</button>
     <div class="sep"></div>
+    <button class="btn" id="bLang" title="Dil / Language">🌐 EN</button>
     <button class="btn" id="bTheme" title="Tema">🌓</button>
     <button class="btn" id="bHelp">❓ Yardım</button>
     <input type="file" id="fileOpen" accept=".json,application/json" hidden>
@@ -63,10 +64,10 @@
   <footer>
     <div id="floors"></div>
     <div class="sep"></div>
-    <label><input type="checkbox" id="cSnap" checked> Yakala (G)</label>
+    <label><input type="checkbox" id="cSnap" checked> <span id="lblSnap">Yakala (G)</span></label>
     <label><input type="checkbox" id="cAngle" checked> <span id="lblAngle">Açı 15°</span></label>
-    <label><input type="checkbox" id="cDims" checked> Duvar ölçüleri</label>
-    <label>Izgara Tipi
+    <label><input type="checkbox" id="cDims" checked> <span id="lblDims">Duvar ölçüleri</span></label>
+    <label><span id="lblGridType">Izgara Tipi</span>
       <select id="sGridType">
         <option value="square" selected>⊞ Kare</option>
         <option value="triangle">△ Üçgen (60°)</option>
@@ -74,7 +75,7 @@
         <option value="none">∅ Kapalı (Serbest)</option>
       </select>
     </label>
-    <label>Adım
+    <label><span id="lblGridStep">Adım</span>
       <select id="sGrid">
         <option value="5">5 cm</option>
         <option value="10" selected>10 cm</option>

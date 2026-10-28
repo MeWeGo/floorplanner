@@ -13,9 +13,9 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 | :-- | :-- |
 | Type | Static single-page web app — no backend, no build step, no package manager |
 | Language | Vanilla JavaScript (global scope, `'use strict'`), HTML, CSS |
-| UI language | **Turkish** (all user-facing strings) |
+| UI language | **Bilingual: Turkish & English (`tr` / `en`)** — auto-detected from `navigator.language`, toggled via `#bLang`, saved in `localStorage['fp_lang']` |
 | Rendering | 2D → SVG (re-rendered from state) · 3D → Three.js r128 + OrbitControls (CDN) |
-| Storage | IndexedDB (`FloorPlannerDB`) + JSON import/export; `localStorage` only for theme |
+| Storage | IndexedDB (`FloorPlannerDB`) + JSON import/export; `localStorage` only for theme & language |
 | Units | **Everything is centimetres.** Y axis points **down** (SVG convention) |
 
 ### Files
@@ -33,7 +33,7 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 ## 2. Golden Rules (read first)
 
 1. **No dependencies, no build.** Do not introduce npm, bundlers, frameworks or TypeScript. The app must work by double-clicking `index.html`.
-2. **Keep all UI text Turkish** (labels, toasts, prompts, modal text). Code identifiers and comments may be English or Turkish — match the surrounding code.
+2. **Keep all UI text bilingual (`tr` / `en`)** using `L('Türkçe', 'English')` (labels, toasts, prompts, modal text, catalog items). Code identifiers and comments may be English or Turkish — match the surrounding code.
 3. **State is the single source of truth.** Mutate `P` (project) → call `commit()` → call `refresh()`/`render()`. Never read geometry back from the DOM.
 4. **Always `commit()` after a completed user action** (not on every mousemove) so undo/redo and autosave work.
 5. **Never hardcode plan colors** in SVG builders — use `pal()` (see §7). Exports must stay on white paper.
@@ -220,19 +220,19 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 ## 9. Common Tasks (recipes)
 
 ### Add a furniture item
-Append a row to `CAT_DEFS`: `['id', catIndex, 'Türkçe Ad', w, d, h3D, 'emoji', 'rect|round|bed|sofa|stairs', '#hexColor']`. Optionally reference it in a template via `c.fu('id', x, y, rot)`. For a new *shape kind*, extend `furnBody()` (2D) **and** the `build3D()` furniture branch.
+Append a row to `CAT_DEFS`: `['id', catIndex, 'Türkçe Ad', w, d, h3D, 'emoji', 'rect|round|bed|sofa|stairs', '#hexColor', 'English Name']`. Optionally reference it in a template via `c.fu('id', x, y, rot)`. For a new *shape kind*, extend `furnBody()` (2D) **and** the `build3D()` furniture branch.
 
 ### Add a door/window type
-Add to `OPENINGS` (`id,name,w,h,sill,icon`), map its `id` to a `type` in `opType()`, draw it in `opSvg()` (use `pal()`), add a 3D representation in `build3D()` if needed, and add the option to the `type` `<select>` in `renderProps()`.
+Add to `OPENINGS` (`id,name,en,w,h,sill,icon`), map its `id` to a `type` in `opType()`, draw it in `opSvg()` (use `pal()`), add a 3D representation in `build3D()` if needed, and add the option to the `type` `<select>` in `renderProps()`.
 
 ### Add a property to an object
 1. Default it in the `mk*` factory **and** `loadProject()` (back-compat).
-2. Add an input in `renderProps()` with `data-k`/`data-p` using `fld()`.
+2. Add an input in `renderProps()` with `data-k`/`data-p` using `fld(L('TR', 'EN'), ...)`.
 3. Use it in the SVG builder (and `build3D` if relevant).
 4. `applyProp` already handles generic `o[p] = v`; add special cases only if needed.
 
 ### Add a tool
-Add to `TOOLS` + `HINTS`, handle it in the `pointerdown` `switch(tool)` (and `pointermove/up` if it drags), draw previews in `drawPreview()`, add a key in the `map` object in the `keydown` handler, document it in `helpModal()` and the README shortcut table.
+Add to `TOOLS` (`['id', 'icon', 'TR', 'Key', 'EN']`) + `HINTS` / `HINTS_EN`, handle it in the `pointerdown` `switch(tool)` (and `pointermove/up` if it drags), draw previews in `drawPreview()`, add a key in the `map` object in the `keydown` handler, document it in `helpModal()` and the README shortcut table.
 
 ### Add a grid type
 Add `<option>` in `index.html#sGridType`; add patterns in `defsSvg()`, selection in `gridSvg()`, snapping in `snapToGrid()`, and (if angular) the angle step in `snapPt()` / label in `syncGridUI`.
@@ -277,7 +277,7 @@ To script UI state, create a temporary copy of `index.html` that appends a `<scr
 - Selection ids may refer to objects on **another floor** after switching floors — `find()` searches only the current floor; filter `sel` when changing floors/undoing (already done in `restore`).
 - `ui.exporting` and `view.z` are temporarily mutated inside `exportSvg()`, `thumbSvg()`, `projectThumbSvg()`; they restore in `finally`. Preserve that pattern (these swap the global `P`/`fi` too).
 - Wall length labels use `view.z` for font size; builders called outside the live canvas must set `view.z` first.
-- `prompt()` / `confirm()` are used for rename, calibration distance and delete confirmations — keep them Turkish.
+- `prompt()` / `confirm()` are used for rename, calibration distance and delete confirmations — wrap strings in `L(tr, en)`.
 - `localStorage` writes can throw (quota/private mode) — keep them in `try/catch`.
 - Room polygons are **not** linked to walls; don't assume they update when walls move.
 - Emoji icons in furniture/library depend on the OS font; always keep a text name.
@@ -309,4 +309,4 @@ To script UI state, create a temporary copy of `index.html` that appends a `<scr
 
 ## 13. Roadmap Ideas (not implemented)
 
-English UI / i18n layer · imperial units · roof & terrain in 3D · cost / materials list · wall-linked room polygons (auto-update) · PWA / offline caching of Three.js · custom user templates · touch-gesture pinch-zoom · curved walls · LICENSE file.
+Imperial units · roof & terrain in 3D · cost / materials list · wall-linked room polygons (auto-update) · PWA / offline caching of Three.js · custom user templates · touch-gesture pinch-zoom · curved walls · LICENSE file.
