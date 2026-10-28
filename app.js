@@ -238,12 +238,25 @@ function autosave() {
     }
   }, 350);
 }
+const GRID_PRESETS = ['5', '10', '25', '50', '100', '300', '500'];
+function syncGridUI() {
+  const g = String(P.grid);
+  if (GRID_PRESETS.includes(g)) {
+    $('#sGrid').value = g;
+    $('#lblGridCustom').style.display = 'none';
+  } else {
+    $('#sGrid').value = 'custom';
+    $('#lblGridCustom').style.display = 'inline-flex';
+    $('#iGridCustom').value = P.grid;
+  }
+  $('#sGridType').value = P.gridType || 'square';
+  $('#lblAngle').textContent = P.gridType === 'triangle' ? 'Açı 30°' : 'Açı 15°';
+}
 function restore(s) {
   P = JSON.parse(s); P.gridType = P.gridType || 'square';
   fi = clamp(fi, 0, P.floors.length - 1);
   sel = sel.filter(id => find(id));
-  $('#pname').value = P.name; $('#sGrid').value = P.grid; $('#sGridType').value = P.gridType;
-  $('#lblAngle').textContent = P.gridType === 'triangle' ? 'Açı 30°' : 'Açı 15°';
+  $('#pname').value = P.name; syncGridUI();
   refresh();
 }
 function undo() { if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
@@ -255,8 +268,7 @@ function loadProject(obj, msg) {
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; });
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
-  $('#pname').value = P.name; $('#sGrid').value = String(P.grid); $('#sGridType').value = P.gridType;
-  $('#lblAngle').textContent = P.gridType === 'triangle' ? 'Açı 30°' : 'Açı 15°';
+  $('#pname').value = P.name; syncGridUI();
   setTool('select'); fit(); refresh(); updateUndo(); autosave();
   if (msg) toast(msg);
 }
@@ -289,18 +301,18 @@ function fit() {
 const WALL_C = '#1f2937', STROKE = '#475569';
 function defsSvg() {
   const s = P.grid, h = +(s * Math.sqrt(3) / 2).toFixed(4), h2 = +(2 * h).toFixed(4);
-  const ms = s >= 25 ? s * 4 : 100, mh = +(ms * Math.sqrt(3) / 2).toFixed(4), mh2 = +(2 * mh).toFixed(4);
+  const ms = s >= 100 ? s * 5 : s >= 25 ? s * 4 : 100, mh = +(ms * Math.sqrt(3) / 2).toFixed(4), mh2 = +(2 * mh).toFixed(4);
   const swMin = 0.65 / view.z, swMaj = 0.95 / view.z, rDot = Math.max(1.1, 1.5 / view.z), rDotM = Math.max(1.8, 2.3 / view.z);
   return `
   <pattern id="p-wood" width="120" height="24" patternUnits="userSpaceOnUse"><path d="M0 0H120M0 12H120M40 0V12M90 12V24" stroke="#92400e" stroke-opacity=".28" fill="none" stroke-width="1"/></pattern>
   <pattern id="p-tile" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M0 0H60V60" stroke="#475569" stroke-opacity=".3" fill="none" stroke-width="1"/></pattern>
   <pattern id="p-carpet" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r="1.1" fill="#6b7280" fill-opacity=".35"/><circle cx="7.5" cy="7.5" r="1.1" fill="#6b7280" fill-opacity=".35"/></pattern>
   <pattern id="g-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><path d="M${s} 0V${s}H0" fill="none" stroke="#cbd5e1" stroke-width="${swMin}" stroke-opacity=".7"/></pattern>
-  <pattern id="g-major" width="100" height="100" patternUnits="userSpaceOnUse"><path d="M100 0V100H0" fill="none" stroke="#94a3b8" stroke-width="${swMaj}" stroke-opacity=".8"/></pattern>
+  <pattern id="g-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><path d="M${ms} 0V${ms}H0" fill="none" stroke="#94a3b8" stroke-width="${swMaj}" stroke-opacity=".8"/></pattern>
   <pattern id="g-tri-minor" width="${s}" height="${h2}" patternUnits="userSpaceOnUse"><path d="M0 0H${s}M0 ${h}H${s}M0 0L${s / 2} ${h}L0 ${h2}M${s / 2} 0L${s} ${h}L${s / 2} ${h2}M${s / 2} 0L0 ${h}L${s / 2} ${h2}M${s} 0L${s / 2} ${h}L${s} ${h2}" fill="none" stroke="#cbd5e1" stroke-width="${swMin}" stroke-opacity=".75"/></pattern>
   <pattern id="g-tri-major" width="${ms}" height="${mh2}" patternUnits="userSpaceOnUse"><path d="M0 0H${ms}M0 ${mh}H${ms}M0 0L${ms / 2} ${mh}L0 ${mh2}M${ms / 2} 0L${ms} ${mh}L${ms / 2} ${mh2}M${ms / 2} 0L0 ${mh}L${ms / 2} ${mh2}M${ms} 0L${ms / 2} ${mh}L${ms} ${mh2}" fill="none" stroke="#94a3b8" stroke-width="${swMaj}" stroke-opacity=".65"/></pattern>
   <pattern id="g-dots-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDot}" fill="#94a3b8" fill-opacity=".75"/></pattern>
-  <pattern id="g-dots-major" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDotM}" fill="#64748b" fill-opacity=".9"/></pattern>`;
+  <pattern id="g-dots-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDotM}" fill="#64748b" fill-opacity=".9"/></pattern>`;
 }
 function gridSvg() {
   const gt = P.gridType || 'square';
@@ -1417,7 +1429,26 @@ $('#pname').addEventListener('change', commit);
 $('#cSnap').onchange = e => { ui.snap = e.target.checked; };
 $('#cAngle').onchange = e => { ui.angle = e.target.checked; };
 $('#cDims').onchange = e => { ui.dims = e.target.checked; render(); };
-$('#sGrid').onchange = e => { P.grid = +e.target.value; commit(); render(); };
+$('#sGrid').onchange = e => {
+  if (e.target.value === 'custom') {
+    $('#lblGridCustom').style.display = 'inline-flex';
+    $('#iGridCustom').value = P.grid;
+    $('#iGridCustom').focus();
+    $('#iGridCustom').select();
+  } else {
+    $('#lblGridCustom').style.display = 'none';
+    P.grid = +e.target.value;
+    commit(); render();
+  }
+};
+$('#iGridCustom').addEventListener('input', e => {
+  const v = clamp(parseFloat(e.target.value) || 0, 1, 10000);
+  if (v >= 1) { P.grid = v; render(); }
+});
+$('#iGridCustom').addEventListener('change', e => {
+  const v = clamp(parseFloat(e.target.value) || 10, 1, 10000);
+  P.grid = v; e.target.value = v; commit(); render();
+});
 $('#sGridType').onchange = e => {
   P.gridType = e.target.value;
   $('#lblAngle').textContent = P.gridType === 'triangle' ? 'Açı 30°' : 'Açı 15°';

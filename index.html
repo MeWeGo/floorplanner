@@ -75,7 +75,19 @@
       </select>
     </label>
     <label>Adım
-      <select id="sGrid"><option value="5">5 cm</option><option value="10" selected>10 cm</option><option value="25">25 cm</option><option value="50">50 cm</option></select>
+      <select id="sGrid">
+        <option value="5">5 cm</option>
+        <option value="10" selected>10 cm</option>
+        <option value="25">25 cm</option>
+        <option value="50">50 cm</option>
+        <option value="100">1 m (100 cm)</option>
+        <option value="300">3 m (300 cm)</option>
+        <option value="500">5 m (500 cm)</option>
+        <option value="custom">Özel...</option>
+      </select>
+    </label>
+    <label id="lblGridCustom" style="display:none">
+      <input type="number" id="iGridCustom" min="1" max="10000" step="1" value="10" style="width:68px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:2px 6px" title="Özel ızgara adımı (cm)"> cm
     </label>
     <div class="spacer"></div>
     <span id="coords" class="muted"></span>
