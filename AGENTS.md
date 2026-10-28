@@ -62,14 +62,15 @@ P = {
 Floor = {
   "id": "…", "name": "Zemin Kat",
   "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain", pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
-  "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1 } ],   // doors & windows
+  "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1, open?:0|90 } ],   // doors & windows
   "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label } ],
-  "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet", pts:[{x,y},…] } ],
+  "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet", pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
   "dims":   [ { id, a:{x,y}, b:{x,y}, off } ],
   "texts":  [ { id, x, y, text, size, color, rot } ],
   "sketches": [ { id, pts:[{x,y},…], w, color } ]   // pen tool: freehand strokes (already simplified)
 }
 ```
+`Floor.groups` = `[ { id, vars: [{ label, poses: {id: pose}, base?, draft? }], idx } ]` — adjustable layout records for grouped objects (see §8).
 
 Key semantics:
 
@@ -198,15 +199,28 @@ Rasterises walls to an offscreen canvas (resolution ≥ 2 cm/px, max ≈ 1800 px
 - Snapshot originals in `ui.drag.orig`; apply a snapped **delta** from the first object's anchor (so off-grid objects keep their offset).
 - Selected walls also drag coincident endpoints of non-selected walls (`conn`) so corners stay joined.
 - Single furniture runs `magnet()`; openings re-project onto the nearest wall within 60 cm.
+- Dragging a **single room** moves its contents too (`roomInner`: furniture + texts inside, captured in `startMove`); the panel's X/Y fields apply the same delta.
 
 ### Handles (`handleSvg` / `startHandle` / `doHandle`)
-Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension), `rot` (furniture rotation), `c0..c3` (furniture resize), `bg0..bg3` (background image corner resize; preserves aspect ratio unless `Shift` is held). Shown only for a single selection. Background image (`id === 'bg'`) is selectable and movable on the canvas unless `P.bg.lock` is true.
+Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension), `rot` (furniture rotation), `c0..c3` (furniture resize), `bg0..bg3` (background image corner resize; preserves aspect ratio unless `Shift` is held). Shown only for a single selection. Background image (`id === 'bg'`) is selectable and movable on the canvas unless `P.bg.lock` is true. `g0..g3` (multi-selection bbox resize) appear when at least one *group-resizable* kind is selected (wall/dim/room/furn/text/sketch/bg — pure-op selections show none); scaling a wall re-projects its attached openings and shifts hinged-wall angle presets by the rotation delta.
 
 ### Storage
 - `autosave()` (debounced) writes `P` to IndexedDB `state` store key `'auto'`; `beforeunload` also writes. Fallback to `localStorage['fp_auto']` if IndexedDB fails.
 - Named projects live in the `projects` store (`{name, updatedAt, project}`, keyPath `name`). Saving with an existing name **overwrites**.
 - `migrateLegacyStorage()` moves old `localStorage` keys (`fp_projects`, `fp_auto`) into IndexedDB once, then deletes them.
 - Bumping `DB_VER` requires handling in `onupgradeneeded`; currently version 1 with stores `projects`, `state`.
+
+### Adjustable layouts & groups (vars)
+- Groups: members carry `o.grp`; per-floor `groups[]` holds `{ id, vars: [{ label, poses: {id: pose}, base?, draft? }], idx }`. Room variants live on the room itself (`r.vars`, `r.vIdx`). Clicking a room/group on canvas cycles layouts (`switchRoomVarTo` / `switchGroupVarTo`).
+- `snapPose(kind, o)` snapshots an object pose (walls also keep `angles`/`posIdx`); `applyVarPoses()` restores them — for legacy poses without angles it re-shifts existing presets by the body's rotation delta. `syncActiveVars()` refreshes the active variant's poses while the user edits.
+- **First-come ownership:** `poseOwners()` maps id → owning layouts; `roomPoses` / `groupPoses` skip objects already claimed by another layout, so a wall shared by two rooms or furniture shared with a group layout is not double-moved. `dropPoseOrphans()` removes stale poses after ungroup / re-group / delete.
+- Alt+click selects a single group member **without** cycling its layout; the layout badge erased with the eraser deletes the whole group.
+
+### 3D interaction notes
+- Picking uses `findAnyFloor()` (ids are unique across floors) and respects **occluders**: only the closest mesh hit is considered — walls/slabs/room floors hide furniture behind them.
+- 3D group drags mirror 2D `doMove`: connected wall ends follow (`conn`), hinge pins translate (`pins`), room/sketch polygons update in the plan and are rebuilt into the scene on drop (`schedBuild3D`).
+- `h3[]` holds one `BoxHelper` per selected furniture item, so grouped selections highlight too.
+- `build3D()` disposes previous geometries/materials (`T3.mats`) before rebuilding; `affects3D(k, p)` gates which panel properties trigger `schedBuild3D()`.
 
 ### 3D (`build3D`, `loop3D`)
 - Plan `(x, y)` → Three `(x, elevation, z=y)`. Rotation: `mesh.rotation.y = -θ` (SVG clockwise → Three counter-clockwise). Room polygons use `rotation.x = +π/2`.

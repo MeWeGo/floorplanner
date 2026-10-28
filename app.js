@@ -113,6 +113,20 @@ function find(id, f = F()) {
   return null;
 }
 const selObjs = () => sel.map(id => find(id)).filter(Boolean);
+function findAnyFloor(id) {
+  // 3B tüm katları çizer; kimlikler katlar arası zaten benzersizdir
+  if (id === 'bg' && P && P.bg) { P.bg.id = 'bg'; return { kind: 'bg', arr: null, o: P.bg, floor: F(), floorIdx: fi }; }
+  for (let i = 0; i < P.floors.length; i++) {
+    const fl = P.floors[i];
+    for (const arr in KINDS) { const o = fl[arr].find(x => x.id === id); if (o) return { kind: KINDS[arr], arr, o, floor: fl, floorIdx: i }; }
+  }
+  return null;
+}
+function groupMemberIdsAny(grp) {
+  const ids = [];
+  for (const fl of P.floors) for (const k in KINDS) for (const o of fl[k]) if (o.grp === grp) ids.push(o.id);
+  return ids;
+}
 
 /* ---------- Geometri ---------- */
 function segProj(p, a, b) {
@@ -170,6 +184,7 @@ function bboxOf(kind, o) {
   else if (kind === 'furn') pts = furnCorners(o);
   else if (kind === 'room' || kind === 'sketch') pts = o.pts;
   else if (kind === 'op') { const p = opPos(o); pts = p ? [p] : []; }
+  else if (kind === 'bg') pts = [{ x: o.x, y: o.y }, { x: o.x + o.w, y: o.y }, { x: o.x + o.w, y: o.y + o.h }, { x: o.x, y: o.y + o.h }];
   else pts = [{ x: o.x, y: o.y }];
   if (!pts.length) return null;
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
@@ -298,6 +313,7 @@ function restore(s) {
   sel = sel.filter(id => find(id));
   $('#pname').value = P.name; syncGridUI();
   refresh();
+  if (ui.view3d && T3) schedBuild3D(); // undo/redo sonrası 3B sahnesi tazelensin
 }
 function undo() { if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
 function redo() { if (hi < hist.length - 1) { hi++; restore(hist[hi]); autosave(); updateUndo(); } }
@@ -410,12 +426,19 @@ function roomSvg(r, live) {
           s += `<text x="${gc.x}" y="${gc.y}" text-anchor="middle" dominant-baseline="central" font-size="${clamp(11 / view.z, 9, 20)}" font-weight="700" fill="${C.accent}" stroke="${C.halo}" stroke-width="${3 / view.z}" paint-order="stroke" pointer-events="none">${esc(v.label)}</text>`;
         }
       }
+      const rotDiff = (a, b) => a != null && Math.abs((((a - (b || 0)) % 360) + 360) % 360) > 1;
       for (const id in v.poses) {
         if (id === r.id) continue;
-        const fd = find(id), p = v.poses[id];
-        if (fd && fd.kind === 'furn' && (Math.hypot(p.x - fd.o.x, p.y - fd.o.y) > 1 || (p.w && Math.abs(p.w - fd.o.w) > 1) || (p.d && Math.abs(p.d - fd.o.d) > 1))) {
+        const fd = find(id), p = v.poses[id]; if (!fd || !p) continue;
+        if (fd.kind === 'furn' && (Math.hypot(p.x - fd.o.x, p.y - fd.o.y) > 1 || (p.w && Math.abs(p.w - fd.o.w) > 1) || (p.d && Math.abs(p.d - fd.o.d) > 1) || rotDiff(p.rot, fd.o.rot))) {
           const gw = p.w ?? fd.o.w, gd = p.d ?? fd.o.d, grot = p.rot ?? fd.o.rot;
           s += `<g transform="translate(${p.x} ${p.y}) rotate(${grot})" pointer-events="none"><rect x="${-gw / 2}" y="${-gd / 2}" width="${gw}" height="${gd}" fill="none" stroke="${C.accent}" stroke-opacity="0.4" stroke-width="${1.5 / view.z}" stroke-dasharray="${5 / view.z} ${4 / view.z}"/></g>`;
+        } else if (fd.kind === 'wall' && p.a && p.b && (dist(p.a, fd.o.a) > 1 || dist(p.b, fd.o.b) > 1)) {
+          s += `<line x1="${p.a.x}" y1="${p.a.y}" x2="${p.b.x}" y2="${p.b.y}" stroke="${C.accent}" stroke-opacity="0.35" stroke-width="${Math.max(2, (p.t || fd.o.t) * 0.3)}" stroke-dasharray="${6 / view.z} ${4 / view.z}" pointer-events="none"/>`;
+        } else if (fd.kind === 'text' && (Math.hypot(p.x - fd.o.x, p.y - fd.o.y) > 1 || rotDiff(p.rot, fd.o.rot))) {
+          s += `<circle cx="${p.x}" cy="${p.y}" r="${clamp(12 / view.z, 8, 22)}" fill="none" stroke="${C.accent}" stroke-opacity="0.4" stroke-width="${1.5 / view.z}" stroke-dasharray="${4 / view.z} ${3 / view.z}" pointer-events="none"/>`;
+        } else if (fd.kind === 'dim' && p.a && p.b && (dist(p.a, fd.o.a) > 1 || dist(p.b, fd.o.b) > 1)) {
+          s += `<line x1="${p.a.x}" y1="${p.a.y}" x2="${p.b.x}" y2="${p.b.y}" stroke="${C.accent}" stroke-opacity="0.35" stroke-width="${1.5 / view.z}" stroke-dasharray="${6 / view.z} ${4 / view.z}" pointer-events="none"/>`;
         }
       }
     });
@@ -597,7 +620,8 @@ function groupVarsSvg(f, live) {
         if (idx === curIdx || !v.poses) return;
         for (const id of mids) {
           const fd = find(id), p = v.poses[id]; if (!fd || !p) continue;
-          if (fd.kind === 'furn' && (Math.hypot(p.x - fd.o.x, p.y - fd.o.y) > 1 || (p.w && Math.abs(p.w - fd.o.w) > 1) || (p.d && Math.abs(p.d - fd.o.d) > 1))) {
+          const rotDiff = (a, b) => a != null && Math.abs((((a - (b || 0)) % 360) + 360) % 360) > 1;
+          if (fd.kind === 'furn' && (Math.hypot(p.x - fd.o.x, p.y - fd.o.y) > 1 || (p.w && Math.abs(p.w - fd.o.w) > 1) || (p.d && Math.abs(p.d - fd.o.d) > 1) || rotDiff(p.rot, fd.o.rot))) {
             const gw = p.w ?? fd.o.w, gd = p.d ?? fd.o.d, grot = p.rot ?? fd.o.rot;
             s += `<g transform="translate(${p.x} ${p.y}) rotate(${grot})" pointer-events="none"><rect x="${-gw / 2}" y="${-gd / 2}" width="${gw}" height="${gd}" fill="none" stroke="${C.accent}" stroke-opacity="0.4" stroke-width="${1.5 / view.z}" stroke-dasharray="${5 / view.z} ${4 / view.z}"/></g>`;
           } else if (fd.kind === 'wall' && p.a && p.b && (dist(p.a, fd.o.a) > 1 || dist(p.b, fd.o.b) > 1)) {
@@ -605,6 +629,10 @@ function groupVarsSvg(f, live) {
           } else if (fd.kind === 'room' && p.pts) {
             const gpts = p.pts.map(q => q.x + ',' + q.y).join(' ');
             s += `<polygon points="${gpts}" fill="none" stroke="${C.accent}" stroke-opacity="0.4" stroke-width="${1.8 / view.z}" stroke-dasharray="${6 / view.z} ${4 / view.z}" pointer-events="none"/>`;
+          } else if (fd.kind === 'text' && (Math.hypot(p.x - fd.o.x, p.y - fd.o.y) > 1 || rotDiff(p.rot, fd.o.rot))) {
+            s += `<circle cx="${p.x}" cy="${p.y}" r="${clamp(12 / view.z, 8, 22)}" fill="none" stroke="${C.accent}" stroke-opacity="0.4" stroke-width="${1.5 / view.z}" stroke-dasharray="${4 / view.z} ${3 / view.z}" pointer-events="none"/>`;
+          } else if (fd.kind === 'dim' && p.a && p.b && (dist(p.a, fd.o.a) > 1 || dist(p.b, fd.o.b) > 1)) {
+            s += `<line x1="${p.a.x}" y1="${p.a.y}" x2="${p.b.x}" y2="${p.b.y}" stroke="${C.accent}" stroke-opacity="0.35" stroke-width="${1.5 / view.z}" stroke-dasharray="${6 / view.z} ${4 / view.z}" pointer-events="none"/>`;
           }
         }
       });
@@ -636,6 +664,7 @@ function layerStrings(f, live) {
     sketches: (f.sketches || []).map(s => sketchSvg(s, live)).join(''),
   };
 }
+const GRESIZE = { wall: 1, dim: 1, room: 1, furn: 1, text: 1, sketch: 1, bg: 1 };
 function handleSvg() {
   const C = pal(), z = view.z, hs = 6 / z, os = selObjs(); let s = '';
   const hnd = (x, y, id, cur = 'pointer', shape = 'rect') => shape === 'rect'
@@ -685,7 +714,7 @@ function handleSvg() {
       s += hnd(o.x + o.w / 2, o.y, 'bgN', 'ns-resize') + hnd(o.x + o.w, o.y + o.h / 2, 'bgE', 'ew-resize')
         + hnd(o.x + o.w / 2, o.y + o.h, 'bgS', 'ns-resize') + hnd(o.x, o.y + o.h / 2, 'bgW', 'ew-resize');
     }
-  } else if (os.length > 1) {
+  } else if (os.length > 1 && os.some(x => GRESIZE[x.kind])) {
     let bb = null;
     for (const { kind, o } of os) {
       const b = bboxOf(kind, o); if (!b) continue;
@@ -803,10 +832,11 @@ function deleteIds(ids) {
   const wl = new Set(f.walls.map(w => w.id));
   f.ops = f.ops.filter(o => !s.has(o.id) && wl.has(o.wall));
   for (const k of ['furn', 'rooms', 'dims', 'texts', 'sketches']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
+  dropPoseOrphans(ids, true); // silinen nesnelerin (grup + oda) düzen kayıtlarındaki eski pozları temizlensin
   pruneGroups();
   sel = sel.filter(id => !s.has(id));
 }
-function deleteSel() { if (!sel.length) return; deleteIds(sel); commit(); refresh(); }
+function deleteSel() { if (!sel.length) return; deleteIds(sel); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
 
 /* ---------- Oda algılama (raster flood-fill) ---------- */
 function detectRoom(p) {
@@ -1183,7 +1213,13 @@ cv.addEventListener('pointerdown', e => {
     }
     case 'text': { const sp = ui.snap ? snapToGrid(raw) : raw; const t = { id: uid(), x: sp.x, y: sp.y, text: L('Metin', 'Text'), size: 24, color: '#1e293b', rot: 0 }; f.texts.push(t); sel = [t.id]; commit(); setTool('select'); refresh(); return; }
     case 'eraser': {
-      const t = pickDataId(e); if (t) { deleteIds([t.dataset.id]); commit(); refresh(); } return;
+      const t = pickDataId(e);
+      if (t) {
+        if (t.dataset.varBadge === 'group' && t.dataset.grp) deleteIds(groupMemberIds(t.dataset.grp)); // rozet = grubun tamamı
+        else deleteIds([t.dataset.id]);
+        commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+      }
+      return;
     }
     case 'calib': {
       if (!P.bg) { toast(L('Önce bir arka plan görseli ekle (sağ panel)', 'Add a background image first (right panel)')); return; }
@@ -1277,7 +1313,7 @@ cv.addEventListener('pointerup', e => {
     refresh(); return;
   }
   if (d.type === 'move' || d.type === 'handle') {
-    if (!d.moved && d.type === 'move' && d.clickedId && !e.shiftKey) {
+    if (!d.moved && d.type === 'move' && d.clickedId && !e.shiftKey && !e.altKey) { // Alt: tek üye seçimi, düzen geçişi yapma
       const fd = find(d.clickedId);
       if (fd && fd.kind === 'wall' && !fd.o.grp && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
         cycleWallPos(fd.o);
@@ -1408,14 +1444,33 @@ function doHandle(raw, e) {
     const ty = y => Math.round((ay + (y - ay) * sy) * 10) / 10;
     for (const { kind, o: mo } of selObjs()) {
       const g = d.origAll.get(mo.id); if (!g) continue;
-      if (kind === 'wall' || kind === 'dim') { mo.a = { x: tx(g.a.x), y: ty(g.a.y) }; mo.b = { x: tx(g.b.x), y: ty(g.b.y) }; }
+      if (kind === 'wall' || kind === 'dim') {
+        mo.a = { x: tx(g.a.x), y: ty(g.a.y) }; mo.b = { x: tx(g.b.x), y: ty(g.b.y) };
+        if (kind === 'wall') {
+          // menteşeli duvar: açı ön ayarlarını yeni yönelime göre kaydır (eski preset'e sıçramasın)
+          if (Array.isArray(g.angles) && g.angles.length) {
+            const od = Math.atan2(g.b.y - g.a.y, g.b.x - g.a.x) * 180 / Math.PI, nd = Math.atan2(mo.b.y - mo.a.y, mo.b.x - mo.a.x) * 180 / Math.PI;
+            const diff = Math.round((nd - od) * 10) / 10;
+            if (Math.abs(diff) > 0.05) mo.angles = g.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
+          }
+          // duvara bağlı kapı/pencereler de ölçeklensin: merkez noktayı ölçekle, yeni duvara projekte et
+          const L0 = dist(g.a, g.b) || 1, L1 = wLen(mo) || 1, ux = (mo.b.x - mo.a.x) / L1, uy = (mo.b.y - mo.a.y) / L1;
+          for (const o2 of F().ops.filter(op => op.wall === mo.id)) {
+            const t0 = clamp(o2.d / L0, 0, 1), px = tx(g.a.x + (g.b.x - g.a.x) * t0), py = ty(g.a.y + (g.b.y - g.a.y) * t0);
+            const pr = clamp(((px - mo.a.x) * ux + (py - mo.a.y) * uy) / L1, 0, 1);
+            o2.d = clamp(pr * L1, Math.min(o2.w / 2, L1 / 2), Math.max(L1 - o2.w / 2, L1 / 2));
+          }
+        }
+      }
       else if (kind === 'room') mo.pts = g.pts.map(q => ({ x: tx(q.x), y: ty(q.y) }));
+      else if (kind === 'sketch') mo.pts = g.pts.map(q => ({ x: tx(q.x), y: ty(q.y) }));
       else if (kind === 'furn') {
         mo.x = tx(g.x); mo.y = ty(g.y);
         const rot = ((g.rot || 0) % 180 + 180) % 180, swap = rot >= 45 && rot < 135;
         mo.w = Math.max(10, Math.round(g.w * (swap ? sy : sx)));
         mo.d = Math.max(10, Math.round(g.d * (swap ? sx : sy)));
       } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
+      else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
     }
   } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; }
   else if (h === 'doff') {
@@ -1569,11 +1624,19 @@ function projectPanel() {
   if (Object.keys(cnt).length) h += `<h4>${L('Mobilya listesi', 'Furniture list')}</h4>` + Object.entries(cnt).map(([k, v]) => `<div class="stat"><span>${esc(k)}</span><b>× ${v}</b></div>`).join('');
   return h;
 }
+function affects3D(k, p) {
+  // yalnızca 3B sahneyi gerçekten etkileyen özellikler yeniden insin
+  if (k === 'wall' || k === 'op') return true;
+  if (k === 'furn') return p !== 'label';
+  if (k === 'room') return p === 'color';
+  if (k === 'sketch') return p === 'w' || p === 'color';
+  return false; // dim/text/bg/layer 3B'yi etkilemez
+}
 function applyProp(t, final) {
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
   if (k === 'layer') { layersVis[p] = v; render(); return; }
-  if (k === 'proj') { P[p] = v; if (final) { commit(); } return; }
+  if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
   if (k === 'bg' && P.bg) { P.bg[p] = v; if (p === 'lock' && v) sel = sel.filter(x => x !== 'bg'); render(); if (final) { commit(); if (p === 'lock') renderProps(); } return; }
   if (k === 'wallpos') {
     const w = selObjs().find(x => x.kind === 'wall')?.o, idx = +p;
@@ -1602,8 +1665,10 @@ function applyProp(t, final) {
       }
     } else if (k === 'room' && (p === 'rx' || p === 'ry' || p === 'rw' || p === 'rd')) {
       const rb = bboxOf('room', o); if (!rb) continue;
-      if (p === 'rx') { const dx = v - rb.x0; o.pts = o.pts.map(q => ({ x: Math.round(q.x + dx), y: q.y })); }
-      else if (p === 'ry') { const dy = v - rb.y0; o.pts = o.pts.map(q => ({ x: q.x, y: Math.round(q.y + dy) })); }
+      // sürüklemeyle aynı davranış: X/Y kaydırınca odanın içeriği de kayar
+      const inner = (p === 'rx' || p === 'ry') ? { fn: furnInRoom(o), tx: F().texts.filter(q => pointInPoly(q, o.pts)) } : null;
+      if (p === 'rx') { const dx = v - rb.x0; o.pts = o.pts.map(q => ({ x: Math.round(q.x + dx), y: q.y })); if (inner) { inner.fn.forEach(q => q.x += dx); inner.tx.forEach(q => q.x += dx); } }
+      else if (p === 'ry') { const dy = v - rb.y0; o.pts = o.pts.map(q => ({ x: q.x, y: Math.round(q.y + dy) })); if (inner) { inner.fn.forEach(q => q.y += dy); inner.tx.forEach(q => q.y += dy); } }
       else if (p === 'rw') { const w0 = rb.x1 - rb.x0 || 1, sc = Math.max(20, v) / w0; o.pts = o.pts.map(q => ({ x: Math.round(rb.x0 + (q.x - rb.x0) * sc), y: q.y })); }
       else if (p === 'rd') { const h0 = rb.y1 - rb.y0 || 1, sc = Math.max(20, v) / h0; o.pts = o.pts.map(q => ({ x: q.x, y: Math.round(rb.y0 + (q.y - rb.y0) * sc) })); }
     } else if (k === 'op' && p === 'open') { o.open = v ? 90 : 0; }
@@ -1613,7 +1678,7 @@ function applyProp(t, final) {
   render();
   if (ui.view3d && T3) {
     if (k === 'furn' && p === 'rot') os.forEach(x => moveFurn3D(x.o));
-    else if (k !== 'furn-label' && k !== 'layer' && k !== 'bg' && !(k === 'furn' && p === 'label')) schedBuild3D();
+    else if (affects3D(k, p)) schedBuild3D();
   }
   if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p)) renderProps(); }
 }
@@ -1737,9 +1802,19 @@ function ungroupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind] && x.o.grp);
   if (!gs.length) return;
   gs.forEach(({ o }) => delete o.grp);
+  dropPoseOrphans(gs.map(x => x.o.id)); // eski grup kayıtlarındaki artık pozlar temizlenir
   pruneGroups();
   commit(); refresh();
+  if (ui.view3d && T3) schedBuild3D();
   toast(L('Grup çözüldü', 'Group dissolved'));
+}
+function dropPoseOrphans(ids, alsoRooms = false) {
+  // grup çözme / yeniden gruplama / silme sonrası: kayıtlarda üyesi olmayan poz kalmasın
+  const f = F(); if (!f) return;
+  const s = new Set(ids);
+  const clean = recs => { for (const g of recs) for (const v of g.vars || []) if (v.poses) for (const id in v.poses) if (s.has(id)) delete v.poses[id]; };
+  clean(f.groups || []);
+  if (alsoRooms) clean(f.rooms || []);
 }
 function pruneGroups() {
   const f = F(); if (!f.groups) return;
@@ -1757,7 +1832,11 @@ function nextVarPrefix() {
   let p = 1; while (used.has(p)) p++; return p;
 }
 function snapPose(kind, o) {
-  if (kind === 'wall') return { a: { ...o.a }, b: { ...o.b }, t: o.t, h: o.h };
+  if (kind === 'wall') {
+    const p = { a: { ...o.a }, b: { ...o.b }, t: o.t, h: o.h };
+    if (Array.isArray(o.angles) && o.angles.length) { p.angles = o.angles.slice(); p.posIdx = o.posIdx ?? 0; } // menteşeli duvarın preset durumu da saklanır
+    return p;
+  }
   if (kind === 'room') return { pts: o.pts.map(p => ({ ...p })) };
   if (kind === 'dim') return { a: { ...o.a }, b: { ...o.b }, off: o.off };
   if (kind === 'furn') return { x: o.x, y: o.y, rot: o.rot, w: o.w, d: o.d, h: o.h };
@@ -1771,7 +1850,24 @@ function groupMemberIds(grp) {
   for (const k in KINDS) for (const o of f[k]) if (o.grp === grp) ids.push(o.id);
   return ids;
 }
-function groupPoses(ids) { const m = {}; for (const id of ids) { const fd = find(id); if (fd && GROUPABLE[fd.kind]) m[id] = snapPose(fd.kind, fd.o); } return m; }
+function poseOwners() {
+  // id -> sahip düzen kümesi ('room:<roomId>' / 'group:<recId>') — ilk gelen sahiplenir
+  const f = F(), m = {};
+  if (!f) return m;
+  for (const r of f.rooms || []) for (const v of r.vars || []) if (v.poses) for (const id in v.poses) (m[id] = m[id] || new Set()).add('room:' + r.id);
+  for (const g of f.groups || []) for (const v of g.vars || []) if (v.poses) for (const id in v.poses) (m[id] = m[id] || new Set()).add('group:' + g.id);
+  return m;
+}
+const ownedElsewhere = (own, id, self) => [...(own[id] || [])].some(t => t !== self);
+function groupPoses(ids, recId) {
+  const own = poseOwners(), self = 'group:' + recId, m = {};
+  for (const id of ids) {
+    if (ownedElsewhere(own, id, self)) continue; // başka bir düzenin sahiplik payında
+    const fd = find(id);
+    if (fd && GROUPABLE[fd.kind]) m[id] = snapPose(fd.kind, fd.o);
+  }
+  return m;
+}
 function furnInRoom(r) { return F().furn.filter(o => pointInPoly(o, r.pts)); }
 function ptNearPoly(p, pts, tol) {
   for (let i = 0; i < pts.length; i++) {
@@ -1780,20 +1876,23 @@ function ptNearPoly(p, pts, tol) {
   return pointInPoly(p, pts);
 }
 function wallsForRoom(r) {
-  return F().walls.filter(w => !w.grp && (
-    ptNearPoly(w.a, r.pts, w.t + 15) ||
-    ptNearPoly(w.b, r.pts, w.t + 15) ||
-    ptNearPoly({ x: (w.a.x + w.b.x) / 2, y: (w.a.y + w.b.y) / 2 }, r.pts, w.t + 15)
-  ));
+  const own = poseOwners(), self = 'room:' + r.id;
+  return F().walls.filter(w => {
+    if (w.grp || ownedElsewhere(own, w.id, self)) return false;
+    const t = w.t + 15; // tek köşe teması yetmez: duvar oda kenarı boyunca uzanmalı
+    const ends = (ptNearPoly(w.a, r.pts, t) ? 1 : 0) + (ptNearPoly(w.b, r.pts, t) ? 1 : 0);
+    return ends === 2 || ptNearPoly({ x: (w.a.x + w.b.x) / 2, y: (w.a.y + w.b.y) / 2 }, r.pts, t);
+  });
 }
 function roomPoses(r) {
+  const own = poseOwners(), self = 'room:' + r.id, free = id => !ownedElsewhere(own, id, self);
   const m = { [r.id]: snapPose('room', r) };
-  for (const o of furnInRoom(r)) m[o.id] = snapPose('furn', o);
-  for (const t of F().texts.filter(x => pointInPoly(x, r.pts))) m[t.id] = snapPose('text', t);
-  for (const w of wallsForRoom(r)) m[w.id] = snapPose('wall', w);
+  for (const o of furnInRoom(r)) if (free(o.id)) m[o.id] = snapPose('furn', o);
+  for (const t of F().texts.filter(x => pointInPoly(x, r.pts))) if (free(t.id)) m[t.id] = snapPose('text', t);
+  for (const w of wallsForRoom(r)) if (free(w.id)) m[w.id] = snapPose('wall', w);
   if (Array.isArray(r.vars)) {
     for (const v of r.vars) for (const id in (v.poses || {})) {
-      if (!m[id]) { const fd = find(id); if (fd && GROUPABLE[fd.kind]) m[id] = snapPose(fd.kind, fd.o); }
+      if (!m[id] && free(id)) { const fd = find(id); if (fd && GROUPABLE[fd.kind]) m[id] = snapPose(fd.kind, fd.o); }
     }
   }
   return m;
@@ -1803,9 +1902,19 @@ function applyVarPoses(poses) {
     const fd = find(id); if (!fd) continue;
     const p = poses[id], o = fd.o;
     if (fd.kind === 'wall') {
+      const hadAngles = Array.isArray(o.angles) && o.angles.length > 0, od = hadAngles ? wallDeg(o) : 0;
       o.a = { ...p.a }; o.b = { ...p.b };
       if (p.t != null) o.t = p.t;
       if (p.h != null) o.h = p.h;
+      if (Array.isArray(p.angles) && p.angles.length) {
+        // preset durumu düzenele birlikte geri gelir (rozet/ hayaletler gövdeyle tutarlı)
+        o.angles = p.angles.slice();
+        o.posIdx = clamp(p.posIdx ?? 0, 0, o.angles.length - 1);
+      } else if (hadAngles) {
+        // eski kayıtlar (angles alanı yok): gövde dönerken presetleri de aynı farkla kaydır
+        const diff = Math.round((wallDeg(o) - od) * 10) / 10;
+        if (Math.abs(diff) > 0.05) o.angles = o.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
+      }
       const L = wLen(o);
       F().ops.forEach(op => { if (op.wall === o.id) op.d = clamp(op.d, Math.min(op.w / 2, L / 2), Math.max(L - op.w / 2, L / 2)); });
     } else if (fd.kind === 'room') {
@@ -1838,14 +1947,14 @@ function syncActiveVars() {
     if (!Array.isArray(rec.vars) || !rec.vars.length) continue;
     const mids = groupMemberIds(rec.id); if (!mids.length) continue;
     const i = clamp(rec.idx ?? 0, 0, rec.vars.length - 1), v = rec.vars[i];
-    if (rec.vars.length >= 2 || v.draft) v.poses = groupPoses(mids);
+    if (rec.vars.length >= 2 || v.draft) v.poses = groupPoses(mids, rec.id);
   }
 }
 function switchGroupVarTo(rec, nextIdx) {
   if (!rec || !rec.vars || !rec.vars.length) return false;
   const mids = groupMemberIds(rec.id); if (!mids.length) return false;
   const curIdx = clamp(rec.idx ?? 0, 0, rec.vars.length - 1), curV = rec.vars[curIdx];
-  const curSnap = groupPoses(mids);
+  const curSnap = groupPoses(mids, rec.id);
   if (rec.vars.length >= 2 || curV.draft) {
     curV.poses = clonePoses(curSnap);
     if (!curV.base || !posesEqual(curSnap, curV.base)) { curV.base = clonePoses(curSnap); delete curV.draft; }
@@ -1855,7 +1964,6 @@ function switchGroupVarTo(rec, nextIdx) {
   if (!v.base) v.base = clonePoses(v.poses);
   _switchingVar = true;
   try { applyVarPoses(v.poses); commit(); } finally { _switchingVar = false; }
-  refresh();
   refresh(); if (ui.view3d && T3) build3D(true);
   toast(L(`Düzen ${v.label} (${rec.idx + 1}/${rec.vars.length})`, `Layout ${v.label} (${rec.idx + 1}/${rec.vars.length})`));
   return true;
@@ -1909,6 +2017,7 @@ function varAction(a, targetIdx) {
   if (c.type === 'potential') {
     if (a !== 'varInit') return;
     const g = uid(), f = F(); f.groups = f.groups || [];
+    dropPoseOrphans(c.os.map(x => x.o.id)); // eski grupların kayıtlarından çıkar (ilk-gelen sahiplik)
     c.os.forEach(({ o }) => o.grp = g);
     const rec = { id: g, vars: [], idx: 0 };
     f.groups.push(rec);
@@ -1918,7 +2027,7 @@ function varAction(a, targetIdx) {
   const vars = isRoom ? (c.o.vars = c.o.vars || []) : (c.rec.vars = c.rec.vars || []);
   const idx = () => isRoom ? (c.o.vIdx ?? 0) : (c.rec.idx ?? 0);
   const setIdx = i => { if (isRoom) c.o.vIdx = i; else c.rec.idx = i; };
-  const snap = () => isRoom ? roomPoses(c.o) : groupPoses(groupMemberIds(c.rec.id));
+  const snap = () => isRoom ? roomPoses(c.o) : groupPoses(groupMemberIds(c.rec.id), c.rec.id);
   const pfx = vars.length ? (parseInt(vars[0].label) || 1) : nextVarPrefix();
   if (a === 'varInit') {
     if (vars.length) return;
@@ -1979,6 +2088,7 @@ function varAction(a, targetIdx) {
   _switchingVar = true;
   try { commit(); } finally { _switchingVar = false; }
   refresh(); renderProps();
+  if (ui.view3d && T3) schedBuild3D();
 }
 function variantUIHtml() {
   const c = varContainer(); if (!c) return '';
@@ -2011,6 +2121,7 @@ function paste(fromSel) {
   }
   for (const { kind, o } of items) if (kind === 'op' && idm[o.wall]) { const n = JSON.parse(JSON.stringify(o)); n.id = uid(); n.wall = idm[o.wall]; f.ops.push(n); ids.push(n.id); }
   sel = ids; commit(); refresh();
+  if (ui.view3d && T3) schedBuild3D();
 }
 
 /* ---------- Klavye ---------- */
@@ -2069,7 +2180,7 @@ window.addEventListener('keydown', e => {
   if (e.key.startsWith('Arrow') && sel.length) {
     e.preventDefault(); const st = e.shiftKey ? 10 : 1; const dx = e.key === 'ArrowLeft' ? -st : e.key === 'ArrowRight' ? st : 0, dy = e.key === 'ArrowUp' ? -st : e.key === 'ArrowDown' ? st : 0;
     selObjs().forEach(({ kind, o }) => { if (kind === 'wall' || kind === 'dim') { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (kind === 'room' || kind === 'sketch') o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
-    commit(); render(); if (sel.includes('bg')) renderProps(); return;
+    commit(); render(); if (sel.includes('bg')) renderProps(); if (ui.view3d && T3) schedBuild3D(); return;
   }
   const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', c: 'calib', b: 'pen' };
   if (map[k]) { setTool(map[k]); return; }
@@ -2119,6 +2230,7 @@ function helpModal() {
     ['Click door', 'Open / close door (90°)'],
     ['Click room / group', 'Cycle saved layouts (1a → 1b → 1c)'],
     ['Alt + drag wall', 'Move wall without pulling connected walls'],
+    ['Drag a room', 'Room + furniture & texts inside move together (single room)'],
     ['Ctrl+G / Ctrl+Shift+G', 'Group / ungroup selected objects'],
   ] : [
     ['V / H', 'Seç / Kaydır (Boşluk basılı: geçici kaydır)'],
@@ -2153,6 +2265,7 @@ function helpModal() {
     ['Kapıya tıkla', 'Kapıyı aç / kapat (90°)'],
     ['Oda / gruba tıkla', 'Kayıtlı düzenler arasında geç (1a → 1b → 1c)'],
     ['Alt + duvar sürükle', 'Bitişik duvarları çekmeden taşı'],
+    ['Odayı sürükle', 'Oda + içindeki mobilya ve metinler birlikte taşınır (tek oda)'],
     ['Ctrl+G / Ctrl+Shift+G', 'Seçili nesneleri grupla / çöz'],
   ];
   openModal(`<h2>${L('Kısayollar & İpuçları', 'Shortcuts & Tips')} <button class="btn sm" data-close>✕</button></h2><table class="kb">${rows.map(r => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
@@ -2356,58 +2469,75 @@ function init3D() {
   r.domElement.addEventListener('pointerdown', e => {
     if (e.button !== 0 || !ui.view3d) return;
     const rc = ray3(e);
-    for (const h of rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh)) {
-      let cur = h.object;
-      while (cur && !(cur.userData && cur.userData.furnId)) cur = cur.parent;
-      if (!cur) continue;
-      const fd = find(cur.userData.furnId);
-      if (!fd || fd.kind !== 'furn') continue;
-      const o = fd.o, elev = cur.userData.elev || 0, p0 = new THREE.Vector3();
-      if (!rc.ray.intersectPlane(floorPlane(elev), p0)) return;
-      e.stopImmediatePropagation(); // orbit başlamasın
-      sel = o.grp ? groupMemberIds(o.grp) : [o.id];
-      d3 = { id: o.id, elev, sx: e.clientX, sy: e.clientY, moved: false, offX: p0.x - o.x, offZ: p0.z - o.y,
-        orig: new Map(sel.map(sid => { const fo = find(sid)?.o; return [sid, fo ? JSON.parse(JSON.stringify(fo)) : null]; })),
-        members: sel.slice() };
-      refreshSel3D(); renderProps();
-      return;
+    const hits = rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh);
+    if (!hits.length) return;
+    // en yakın mesh kazanır: duvar/döşeme arkasındaki mobilya seçilmez (örtücüye saygı)
+    let cur = hits[0].object;
+    while (cur && !(cur.userData && cur.userData.furnId)) cur = cur.parent;
+    if (!cur) return;
+    const fd = findAnyFloor(cur.userData.furnId);
+    if (!fd || fd.kind !== 'furn') return;
+    const o = fd.o, elev = cur.userData.elev || 0, p0 = new THREE.Vector3();
+    if (!rc.ray.intersectPlane(floorPlane(elev), p0)) return;
+    e.stopImmediatePropagation(); // orbit başlamasın
+    sel = o.grp ? groupMemberIdsAny(o.grp) : [o.id];
+    d3 = { id: o.id, elev, sx: e.clientX, sy: e.clientY, moved: false, offX: p0.x - o.x, offZ: p0.z - o.y,
+      orig: new Map(sel.map(sid => { const fo = findAnyFloor(sid)?.o; return [sid, fo ? JSON.parse(JSON.stringify(fo)) : null]; })),
+      members: sel.slice(), conn: [], pins: [] };
+    // 2B ile aynı davranış: seçili duvarların bitişik uçları da birlikte taşınır (kat başına)
+    const sws = d3.members.map(sid => findAnyFloor(sid)).filter(x => x && x.kind === 'wall');
+    for (const sw of sws) {
+      const sset = new Set(sws.filter(s => s.floorIdx === sw.floorIdx).map(s => s.o.id));
+      const ends = Array.isArray(sw.o.angles) && sw.o.angles.length ? [wallPivot(sw.o)] : ['a', 'b'];
+      for (const w of sw.floor.walls) {
+        if (sset.has(w.id)) continue;
+        for (const e2 of ['a', 'b']) for (const se of ends) if (dist(w[e2], sw.o[se]) < 1) d3.conn.push({ w, e: e2, o: { x: w[e2].x, y: w[e2].y } });
+      }
     }
+    // menteşeli duvar pimleri de sürüklemeyi izlesin
+    const dragWalls = new Set([...sws.map(s => s.o.id), ...d3.conn.map(c => c.w.id)]);
+    for (const c of scene.children) if (c.isMesh && c.userData.wallId && dragWalls.has(c.userData.wallId)) d3.pins.push({ m: c, x: c.position.x, z: c.position.z });
+    refreshSel3D(); renderProps();
   });
   window.addEventListener('pointermove', e => {
     if (!d3) return;
     if (!d3.moved && Math.hypot(e.clientX - d3.sx, e.clientY - d3.sy) < 4) return;
     d3.moved = true;
-    const o = find(d3.id)?.o; if (!o) { d3 = null; return; }
+    const o = findAnyFloor(d3.id)?.o; if (!o) { d3 = null; return; }
     const p = new THREE.Vector3();
     if (!ray3(e).ray.intersectPlane(floorPlane(d3.elev), p)) return;
     let nx = p.x - d3.offX, ny = p.z - d3.offZ;
     if (ui.snap && !e.shiftKey) { const sp = snapToGrid({ x: nx, y: ny }); nx = sp.x; ny = sp.y; }
     const o0 = d3.orig.get(d3.id), dx = nx - o0.x, dy = ny - o0.y;
     for (const sid of d3.members) {
-      const fd = find(sid); if (!fd) continue;
+      const fd = findAnyFloor(sid); if (!fd) continue;
       const fo = fd.o, g0 = d3.orig.get(sid); if (!g0) continue;
       if (fd.kind === 'furn' || fd.kind === 'text') { fo.x = g0.x + dx; fo.y = g0.y + dy; }
       else if (fd.kind === 'wall' || fd.kind === 'dim') { fo.a = { x: g0.a.x + dx, y: g0.a.y + dy }; fo.b = { x: g0.b.x + dx, y: g0.b.y + dy }; }
+      else if (fd.kind === 'room' || fd.kind === 'sketch') fo.pts = g0.pts.map(q => ({ x: q.x + dx, y: q.y + dy })); // oda/poligon da grupsa birlikte
     }
+    for (const c of d3.conn) c.w[c.e] = { x: c.o.x + dx, y: c.o.y + dy }; // bitişik duvar uçları (2B davranışı)
     for (const sid of d3.members) {
-      const fd = find(sid); if (!fd) continue;
+      const fd = findAnyFloor(sid); if (!fd) continue;
       const g = T3.scene.children.find(c => c.userData && (c.userData.furnId === sid || c.userData.wallId === sid));
       if (!g) continue;
       const fo = fd.o;
       if (fd.kind === 'furn') g.position.set(fo.x, d3.elev, fo.y);
       else if (fd.kind === 'wall') g.position.set((fo.a.x + fo.b.x) / 2, d3.elev, (fo.a.y + fo.b.y) / 2);
     }
-    if (h3) h3.update();
+    for (const c of d3.conn) { const g2 = T3.scene.children.find(ch => ch.userData && ch.userData.wallId === c.w.id); if (g2 && !g2.isMesh) g2.position.set((c.w.a.x + c.w.b.x) / 2, g2.position.y, (c.w.a.y + c.w.b.y) / 2); }
+    for (const pn of d3.pins) { pn.m.position.x = pn.x + dx; pn.m.position.z = pn.z + dy; }
+    for (const h of h3) h.update();
   });
   window.addEventListener('pointerup', e => {
     if (!d3 || e.button !== 0) return;
     const { id, moved } = d3; d3 = null;
-    const fd = find(id); if (!fd || fd.kind !== 'furn') return;
+    const fd = findAnyFloor(id); if (!fd || fd.kind !== 'furn') return;
     if (moved) {
-      if (sel.length === 1) magnet(fd.o); // 2B ile aynı: yakın duvara yapış, arkası duvara baksın
+      if (sel.length === 1 && fd.floorIdx === fi) magnet(fd.o); // 2B ile aynı: yakın duvara yapış (yalnızca kendi katında)
       commit(); refresh();
-      schedBuild3D(); // tutkal/rotasyon değişimi olabilir -> sahne tazelensin
-    } else { if (fd.o.grp && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
+      schedBuild3D(); // tutkal/rotasyon/pin değişimi olabilir -> sahne tazelensin
+    } else { if (fd.floorIdx === fi && fd.o.grp && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
   });
   const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI / 2.02;
   let downPt = null;
@@ -2420,28 +2550,27 @@ function init3D() {
     const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     const rc = new THREE.Raycaster(); rc.setFromCamera(mouse, cam);
     const hits = rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh); // kenar çizgileri (LineSegments) tık çalmasın
+    if (!hits.length) return;
+    // en yakın mesh kazanır: örtücünün arkasındaki kapı/duvar tıklanamaz
+    let cur = hits[0].object;
+    while (cur && !cur.userData?.wallId && !cur.userData?.opId) cur = cur.parent;
     let hit3 = false;
-    for (const h of hits) {
-      let cur = h.object;
-      while (cur && !cur.userData?.wallId && !cur.userData?.opId) cur = cur.parent;
-      if (cur && cur.userData?.opId) {
-        const fd = find(cur.userData.opId);
-        if (fd && fd.kind === 'op' && (fd.o.type === 'door' || fd.o.type === 'double')) {
-          fd.o.open = fd.o.open ? 0 : 90; sel = [fd.o.id]; commit(); refresh(); build3D(true);
-          toast(fd.o.open ? L('Kapı açıldı (90°)', 'Door opened (90°)') : L('Kapı kapandı', 'Door closed'));
-        }
-        hit3 = true; break;
+    if (cur && cur.userData?.opId) {
+      const fd = findAnyFloor(cur.userData.opId);
+      if (fd && fd.kind === 'op' && (fd.o.type === 'door' || fd.o.type === 'double')) {
+        fd.o.open = fd.o.open ? 0 : 90; sel = [fd.o.id]; commit(); refresh(); build3D(true);
+        toast(fd.o.open ? L('Kapı açıldı (90°)', 'Door opened (90°)') : L('Kapı kapandı', 'Door closed'));
       }
-      if (cur && cur.userData?.wallId) {
-        const fd = find(cur.userData.wallId);
-        if (fd && fd.kind === 'wall' && fd.o.grp) {
-          if (cycleGroupVars(fd.o.grp)) { sel = groupMemberIds(fd.o.grp); build3D(true); }
-        } else if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
-          cycleWallPos(fd.o); sel = [fd.o.id]; commit(); refresh(); build3D(true);
-          toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
-        }
-        hit3 = true; break;
+      hit3 = true;
+    } else if (cur && cur.userData?.wallId) {
+      const fd = findAnyFloor(cur.userData.wallId);
+      if (fd && fd.kind === 'wall' && fd.o.grp) {
+        if (fd.floorIdx === fi && cycleGroupVars(fd.o.grp)) { sel = groupMemberIds(fd.o.grp); build3D(true); }
+      } else if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
+        cycleWallPos(fd.o); sel = [fd.o.id]; commit(); refresh(); build3D(true);
+        toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
       }
+      hit3 = true;
     }
     if (!hit3 && sel.length) { sel = []; render(); refreshSel3D(); renderProps(); } // boşluğa tıkla -> seçimi bırak
   });
@@ -2469,7 +2598,10 @@ function loop3D() {
 }
 function build3D(keepCam = false) {
   sync3DFloors();
-  const lt = isLight(), S = T3.scene; while (S.children.length) S.remove(S.children[0]);
+  const lt = isLight(), S = T3.scene;
+  // önceki sahnenin GPU kaynaklarını serbest bırak (sık yeniden yapılanmalarda sızıntı olmasın)
+  if (T3.mats) { S.traverse(o => { if (o.geometry) o.geometry.dispose(); }); for (const m of T3.mats) m.dispose(); }
+  while (S.children.length) S.remove(S.children[0]);
   S.background = new THREE.Color(lt ? 0xe8e3d9 : 0x0b0f14);
   S.add(new THREE.HemisphereLight(0xffffff, lt ? 0x667788 : 0x1e293b, lt ? 0.55 : 0.65));
   const dl = new THREE.DirectionalLight(0xffffff, 0.45); dl.position.set(600, 1500, 400); S.add(dl);
@@ -2546,7 +2678,7 @@ function build3D(keepCam = false) {
       let col = sk.color || '#1e293b';
       if (!lt && (col === '#1e293b' || col === '#0f172a' || col === '#000000')) col = '#e6edf5';
       const geo = new THREE.BufferGeometry().setFromPoints(sk.pts.map(p => new THREE.Vector3(p.x, elev + 1.5, p.y)));
-      S.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: col })));
+      S.add(new THREE.Line(geo, mat(col))); // malzeme matCache ile T3.mats'te dispose edilir
     });
     elev += P.wallH + 20;
   });
@@ -2554,24 +2686,30 @@ function build3D(keepCam = false) {
   const cx = (all.x0 + all.x1) / 2, cz = (all.y0 + all.y1) / 2, sz = Math.max(all.x1 - all.x0, all.y1 - all.y0, 400);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xd8d2c5 : 0x11161e)); ground.rotation.x = -Math.PI / 2; ground.position.y = -21; S.add(ground);
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); }
+  T3.mats = Object.values(matCache).concat([lineMat]); // sonraki build3D çağrısında dispose edilmek üzere
   T3.ctl.update();
   refreshSel3D();
 }
 
 /* ---------- 3B seçim vurgusu & canlı güncelleme ---------- */
-let h3 = null, b3t = null;
+let h3 = [], b3t = null;
 function refreshSel3D() {
   if (!T3 || !T3.scene) return;
-  if (h3) { T3.scene.remove(h3); h3.geometry.dispose(); h3.material.dispose(); h3 = null; }
-  if (!ui.view3d || sel.length !== 1) return;
-  const g = T3.scene.children.find(c => c.userData && c.userData.furnId === sel[0]);
-  if (g) { h3 = new THREE.BoxHelper(g, isLight() ? 0xd97706 : 0xfbbf24); T3.scene.add(h3); }
+  for (const h of h3) { T3.scene.remove(h); h.geometry.dispose(); h.material.dispose(); }
+  h3 = [];
+  if (!ui.view3d || !sel.length) return;
+  // tekil veya gruplu seçimde tüm mobilya üyeleri turuncu kutuyla vurgulanır
+  for (const id of sel) {
+    const g = T3.scene.children.find(c => c.userData && c.userData.furnId === id);
+    if (g) h3.push(new THREE.BoxHelper(g, isLight() ? 0xd97706 : 0xfbbf24));
+  }
+  for (const h of h3) T3.scene.add(h);
 }
 function moveFurn3D(o) {
   if (!T3 || !ui.view3d) return;
   const g = T3.scene.children.find(c => c.userData && c.userData.furnId === o.id);
   if (g) { g.position.set(o.x, g.userData.elev || 0, o.y); g.rotation.y = -(o.rot || 0) * Math.PI / 180; }
-  if (h3) h3.update();
+  for (const h of h3) h.update();
 }
 function schedBuild3D() {
   if (!T3 || !ui.view3d) return;
