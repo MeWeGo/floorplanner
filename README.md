@@ -40,6 +40,7 @@
 - **Polygon room** tool for irregular spaces.
 - **Adjustable-angle (hinged) walls** — fix a wall at either endpoint (`Point A` or `Point B`), define **3 (or any number of) angle positions**, add or delete positions, adjust angles via the on-canvas rotation handle (`wrot`) or numeric inputs, and **click the wall in 2D or 3D** to cycle through `Position 1 → Position 2 → Position 3`.
 - Wall endpoints stay **connected** when you drag a wall or a corner.
+- **Wall types** — every wall can be 🧱 **Solid** (default) or 🪟 **Curtain Wall**: a glass facade with an aluminium frame and mullions (~1.2 m modules), drawn with a glass band in 2D and built as translucent glass panels with rails in 3D. Doors and windows still cut curtain walls normally.
 
 ### 🧲 Grids & Snapping
 | Grid type | Description |

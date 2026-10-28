@@ -2087,7 +2087,7 @@ function helpModal() {
     ['Ok tuşları', 'Seçileni / arka plan görselini 1 cm kaydır (Shift: 10 cm)'],
     ['WASD / Q / E (3B)', '3B görünümde gezin (Q/E: alçal/yüksel, Shift: hızlı)'],
     ['3B: mobilyaya tıkla / sürükle', 'Seç & vurgula • zeminde sürükle (Shift: ızgara yok) • boyutu sağ panelden değiştir'],
-    ['Duvar tipi: Cam Cephe', 'Duvar seç → Duvar Tipi → 🪟 Cam Cephe: 2B ve 3B'de alüminyum çerçeveli cam cephe'],
+    ['Duvar tipi: Cam Cephe', 'Duvar seç → Duvar Tipi → 🪟 Cam Cephe: 2B ve 3B içinde alüminyum çerçeveli cam cephe'],
     ['Ctrl+C/V/D', 'Kopyala / Yapıştır / Çoğalt'],
     ['Ctrl+Z / Ctrl+Y', 'Geri al / Yinele'],
     ['Ctrl+A', 'Tümünü seç'],
