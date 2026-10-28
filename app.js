@@ -261,6 +261,7 @@ async function migrateLegacyStorage() {
 /* ---------- Geçmiş & kayıt ---------- */
 let saveTimer = null;
 function commit() {
+  if (typeof syncActiveVars === 'function') syncActiveVars();
   const s = JSON.stringify(P);
   if (hist[hi] === s) return;
   hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 150) hist.shift();
@@ -305,7 +306,7 @@ function loadProject(obj, msg) {
   P = obj; if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   if (P.bg) P.bg.id = 'bg';
-  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; for (const o of f.ops) if (o.open == null) o.open = 0; });
+  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid'; });
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
   $('#pname').value = P.name; syncGridUI();
@@ -392,13 +393,54 @@ function roomSvg(r, live) {
   const C = pal(), pts = r.pts.map(p => p.x + ',' + p.y).join(' ');
   const c = polyCentroid(r.pts), area = polyArea(r.pts);
   const fs = clamp(Math.sqrt(area) / 12, 16, 34);
-  let s = `<polygon points="${pts}" fill="${r.color}" fill-opacity="${C.roomOp}" pointer-events="none"/>`;
+  const hasVars = Array.isArray(r.vars) && r.vars.length > 0;
+  const canHitPoly = live && (sel.includes(r.id) || (hasVars && r.vars.length >= 2));
+  const polyHit = canHitPoly ? `data-id="${r.id}" data-rpoly="1" style="cursor:${sel.includes(r.id) ? 'move' : 'pointer'}"` : `pointer-events="none"`;
+  let s = '';
+  if (live && hasVars && r.vars.length >= 2) {
+    const curIdx = clamp(r.vIdx ?? 0, 0, r.vars.length - 1);
+    r.vars.forEach((v, idx) => {
+      if (idx === curIdx || !v.poses) return;
+      const rp = v.poses[r.id];
+      if (rp && rp.pts) {
+        const gpts = rp.pts.map(p => p.x + ',' + p.y).join(' ');
+        if (gpts !== pts) {
+          const gc = polyCentroid(rp.pts);
+          s += `<polygon points="${gpts}" fill="${r.color}" fill-opacity="0.1" stroke="${C.accent}" stroke-opacity="0.5" stroke-width="${Math.max(1.8, 2 / view.z)}" stroke-dasharray="${7 / view.z} ${5 / view.z}" pointer-events="none"/>`;
+          s += `<text x="${gc.x}" y="${gc.y}" text-anchor="middle" dominant-baseline="central" font-size="${clamp(11 / view.z, 9, 20)}" font-weight="700" fill="${C.accent}" stroke="${C.halo}" stroke-width="${3 / view.z}" paint-order="stroke" pointer-events="none">${esc(v.label)}</text>`;
+        }
+      }
+      for (const id in v.poses) {
+        if (id === r.id) continue;
+        const fd = find(id), p = v.poses[id];
+        if (fd && fd.kind === 'furn' && (Math.hypot(p.x - fd.o.x, p.y - fd.o.y) > 1 || (p.w && Math.abs(p.w - fd.o.w) > 1) || (p.d && Math.abs(p.d - fd.o.d) > 1))) {
+          const gw = p.w ?? fd.o.w, gd = p.d ?? fd.o.d, grot = p.rot ?? fd.o.rot;
+          s += `<g transform="translate(${p.x} ${p.y}) rotate(${grot})" pointer-events="none"><rect x="${-gw / 2}" y="${-gd / 2}" width="${gw}" height="${gd}" fill="none" stroke="${C.accent}" stroke-opacity="0.4" stroke-width="${1.5 / view.z}" stroke-dasharray="${5 / view.z} ${4 / view.z}"/></g>`;
+        }
+      }
+    });
+  }
+  s += `<polygon points="${pts}" fill="${r.color}" fill-opacity="${C.roomOp}" ${polyHit}/>`;
   if (r.floor && r.floor !== 'none') s += `<polygon points="${pts}" fill="url(#p-${r.floor})" pointer-events="none"/>`;
   const t1 = esc(r.name), t2 = fmtArea(area);
   const bw = Math.max(t1.length, t2.length) * fs * 0.58 + 10;
+  let badge = '';
+  if (live && hasVars) {
+    const curIdx = clamp(r.vIdx ?? 0, 0, r.vars.length - 1), cur = r.vars[curIdx];
+    const bfs = clamp(11.5 / view.z, 9, 20);
+    const btxt = r.vars.length >= 2
+      ? `👆 ${cur.label} (${curIdx + 1}/${r.vars.length}) • ${L('Tıkla', 'Click me')}`
+      : `🔄 ${cur.label} (1/1)`;
+    const bbw = Math.max(btxt.length * bfs * 0.56 + bfs * 1.1, bfs * 4.5), bbh = bfs * 1.65;
+    const by = c.y + fs * 1.95;
+    badge = `<g data-id="${r.id}" data-var-badge="room" transform="translate(${c.x} ${by})" style="cursor:pointer">
+      <rect x="${-bbw / 2}" y="${-bbh / 2}" width="${bbw}" height="${bbh}" rx="${bbh / 2}" fill="${C.bg}" stroke="${C.accent}" stroke-width="${Math.max(1.5, 1.8 / view.z)}"/>
+      <text text-anchor="middle" dominant-baseline="central" font-size="${bfs}" font-weight="700" fill="${C.accent}" font-family="Segoe UI,sans-serif">${esc(btxt)}</text>
+    </g>`;
+  }
   const lab = `<g ${live ? `data-id="${r.id}" data-rlabel="1"` : ''} style="cursor:pointer"><rect x="${c.x - bw / 2}" y="${c.y - fs * 0.9}" width="${bw}" height="${fs * 2.1}" fill="#fff" fill-opacity="0" pointer-events="fill" />
     <text x="${c.x}" y="${c.y}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${C.text}" stroke="${C.halo}" stroke-width="${fs * 0.18}" paint-order="stroke" font-family="Segoe UI,sans-serif">${t1}</text>
-    <text x="${c.x}" y="${c.y + fs * 1.05}" text-anchor="middle" font-size="${fs * 0.8}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.16}" paint-order="stroke" font-family="Segoe UI,sans-serif">${t2}</text></g>`;
+    <text x="${c.x}" y="${c.y + fs * 1.05}" text-anchor="middle" font-size="${fs * 0.8}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.16}" paint-order="stroke" font-family="Segoe UI,sans-serif">${t2}</text></g>${badge}`;
   return [s, lab];
 }
 function wallSvg(w, live) {
@@ -418,7 +460,20 @@ function wallSvg(w, live) {
       s += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" font-size="${fs}" font-weight="700" fill="${idx === curIdx ? C.accent : C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" pointer-events="none">${idx + 1}</text>`;
     });
   }
-  s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
+  if (w.wt === 'curtain') {
+    // cam cephe: kenar çizgileri + cam dolgu + dikme işaretleri (~120 cm modül)
+    const Lc = wLen(w) || 1, ux = (w.b.x - w.a.x) / Lc, uy = (w.b.y - w.a.y) / Lc, nx = -uy, ny = ux;
+    const sw = Math.max(1.1, w.t * 0.12);
+    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
+    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.glass}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="square" pointer-events="none"/>`;
+    const nTick = Math.max(1, Math.round(Lc / 120));
+    for (let i = 1; i < nTick; i++) {
+      const px = w.a.x + ux * (Lc * i / nTick), py = w.a.y + uy * (Lc * i / nTick), hw2 = w.t / 2 - sw * 0.5;
+      s += `<line x1="${px - nx * hw2}" y1="${py - ny * hw2}" x2="${px + nx * hw2}" y2="${py + ny * hw2}" stroke="${C.wall}" stroke-width="${sw}" pointer-events="none"/>`;
+    }
+  } else {
+    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
+  }
   if (hasPos) {
     const pv = w[wallPivot(w)], curIdx = clamp(w.posIdx ?? 0, 0, w.angles.length - 1);
     const pr = Math.max(w.t * 0.46, 6 / view.z);
@@ -514,10 +569,56 @@ function textSvg(t, live) {
   const col = !C.lt && (t.color === '#1e293b' || t.color === '#0f172a' || t.color === '#000000') ? C.text : t.color;
   return `<text ${live ? `data-id="${t.id}" style="cursor:move"` : ''} transform="translate(${t.x} ${t.y}) rotate(${t.rot || 0})" font-size="${t.size}" fill="${col}" stroke="${C.halo}" stroke-width="${t.size * 0.14}" paint-order="stroke" font-family="Segoe UI,sans-serif" font-weight="600">${esc(t.text)}</text>`;
 }
+function groupVarsSvg(f, live) {
+  if (!live || !f.groups || !f.groups.length) return '';
+  const C = pal(); let s = '';
+  for (const rec of f.groups) {
+    if (!rec.vars || !rec.vars.length) continue;
+    const mids = groupMemberIds(rec.id); if (!mids.length) continue;
+    let bb = null;
+    for (const id of mids) {
+      const fd = find(id); if (!fd) continue;
+      const b = bboxOf(fd.kind, fd.o); if (!b) continue;
+      bb = bb ? { x0: Math.min(bb.x0, b.x0), y0: Math.min(bb.y0, b.y0), x1: Math.max(bb.x1, b.x1), y1: Math.max(bb.y1, b.y1) } : { ...b };
+    }
+    if (!bb) continue;
+    const curIdx = clamp(rec.idx ?? 0, 0, rec.vars.length - 1), cur = rec.vars[curIdx];
+    if (rec.vars.length >= 2) {
+      rec.vars.forEach((v, idx) => {
+        if (idx === curIdx || !v.poses) return;
+        for (const id of mids) {
+          const fd = find(id), p = v.poses[id]; if (!fd || !p) continue;
+          if (fd.kind === 'furn' && (Math.hypot(p.x - fd.o.x, p.y - fd.o.y) > 1 || (p.w && Math.abs(p.w - fd.o.w) > 1) || (p.d && Math.abs(p.d - fd.o.d) > 1))) {
+            const gw = p.w ?? fd.o.w, gd = p.d ?? fd.o.d, grot = p.rot ?? fd.o.rot;
+            s += `<g transform="translate(${p.x} ${p.y}) rotate(${grot})" pointer-events="none"><rect x="${-gw / 2}" y="${-gd / 2}" width="${gw}" height="${gd}" fill="none" stroke="${C.accent}" stroke-opacity="0.4" stroke-width="${1.5 / view.z}" stroke-dasharray="${5 / view.z} ${4 / view.z}"/></g>`;
+          } else if (fd.kind === 'wall' && p.a && p.b && (dist(p.a, fd.o.a) > 1 || dist(p.b, fd.o.b) > 1)) {
+            s += `<line x1="${p.a.x}" y1="${p.a.y}" x2="${p.b.x}" y2="${p.b.y}" stroke="${C.accent}" stroke-opacity="0.35" stroke-width="${Math.max(2, (p.t || fd.o.t) * 0.3)}" stroke-dasharray="${6 / view.z} ${4 / view.z}" pointer-events="none"/>`;
+          } else if (fd.kind === 'room' && p.pts) {
+            const gpts = p.pts.map(q => q.x + ',' + q.y).join(' ');
+            s += `<polygon points="${gpts}" fill="none" stroke="${C.accent}" stroke-opacity="0.4" stroke-width="${1.8 / view.z}" stroke-dasharray="${6 / view.z} ${4 / view.z}" pointer-events="none"/>`;
+          }
+        }
+      });
+    }
+    const pad = 6 / view.z;
+    s += `<rect x="${bb.x0 - pad}" y="${bb.y0 - pad}" width="${bb.x1 - bb.x0 + pad * 2}" height="${bb.y1 - bb.y0 + pad * 2}" rx="${4 / view.z}" fill="none" stroke="${C.accent}" stroke-opacity="0.45" stroke-width="${1.4 / view.z}" stroke-dasharray="${5 / view.z} ${4 / view.z}" pointer-events="none"/>`;
+    const bfs = clamp(11.5 / view.z, 9, 20);
+    const btxt = rec.vars.length >= 2
+      ? `👆 ${cur.label} (${curIdx + 1}/${rec.vars.length}) • ${L('Tıkla', 'Click me')}`
+      : `🔄 ${cur.label} (1/1)`;
+    const bbw = Math.max(btxt.length * bfs * 0.56 + bfs * 1.1, bfs * 4.5), bbh = bfs * 1.65;
+    const cx = (bb.x0 + bb.x1) / 2, cy = bb.y0 - bbh * 0.65 - pad;
+    s += `<g data-id="${mids[0]}" data-var-badge="group" data-grp="${rec.id}" transform="translate(${cx} ${cy})" style="cursor:pointer">
+      <rect x="${-bbw / 2}" y="${-bbh / 2}" width="${bbw}" height="${bbh}" rx="${bbh / 2}" fill="${C.bg}" stroke="${C.accent}" stroke-width="${Math.max(1.5, 1.8 / view.z)}"/>
+      <text text-anchor="middle" dominant-baseline="central" font-size="${bfs}" font-weight="700" fill="${C.accent}" font-family="Segoe UI,sans-serif">${esc(btxt)}</text>
+    </g>`;
+  }
+  return s;
+}
 function layerStrings(f, live) {
   return {
     rooms: f.rooms.map(r => roomSvg(r, live)[0]).join(''),
-    roomLabels: f.rooms.map(r => roomSvg(r, live)[1]).join(''),
+    roomLabels: f.rooms.map(r => roomSvg(r, live)[1]).join('') + groupVarsSvg(f, live),
     walls: f.walls.map(w => wallSvg(w, live)).join('') + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
     ops: f.ops.map(o => opSvg(o, live)).join(''),
     furn: f.furn.map(x => furnSvg(x, live)).join(''),
@@ -550,7 +651,14 @@ function handleSvg() {
       s += `<line x1="${fr.x}" y1="${fr.y}" x2="${rx}" y2="${ry}" stroke="#f59e0b" stroke-width="${1.5 / z}" pointer-events="none"/>`
         + hnd(o.a.x, o.a.y, 'wa', 'move') + hnd(o.b.x, o.b.y, 'wb', 'move') + hnd(rx, ry, 'wrot', 'grab', 'circle');
     }
-    if (kind === 'room') o.pts.forEach((p, i) => s += hnd(p.x, p.y, 'v' + i, 'move'));
+    if (kind === 'room') {
+      o.pts.forEach((p, i) => {
+        const q = o.pts[(i + 1) % o.pts.length], mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+        const cur = Math.abs(q.x - p.x) > Math.abs(q.y - p.y) ? 'ns-resize' : 'ew-resize';
+        s += hnd(mx, my, 're' + i, cur, 'circle');
+      });
+      o.pts.forEach((p, i) => s += hnd(p.x, p.y, 'v' + i, 'move'));
+    }
     if (kind === 'dim') {
       const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, off = o.off ?? 40;
       s += hnd(o.a.x, o.a.y, 'da', 'move') + hnd(o.b.x, o.b.y, 'db', 'move') + hnd((o.a.x + o.b.x) / 2 + nx * off, (o.a.y + o.b.y) / 2 + ny * off, 'doff', 'move', 'circle');
@@ -565,6 +673,16 @@ function handleSvg() {
       [[o.x, o.y], [o.x + o.w, o.y], [o.x + o.w, o.y + o.h], [o.x, o.y + o.h]].forEach(([x, y], i) => s += hnd(x, y, 'bg' + i, i % 2 ? 'nesw-resize' : 'nwse-resize'));
       s += hnd(o.x + o.w / 2, o.y, 'bgN', 'ns-resize') + hnd(o.x + o.w, o.y + o.h / 2, 'bgE', 'ew-resize')
         + hnd(o.x + o.w / 2, o.y + o.h, 'bgS', 'ns-resize') + hnd(o.x, o.y + o.h / 2, 'bgW', 'ew-resize');
+    }
+  } else if (os.length > 1) {
+    let bb = null;
+    for (const { kind, o } of os) {
+      const b = bboxOf(kind, o); if (!b) continue;
+      bb = bb ? { x0: Math.min(bb.x0, b.x0), y0: Math.min(bb.y0, b.y0), x1: Math.max(bb.x1, b.x1), y1: Math.max(bb.y1, b.y1) } : { ...b };
+    }
+    if (bb && bb.x1 - bb.x0 > 5 && bb.y1 - bb.y0 > 5) {
+      s += `<rect x="${bb.x0}" y="${bb.y0}" width="${bb.x1 - bb.x0}" height="${bb.y1 - bb.y0}" fill="none" stroke="#f59e0b" stroke-width="${1.6 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
+      [[bb.x0, bb.y0], [bb.x1, bb.y0], [bb.x1, bb.y1], [bb.x0, bb.y1]].forEach(([x, y], i) => s += hnd(x, y, 'g' + i, i % 2 ? 'nesw-resize' : 'nwse-resize'));
     }
   }
   return s;
@@ -650,7 +768,7 @@ function magnet(f) {
 }
 
 /* ---------- Oluşturma ---------- */
-function mkWall(a, b) { return { id: uid(), a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y }, t: P.wallT, h: P.wallH }; }
+function mkWall(a, b) { return { id: uid(), a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y }, t: P.wallT, h: P.wallH, wt: 'solid' }; }
 function opType(id) { return id.startsWith('window') || id === 'wsmall' ? 'window' : id; }
 function mkOp(def, wall, d) {
   const L = wLen(wall); const w = def.w;
@@ -960,18 +1078,23 @@ cv.addEventListener('dblclick', e => {
   }
 });
 function pickDataId(e) {
-  // oda etiketi (geniş görünmez alan), altındaki mobilya/nesne tıklamasını engellemesin;
-  // ama odada ≥2 kayıtlı düzen varsa etiket önceliklidir (tık = düzen döngüsü)
-  let first = null;
+  // 1) "👆 Tıkla / Click me" rozeti her zaman en üst önceliklidir
+  // 2) Mobilya/duvar/kapı gibi nesneler oda etiketinin altında kalmasın
+  // 3) Altında nesne yoksa oda etiketi / oda çokgeni seçilir
+  let first = null, roomHit = null;
   for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
+    const b = el.closest ? el.closest('[data-var-badge]') : null;
+    if (b) return b;
     const t = el.closest ? el.closest('[data-id]') : null;
     if (!t) continue;
     if (!first) first = t;
-    if (!t.hasAttribute('data-rlabel')) return t;
-    const rd = find(t.dataset.id);
-    if (rd && rd.kind === 'room' && rd.o.vars && rd.o.vars.length >= 2) return t;
+    if (t.hasAttribute('data-rlabel') || t.hasAttribute('data-rpoly')) {
+      if (!roomHit) roomHit = t;
+      continue;
+    }
+    return t;
   }
-  return first;
+  return roomHit || first;
 }
 cv.addEventListener('pointerdown', e => {
   cv.setPointerCapture(e.pointerId); setCursor(e);
@@ -986,8 +1109,10 @@ cv.addEventListener('pointerdown', e => {
       const t = pickDataId(e);
       if (t) {
         const id = t.dataset.id;
+        const badgeType = t.dataset.varBadge || null, badgeGrp = t.dataset.grp || null;
         if (e.shiftKey) { sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]; }
-        else if (!sel.includes(id)) {
+        else if (e.altKey) { sel = [id]; }
+        else if (!sel.includes(id) || badgeType) {
           const fd = find(id);
           // gruplu nesneye tıklayınca tüm grup seçilir (duvar + mobilya karışık dahil)
           if (fd && fd.o.grp) {
@@ -996,7 +1121,10 @@ cv.addEventListener('pointerdown', e => {
           } else sel = [id];
         }
         renderProps(); startMove(raw, e);
-        if (ui.drag) ui.drag.clickedId = id;
+        if (ui.drag) {
+          ui.drag.clickedId = id;
+          if (badgeType) ui.drag.badgeClick = { type: badgeType, id, grp: badgeGrp };
+        }
       } else { if (!e.shiftKey) sel = []; ui.drag = { type: 'box', start: raw, cur: raw, moved: false }; renderProps(); }
       render(); return;
     }
@@ -1117,6 +1245,12 @@ cv.addEventListener('pointerup', e => {
         toast(fd.o.open ? L('Kapı açıldı (90°)', 'Door opened (90°)') : L('Kapı kapandı', 'Door closed'));
         return;
       }
+      if (d.badgeClick) {
+        if (d.badgeClick.type === 'group' && cycleGroupVars(d.badgeClick.grp)) return;
+        if (d.badgeClick.type === 'room' && fd && fd.kind === 'room' && cycleRoomVars(fd.o)) return;
+        toast(L('2. düzeni eklemek için sağ panelden ➕ Yeni düğmesine basın', 'Press ➕ New in the right panel to add a 2nd layout'));
+        return;
+      }
       if (fd && fd.o.grp && cycleGroupVars(fd.o.grp)) return;
       if (fd && fd.kind === 'room' && cycleRoomVars(fd.o)) return;
     }
@@ -1138,9 +1272,15 @@ function startMove(raw, e) {
       for (const se of ends) if (dist(w[e], sw[se]) < 1) { conn.push({ w, e, o: { x: w[e].x, y: w[e].y } }); }
     }
   }
+  const roomInner = [];
+  if (objs.length === 1 && objs[0].kind === 'room' && !(e && e.altKey)) {
+    const r = objs[0].o;
+    for (const fn of furnInRoom(r)) roomInner.push({ kind: 'furn', o: fn, g: JSON.parse(JSON.stringify(fn)) });
+    for (const tx of F().texts.filter(t => pointInPoly(t, r.pts))) roomInner.push({ kind: 'text', o: tx, g: JSON.parse(JSON.stringify(tx)) });
+  }
   const first = objs[0]; let anchor = { x: raw.x, y: raw.y };
   if (first) { const o = orig.get(first.o.id); anchor = first.kind === 'wall' || first.kind === 'dim' ? o.a : first.kind === 'room' ? o.pts[0] : first.kind === 'op' ? anchor : { x: o.x, y: o.y }; }
-  ui.drag = { type: 'move', start: raw, orig, conn, anchor, moved: false };
+  ui.drag = { type: 'move', start: raw, orig, conn, roomInner, anchor, moved: false };
 }
 function doMove(raw, e) {
   const d = ui.drag; let dx = raw.x - d.start.x, dy = raw.y - d.start.y;
@@ -1164,17 +1304,28 @@ function doMove(raw, e) {
     }
   }
   for (const c of d.conn) { c.w[c.e] = { x: c.o.x + dx, y: c.o.y + dy }; }
+  if (d.roomInner) for (const it of d.roomInner) { it.o.x = it.g.x + dx; it.o.y = it.g.y + dy; }
   render();
 }
 function startHandle(h, raw, e) {
-  const o = selObjs()[0].o, orig = JSON.parse(JSON.stringify(o)), conn = [];
+  const os = selObjs(); if (!os.length) return;
+  const o = os[0].o, orig = JSON.parse(JSON.stringify(o)), conn = [];
   const join = e && e.altKey ? !ui.connWalls : ui.connWalls;
   if ((h === 'wa' || h === 'wb') && join) {
     const ek = h === 'wa' ? 'a' : 'b';
     const isHingedFree = Array.isArray(o.angles) && o.angles.length && ek === wallFree(o);
     if (!isHingedFree) for (const w of F().walls) if (w.id !== o.id) for (const k of ['a', 'b']) if (dist(w[k], orig[ek]) < 1) conn.push({ w, k });
   }
-  ui.drag = { type: 'handle', h, orig, conn, moved: false };
+  let origAll = null, origBb = null;
+  if (h[0] === 'g') {
+    origAll = new Map();
+    for (const { kind, o: mo } of os) {
+      origAll.set(mo.id, JSON.parse(JSON.stringify(mo)));
+      const b = bboxOf(kind, mo); if (!b) continue;
+      origBb = origBb ? { x0: Math.min(origBb.x0, b.x0), y0: Math.min(origBb.y0, b.y0), x1: Math.max(origBb.x1, b.x1), y1: Math.max(origBb.y1, b.y1) } : { ...b };
+    }
+  }
+  ui.drag = { type: 'handle', h, orig, conn, origAll, origBb, moved: false };
 }
 function doHandle(raw, e) {
   const d = ui.drag, h = d.h, o = selObjs()[0]?.o; if (!o) return; d.moved = true;
@@ -1193,6 +1344,33 @@ function doHandle(raw, e) {
     setWallDeg(o, a, true);
   } else if (h[0] === 'v') {
     const i = +h.slice(1), p = snapPt(raw, null, e); o.pts[i] = { x: p.x, y: p.y };
+  } else if (h.startsWith('re')) {
+    const i = +h.slice(2), n = d.orig.pts.length, j = (i + 1) % n;
+    const p1 = d.orig.pts[i], p2 = d.orig.pts[j], L = dist(p1, p2) || 1;
+    const nx = -(p2.y - p1.y) / L, ny = (p2.x - p1.x) / L;
+    const p = ui.snap && !sh ? snapToGrid(raw) : raw;
+    const delta = (p.x - (p1.x + p2.x) / 2) * nx + (p.y - (p1.y + p2.y) / 2) * ny;
+    o.pts[i] = { x: Math.round(p1.x + nx * delta), y: Math.round(p1.y + ny * delta) };
+    o.pts[j] = { x: Math.round(p2.x + nx * delta), y: Math.round(p2.y + ny * delta) };
+  } else if (h[0] === 'g' && d.origBb && d.origAll) {
+    const bb = d.origBb, p = ui.snap && !sh ? snapToGrid(raw) : raw;
+    const w0 = Math.max(10, bb.x1 - bb.x0), h0 = Math.max(10, bb.y1 - bb.y0);
+    const ax = (h === 'g1' || h === 'g2') ? bb.x0 : bb.x1;
+    const ay = (h === 'g2' || h === 'g3') ? bb.y0 : bb.y1;
+    const sx = Math.max(20, Math.abs(p.x - ax)) / w0, sy = Math.max(20, Math.abs(p.y - ay)) / h0;
+    const tx = x => Math.round((ax + (x - ax) * sx) * 10) / 10;
+    const ty = y => Math.round((ay + (y - ay) * sy) * 10) / 10;
+    for (const { kind, o: mo } of selObjs()) {
+      const g = d.origAll.get(mo.id); if (!g) continue;
+      if (kind === 'wall' || kind === 'dim') { mo.a = { x: tx(g.a.x), y: ty(g.a.y) }; mo.b = { x: tx(g.b.x), y: ty(g.b.y) }; }
+      else if (kind === 'room') mo.pts = g.pts.map(q => ({ x: tx(q.x), y: ty(q.y) }));
+      else if (kind === 'furn') {
+        mo.x = tx(g.x); mo.y = ty(g.y);
+        const rot = ((g.rot || 0) % 180 + 180) % 180, swap = rot >= 45 && rot < 135;
+        mo.w = Math.max(10, Math.round(g.w * (swap ? sy : sx)));
+        mo.d = Math.max(10, Math.round(g.d * (swap ? sx : sy)));
+      } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
+    }
   } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; }
   else if (h === 'doff') {
     const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, mx = (o.a.x + o.b.x) / 2, my = (o.a.y + o.b.y) / 2;
@@ -1254,6 +1432,7 @@ function renderProps() {
   if (k === 'wall') {
     if (n === 1) h += fld(L('Uzunluk (cm)', 'Length (cm)'), 'wall', 'len', wLen(o), { step: 1, min: 1 });
     h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 });
+    h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall') } });
     if (n === 1) {
       h += fld(L('Açı (°)', 'Angle (°)'), 'wall', 'deg', wallDeg(o), { step: 5, min: 0, max: 360 });
       h += fld(L('Sabit Nokta (Menteşe)', 'Fixed Point (Pivot)'), 'wall', 'pivot', wallPivot(o), {
@@ -1298,7 +1477,16 @@ function renderProps() {
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button><button class="btn sm" data-act="front">${L('⬆ Öne', '⬆ Bring front')}</button>`);
   } else if (k === 'room') {
     h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: getFloors() });
-    if (n === 1) h += `<div class="stat"><span>${L('Alan', 'Area')}</span><b>${fmtArea(polyArea(o.pts))}</b></div><div class="stat"><span>${L('Çevre', 'Perimeter')}</span><b>${fmtLen(polyPerim(o.pts))}</b></div><div class="stat"><span>${L('Köşe sayısı', 'Vertices')}</span><b>${o.pts.length}</b></div>`;
+    if (n === 1) {
+      const rb = bboxOf('room', o);
+      if (rb) {
+        h += fld(L('Konum X (cm)', 'Position X (cm)'), 'room', 'rx', Math.round(rb.x0), { step: 10 })
+          + fld(L('Konum Y (cm)', 'Position Y (cm)'), 'room', 'ry', Math.round(rb.y0), { step: 10 })
+          + fld(L('Genişlik (cm)', 'Width (cm)'), 'room', 'rw', Math.round(rb.x1 - rb.x0), { min: 20, step: 10 })
+          + fld(L('Derinlik (cm)', 'Depth (cm)'), 'room', 'rd', Math.round(rb.y1 - rb.y0), { min: 20, step: 10 });
+      }
+      h += `<div class="stat"><span>${L('Alan', 'Area')}</span><b>${fmtArea(polyArea(o.pts))}</b></div><div class="stat"><span>${L('Çevre', 'Perimeter')}</span><b>${fmtLen(polyPerim(o.pts))}</b></div><div class="stat"><span>${L('Köşe sayısı', 'Vertices')}</span><b>${o.pts.length}</b></div>`;
+    }
     h += acts(`<button class="btn sm" data-act="redetect">${L('↻ Yeniden algıla', '↻ Redetect')}</button>`);
   } else if (k === 'dim') {
     h += `<div class="stat"><span>${L('Ölçü', 'Length')}</span><b>${fmtLen(dist(o.a, o.b))}</b></div>` + fld(L('Ofset (cm)', 'Offset (cm)'), 'dim', 'off', o.off ?? 40) + acts();
@@ -1362,6 +1550,12 @@ function applyProp(t, final) {
           o.angles = o.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
         }
       }
+    } else if (k === 'room' && (p === 'rx' || p === 'ry' || p === 'rw' || p === 'rd')) {
+      const rb = bboxOf('room', o); if (!rb) continue;
+      if (p === 'rx') { const dx = v - rb.x0; o.pts = o.pts.map(q => ({ x: Math.round(q.x + dx), y: q.y })); }
+      else if (p === 'ry') { const dy = v - rb.y0; o.pts = o.pts.map(q => ({ x: q.x, y: Math.round(q.y + dy) })); }
+      else if (p === 'rw') { const w0 = rb.x1 - rb.x0 || 1, sc = Math.max(20, v) / w0; o.pts = o.pts.map(q => ({ x: Math.round(rb.x0 + (q.x - rb.x0) * sc), y: q.y })); }
+      else if (p === 'rd') { const h0 = rb.y1 - rb.y0 || 1, sc = Math.max(20, v) / h0; o.pts = o.pts.map(q => ({ x: q.x, y: Math.round(rb.y0 + (q.y - rb.y0) * sc) })); }
     } else if (k === 'op' && p === 'open') { o.open = v ? 90 : 0; }
     else if (k === 'op' && p === 'type') { o[p] = v; if (v === 'window' && o.sill === 0) { o.sill = 90; o.h = 120; } if (v !== 'window' && o.sill > 0) { o.sill = 0; o.h = 210; } }
     else o[p] = v;
@@ -1388,7 +1582,7 @@ $('#props').addEventListener('click', e => {
   if (a === 'calib') return setTool('calib');
   if (a === 'group') return groupSel();
   if (a === 'ungroup') return ungroupSel();
-  if (a === 'varInit' || a === 'varSave' || a === 'varNew' || a === 'varDel') return varAction(a);
+  if (a === 'varInit' || a === 'varSave' || a === 'varNew' || a === 'varDel' || a === 'varGo' || a === 'varNext') return varAction(a, b.dataset.idx != null ? +b.dataset.idx : null);
   for (const { kind, o } of os) {
     if (kind === 'wall') {
       if (a === 'wallposInit') {
@@ -1427,7 +1621,7 @@ $('#props').addEventListener('click', e => {
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
     if (a === 'redetect' && kind === 'room') { const c = polyCentroid(o.pts); const r = detectRoom(pointInPoly(c, o.pts) ? c : o.pts[0]); if (Array.isArray(r)) o.pts = r; else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
     if (a === 'split' && kind === 'wall') {
-      const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; const L = wLen(o), old = o.b;
+      const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; const L = wLen(o), old = o.b;
       o.b = m; f.walls.push(nw);
       f.ops.forEach(op => { if (op.wall === o.id && op.d > L / 2) { op.wall = nw.id; op.d -= L / 2; } });
     }
@@ -1504,13 +1698,24 @@ function pruneGroups() {
 }
 
 /* ---------- Ayarlanabilir düzenler (1a → 1b → 1c döngüsü) ---------- */
-function varLabel(i) { return '1' + String.fromCharCode(97 + i % 26); }
+function varLabel(i, pfx = 1) { return pfx + String.fromCharCode(97 + i % 26); }
+function nextVarPrefix() {
+  const f = F(); if (!f) return 1;
+  const used = new Set();
+  for (const r of f.rooms || []) if (r.vars && r.vars.length) used.add(parseInt(r.vars[0].label) || 1);
+  for (const g of f.groups || []) if (g.vars && g.vars.length) used.add(parseInt(g.vars[0].label) || 1);
+  let p = 1; while (used.has(p)) p++; return p;
+}
 function snapPose(kind, o) {
-  if (kind === 'wall') return { a: { ...o.a }, b: { ...o.b } };
+  if (kind === 'wall') return { a: { ...o.a }, b: { ...o.b }, t: o.t, h: o.h };
   if (kind === 'room') return { pts: o.pts.map(p => ({ ...p })) };
   if (kind === 'dim') return { a: { ...o.a }, b: { ...o.b }, off: o.off };
+  if (kind === 'furn') return { x: o.x, y: o.y, rot: o.rot, w: o.w, d: o.d, h: o.h };
+  if (kind === 'text') return { x: o.x, y: o.y, rot: o.rot, size: o.size };
   return { x: o.x, y: o.y, rot: o.rot };
 }
+function clonePoses(poses) { return JSON.parse(JSON.stringify(poses || {})); }
+function posesEqual(a, b) { return JSON.stringify(a || {}) === JSON.stringify(b || {}); }
 function groupMemberIds(grp) {
   const f = F(), ids = [];
   for (const k in KINDS) for (const o of f[k]) if (o.grp === grp) ids.push(o.id);
@@ -1518,33 +1723,119 @@ function groupMemberIds(grp) {
 }
 function groupPoses(ids) { const m = {}; for (const id of ids) { const fd = find(id); if (fd && GROUPABLE[fd.kind]) m[id] = snapPose(fd.kind, fd.o); } return m; }
 function furnInRoom(r) { return F().furn.filter(o => pointInPoly(o, r.pts)); }
-function roomPoses(r) { const m = { [r.id]: snapPose('room', r) }; for (const o of furnInRoom(r)) m[o.id] = snapPose('furn', o); return m; }
+function ptNearPoly(p, pts, tol) {
+  for (let i = 0; i < pts.length; i++) {
+    if (segProj(p, pts[i], pts[(i + 1) % pts.length]).d <= tol) return true;
+  }
+  return pointInPoly(p, pts);
+}
+function wallsForRoom(r) {
+  return F().walls.filter(w => !w.grp && (
+    ptNearPoly(w.a, r.pts, w.t + 15) ||
+    ptNearPoly(w.b, r.pts, w.t + 15) ||
+    ptNearPoly({ x: (w.a.x + w.b.x) / 2, y: (w.a.y + w.b.y) / 2 }, r.pts, w.t + 15)
+  ));
+}
+function roomPoses(r) {
+  const m = { [r.id]: snapPose('room', r) };
+  for (const o of furnInRoom(r)) m[o.id] = snapPose('furn', o);
+  for (const t of F().texts.filter(x => pointInPoly(x, r.pts))) m[t.id] = snapPose('text', t);
+  for (const w of wallsForRoom(r)) m[w.id] = snapPose('wall', w);
+  if (Array.isArray(r.vars)) {
+    for (const v of r.vars) for (const id in (v.poses || {})) {
+      if (!m[id]) { const fd = find(id); if (fd && GROUPABLE[fd.kind]) m[id] = snapPose(fd.kind, fd.o); }
+    }
+  }
+  return m;
+}
 function applyVarPoses(poses) {
   for (const id in poses) {
     const fd = find(id); if (!fd) continue;
     const p = poses[id], o = fd.o;
-    if (fd.kind === 'wall') { o.a = { ...p.a }; o.b = { ...p.b }; }
-    else if (fd.kind === 'room') o.pts = p.pts.map(q => ({ ...q }));
-    else if (fd.kind === 'dim') { o.a = { ...p.a }; o.b = { ...p.b }; o.off = p.off; }
-    else { o.x = p.x; o.y = p.y; o.rot = p.rot; }
+    if (fd.kind === 'wall') {
+      o.a = { ...p.a }; o.b = { ...p.b };
+      if (p.t != null) o.t = p.t;
+      if (p.h != null) o.h = p.h;
+      const L = wLen(o);
+      F().ops.forEach(op => { if (op.wall === o.id) op.d = clamp(op.d, Math.min(op.w / 2, L / 2), Math.max(L - op.w / 2, L / 2)); });
+    } else if (fd.kind === 'room') {
+      o.pts = p.pts.map(q => ({ ...q }));
+    } else if (fd.kind === 'dim') {
+      o.a = { ...p.a }; o.b = { ...p.b }; o.off = p.off;
+    } else if (fd.kind === 'furn') {
+      o.x = p.x; o.y = p.y; o.rot = p.rot;
+      if (p.w != null) o.w = p.w;
+      if (p.d != null) o.d = p.d;
+      if (p.h != null) o.h = p.h;
+    } else if (fd.kind === 'text') {
+      o.x = p.x; o.y = p.y; o.rot = p.rot;
+      if (p.size != null) o.size = p.size;
+    } else {
+      o.x = p.x; o.y = p.y; o.rot = p.rot;
+    }
   }
+}
+let _switchingVar = false;
+function syncActiveVars() {
+  if (_switchingVar || !P) return;
+  const f = F(); if (!f) return;
+  for (const r of f.rooms || []) {
+    if (!Array.isArray(r.vars) || !r.vars.length) continue;
+    const i = clamp(r.vIdx ?? 0, 0, r.vars.length - 1), v = r.vars[i];
+    if (r.vars.length >= 2 || v.draft) v.poses = roomPoses(r);
+  }
+  for (const rec of f.groups || []) {
+    if (!Array.isArray(rec.vars) || !rec.vars.length) continue;
+    const mids = groupMemberIds(rec.id); if (!mids.length) continue;
+    const i = clamp(rec.idx ?? 0, 0, rec.vars.length - 1), v = rec.vars[i];
+    if (rec.vars.length >= 2 || v.draft) v.poses = groupPoses(mids);
+  }
+}
+function switchGroupVarTo(rec, nextIdx) {
+  if (!rec || !rec.vars || !rec.vars.length) return false;
+  const mids = groupMemberIds(rec.id); if (!mids.length) return false;
+  const curIdx = clamp(rec.idx ?? 0, 0, rec.vars.length - 1), curV = rec.vars[curIdx];
+  const curSnap = groupPoses(mids);
+  if (rec.vars.length >= 2 || curV.draft) {
+    curV.poses = clonePoses(curSnap);
+    if (!curV.base || !posesEqual(curSnap, curV.base)) { curV.base = clonePoses(curSnap); delete curV.draft; }
+  }
+  rec.idx = clamp(nextIdx, 0, rec.vars.length - 1);
+  const v = rec.vars[rec.idx];
+  if (!v.base) v.base = clonePoses(v.poses);
+  _switchingVar = true;
+  try { applyVarPoses(v.poses); commit(); } finally { _switchingVar = false; }
+  refresh();
+  refresh(); if (ui.view3d && T3) build3D(true);
+  toast(L(`Düzen ${v.label} (${rec.idx + 1}/${rec.vars.length})`, `Layout ${v.label} (${rec.idx + 1}/${rec.vars.length})`));
+  return true;
+}
+function switchRoomVarTo(r, nextIdx) {
+  if (!r || !r.vars || !r.vars.length) return false;
+  const curIdx = clamp(r.vIdx ?? 0, 0, r.vars.length - 1), curV = r.vars[curIdx];
+  const curSnap = roomPoses(r);
+  if (r.vars.length >= 2 || curV.draft) {
+    curV.poses = clonePoses(curSnap);
+    if (!curV.base || !posesEqual(curSnap, curV.base)) { curV.base = clonePoses(curSnap); delete curV.draft; }
+  }
+  r.vIdx = clamp(nextIdx, 0, r.vars.length - 1);
+  const v = r.vars[r.vIdx];
+  if (!v.base) v.base = clonePoses(v.poses);
+  _switchingVar = true;
+  try { applyVarPoses(v.poses); commit(); } finally { _switchingVar = false; }
+  refresh();
+  if (ui.view3d && T3) build3D(true);
+  toast(L(`Düzen ${v.label} (${r.vIdx + 1}/${r.vars.length})`, `Layout ${v.label} (${r.vIdx + 1}/${r.vars.length})`));
+  return true;
 }
 function cycleGroupVars(grp) {
   const rec = (F().groups || []).find(g => g.id === grp);
   if (!rec || !rec.vars || rec.vars.length < 2) return false;
-  rec.idx = ((rec.idx ?? 0) + 1) % rec.vars.length;
-  const v = rec.vars[rec.idx];
-  applyVarPoses(v.poses); commit(); refresh();
-  toast(L(`Düzen ${v.label} (${rec.idx + 1}/${rec.vars.length})`, `Layout ${v.label} (${rec.idx + 1}/${rec.vars.length})`));
-  return true;
+  return switchGroupVarTo(rec, ((rec.idx ?? 0) + 1) % rec.vars.length);
 }
 function cycleRoomVars(r) {
-  if (!r.vars || r.vars.length < 2) return false;
-  r.vIdx = ((r.vIdx ?? 0) + 1) % r.vars.length;
-  const v = r.vars[r.vIdx];
-  applyVarPoses(v.poses); commit(); refresh();
-  toast(L(`Düzen ${v.label} (${r.vIdx + 1}/${r.vars.length})`, `Layout ${v.label} (${r.vIdx + 1}/${r.vars.length})`));
-  return true;
+  if (!r || !r.vars || !r.vars.length || r.vars.length < 2) return false;
+  return switchRoomVarTo(r, ((r.vIdx ?? 0) + 1) % r.vars.length);
 }
 function varContainer() {
   const os = selObjs(); if (!os.length) return null;
@@ -1554,43 +1845,102 @@ function varContainer() {
     if (rec) return { type: 'group', rec };
   }
   if (os.length === 1 && os[0].kind === 'room') return { type: 'room', o: os[0].o };
+  if (os.length === 1 && (os[0].kind === 'furn' || os[0].kind === 'text')) {
+    const item = os[0].o;
+    const adjRoom = (F().rooms || []).find(r => r.vars && r.vars.length && (pointInPoly(item, r.pts) || r.vars.some(v => v.poses && v.poses[item.id])));
+    if (adjRoom) return { type: 'room', o: adjRoom };
+  }
+  const groupable = os.filter(x => GROUPABLE[x.kind]);
+  if (groupable.length >= 1) return { type: 'potential', os: groupable };
   return null;
 }
-function varAction(a) {
-  const c = varContainer(); if (!c) return;
+function varAction(a, targetIdx) {
+  let c = varContainer(); if (!c) return;
+  if (c.type === 'potential') {
+    if (a !== 'varInit') return;
+    const g = uid(), f = F(); f.groups = f.groups || [];
+    c.os.forEach(({ o }) => o.grp = g);
+    const rec = { id: g, vars: [], idx: 0 };
+    f.groups.push(rec);
+    c = { type: 'group', rec };
+  }
   const isRoom = c.type === 'room';
   const vars = isRoom ? (c.o.vars = c.o.vars || []) : (c.rec.vars = c.rec.vars || []);
   const idx = () => isRoom ? (c.o.vIdx ?? 0) : (c.rec.idx ?? 0);
   const setIdx = i => { if (isRoom) c.o.vIdx = i; else c.rec.idx = i; };
   const snap = () => isRoom ? roomPoses(c.o) : groupPoses(groupMemberIds(c.rec.id));
+  const pfx = vars.length ? (parseInt(vars[0].label) || 1) : nextVarPrefix();
   if (a === 'varInit') {
     if (vars.length) return;
-    vars.push({ label: varLabel(0), poses: snap() }); setIdx(0);
-    toast(L('Düzen 1a kaydedildi – yeniden düzenleyip ➕ ile yeni düzen ekleyin', 'Layout 1a saved – rearrange and press ➕ to add another'));
+    const s0 = snap();
+    vars.push({ label: varLabel(0, pfx), poses: clonePoses(s0), base: clonePoses(s0) }); setIdx(0);
+    toast(L(`Düzen ${vars[0].label} kaydedildi – yeniden düzenleyip ➕ Yeni ile ikinci düzeni ekleyin`, `Layout ${vars[0].label} saved – rearrange and press ➕ New to add another`));
   } else if (a === 'varSave') {
     if (!vars.length) return;
-    vars[idx()] = { label: vars[idx()].label, poses: snap() };
-    toast(L(`Düzen ${vars[idx()].label} güncellendi`, `Layout ${vars[idx()].label} updated`));
+    const i = clamp(idx(), 0, vars.length - 1), s = snap();
+    vars[i] = { label: vars[i].label, poses: clonePoses(s), base: clonePoses(s) };
+    toast(L(`Düzen ${vars[i].label} güncellendi`, `Layout ${vars[i].label} updated`));
   } else if (a === 'varNew') {
-    vars.push({ label: varLabel(vars.length), poses: snap() }); setIdx(vars.length - 1);
-    toast(L(`Düzen ${vars[vars.length - 1].label} eklendi`, `Layout ${vars[vars.length - 1].label} added`));
+    const curSnap = snap();
+    if (vars.length) {
+      const i = clamp(idx(), 0, vars.length - 1), curV = vars[i];
+      const base = curV.base || curV.poses;
+      if (curV.draft) {
+        curV.poses = clonePoses(curSnap); curV.base = clonePoses(curSnap); delete curV.draft;
+        const lbl = varLabel(vars.length, pfx);
+        vars.push({ label: lbl, poses: clonePoses(curSnap), base: clonePoses(curSnap), draft: true });
+        setIdx(vars.length - 1);
+        toast(L(`Düzen ${lbl} eklendi – yeni konum/boyutu ayarlayın (otomatik kaydedilir)`, `Layout ${lbl} added – adjust position/size (auto-saved)`));
+      } else if (!posesEqual(curSnap, base)) {
+        curV.poses = clonePoses(base); curV.base = clonePoses(base);
+        const lbl = varLabel(vars.length, pfx);
+        vars.push({ label: lbl, poses: clonePoses(curSnap), base: clonePoses(curSnap) });
+        setIdx(vars.length - 1);
+        toast(L(`Düzen ${lbl} eklendi`, `Layout ${lbl} added`));
+      } else {
+        const lbl = varLabel(vars.length, pfx);
+        vars.push({ label: lbl, poses: clonePoses(curSnap), base: clonePoses(curSnap), draft: true });
+        setIdx(vars.length - 1);
+        toast(L(`Düzen ${lbl} eklendi – yeni konum/boyutu ayarlayın (otomatik kaydedilir)`, `Layout ${lbl} added – adjust position/size (auto-saved)`));
+      }
+    } else {
+      const lbl = varLabel(0, pfx);
+      vars.push({ label: lbl, poses: clonePoses(curSnap), base: clonePoses(curSnap) });
+      setIdx(0);
+    }
+  } else if (a === 'varGo' && targetIdx != null) {
+    if (isRoom) switchRoomVarTo(c.o, targetIdx); else switchGroupVarTo(c.rec, targetIdx);
+    return;
+  } else if (a === 'varNext') {
+    if (isRoom) cycleRoomVars(c.o); else cycleGroupVars(c.rec.id);
+    return;
   } else if (a === 'varDel') {
     if (!vars.length) return;
-    vars.splice(idx(), 1);
-    if (!vars.length) { if (isRoom) delete c.o.vIdx; else delete c.rec.idx; if (isRoom) delete c.o.vars; else delete c.rec.vars; }
-    else setIdx(clamp(idx(), 0, vars.length - 1));
+    const i = clamp(idx(), 0, vars.length - 1);
+    vars.splice(i, 1);
+    vars.forEach((v, k) => v.label = varLabel(k, pfx));
+    if (!vars.length) { if (isRoom) { delete c.o.vIdx; delete c.o.vars; } else { delete c.rec.idx; c.rec.vars = []; } }
+    else {
+      const ni = clamp(i, 0, vars.length - 1); setIdx(ni);
+      _switchingVar = true;
+      try { applyVarPoses(vars[ni].poses); } finally { _switchingVar = false; }
+    }
   }
-  commit(); refresh(); renderProps();
+  _switchingVar = true;
+  try { commit(); } finally { _switchingVar = false; }
+  refresh(); renderProps();
 }
 function variantUIHtml() {
   const c = varContainer(); if (!c) return '';
-  const vars = c.type === 'room' ? (c.o.vars || []) : (c.rec.vars || []);
+  const vars = c.type === 'room' ? (c.o.vars || []) : c.type === 'group' ? (c.rec.vars || []) : [];
   if (!vars.length) return `<div class="row"><button class="btn sm primary" data-act="varInit">🔄 ${L('Ayarlanabilir Yap', 'Make Adjustable')}</button></div><p class="muted" style="margin:0 0 6px">${L('Mevcut düzeni 1a olarak kaydeder; sonraki düzenleri ➕ ile ekleyin, kanvasta tıklayarak geçin.', 'Saves the current layout as 1a; add more with ➕, cycle by clicking on canvas.')}</p>`;
-  const idx = c.type === 'room' ? (c.o.vIdx ?? 0) : (c.rec.idx ?? 0);
-  const cur = vars[Math.min(idx, vars.length - 1)];
-  return `<p style="margin:8px 0 4px"><b>${L('Düzenler', 'Layouts')}</b> <span class="muted">— ${cur.label} (${Math.min(idx, vars.length - 1) + 1}/${vars.length})</span></p>
-  <div class="row"><button class="btn sm" data-act="varSave">💾 ${L('Kaydet', 'Save')}</button><button class="btn sm primary" data-act="varNew">➕ ${L('Yeni', 'New')}</button><button class="btn sm" data-act="varDel" style="color:var(--danger)">🗑</button></div>
-  <p class="muted" style="margin:0 0 6px">${L('Kanvasda tıklayınca sıradaki düzene geçer (1a → 1b → 1c).', 'Clicking on canvas cycles layouts (1a → 1b → 1c).')}</p>`;
+  const idx = clamp(c.type === 'room' ? (c.o.vIdx ?? 0) : (c.rec.idx ?? 0), 0, vars.length - 1);
+  const cur = vars[idx];
+  const chips = vars.map((v, i) => `<button class="btn sm ${i === idx ? 'primary' : ''}" data-act="varGo" data-idx="${i}" title="${L('Bu düzene geç', 'Switch to this layout')}">${i === idx ? '● ' : '○ '}${esc(v.label)}</button>`).join('');
+  return `<p style="margin:8px 0 4px"><b>🔄 ${L('Düzenler', 'Layouts')}</b> <span class="muted">— ${esc(cur.label)} (${idx + 1}/${vars.length})</span></p>
+  <div class="row" style="flex-wrap:wrap;gap:4px;margin-bottom:6px">${chips}</div>
+  <div class="row"><button class="btn sm" data-act="varSave" title="${L('Mevcut konumu/boyutu bu düzene kaydet', 'Save current position/size to this layout')}">💾 ${L('Kaydet', 'Save')}</button><button class="btn sm primary" data-act="varNew">➕ ${L('Yeni', 'New')}</button>${vars.length >= 2 ? `<button class="btn sm" data-act="varNext" title="${L('Sıradaki düzene geç', 'Cycle to next layout')}">↻</button>` : ''}<button class="btn sm" data-act="varDel" style="color:var(--danger)" title="${L('Bu düzeni sil', 'Delete this layout')}">🗑</button></div>
+  <p class="muted" style="margin:4px 0 6px">${L('Aktif düzendeki konum ve boyut değişiklikleri otomatik kaydedilir. Tuvalde "👆 Tıkla" göstergesine tıklayarak düzenler arasında geçin.', 'Position & size changes in the active layout are auto-saved. Click the "👆 Click me" badge on canvas to cycle layouts.')}</p>`;
 }
 function copySel() { ui.clip = selObjs().map(({ kind, o }) => ({ kind, o: JSON.parse(JSON.stringify(o)) })); pasteN = 0; if (ui.clip.length) toast(ui.clip.length + L(' nesne kopyalandı', ' object(s) copied')); }
 function paste(fromSel) {
@@ -1705,6 +2055,7 @@ function helpModal() {
     ['Arrow keys', 'Nudge selection / background image by 1 cm (Shift: 10 cm)'],
     ['WASD / Q / E (3D)', 'Walk around in 3D view (Q/E: down/up, Shift: faster)'],
     ['3D: click / drag furniture', 'Select & highlight • drag to move on the floor (Shift: no grid snap) • resize via the side panel'],
+    ['Wall type: Curtain Wall', 'Select a wall → Wall Type → 🪟 Curtain Wall: glass facade with aluminum frame in 2D & 3D'],
     ['Ctrl+C/V/D', 'Copy / Paste / Duplicate'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'],
     ['Ctrl+A', 'Select all on current floor'],
@@ -1736,6 +2087,7 @@ function helpModal() {
     ['Ok tuşları', 'Seçileni / arka plan görselini 1 cm kaydır (Shift: 10 cm)'],
     ['WASD / Q / E (3B)', '3B görünümde gezin (Q/E: alçal/yüksel, Shift: hızlı)'],
     ['3B: mobilyaya tıkla / sürükle', 'Seç & vurgula • zeminde sürükle (Shift: ızgara yok) • boyutu sağ panelden değiştir'],
+    ['Duvar tipi: Cam Cephe', 'Duvar seç → Duvar Tipi → 🪟 Cam Cephe: 2B ve 3B'de alüminyum çerçeveli cam cephe'],
     ['Ctrl+C/V/D', 'Kopyala / Yapıştır / Çoğalt'],
     ['Ctrl+Z / Ctrl+Y', 'Geri al / Yinele'],
     ['Ctrl+A', 'Tümünü seç'],
@@ -1991,7 +2343,7 @@ function init3D() {
       if (sel.length === 1) magnet(fd.o); // 2B ile aynı: yakın duvara yapış, arkası duvara baksın
       commit(); refresh();
       schedBuild3D(); // tutkal/rotasyon değişimi olabilir -> sahne tazelensin
-    } else { refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
+    } else { if (fd.o.grp && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
   });
   const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI / 2.02;
   let downPt = null;
@@ -2077,7 +2429,12 @@ function build3D(keepCam = false) {
       const L = wLen(w), H = w.h, g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
       const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
       const wCol = hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0);
-      const seg = (s, e, y0, y1) => { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, wCol, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); };
+      const curt = w.wt === 'curtain', rail = 5, frameCol = lt ? 0x8fa3b8 : 0x7c8a9c;
+      if (curt) { box(g, L, rail, w.t, frameCol, 0, rail / 2, 0); box(g, L, rail, w.t, frameCol, 0, H - rail / 2, 0); } // alt & üst kuşak
+      const seg = (s, e, y0, y1) => {
+        if (curt) { y0 = Math.max(y0, rail); y1 = Math.min(y1, H - rail); if (e - s < 1 || y1 - y0 < 1) return; box(g, e - s, y1 - y0, w.t * 0.3, 0x9fd3ee, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0, 0, lt ? 0.38 : 0.30, false); }
+        else { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, wCol, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); }
+      };
       const ops = f.ops.filter(o => o.wall === w.id).sort((a, c) => a.d - c.d); let pos = 0;
       ops.forEach(o => {
         const s = Math.max(pos, o.d - o.w / 2), e = Math.min(L, o.d + o.w / 2); seg(pos, s, 0, H);
@@ -2094,6 +2451,15 @@ function build3D(keepCam = false) {
         pos = Math.max(pos, e);
       });
       seg(pos, L, 0, H);
+      if (curt) {
+        // dikmeler: açıklıkların üstüne binmesin
+        const nM = Math.max(1, Math.round(L / 120));
+        for (let i = 0; i <= nM; i++) {
+          const x = (i * L) / nM;
+          if (ops.some(o => o.d - o.w / 2 < x + 4 && o.d + o.w / 2 > x - 4)) continue;
+          box(g, 6, H - 2 * rail, w.t * 0.55, frameCol, x - L / 2, rail + (H - 2 * rail) / 2, 0, 0, 0, false);
+        }
+      }
       if (hasPos) {
         const pv = w[wallPivot(w)], pin = new THREE.Mesh(new THREE.CylinderGeometry(w.t * 0.55, w.t * 0.55, H + 4, 20), mat(lt ? 0x1d4ed8 : 0xd99b26));
         pin.position.set(pv.x, elev + H / 2, pv.y); pin.userData = { wallId: w.id }; S.add(pin);
