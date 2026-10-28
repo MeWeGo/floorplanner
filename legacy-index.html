@@ -1,0 +1,1944 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>İnteraktif Mimari Plan & Tefrişat Editörü</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    .wall-double {
+      stroke: #ffffff;
+      stroke-width: 4.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      filter: drop-shadow(0 0 2px rgba(255,255,255,0.3));
+      cursor: pointer;
+    }
+    .wall-double:hover {
+      stroke: #38bdf8;
+    }
+    .wall-selected {
+      stroke: #f59e0b !important;
+      filter: drop-shadow(0 0 5px rgba(245,158,11,0.8));
+    }
+    .wall-inner-gap {
+      stroke: #222731;
+      stroke-width: 1.4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+    .wall-thin {
+      stroke: #e2e8f0;
+      stroke-width: 2.4;
+      stroke-linecap: round;
+      cursor: pointer;
+    }
+    .wall-glass {
+      stroke: #38bdf8;
+      stroke-width: 3.2;
+      stroke-opacity: 0.85;
+      stroke-linecap: round;
+      cursor: pointer;
+    }
+    .wall-dashed {
+      stroke: #94a3b8;
+      stroke-width: 2.2;
+      stroke-dasharray: 5 4;
+      stroke-linecap: round;
+      cursor: pointer;
+    }
+    .room-poly {
+      transition: fill-opacity 0.15s ease;
+      cursor: pointer;
+    }
+    .room-poly:hover {
+      fill-opacity: 0.32;
+    }
+    .room-poly-selected {
+      stroke: #fbbf24 !important;
+      stroke-width: 2 !important;
+      stroke-dasharray: 4 2;
+    }
+    .furn-item {
+      cursor: grab;
+    }
+    .furn-item:active {
+      cursor: grabbing;
+    }
+    .grid-node {
+      transition: r 0.12s ease, fill-opacity 0.12s ease;
+      cursor: crosshair;
+    }
+    .grid-node:hover {
+      r: 5.5;
+      fill-opacity: 1;
+    }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.3); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.5); }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased p-2 sm:p-3 select-none">
+  <div class="max-w-[1400px] mx-auto bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-xl overflow-hidden flex flex-col">
+
+    <!-- ==================== TOP TOOLBAR ==================== -->
+    <div class="p-2.5 border-b border-[var(--border)] bg-[var(--background)] flex flex-wrap items-center justify-between gap-2">
+      <!-- Mode Switcher -->
+      <div class="flex flex-wrap items-center gap-1">
+        <button id="mode-select" onclick="setMode('select')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition bg-indigo-600 text-white shadow-sm" title="Seç, Taşı ve Düzenle (Kısayol: V)">
+          <span>🖱️ Seç / Taşı</span>
+        </button>
+        <button id="mode-wall" onclick="setMode('wall')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] hover:border-indigo-400" title="Üçgen ızgara noktalarına tıklayarak duvar ekle (Kısayol: W)">
+          <span>🧱 Duvar Çiz</span>
+        </button>
+        <button id="mode-door" onclick="setMode('door')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] hover:border-indigo-400" title="Duvar üzerine veya plana kapı/pencere ekle (Kısayol: D)">
+          <span>🚪 Kapı / Pencere</span>
+        </button>
+        <button id="mode-furniture" onclick="setMode('furniture')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] hover:border-indigo-400" title="Katalogdan yeni eşya/tefriş ekle (Kısayol: F)">
+          <span>🛋️ Tefriş Ekle</span>
+        </button>
+        <button id="mode-room" onclick="setMode('room')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] hover:border-indigo-400" title="Köşe noktalarına tıklayarak yeni oda bölgesi işaretle (Kısayol: R)">
+          <span>🏷️ Oda İşaretle</span>
+        </button>
+        <button id="mode-eraser" onclick="setMode('eraser')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition bg-[var(--card)] text-rose-400 border border-[var(--border)] hover:border-rose-500" title="Tıkladığın duvar, eşya veya odayı sil (Kısayol: E)">
+          <span>🧹 Silgi</span>
+        </button>
+      </div>
+
+      <!-- History & Toggles -->
+      <div class="flex flex-wrap items-center gap-1.5">
+        <button onclick="undo()" id="btn-undo" class="px-2 py-1.5 rounded-lg text-xs bg-[var(--card)] border border-[var(--border)] hover:bg-slate-700/30 transition" title="Geri Al (Ctrl+Z)">↩️ Geri</button>
+        <button onclick="redo()" id="btn-redo" class="px-2 py-1.5 rounded-lg text-xs bg-[var(--card)] border border-[var(--border)] hover:bg-slate-700/30 transition" title="İleri Al (Ctrl+Y)">↪️ İleri</button>
+
+        <div class="h-4 w-[1px] bg-[var(--border)] mx-0.5"></div>
+
+        <button id="btn-lock-orig" onclick="toggleLockOriginalWalls()" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 transition" title="Senin çizdiğin orijinal duvarların yanlışlıkla silinmesini önler">
+          🔒 Orijinal Duvarlar: Kilitli
+        </button>
+
+        <button id="btn-snap" onclick="toggleSnap()" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-sky-500/20 text-sky-300 border border-sky-500/40 transition" title="Üçgen ızgara düğümlerine ve 30°/60° açılara mıknatıs gibi yapışır">
+          🧲 Izgara Mıknatısı: Açık
+        </button>
+
+        <button id="btn-bg-img" onclick="toggleBgImage()" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-500/20 text-slate-300 border border-slate-500/40 transition" title="Alttaki orijinal PNG görselini aç/kapat (Duvarlar vektörel olarak da çizilidir)">
+          🖼️ Altlık Görsel: Açık
+        </button>
+
+        <button onclick="openSyncModal()" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/50 hover:bg-amber-500/30 transition flex items-center gap-1" title="Yaptığın değişiklikleri AI'a göndermek veya JSON olarak kaydetmek için tıkla">
+          <span>🤖 AI Senkron / JSON</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ==================== STATUS & INSTRUCTION BANNER ==================== -->
+    <div id="status-banner" class="px-3 py-1.5 bg-indigo-950/50 border-b border-[var(--border)] flex flex-wrap items-center justify-between gap-2 text-xs">
+      <div class="flex items-center gap-2">
+        <span id="status-dot" class="w-2 h-2 rounded-full bg-indigo-400 animate-pulse"></span>
+        <span id="status-text" class="text-[var(--foreground)] font-medium">
+          Seç / Taşı Modu: Herhangi bir eşyaya, kapıya, duvara veya odaya tıklayarak düzenleyebilir, sürükleyerek taşıyabilirsin.
+        </span>
+      </div>
+      <div class="flex items-center gap-3 text-[var(--muted-foreground)]">
+        <span id="mouse-coords">X: 0, Y: 0</span>
+        <button onclick="resetZoom()" class="hover:text-[var(--foreground)] underline">🔍 Görünümü Sıfırla (100%)</button>
+      </div>
+    </div>
+
+    <!-- ==================== MAIN WORKSPACE (3-COLUMN CAD LAYOUT) ==================== -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 min-h-[590px]">
+
+      <!-- LEFT SIDEBAR: PALETTE & CATALOG (3 cols on lg) -->
+      <div class="lg:col-span-3 border-b lg:border-b-0 lg:border-r border-[var(--border)] bg-[var(--background)] p-3 flex flex-col gap-3 max-h-[640px] overflow-y-auto">
+
+        <!-- Contextual Panel: Wall Drawing Options -->
+        <div id="palette-wall" class="hidden flex-col gap-2.5 p-3 rounded-xl bg-[var(--card)] border border-[var(--border)]">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-sky-400">🧱 Duvar Çizim Ayarları</h3>
+          <p class="text-xs text-[var(--muted-foreground)]">
+            Plandaki parlayan <strong>üçgen ızgara noktalarına</strong> sırayla tıklayarak duvar çizebilirsin. Zinciri bitirmek için <strong>Sağ Tık</strong> veya <strong>ESC</strong> tuşuna bas.
+          </p>
+          <div class="flex flex-col gap-1.5 mt-1">
+            <label class="text-xs font-medium">Duvar Tipi:</label>
+            <select id="wall-type-select" class="w-full px-2.5 py-1.5 rounded-lg text-xs bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+              <option value="double">Ana Duvar (Kalın Çift Çizgi Beyaz)</option>
+              <option value="thin">İnce Bölme Duvar</option>
+              <option value="glass">Cam Bölme / Sürme Cam</option>
+              <option value="dashed">Kesik Çizgi (Sınır / Açıklık)</option>
+            </select>
+          </div>
+          <button onclick="finishActiveChain()" class="mt-1 w-full py-1.5 rounded-lg text-xs font-semibold bg-sky-600/20 text-sky-300 border border-sky-500/40 hover:bg-sky-600/30">
+            ✓ Aktif Duvar Zincirini Bitir (ESC)
+          </button>
+        </div>
+
+        <!-- Contextual Panel: Room Marking Options -->
+        <div id="palette-room" class="hidden flex-col gap-2.5 p-3 rounded-xl bg-[var(--card)] border border-[var(--border)]">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-purple-400">🏷️ Yeni Oda İşaretleme</h3>
+          <p class="text-xs text-[var(--muted-foreground)]">
+            Yeni odanın köşe noktalarına sırayla tıkla (en az 3 köşe), ardından aşağıdaki <strong>"Odayı Tamamla"</strong> butonuna bas.
+          </p>
+          <div class="grid grid-cols-2 gap-1.5">
+            <div>
+              <label class="text-xs text-[var(--muted-foreground)]">Oda Adı:</label>
+              <input id="new-room-name" type="text" value="Yeni Oda" class="w-full px-2 py-1 rounded text-xs bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]" />
+            </div>
+            <div>
+              <label class="text-xs text-[var(--muted-foreground)]">Alt Başlık:</label>
+              <input id="new-room-sub" type="text" value="Ek Alan" class="w-full px-2 py-1 rounded text-xs bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]" />
+            </div>
+          </div>
+          <div class="flex items-center justify-between gap-2">
+            <label class="text-xs text-[var(--muted-foreground)]">Bölge Rengi:</label>
+            <input id="new-room-color" type="color" value="#a855f7" class="h-7 w-16 rounded cursor-pointer bg-transparent border border-[var(--border)]" />
+            <select id="new-room-pattern" class="px-2 py-1 rounded text-xs bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+              <option value="none">Düz Zemin</option>
+              <option value="tile">Seramik Karo</option>
+            </select>
+          </div>
+          <div class="flex gap-1.5 mt-1">
+            <button onclick="finishRoomPolygon()" class="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-500">
+              ✓ Odayı Tamamla
+            </button>
+            <button onclick="cancelRoomPolygon()" class="px-2.5 py-1.5 rounded-lg text-xs bg-rose-500/20 text-rose-300 border border-rose-500/40">
+              İptal
+            </button>
+          </div>
+        </div>
+
+        <!-- Contextual Panel: Door & Window Catalog -->
+        <div id="palette-door" class="hidden flex-col gap-2 p-3 rounded-xl bg-[var(--card)] border border-[var(--border)]">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-amber-400">🚪 Kapı & Pencere Ekle</h3>
+          <p class="text-xs text-[var(--muted-foreground)]">
+            Aşağıdan bir kapı/pencere seçip planda istediğin duvarın üzerine tıkla (duvar açısını otomatik algılar!).
+          </p>
+          <div id="door-catalog-grid" class="grid grid-cols-2 gap-1.5 mt-1"></div>
+        </div>
+
+        <!-- Always-Accessible Furniture Catalog -->
+        <div id="palette-furniture" class="flex flex-col gap-2 p-3 rounded-xl bg-[var(--card)] border border-[var(--border)]">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-400">🛋️ Tefrişat (Eşya) Kataloğu</h3>
+            <span class="text-xs text-[var(--muted-foreground)]">Tıkla & Ekle</span>
+          </div>
+
+          <!-- Category Tabs -->
+          <div class="flex flex-wrap gap-1 border-b border-[var(--border)] pb-2" id="catalog-tabs">
+            <button onclick="setCatalogCategory('yatak')" id="cat-yatak" class="px-2 py-1 rounded text-xs font-medium bg-indigo-600 text-white">🛏️ Yatak</button>
+            <button onclick="setCatalogCategory('banyo')" id="cat-banyo" class="px-2 py-1 rounded text-xs font-medium bg-[var(--background)] text-[var(--muted-foreground)]">🚿 Banyo</button>
+            <button onclick="setCatalogCategory('salon')" id="cat-salon" class="px-2 py-1 rounded text-xs font-medium bg-[var(--background)] text-[var(--muted-foreground)]">🛋️ Salon</button>
+            <button onclick="setCatalogCategory('mutfak')" id="cat-mutfak" class="px-2 py-1 rounded text-xs font-medium bg-[var(--background)] text-[var(--muted-foreground)]">🍳 Mutfak</button>
+            <button onclick="setCatalogCategory('ofis')" id="cat-ofis" class="px-2 py-1 rounded text-xs font-medium bg-[var(--background)] text-[var(--muted-foreground)]">💻 Ofis/Çocuk</button>
+          </div>
+
+          <!-- Items Grid -->
+          <div id="furniture-catalog-grid" class="grid grid-cols-2 gap-1.5 max-h-[260px] overflow-y-auto pr-1"></div>
+        </div>
+
+        <!-- Layer Visibility Checkboxes -->
+        <div class="p-3 rounded-xl bg-[var(--card)] border border-[var(--border)] flex flex-col gap-1.5">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-[var(--muted-foreground)]">👁️ Katman Görünürlüğü</h3>
+          <label class="flex items-center justify-between text-xs cursor-pointer py-0.5">
+            <span>🧱 Vektörel Duvarlar</span>
+            <input type="checkbox" checked onchange="toggleLayerVis('layer-walls', this.checked)" class="accent-indigo-500" />
+          </label>
+          <label class="flex items-center justify-between text-xs cursor-pointer py-0.5">
+            <span>🛋️ Eşyalar (Tefrişat)</span>
+            <input type="checkbox" checked onchange="toggleLayerVis('layer-furniture', this.checked)" class="accent-indigo-500" />
+          </label>
+          <label class="flex items-center justify-between text-xs cursor-pointer py-0.5">
+            <span>🚪 Kapılar & Pencereler</span>
+            <input type="checkbox" checked onchange="toggleLayerVis('layer-doors', this.checked)" class="accent-indigo-500" />
+          </label>
+          <label class="flex items-center justify-between text-xs cursor-pointer py-0.5">
+            <span>🏷️ Oda İsim Etiketleri</span>
+            <input type="checkbox" checked onchange="toggleLayerVis('layer-labels', this.checked)" class="accent-indigo-500" />
+          </label>
+          <label class="flex items-center justify-between text-xs cursor-pointer py-0.5">
+            <span>🎨 Oda Bölge Renkleri</span>
+            <input type="checkbox" checked onchange="toggleLayerVis('layer-zones', this.checked)" class="accent-indigo-500" />
+          </label>
+          <label class="flex items-center justify-between text-xs cursor-pointer py-0.5">
+            <span>📐 Üçgen Izgara Noktaları</span>
+            <input type="checkbox" checked onchange="toggleLayerVis('layer-grid-nodes', this.checked)" class="accent-indigo-500" />
+          </label>
+        </div>
+      </div>
+
+      <!-- CENTER: INTERACTIVE SVG CANVAS (6 cols on lg) -->
+      <div class="lg:col-span-6 bg-[#1b2029] relative overflow-hidden flex items-center justify-center min-h-[500px]" id="canvas-container">
+        <svg id="cad-svg" viewBox="0 0 690 568" class="w-full h-full block touch-none">
+          <defs>
+            <pattern id="tilePattern" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(30)">
+              <path d="M 12 0 L 0 0 0 12" fill="none" stroke="#94a3b8" stroke-width="0.5" stroke-opacity="0.32"/>
+            </pattern>
+          </defs>
+
+          <g id="viewport-group">
+            <!-- 1. User's Original Uploaded PNG Background -->
+            <image id="bg-orig-image" href="data:image/png;base64,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" x="0" y="0" width="690" height="568" preserveAspectRatio="none" />
+
+            <!-- 2. Vector Triangular Grid Lines (visible even if background PNG is hidden) -->
+            <g id="layer-vector-grid" opacity="0.25"></g>
+
+            <!-- 3. Room Polygon Zones -->
+            <g id="layer-zones"></g>
+
+            <!-- 4. Furniture & Fixtures -->
+            <g id="layer-furniture"></g>
+
+            <!-- 5. Vector Walls -->
+            <g id="layer-walls"></g>
+
+            <!-- 6. Doors & Windows -->
+            <g id="layer-doors"></g>
+
+            <!-- 7. Room Labels -->
+            <g id="layer-labels"></g>
+
+            <!-- 8. Interactive Triangular Grid Snap Nodes -->
+            <g id="layer-grid-nodes"></g>
+
+            <!-- 9. Active Drawing Preview (Wall chain / Room polygon / Selection Gizmo) -->
+            <g id="layer-preview"></g>
+          </g>
+        </svg>
+
+        <!-- Floating Canvas Quick Controls (Bottom Left of Canvas) -->
+        <div class="absolute bottom-3 left-3 flex items-center gap-1.5 bg-slate-900/85 backdrop-blur border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 shadow-lg">
+          <button onclick="zoomBy(1.18)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-bold" title="Yakınlaş">+</button>
+          <span id="zoom-label" class="px-1 font-mono">100%</span>
+          <button onclick="zoomBy(0.85)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-bold" title="Uzaklaş">−</button>
+          <span class="text-slate-500">|</span>
+          <button onclick="rotateSelectedBy(-30)" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700" title="Seçili öğeyi -30° döndür">↺ -30°</button>
+          <button onclick="rotateSelectedBy(30)" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700" title="Seçili öğeyi +30° döndür">↻ +30°</button>
+          <button onclick="rotateSelectedBy(60)" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700" title="Seçili öğeyi +60° (Üçgen ızgara açısı) döndür">↻ +60°</button>
+          <button onclick="deleteSelected()" class="px-2 py-0.5 rounded bg-rose-600/30 text-rose-300 border border-rose-500/40 hover:bg-rose-600/50" title="Seçili öğeyi sil (Delete)">🗑️ Sil</button>
+        </div>
+      </div>
+
+      <!-- RIGHT SIDEBAR: INSPECTOR & ROOM LIST (3 cols on lg) -->
+      <div class="lg:col-span-3 border-t lg:border-t-0 lg:border-l border-[var(--border)] bg-[var(--background)] p-3 flex flex-col gap-3 max-h-[640px] overflow-y-auto">
+
+        <!-- Dynamic Property Inspector -->
+        <div id="inspector-panel" class="p-3 rounded-xl bg-[var(--card)] border border-[var(--border)] flex flex-col gap-2.5">
+          <div class="flex items-center justify-between border-b border-[var(--border)] pb-2">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-indigo-400" id="insp-header">⚙️ Öğe Özellikleri</h3>
+            <span id="insp-type-badge" class="px-2 py-0.5 rounded text-xs bg-slate-700/50 text-[var(--muted-foreground)]">Seçim Yok</span>
+          </div>
+
+          <!-- Empty State -->
+          <div id="insp-empty" class="py-4 text-center text-xs text-[var(--muted-foreground)] flex flex-col items-center gap-2">
+            <span>👆 Planda düzenlemek istediğin bir <strong>eşyaya</strong>, <strong>kapıya</strong>, <strong>duvara</strong> veya <strong>odaya</strong> tıkla.</span>
+            <span class="text-[var(--muted-foreground)] opacity-80">İpucu: Eşyaları doğrudan fareyle sürükleyebilir, 60° açılı duvarlara paralel döndürebilirsin.</span>
+          </div>
+
+          <!-- Furniture / Door Inspector Controls -->
+          <div id="insp-item-controls" class="hidden flex-col gap-2.5 text-xs">
+            <div>
+              <label class="text-[var(--muted-foreground)] block mb-1">Öğe Etiketi / Adı:</label>
+              <input id="insp-item-name" type="text" oninput="updateSelectedProp('name', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]" />
+            </div>
+
+            <!-- Rotation Controls with 60-degree Isometric Presets -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-[var(--muted-foreground)]">Döndürme Açısı:</label>
+                <span id="insp-rot-val" class="font-mono font-semibold text-indigo-400">0°</span>
+              </div>
+              <input id="insp-item-rot" type="range" min="-180" max="180" step="5" oninput="updateSelectedProp('rot', parseFloat(this.value))" class="w-full accent-indigo-500" />
+              <div class="grid grid-cols-5 gap-1 mt-1.5">
+                <button onclick="updateSelectedProp('rot', -120)" class="py-1 rounded bg-[var(--background)] border border-[var(--border)] hover:border-indigo-400 font-mono">-120°</button>
+                <button onclick="updateSelectedProp('rot', -60)" class="py-1 rounded bg-[var(--background)] border border-[var(--border)] hover:border-indigo-400 font-mono">-60°</button>
+                <button onclick="updateSelectedProp('rot', 0)" class="py-1 rounded bg-[var(--background)] border border-[var(--border)] hover:border-indigo-400 font-mono">0°</button>
+                <button onclick="updateSelectedProp('rot', 60)" class="py-1 rounded bg-[var(--background)] border border-[var(--border)] hover:border-indigo-400 font-mono">+60°</button>
+                <button onclick="updateSelectedProp('rot', 120)" class="py-1 rounded bg-[var(--background)] border border-[var(--border)] hover:border-indigo-400 font-mono">+120°</button>
+              </div>
+            </div>
+
+            <!-- Scale / Size Controls -->
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <div class="flex justify-between mb-1">
+                  <label class="text-[var(--muted-foreground)]">Genişlik (X):</label>
+                  <span id="insp-sx-val" class="font-mono">100%</span>
+                </div>
+                <input id="insp-item-sx" type="range" min="0.5" max="2.0" step="0.05" oninput="updateSelectedProp('scaleX', parseFloat(this.value))" class="w-full accent-indigo-500" />
+              </div>
+              <div>
+                <div class="flex justify-between mb-1">
+                  <label class="text-[var(--muted-foreground)]">Derinlik (Y):</label>
+                  <span id="insp-sy-val" class="font-mono">100%</span>
+                </div>
+                <input id="insp-item-sy" type="range" min="0.5" max="2.0" step="0.05" oninput="updateSelectedProp('scaleY', parseFloat(this.value))" class="w-full accent-indigo-500" />
+              </div>
+            </div>
+
+            <!-- Flip Button (Especially useful for doors & L-sofas) -->
+            <div class="flex gap-1.5 pt-1">
+              <button onclick="flipSelectedHorizontal()" class="flex-1 py-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] hover:border-amber-400 font-medium">
+                ↔️ Yatay Çevir
+              </button>
+              <button onclick="flipSelectedVertical()" class="flex-1 py-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] hover:border-amber-400 font-medium">
+                ↕️ Dikey Çevir
+              </button>
+            </div>
+
+            <div class="flex gap-1.5 pt-1 border-t border-[var(--border)]">
+              <button onclick="duplicateSelected()" class="flex-1 py-1.5 rounded-lg bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-600/30 font-semibold">
+                📋 Çoğalt
+              </button>
+              <button onclick="deleteSelected()" class="flex-1 py-1.5 rounded-lg bg-rose-600/20 text-rose-300 border border-rose-500/40 hover:bg-rose-600/30 font-semibold">
+                🗑️ Sil
+              </button>
+            </div>
+          </div>
+
+          <!-- Room Inspector Controls -->
+          <div id="insp-room-controls" class="hidden flex-col gap-2.5 text-xs">
+            <div>
+              <label class="text-[var(--muted-foreground)] block mb-1">Oda Başlığı:</label>
+              <input id="insp-room-title" type="text" oninput="updateSelectedRoom('title', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)] font-semibold" />
+            </div>
+            <div>
+              <label class="text-[var(--muted-foreground)] block mb-1">Alt Açıklama:</label>
+              <input id="insp-room-sub" type="text" oninput="updateSelectedRoom('subtitle', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]" />
+            </div>
+            <div class="flex items-center justify-between gap-2">
+              <label class="text-[var(--muted-foreground)]">Bölge Rengi:</label>
+              <input id="insp-room-color" type="color" oninput="updateSelectedRoom('color', this.value)" class="h-8 w-20 rounded cursor-pointer bg-transparent border border-[var(--border)]" />
+              <select id="insp-room-pattern" onchange="updateSelectedRoom('pattern', this.value)" class="px-2 py-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+                <option value="none">Düz Dolgu</option>
+                <option value="tile">Seramik Karo</option>
+              </select>
+            </div>
+            <div class="pt-1 border-t border-[var(--border)]">
+              <button onclick="deleteSelected()" class="w-full py-1.5 rounded-lg bg-rose-600/20 text-rose-300 border border-rose-500/40 hover:bg-rose-600/30 font-semibold">
+                🗑️ Bu Oda Bölgesini Sil
+              </button>
+            </div>
+          </div>
+
+          <!-- Wall Inspector Controls -->
+          <div id="insp-wall-controls" class="hidden flex-col gap-2.5 text-xs">
+            <div class="p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] flex justify-between">
+              <span class="text-[var(--muted-foreground)]">Duvar Durumu:</span>
+              <span id="insp-wall-origin" class="font-semibold text-emerald-400">Orijinal Duvar</span>
+            </div>
+            <div>
+              <label class="text-[var(--muted-foreground)] block mb-1">Duvar Tipi:</label>
+              <select id="insp-wall-type" onchange="updateSelectedWall('type', this.value)" class="w-full px-2.5 py-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+                <option value="double">Ana Duvar (Çift Çizgi Beyaz)</option>
+                <option value="thin">İnce Bölme Duvar</option>
+                <option value="glass">Cam Bölme</option>
+                <option value="dashed">Kesik Çizgi (Sınır)</option>
+              </select>
+            </div>
+            <button onclick="deleteSelected()" class="w-full py-1.5 rounded-lg bg-rose-600/20 text-rose-300 border border-rose-500/40 hover:bg-rose-600/30 font-semibold">
+              🗑️ Bu Duvar Parçasını Sil
+            </button>
+          </div>
+        </div>
+
+        <!-- Quick Room Navigator & Manager -->
+        <div class="p-3 rounded-xl bg-[var(--card)] border border-[var(--border)] flex flex-col gap-2">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-[var(--muted-foreground)]">🏠 Kayıtlı Odalar</h3>
+            <button onclick="setMode('room')" class="text-xs text-indigo-400 hover:underline font-medium">+ Yeni Oda Çiz</button>
+          </div>
+          <div id="room-list-container" class="flex flex-col gap-1.5"></div>
+        </div>
+
+        <!-- Quick Collaboration Guide -->
+        <div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs flex flex-col gap-1.5">
+          <div class="font-semibold text-amber-300 flex items-center gap-1.5">
+            <span>🤝 Hem Sen Hem Ben (AI) Nasıl Düzenleriz?</span>
+          </div>
+          <p class="text-[var(--muted-foreground)] leading-relaxed">
+            1. <strong>Sen düzenlerken:</strong> Üstteki araçlarla duvar, eşya, kapı veya oda ekleyip silebilirsin. Otomatik kaydedilir.<br/>
+            2. <strong>Bana (AI'a) düzenletirken:</strong> Sohbette doğrudan <em>"Yatağı sağ duvara al, balkona yeni duvar ekle"</em> diyebilirsin. Kendi yaptığın el değişikliklerini bana aktarmak istersen üstteki <strong>"🤖 AI Senkron / JSON"</strong> butonuna basıp kodu sohbete yapıştırman yeterli!
+          </p>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== AI SYNC / JSON MODAL ==================== -->
+  <div id="sync-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl max-w-xl w-full p-4 shadow-2xl flex flex-col gap-3">
+      <div class="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
+        <h2 class="text-sm font-bold text-[var(--foreground)] flex items-center gap-2">
+          <span>🤖 AI İle Çift Yönlü Senkronizasyon & Plan Verisi</span>
+        </h2>
+        <button onclick="closeSyncModal()" class="text-xs px-2 py-1 rounded bg-[var(--background)] hover:bg-rose-500/20">✕ Kapat</button>
+      </div>
+      <p class="text-xs text-[var(--muted-foreground)]">
+        Ekranda kendi elinle yaptığın değişiklikleri bana (AI'a) göstermek için <strong>"Plan Kodunu Kopyala"</strong> butonuna basıp sohbete yapıştırabilirsin. Veya başka bir JSON plan verisini buraya yapıştırıp <strong>"Plana Yükle"</strong> diyebilirsin.
+      </p>
+      <textarea id="sync-json-area" rows="8" class="w-full p-2.5 rounded-xl font-mono text-xs bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]"></textarea>
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
+        <div class="flex gap-2">
+          <button onclick="copyPlanJson()" id="btn-copy-json" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-500">
+            📋 Plan Kodunu Kopyala (AI'a Gönder)
+          </button>
+          <button onclick="importPlanJson()" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600/30">
+            📥 Kutudaki Kodu Plana Yükle
+          </button>
+        </div>
+        <button onclick="resetToAiDefault()" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30">
+          🔄 AI'ın Son Planına Sıfırla
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== APPLICATION LOGIC ==================== -->
+  <script>
+    // Whenever AI updates the file on user request, bump AI_REVISION so the client loads AI's new state automatically!
+    const AI_REVISION = 1;
+    const STORAGE_KEY = 'agy_floorplan_state_v1';
+    const STORAGE_REV_KEY = 'agy_floorplan_ai_rev';
+
+    // Exact Triangular Grid Constants (matching the 690x568 user image pixel-for-pixel)
+    const GRID_S = 88.70;
+    const GRID_H = 76.82; // GRID_S * sqrt(3)/2
+    const GRID_X0 = 219.5;
+    const GRID_Y0 = 72.5; // Row 1 Y
+
+    // Generate all triangular grid vertices covering the 690x568 canvas
+    const GRID_NODES = [];
+    for (let r = 0; r <= 7; r++) {
+      const y = +(GRID_Y0 + (r - 1) * GRID_H).toFixed(1);
+      const isOddOffset = ((r - 1) % 2 !== 0);
+      for (let k = -3; k <= 5; k++) {
+        const x = +(GRID_X0 + (k + (isOddOffset ? 0.5 : 0)) * GRID_S).toFixed(1);
+        if (x >= 20 && x <= 670 && y >= 15 && y <= 550) {
+          GRID_NODES.push({ id: `n_${r}_${k}`, r, k, x, y });
+        }
+      }
+    }
+
+    // Initial AI Plan Data (100% faithful to user's original walls + full room & furniture layout)
+    const INITIAL_AI_DATA = {
+      revision: AI_REVISION,
+      walls: [
+        // 1. Top horizontal wall (3 grid units)
+        { id: 'w1', x1: 219.5, y1: 72.5, x2: 308.2, y2: 72.5, type: 'double', orig: true },
+        { id: 'w2', x1: 308.2, y1: 72.5, x2: 396.9, y2: 72.5, type: 'double', orig: true },
+        { id: 'w3', x1: 396.9, y1: 72.5, x2: 485.6, y2: 72.5, type: 'double', orig: true },
+        // 2. Right upper slanted wall (2 grid units)
+        { id: 'w4', x1: 485.6, y1: 72.5, x2: 530.0, y2: 149.3, type: 'double', orig: true },
+        { id: 'w5', x1: 530.0, y1: 149.3, x2: 574.3, y2: 226.1, type: 'double', orig: true },
+        // 3. Right lower slanted wall (1 grid unit)
+        { id: 'w6', x1: 574.3, y1: 226.1, x2: 530.0, y2: 303.0, type: 'double', orig: true },
+        // 4. Bottom-right horizontal wall (1 grid unit)
+        { id: 'w7', x1: 530.0, y1: 303.0, x2: 441.3, y2: 303.0, type: 'double', orig: true },
+        // 5. Bottom-right step-down slanted wall (1 grid unit)
+        { id: 'w8', x1: 441.3, y1: 303.0, x2: 396.9, y2: 379.8, type: 'double', orig: true },
+        // 6. Entrance horizontal wall (1 grid unit)
+        { id: 'w9', x1: 396.9, y1: 379.8, x2: 308.2, y2: 379.8, type: 'double', orig: true },
+        // 7. Hexagon Master Bedroom (6 grid units)
+        { id: 'w10', x1: 175.2, y1: 303.0, x2: 263.9, y2: 303.0, type: 'double', orig: true },
+        { id: 'w11', x1: 263.9, y1: 303.0, x2: 308.2, y2: 379.8, type: 'double', orig: true },
+        { id: 'w12', x1: 308.2, y1: 379.8, x2: 263.9, y2: 456.6, type: 'double', orig: true },
+        { id: 'w13', x1: 263.9, y1: 456.6, x2: 175.2, y2: 456.6, type: 'double', orig: true },
+        { id: 'w14', x1: 175.2, y1: 456.6, x2: 130.8, y2: 379.8, type: 'double', orig: true },
+        { id: 'w15', x1: 130.8, y1: 379.8, x2: 175.2, y2: 303.0, type: 'double', orig: true },
+        // 8. Left outer slanted spine (3 grid units)
+        { id: 'w16', x1: 86.5, y1: 303.0, x2: 130.8, y2: 226.1, type: 'double', orig: true },
+        { id: 'w17', x1: 130.8, y1: 226.1, x2: 175.2, y2: 149.3, type: 'double', orig: true },
+        { id: 'w18', x1: 175.2, y1: 149.3, x2: 219.5, y2: 72.5, type: 'double', orig: true },
+        // 9. Ebeveyn Banyosu bottom-left wall
+        { id: 'w19', x1: 86.5, y1: 303.0, x2: 130.8, y2: 379.8, type: 'double', orig: true },
+        // 10. Inner slanted spine from Hexagon top-left to Top wall (3 grid units)
+        { id: 'w20', x1: 175.2, y1: 303.0, x2: 219.5, y2: 226.1, type: 'double', orig: true },
+        { id: 'w21', x1: 219.5, y1: 226.1, x2: 263.9, y2: 149.3, type: 'double', orig: true },
+        { id: 'w22', x1: 263.9, y1: 149.3, x2: 308.2, y2: 72.5, type: 'double', orig: true },
+        // 11. Bathroom & Room dividers
+        { id: 'w23', x1: 130.8, y1: 226.1, x2: 175.2, y2: 303.0, type: 'double', orig: true },
+        { id: 'w24', x1: 175.2, y1: 149.3, x2: 219.5, y2: 226.1, type: 'double', orig: true },
+        // 12. Çalışma Odası V-walls (3 grid units)
+        { id: 'w25', x1: 263.9, y1: 149.3, x2: 308.2, y2: 226.1, type: 'double', orig: true },
+        { id: 'w26', x1: 308.2, y1: 226.1, x2: 352.6, y2: 149.3, type: 'double', orig: true },
+        { id: 'w27', x1: 352.6, y1: 149.3, x2: 396.9, y2: 72.5, type: 'double', orig: true }
+      ],
+      rooms: [
+        {
+          id: 'r_yatak',
+          title: 'YATAK ODASI',
+          subtitle: 'Altıgen Ebeveyn Odası',
+          color: '#6366f1',
+          pattern: 'none',
+          labelX: 220,
+          labelY: 355,
+          points: [
+            { x: 175.2, y: 303.0 }, { x: 263.9, y: 303.0 }, { x: 308.2, y: 379.8 },
+            { x: 263.9, y: 456.6 }, { x: 175.2, y: 456.6 }, { x: 130.8, y: 379.8 }
+          ]
+        },
+        {
+          id: 'r_ebeveyn',
+          title: 'EBEVEYN BANYO',
+          subtitle: 'Duş + Lavabo + WC',
+          color: '#06b6d4',
+          pattern: 'tile',
+          labelX: 131,
+          labelY: 303,
+          points: [
+            { x: 130.8, y: 226.1 }, { x: 175.2, y: 303.0 },
+            { x: 130.8, y: 379.8 }, { x: 86.5, y: 303.0 }
+          ]
+        },
+        {
+          id: 'r_ortak',
+          title: 'ORTAK BANYO',
+          subtitle: 'Genel Banyo & WC',
+          color: '#0ea5e9',
+          pattern: 'tile',
+          labelX: 175.5,
+          labelY: 226.1,
+          points: [
+            { x: 175.2, y: 149.3 }, { x: 219.5, y: 226.1 },
+            { x: 175.2, y: 303.0 }, { x: 130.8, y: 226.1 }
+          ]
+        },
+        {
+          id: 'r_cocuk',
+          title: 'ÇOCUK ODASI',
+          subtitle: 'Yatak + Masa + Dolap',
+          color: '#f59e0b',
+          pattern: 'none',
+          labelX: 245,
+          labelY: 130,
+          points: [
+            { x: 219.5, y: 72.5 }, { x: 308.2, y: 72.5 },
+            { x: 263.9, y: 149.3 }, { x: 219.5, y: 226.1 }, { x: 175.2, y: 149.3 }
+          ]
+        },
+        {
+          id: 'r_calisma',
+          title: 'ÇALIŞMA ODASI',
+          subtitle: 'Ofis Masası + Kitaplık',
+          color: '#10b981',
+          pattern: 'none',
+          labelX: 332,
+          labelY: 130,
+          points: [
+            { x: 308.2, y: 72.5 }, { x: 396.9, y: 72.5 },
+            { x: 352.6, y: 149.3 }, { x: 308.2, y: 226.1 }, { x: 263.9, y: 149.3 }
+          ]
+        },
+        {
+          id: 'r_salon',
+          title: 'GİRİŞ / MUTFAK / SALON',
+          subtitle: 'Açık Yaşam Alanı',
+          color: '#ec4899',
+          pattern: 'none',
+          labelX: 468,
+          labelY: 262,
+          points: [
+            { x: 396.9, y: 72.5 }, { x: 485.6, y: 72.5 }, { x: 530.0, y: 149.3 },
+            { x: 574.3, y: 226.1 }, { x: 530.0, y: 303.0 }, { x: 441.3, y: 303.0 },
+            { x: 396.9, y: 379.8 }, { x: 308.2, y: 379.8 }, { x: 263.9, y: 303.0 },
+            { x: 175.2, y: 303.0 }, { x: 219.5, y: 226.1 }, { x: 263.9, y: 149.3 },
+            { x: 308.2, y: 226.1 }
+          ]
+        }
+      ],
+      items: [
+        // --- YATAK ODASI ---
+        { id: 'f_y_hal', kind: 'furniture', type: 'rug_round', name: 'Yatak Odası Halısı', x: 220, y: 380, rot: 0, scaleX: 1, scaleY: 1 },
+        { id: 'f_y_bed', kind: 'furniture', type: 'double_bed', name: 'Çift Kişilik Yatak', x: 220, y: 414, rot: 0, scaleX: 1, scaleY: 1 },
+        { id: 'f_y_war', kind: 'furniture', type: 'wardrobe', name: 'Gömme Gardırop', x: 278, y: 414, rot: -60, scaleX: 1, scaleY: 1 },
+        { id: 'f_y_van', kind: 'furniture', type: 'dresser', name: 'Makyaj Masası', x: 208, y: 313, rot: 0, scaleX: 1, scaleY: 1 },
+
+        // --- EBEVEYN BANYOSU ---
+        { id: 'f_eb_shw', kind: 'furniture', type: 'shower', name: 'Duşakabin', x: 131.3, y: 255, rot: 30, scaleX: 1, scaleY: 1 },
+        { id: 'f_eb_snk', kind: 'furniture', type: 'bath_sink', name: 'Banyo Lavabosu', x: 109, y: 328, rot: 60, scaleX: 1, scaleY: 1 },
+        { id: 'f_eb_wc',  kind: 'furniture', type: 'toilet', name: 'Klozet (WC)', x: 125, y: 356, rot: 60, scaleX: 1, scaleY: 1 },
+
+        // --- ORTAK BANYO ---
+        { id: 'f_ob_shw', kind: 'furniture', type: 'shower', name: 'Duş Alanı', x: 175.7, y: 178, rot: 30, scaleX: 1, scaleY: 1 },
+        { id: 'f_ob_snk', kind: 'furniture', type: 'wash_sink', name: 'Lavabo & Çamaşır M.', x: 154, y: 215, rot: -60, scaleX: 1, scaleY: 1 },
+        { id: 'f_ob_wc',  kind: 'furniture', type: 'toilet', name: 'Klozet (WC)', x: 169, y: 272, rot: 60, scaleX: 1, scaleY: 1 },
+
+        // --- ÇOCUK ODASI ---
+        { id: 'f_co_bed', kind: 'furniture', type: 'single_bed', name: 'Çocuk Yatağı', x: 215, y: 117, rot: -60, scaleX: 1, scaleY: 1 },
+        { id: 'f_co_dsk', kind: 'furniture', type: 'kids_desk', name: 'Çalışma Masası', x: 270, y: 84, rot: 0, scaleX: 1, scaleY: 1 },
+        { id: 'f_co_war', kind: 'furniture', type: 'wardrobe', name: 'Çocuk Gardırobu', x: 254, y: 152, rot: -60, scaleX: 0.78, scaleY: 0.9 },
+
+        // --- ÇALIŞMA ODASI ---
+        { id: 'f_ca_dsk', kind: 'furniture', type: 'office_desk', name: 'Çift Monitörlü Masa', x: 350, y: 87, rot: 0, scaleX: 1, scaleY: 1 },
+        { id: 'f_ca_lib', kind: 'furniture', type: 'bookshelf', name: 'Boydan Kitaplık', x: 344, y: 150, rot: -60, scaleX: 1, scaleY: 1 },
+        { id: 'f_ca_chr', kind: 'furniture', type: 'armchair', name: 'Okuma Koltuğu', x: 296, y: 169, rot: 60, scaleX: 1, scaleY: 1 },
+
+        // --- GİRİŞ / MUTFAK / SALON ---
+        { id: 'f_gi_mat', kind: 'furniture', type: 'welcome_mat', name: 'Giriş Paspası', x: 352, y: 365, rot: 0, scaleX: 1, scaleY: 1 },
+        { id: 'f_gi_ves', kind: 'furniture', type: 'wardrobe', name: 'Vestiyer / Portmanto', x: 413, y: 339, rot: -60, scaleX: 0.92, scaleY: 0.85 },
+        { id: 'f_mu_cnt', kind: 'furniture', type: 'kitchen_l', name: 'L-Mutfak Tezgahı', x: 454, y: 105, rot: 0, scaleX: 1, scaleY: 1 },
+        { id: 'f_mu_tbl', kind: 'furniture', type: 'dining_6', name: '6 Kişilik Yemek Masası', x: 425, y: 160, rot: 0, scaleX: 1, scaleY: 1 },
+        { id: 'f_sa_sof', kind: 'furniture', type: 'l_sofa', name: 'L-Köşe Koltuk & Sehpa', x: 431, y: 248, rot: 0, scaleX: 1, scaleY: 1 },
+        { id: 'f_sa_ber', kind: 'furniture', type: 'armchair', name: 'Berjer Koltuk', x: 497, y: 231, rot: 120, scaleX: 1, scaleY: 1 },
+        { id: 'f_sa_tv',  kind: 'furniture', type: 'tv_unit', name: 'TV Ünitesi', x: 485, y: 291, rot: 0, scaleX: 1, scaleY: 1 },
+        { id: 'f_sa_pln', kind: 'furniture', type: 'plant', name: 'Salon Bitkisi', x: 552, y: 226, rot: 0, scaleX: 1, scaleY: 1 },
+
+        // --- KAPILAR & PENCERELER ---
+        { id: 'd_main',   kind: 'door', type: 'door_single', name: 'Ana Çelik Kapı', x: 338, y: 379.8, rot: 0, scaleX: 1.1, scaleY: 1 },
+        { id: 'd_yatak',  kind: 'door', type: 'door_single', name: 'Yatak Odası Kapısı', x: 276.5, y: 324.2, rot: 60, scaleX: 0.95, scaleY: -1 },
+        { id: 'd_ebev',   kind: 'door', type: 'door_single', name: 'Ebeveyn Banyo Kapısı', x: 149.5, y: 348.3, rot: -60, scaleX: 0.85, scaleY: 1 },
+        { id: 'd_ortak',  kind: 'door', type: 'door_single', name: 'Ortak Banyo Kapısı', x: 193.5, y: 272.1, rot: -60, scaleX: 0.85, scaleY: 1 },
+        { id: 'd_cocuk',  kind: 'door', type: 'door_open',   name: 'Çocuk Odası Geçişi', x: 242, y: 188, rot: -60, scaleX: 1, scaleY: 1 },
+        { id: 'd_calis',  kind: 'door', type: 'door_single', name: 'Çalışma Odası Kapısı', x: 317, y: 211.5, rot: -60, scaleX: 0.9, scaleY: 1 }
+      ]
+    };
+
+    // ==================== FURNITURE & DOOR CATALOG DEFINITIONS ====================
+    const CATALOG = {
+      yatak: [
+        { type: 'double_bed', name: 'Çift Kişilik Yatak', icon: '🛏️' },
+        { type: 'single_bed', name: 'Tek Kişilik Yatak', icon: '🛌' },
+        { type: 'wardrobe',   name: 'Gardırop / Dolap',  icon: '🚪' },
+        { type: 'dresser',    name: 'Makyaj Masası',     icon: '🪞' },
+        { type: 'rug_round',  name: 'Yuvarlak Halı',     icon: '⭕' },
+        { type: 'rug_rect',   name: 'Dikdörtgen Halı',   icon: '▭' }
+      ],
+      banyo: [
+        { type: 'shower',     name: 'Duşakabin',         icon: '🚿' },
+        { type: 'bathtub',    name: 'Küvet',             icon: '🛁' },
+        { type: 'toilet',     name: 'Klozet (WC)',       icon: '🚽' },
+        { type: 'bath_sink',  name: 'Banyo Lavabosu',    icon: '🚰' },
+        { type: 'wash_sink',  name: 'Lavabo + Çamaşır',  icon: '🧺' }
+      ],
+      salon: [
+        { type: 'l_sofa',      name: 'L-Köşe Koltuk',    icon: '🛋️' },
+        { type: 'sofa_3',      name: '3\'lü Koltuk',     icon: '🛋️' },
+        { type: 'armchair',    name: 'Berjer Koltuk',    icon: '🪑' },
+        { type: 'tv_unit',     name: 'TV Ünitesi',       icon: '📺' },
+        { type: 'welcome_mat', name: 'Kapı Paspası',     icon: '🟫' },
+        { type: 'plant',       name: 'Salon Bitkisi',    icon: '🪴' }
+      ],
+      mutfak: [
+        { type: 'kitchen_l',   name: 'L-Mutfak Tezgahı', icon: '🍳' },
+        { type: 'kitchen_str', name: 'Düz Mutfak Tezgah',icon: '🔪' },
+        { type: 'dining_6',    name: '6 Kişilik Masa',   icon: '🍽️' },
+        { type: 'dining_4',    name: '4 Kişilik Masa',   icon: '🪑' },
+        { type: 'fridge',      name: 'Buzdolabı',        icon: '🧊' }
+      ],
+      ofis: [
+        { type: 'office_desk', name: 'Ofis Masası (2 Ekran)', icon: '🖥️' },
+        { type: 'kids_desk',   name: 'Çocuk Çalışma Masası',  icon: '📚' },
+        { type: 'bookshelf',   name: 'Kitaplık / Raf',        icon: '📖' }
+      ]
+    };
+
+    const DOOR_CATALOG = [
+      { type: 'door_single', name: 'Tek Kanat Kapı', icon: '🚪' },
+      { type: 'door_double', name: 'Çift Kanat Kapı', icon: '🚪' },
+      { type: 'door_slide',  name: 'Sürgülü Kapı',   icon: '↔️' },
+      { type: 'window_std',  name: 'Pencere',        icon: '🪟' },
+      { type: 'door_open',   name: 'Açık Geçiş / Kemer', icon: '⛩️' }
+    ];
+
+    // Render SVG markup for any furniture/door item centered at (0,0)
+    function getItemSvgContent(item) {
+      switch (item.type) {
+        case 'double_bed':
+          return `
+            <rect x="-31" y="-35" width="62" height="70" rx="4" fill="#312e81" stroke="#c7d2fe" stroke-width="1.4"/>
+            <rect x="-28" y="-32" width="56" height="45" rx="3" fill="#4338ca" stroke="#a5b4fc" stroke-width="1"/>
+            <line x1="-28" y1="2" x2="28" y2="2" stroke="#c7d2fe" stroke-width="1.2"/>
+            <rect x="-24" y="16" width="21" height="13" rx="3" fill="#e0e7ff" stroke="#6366f1" stroke-width="1"/>
+            <rect x="3" y="16" width="21" height="13" rx="3" fill="#e0e7ff" stroke="#6366f1" stroke-width="1"/>
+            <rect x="-43" y="19" width="10" height="13" rx="2" fill="#1e1b4b" stroke="#a5b4fc" stroke-width="1"/>
+            <circle cx="-38" cy="25.5" r="2.2" fill="#fde047"/>
+            <rect x="33" y="19" width="10" height="13" rx="2" fill="#1e1b4b" stroke="#a5b4fc" stroke-width="1"/>
+            <circle cx="38" cy="25.5" r="2.2" fill="#fde047"/>
+          `;
+        case 'single_bed':
+          return `
+            <rect x="-32" y="-16" width="64" height="33" rx="4" fill="#78350f" stroke="#fcd34d" stroke-width="1.3"/>
+            <rect x="-29" y="-14" width="46" height="29" rx="2" fill="#b45309" stroke="#fde68a" stroke-width="1"/>
+            <rect x="15" y="-10" width="14" height="21" rx="3" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+          `;
+        case 'wardrobe':
+          return `
+            <rect x="-28" y="-8" width="56" height="16" rx="2" fill="#1e293b" stroke="#cbd5e1" stroke-width="1.3"/>
+            <line x1="-24" y1="0" x2="24" y2="0" stroke="#64748b" stroke-width="0.9"/>
+            <line x1="-16" y1="-5" x2="-16" y2="5" stroke="#94a3b8" stroke-width="0.9"/>
+            <line x1="-5" y1="-5" x2="-5" y2="5" stroke="#94a3b8" stroke-width="0.9"/>
+            <line x1="5" y1="-5" x2="5" y2="5" stroke="#94a3b8" stroke-width="0.9"/>
+            <line x1="16" y1="-5" x2="16" y2="5" stroke="#94a3b8" stroke-width="0.9"/>
+          `;
+        case 'dresser':
+          return `
+            <rect x="-20" y="-6" width="40" height="12" rx="2" fill="#1e293b" stroke="#cbd5e1" stroke-width="1.1"/>
+            <circle cx="0" cy="11" r="5" fill="#334155" stroke="#94a3b8" stroke-width="1"/>
+          `;
+        case 'rug_round':
+          return `<circle cx="0" cy="0" r="38" fill="#818cf8" fill-opacity="0.16" stroke="#818cf8" stroke-width="1" stroke-dasharray="3 2"/>`;
+        case 'rug_rect':
+          return `<rect x="-45" y="-30" width="90" height="60" rx="5" fill="#ec4899" fill-opacity="0.14" stroke="#f472b6" stroke-width="1" stroke-dasharray="3 2"/>`;
+        case 'shower':
+          return `
+            <rect x="-15" y="-14" width="30" height="28" rx="2.5" fill="#083344" fill-opacity="0.8" stroke="#67e8f9" stroke-width="1.2"/>
+            <line x1="-13" y1="-12" x2="13" y2="12" stroke="#67e8f9" stroke-width="0.7" stroke-opacity="0.6"/>
+            <line x1="13" y1="-12" x2="-13" y2="12" stroke="#67e8f9" stroke-width="0.7" stroke-opacity="0.6"/>
+            <circle cx="0" cy="0" r="2.5" fill="#22d3ee" stroke="#ecfeff" stroke-width="0.8"/>
+          `;
+        case 'bathtub':
+          return `
+            <rect x="-26" y="-14" width="52" height="28" rx="5" fill="#0c4a6e" stroke="#7dd3fc" stroke-width="1.3"/>
+            <rect x="-22" y="-10" width="44" height="20" rx="7" fill="#075985" stroke="#bae6fd" stroke-width="1"/>
+            <circle cx="16" cy="0" r="2" fill="#e0f2fe"/>
+          `;
+        case 'toilet':
+          return `
+            <rect x="-6" y="-9" width="12" height="5" rx="1.5" fill="#e2e8f0" stroke="#475569" stroke-width="0.9"/>
+            <ellipse cx="0" cy="2" rx="5.8" ry="7.8" fill="#f8fafc" stroke="#475569" stroke-width="1"/>
+          `;
+        case 'bath_sink':
+          return `
+            <rect x="-15" y="-8" width="30" height="15" rx="2" fill="#0f172a" stroke="#67e8f9" stroke-width="1.1"/>
+            <ellipse cx="0" cy="-1" rx="8" ry="4.5" fill="#164e63" stroke="#bae6fd" stroke-width="1"/>
+          `;
+        case 'wash_sink':
+          return `
+            <rect x="-17" y="-7" width="34" height="14" rx="2" fill="#0f172a" stroke="#7dd3fc" stroke-width="1.1"/>
+            <ellipse cx="-6" cy="0" rx="7" ry="4" fill="#075985" stroke="#e0f2fe" stroke-width="1"/>
+            <rect x="4" y="-5.5" width="11" height="11" rx="1.5" fill="#1e293b" stroke="#94a3b8" stroke-width="0.8"/>
+            <circle cx="9.5" cy="0" r="3" fill="none" stroke="#7dd3fc" stroke-width="0.8"/>
+          `;
+        case 'l_sofa':
+          return `
+            <path d="M -32 -28 L 35 -28 L 35 -6 L -11 -6 L -11 26 L -32 26 Z" fill="#831843" stroke="#fbcfe8" stroke-width="1.3" stroke-linejoin="round"/>
+            <rect x="-32" y="-28" width="67" height="6" rx="1.5" fill="#9d174d" stroke="#f9a8d4" stroke-width="1"/>
+            <rect x="-32" y="-28" width="6" height="54" rx="1.5" fill="#9d174d" stroke="#f9a8d4" stroke-width="1"/>
+            <rect x="2" y="5" width="34" height="18" rx="4" fill="#1e293b" stroke="#cbd5e1" stroke-width="1.1"/>
+            <circle cx="14" cy="14" r="3" fill="#fde047" fill-opacity="0.6"/>
+          `;
+        case 'sofa_3':
+          return `
+            <rect x="-34" y="-12" width="68" height="24" rx="4" fill="#831843" stroke="#fbcfe8" stroke-width="1.3"/>
+            <rect x="-34" y="-12" width="68" height="6" rx="1.5" fill="#9d174d" stroke="#f9a8d4" stroke-width="1"/>
+            <line x1="-11" y1="-6" x2="-11" y2="12" stroke="#f9a8d4" stroke-width="0.9"/>
+            <line x1="11" y1="-6" x2="11" y2="12" stroke="#f9a8d4" stroke-width="0.9"/>
+          `;
+        case 'armchair':
+          return `
+            <rect x="-11.5" y="-10" width="23" height="19" rx="4.5" fill="#047857" stroke="#6ee7b7" stroke-width="1.2"/>
+            <rect x="-8.5" y="-5" width="17" height="12" rx="2.5" fill="#059669"/>
+          `;
+        case 'tv_unit':
+          return `
+            <rect x="-34" y="-5.5" width="68" height="11" rx="2" fill="#0f172a" stroke="#f472b6" stroke-width="1.1"/>
+            <line x1="-26" y1="1" x2="26" y2="1" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round"/>
+          `;
+        case 'welcome_mat':
+          return `<rect x="-18" y="-9" width="36" height="18" rx="2" fill="#475569" fill-opacity="0.65" stroke="#94a3b8" stroke-width="1" stroke-dasharray="2 2"/>`;
+        case 'plant':
+          return `
+            <circle cx="0" cy="0" r="9" fill="#14532d" stroke="#4ade80" stroke-width="1.2"/>
+            <circle cx="-2.5" cy="-2" r="3" fill="#22c55e"/>
+            <circle cx="3" cy="1.5" r="3" fill="#16a34a"/>
+          `;
+        case 'kitchen_l':
+          return `
+            <path d="M -55 -29.5 L 30 -29.5 L 71 41 L 52 52 L 18 -7.5 L -55 -7.5 Z" fill="#1e293b" stroke="#f472b6" stroke-width="1.4"/>
+            <rect x="-53" y="-28" width="20" height="19" rx="2" fill="#334155" stroke="#f9a8d4" stroke-width="1.2"/>
+            <rect x="-18" y="-26.5" width="29" height="15" rx="2" fill="#0f172a" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="-15.5" y="-24" width="12" height="10" rx="1.5" fill="#1e293b" stroke="#94a3b8" stroke-width="0.8"/>
+            <g transform="translate(43, 15) rotate(60)">
+              <rect x="-14" y="-8.5" width="28" height="17" rx="2" fill="#090d16" stroke="#cbd5e1" stroke-width="1"/>
+              <circle cx="-7" cy="-4" r="3" fill="none" stroke="#f43f5e" stroke-width="1"/>
+              <circle cx="7" cy="-4" r="3" fill="none" stroke="#f43f5e" stroke-width="1"/>
+              <circle cx="-7" cy="4" r="3" fill="none" stroke="#f43f5e" stroke-width="1"/>
+              <circle cx="7" cy="4" r="3" fill="none" stroke="#f43f5e" stroke-width="1"/>
+            </g>
+          `;
+        case 'kitchen_str':
+          return `
+            <rect x="-40" y="-11" width="80" height="22" rx="2" fill="#1e293b" stroke="#f472b6" stroke-width="1.3"/>
+            <rect x="-34" y="-7" width="24" height="14" rx="2" fill="#0f172a" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="6" y="-7" width="24" height="14" rx="2" fill="#090d16" stroke="#cbd5e1" stroke-width="1"/>
+            <circle cx="13" cy="-2" r="2.5" fill="none" stroke="#f43f5e" stroke-width="1"/>
+            <circle cx="23" cy="-2" r="2.5" fill="none" stroke="#f43f5e" stroke-width="1"/>
+          `;
+        case 'dining_6':
+          return `
+            <rect x="-24" y="-20" width="12" height="6" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="12" y="-20" width="12" height="6" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="-24" y="14" width="12" height="6" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="12" y="14" width="12" height="6" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="-43" y="-6" width="6" height="12" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="37" y="-6" width="6" height="12" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="-35" y="-14" width="70" height="28" rx="4.5" fill="#334155" stroke="#f9a8d4" stroke-width="1.3"/>
+          `;
+        case 'dining_4':
+          return `
+            <rect x="-14" y="-19" width="12" height="5" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="2" y="-19" width="12" height="5" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="-14" y="14" width="12" height="5" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="2" y="14" width="12" height="5" rx="2" fill="#475569" stroke="#cbd5e1" stroke-width="1"/>
+            <rect x="-24" y="-13" width="48" height="26" rx="4" fill="#334155" stroke="#f9a8d4" stroke-width="1.3"/>
+          `;
+        case 'fridge':
+          return `
+            <rect x="-12" y="-12" width="24" height="24" rx="2.5" fill="#334155" stroke="#bae6fd" stroke-width="1.3"/>
+            <line x1="-12" y1="8" x2="12" y2="8" stroke="#38bdf8" stroke-width="1"/>
+          `;
+        case 'office_desk':
+          return `
+            <rect x="-27" y="-9" width="54" height="18" rx="2.5" fill="#064e3b" stroke="#6ee7b7" stroke-width="1.3"/>
+            <line x1="-16" y1="-5" x2="-3" y2="-3.5" stroke="#a7f3d0" stroke-width="2"/>
+            <line x1="3" y1="-3.5" x2="16" y2="-5" stroke="#a7f3d0" stroke-width="2"/>
+            <rect x="-7" y="1" width="14" height="4.5" rx="1" fill="#34d399"/>
+            <circle cx="0" cy="16.5" r="7" fill="#065f46" stroke="#6ee7b7" stroke-width="1.2"/>
+          `;
+        case 'kids_desk':
+          return `
+            <rect x="-21" y="-7.5" width="42" height="15" rx="2" fill="#451a03" stroke="#fbbf24" stroke-width="1.1"/>
+            <rect x="-7" y="-4.5" width="14" height="8" rx="1" fill="#fde68a" fill-opacity="0.8"/>
+            <circle cx="0" cy="13.5" r="6" fill="#78350f" stroke="#fcd34d" stroke-width="1"/>
+          `;
+        case 'bookshelf':
+          return `
+            <rect x="-35" y="-6" width="70" height="12" rx="2" fill="#064e3b" stroke="#34d399" stroke-width="1.1"/>
+            <line x1="-28" y1="-5" x2="-28" y2="5" stroke="#6ee7b7" stroke-width="1.8"/>
+            <line x1="-22" y1="-5" x2="-22" y2="5" stroke="#34d399" stroke-width="1.8"/>
+            <line x1="-16" y1="-5" x2="-16" y2="5" stroke="#a7f3d0" stroke-width="1.8"/>
+            <line x1="-4" y1="-5" x2="-4" y2="5" stroke="#6ee7b7" stroke-width="1.8"/>
+            <line x1="10" y1="-5" x2="10" y2="5" stroke="#a7f3d0" stroke-width="1.8"/>
+            <line x1="18" y1="-5" x2="18" y2="5" stroke="#6ee7b7" stroke-width="1.8"/>
+          `;
+        // DOORS & WINDOWS
+        case 'door_single':
+          return `
+            <rect x="0" y="-3.2" width="26" height="6.4" fill="#222731" stroke="#fbbf24" stroke-width="1.2"/>
+            <line x1="0" y1="0" x2="0" y2="-26" stroke="#fbbf24" stroke-width="2"/>
+            <path d="M 0 -26 A 26 26 0 0 1 26 0" fill="#fbbf24" fill-opacity="0.18" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="2.5 2"/>
+          `;
+        case 'door_double':
+          return `
+            <rect x="-24" y="-3.2" width="48" height="6.4" fill="#222731" stroke="#fbbf24" stroke-width="1.2"/>
+            <line x1="-24" y1="0" x2="-24" y2="-24" stroke="#fbbf24" stroke-width="1.8"/>
+            <line x1="24" y1="0" x2="24" y2="-24" stroke="#fbbf24" stroke-width="1.8"/>
+            <path d="M -24 -24 A 24 24 0 0 1 0 0" fill="#fbbf24" fill-opacity="0.15" stroke="#fbbf24" stroke-width="1.1" stroke-dasharray="2 2"/>
+            <path d="M 24 -24 A 24 24 0 0 0 0 0" fill="#fbbf24" fill-opacity="0.15" stroke="#fbbf24" stroke-width="1.1" stroke-dasharray="2 2"/>
+          `;
+        case 'door_slide':
+          return `
+            <rect x="-20" y="-3" width="40" height="6" fill="#222731" stroke="#38bdf8" stroke-width="1.1"/>
+            <line x1="-18" y1="-1.2" x2="4" y2="-1.2" stroke="#38bdf8" stroke-width="2"/>
+            <line x1="-4" y1="1.2" x2="18" y2="1.2" stroke="#38bdf8" stroke-width="2"/>
+          `;
+        case 'window_std':
+          return `
+            <rect x="-22" y="-3.2" width="44" height="6.4" fill="#0f172a" stroke="#7dd3fc" stroke-width="1.3"/>
+            <line x1="-22" y1="-1" x2="22" y2="-1" stroke="#bae6fd" stroke-width="0.9"/>
+            <line x1="-22" y1="1" x2="22" y2="1" stroke="#bae6fd" stroke-width="0.9"/>
+          `;
+        case 'door_open':
+          return `
+            <line x1="-25" y1="0" x2="25" y2="0" stroke="#fbbf24" stroke-width="1.4" stroke-dasharray="3 3"/>
+          `;
+        default:
+          return `<rect x="-15" y="-15" width="30" height="30" rx="4" fill="#6366f1" stroke="#fff"/>`;
+      }
+    }
+
+    // ==================== STATE MANAGEMENT ====================
+    let plan = loadInitialState();
+    let historyStack = [JSON.stringify(plan)];
+    let historyIndex = 0;
+
+    let currentMode = 'select'; // 'select', 'wall', 'door', 'furniture', 'room', 'eraser'
+    let lockOriginalWalls = true;
+    let snapEnabled = true;
+    let showBgImage = true;
+
+    let selectedRef = null; // { kind: 'item'|'wall'|'room', id: string }
+    let pendingCatalogItem = null; // For placing new furniture/door
+
+    // Drawing states
+    let activeWallNode = null; // { x, y }
+    let activeRoomPoints = []; // [{ x, y }, ...]
+    let mouseSvgPos = { x: 345, y: 284 };
+    let hoveredGridNode = null;
+
+    // Dragging state
+    let dragState = null; // { type: 'item'|'roomLabel'|'pan', id, startSvgX, startSvgY, origX, origY }
+
+    // Viewport Zoom/Pan state
+    let viewBox = { x: 0, y: 0, w: 690, h: 568 };
+
+    function loadInitialState() {
+      try {
+        const savedRev = parseInt(localStorage.getItem(STORAGE_REV_KEY) || '0', 10);
+        const savedStr = localStorage.getItem(STORAGE_KEY);
+        if (savedStr && savedRev === AI_REVISION) {
+          return JSON.parse(savedStr);
+        }
+      } catch (e) {}
+      localStorage.setItem(STORAGE_REV_KEY, String(AI_REVISION));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_AI_DATA));
+      return JSON.parse(JSON.stringify(INITIAL_AI_DATA));
+    }
+
+    function saveState(pushHistory = true) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(plan));
+        localStorage.setItem(STORAGE_REV_KEY, String(AI_REVISION));
+      } catch (e) {}
+      if (pushHistory) {
+        const snap = JSON.stringify(plan);
+        if (historyStack[historyIndex] !== snap) {
+          historyStack = historyStack.slice(0, historyIndex + 1);
+          historyStack.push(snap);
+          if (historyStack.length > 40) historyStack.shift();
+          else historyIndex++;
+        }
+      }
+    }
+
+    function undo() {
+      if (historyIndex > 0) {
+        historyIndex--;
+        plan = JSON.parse(historyStack[historyIndex]);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(plan));
+        renderAll();
+        updateInspector();
+      }
+    }
+
+    function redo() {
+      if (historyIndex < historyStack.length - 1) {
+        historyIndex++;
+        plan = JSON.parse(historyStack[historyIndex]);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(plan));
+        renderAll();
+        updateInspector();
+      }
+    }
+
+    // ==================== RENDER ENGINE ====================
+    function renderVectorGrid() {
+      const g = document.getElementById('layer-vector-grid');
+      let lines = '';
+      for (let r = 0; r <= 7; r++) {
+        const y = +(GRID_Y0 + (r - 1) * GRID_H).toFixed(1);
+        lines += `<line x1="0" y1="${y}" x2="690" y2="${y}" stroke="#94a3b8" stroke-width="0.6"/>`;
+      }
+      for (let k = -6; k <= 10; k++) {
+        const xTop = GRID_X0 + k * GRID_S;
+        const yTop = GRID_Y0;
+        lines += `<line x1="${(xTop - 2 * GRID_S / 2).toFixed(1)}" y1="${(yTop - 2 * GRID_H).toFixed(1)}" x2="${(xTop + 7 * GRID_S / 2).toFixed(1)}" y2="${(yTop + 7 * GRID_H).toFixed(1)}" stroke="#94a3b8" stroke-width="0.6"/>`;
+        lines += `<line x1="${(xTop + 2 * GRID_S / 2).toFixed(1)}" y1="${(yTop - 2 * GRID_H).toFixed(1)}" x2="${(xTop - 7 * GRID_S / 2).toFixed(1)}" y2="${(yTop + 7 * GRID_H).toFixed(1)}" stroke="#94a3b8" stroke-width="0.6"/>`;
+      }
+      g.innerHTML = lines;
+    }
+
+    function renderGridNodes() {
+      const g = document.getElementById('layer-grid-nodes');
+      const emphasize = (currentMode === 'wall' || currentMode === 'room');
+      let html = '';
+      for (const n of GRID_NODES) {
+        const isStart = (activeWallNode && Math.hypot(activeWallNode.x - n.x, activeWallNode.y - n.y) < 1);
+        const r = isStart ? 5.5 : (emphasize ? 3.5 : 1.8);
+        const fill = isStart ? '#fbbf24' : (emphasize ? '#38bdf8' : '#94a3b8');
+        const op = isStart ? 1 : (emphasize ? 0.75 : 0.35);
+        html += `<circle class="grid-node" cx="${n.x}" cy="${n.y}" r="${r}" fill="${fill}" fill-opacity="${op}" data-x="${n.x}" data-y="${n.y}" onclick="onGridNodeClick(${n.x}, ${n.y}, event)"/>`;
+      }
+      g.innerHTML = html;
+    }
+
+    function renderAll() {
+      // 1. Rooms & Labels
+      const zonesG = document.getElementById('layer-zones');
+      const labelsG = document.getElementById('layer-labels');
+      let zonesHtml = '';
+      let labelsHtml = '';
+
+      for (const rm of plan.rooms) {
+        const pts = rm.points.map(p => `${p.x},${p.y}`).join(' ');
+        const isSel = (selectedRef && selectedRef.kind === 'room' && selectedRef.id === rm.id);
+        zonesHtml += `
+          <polygon class="room-poly ${isSel ? 'room-poly-selected' : ''}"
+            points="${pts}" fill="${rm.color}" fill-opacity="0.18"
+            stroke="${rm.color}" stroke-width="0.8" stroke-opacity="0.4"
+            onclick="onRoomClick('${rm.id}', event)" />
+        `;
+        if (rm.pattern === 'tile') {
+          zonesHtml += `<polygon points="${pts}" fill="url(#tilePattern)" pointer-events="none"/>`;
+        }
+
+        // Room Badge Label (draggable!)
+        const lx = rm.labelX || 300;
+        const ly = rm.labelY || 200;
+        labelsHtml += `
+          <g class="furn-item" transform="translate(${lx}, ${ly})"
+             onmousedown="startDragRoomLabel('${rm.id}', event)"
+             onclick="onRoomClick('${rm.id}', event)">
+            <rect x="-40" y="-11" width="80" height="22" rx="4.5" fill="#0f172a" fill-opacity="0.88" stroke="${isSel ? '#fbbf24' : rm.color}" stroke-width="${isSel ? 1.8 : 1.1}"/>
+            <text x="0" y="-1" text-anchor="middle" fill="#f8fafc" font-size="7.6" font-weight="700">${escapeHtml(rm.title)}</text>
+            <text x="0" y="7.2" text-anchor="middle" fill="#cbd5e1" font-size="6.1">${escapeHtml(rm.subtitle || '')}</text>
+          </g>
+        `;
+      }
+      zonesG.innerHTML = zonesHtml;
+      labelsG.innerHTML = labelsHtml;
+
+      // 2. Walls
+      const wallsG = document.getElementById('layer-walls');
+      let wallsHtml = '';
+      let innerGapsHtml = '';
+      for (const w of plan.walls) {
+        const isSel = (selectedRef && selectedRef.kind === 'wall' && selectedRef.id === w.id);
+        let cls = 'wall-double';
+        if (w.type === 'thin') cls = 'wall-thin';
+        else if (w.type === 'glass') cls = 'wall-glass';
+        else if (w.type === 'dashed') cls = 'wall-dashed';
+
+        wallsHtml += `
+          <line class="${cls} ${isSel ? 'wall-selected' : ''}"
+            x1="${w.x1}" y1="${w.y1}" x2="${w.x2}" y2="${w.y2}"
+            onclick="onWallClick('${w.id}', event)" />
+        `;
+        if (w.type === 'double' || !w.type) {
+          innerGapsHtml += `<line class="wall-inner-gap" x1="${w.x1}" y1="${w.y1}" x2="${w.x2}" y2="${w.y2}" />`;
+        }
+      }
+      wallsG.innerHTML = wallsHtml + innerGapsHtml;
+
+      // 3. Furniture & Doors
+      const furnG = document.getElementById('layer-furniture');
+      const doorsG = document.getElementById('layer-doors');
+      let furnHtml = '';
+      let doorsHtml = '';
+
+      for (const it of plan.items) {
+        const isSel = (selectedRef && selectedRef.kind === 'item' && selectedRef.id === it.id);
+        const sx = it.scaleX !== undefined ? it.scaleX : 1;
+        const sy = it.scaleY !== undefined ? it.scaleY : 1;
+        const rot = it.rot || 0;
+        const selRing = isSel
+          ? `<circle cx="0" cy="0" r="32" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4 2" pointer-events="none"/>
+             <circle cx="0" cy="-36" r="4" fill="#fbbf24" stroke="#0f172a" stroke-width="1" pointer-events="none"/>`
+          : '';
+        const gMarkup = `
+          <g class="furn-item" transform="translate(${it.x}, ${it.y}) rotate(${rot}) scale(${sx}, ${sy})"
+             onmousedown="startDragItem('${it.id}', event)"
+             onclick="onItemClick('${it.id}', event)">
+            ${getItemSvgContent(it)}
+            ${selRing}
+          </g>
+        `;
+        if (it.kind === 'door') doorsHtml += gMarkup;
+        else furnHtml += gMarkup;
+      }
+      furnG.innerHTML = furnHtml;
+      doorsG.innerHTML = doorsHtml;
+
+      renderGridNodes();
+      renderPreview();
+      renderRoomListSidebar();
+    }
+
+    function renderPreview() {
+      const prevG = document.getElementById('layer-preview');
+      let html = '';
+
+      // 1. Active Wall Chain Preview
+      if (currentMode === 'wall' && activeWallNode) {
+        const target = hoveredGridNode || mouseSvgPos;
+        const dx = target.x - activeWallNode.x;
+        const dy = target.y - activeWallNode.y;
+        const lenPx = Math.hypot(dx, dy);
+        const deg = Math.round(Math.atan2(dy, dx) * 180 / Math.PI);
+        const meters = (lenPx / GRID_S * 3.0).toFixed(1);
+        html += `
+          <line x1="${activeWallNode.x}" y1="${activeWallNode.y}" x2="${target.x}" y2="${target.y}"
+                stroke="#38bdf8" stroke-width="4.2" stroke-dasharray="5 3" pointer-events="none"/>
+          <g transform="translate(${(activeWallNode.x + target.x)/2}, ${(activeWallNode.y + target.y)/2 - 10})" pointer-events="none">
+            <rect x="-34" y="-10" width="68" height="16" rx="4" fill="#0f172a" stroke="#38bdf8" stroke-width="1"/>
+            <text x="0" y="1" text-anchor="middle" fill="#e0f2fe" font-size="7.5" font-weight="700">${meters}m (${deg}°)</text>
+          </g>
+        `;
+      }
+
+      // 2. Active Room Polygon Preview
+      if (currentMode === 'room' && activeRoomPoints.length > 0) {
+        const target = hoveredGridNode || mouseSvgPos;
+        const allPts = [...activeRoomPoints, target].map(p => `${p.x},${p.y}`).join(' ');
+        const col = document.getElementById('new-room-color').value || '#a855f7';
+        html += `
+          <polygon points="${allPts}" fill="${col}" fill-opacity="0.25" stroke="${col}" stroke-width="1.8" stroke-dasharray="4 2" pointer-events="none"/>
+        `;
+        for (const p of activeRoomPoints) {
+          html += `<circle cx="${p.x}" cy="${p.y}" r="4.5" fill="#fbbf24" stroke="#0f172a" stroke-width="1" pointer-events="none"/>`;
+        }
+      }
+
+      // 3. Pending Furniture / Door Placement Preview
+      if ((currentMode === 'furniture' || currentMode === 'door') && pendingCatalogItem) {
+        let previewRot = 0;
+        let px = mouseSvgPos.x;
+        let py = mouseSvgPos.y;
+        if (currentMode === 'door') {
+          const snapWall = findNearestWallSnap(px, py);
+          if (snapWall) {
+            px = snapWall.x;
+            py = snapWall.y;
+            previewRot = snapWall.angle;
+          }
+        }
+        html += `
+          <g transform="translate(${px}, ${py}) rotate(${previewRot})" opacity="0.7" pointer-events="none">
+            ${getItemSvgContent(pendingCatalogItem)}
+          </g>
+        `;
+      }
+
+      prevG.innerHTML = html;
+    }
+
+    // ==================== INTERACTION & MODES ====================
+    function setMode(mode) {
+      currentMode = mode;
+      activeWallNode = null;
+      activeRoomPoints = [];
+
+      const modes = ['select', 'wall', 'door', 'furniture', 'room', 'eraser'];
+      for (const m of modes) {
+        const btn = document.getElementById('mode-' + m);
+        if (!btn) continue;
+        if (m === mode) {
+          btn.className = 'px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition bg-indigo-600 text-white shadow-sm';
+        } else {
+          btn.className = 'px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] hover:border-indigo-400';
+        }
+      }
+
+      // Show/hide contextual left palettes
+      document.getElementById('palette-wall').className = (mode === 'wall') ? 'flex flex-col gap-2.5 p-3 rounded-xl bg-[var(--card)] border border-sky-500/40' : 'hidden';
+      document.getElementById('palette-room').className = (mode === 'room') ? 'flex flex-col gap-2.5 p-3 rounded-xl bg-[var(--card)] border border-purple-500/40' : 'hidden';
+      document.getElementById('palette-door').className = (mode === 'door') ? 'flex flex-col gap-2 p-3 rounded-xl bg-[var(--card)] border border-amber-500/40' : 'hidden';
+
+      const statusMap = {
+        select: 'Seç / Taşı Modu: Eşyalara, kapılara, duvarlara veya odalara tıklayarak düzenleyebilir, fareyle sürükleyebilirsin.',
+        wall: 'Duvar Çizim Modu: Parlayan mavi üçgen ızgara noktalarına sırayla tıklayarak yeni duvar ekle. Bitirmek için Sağ Tık veya ESC.',
+        door: 'Kapı / Pencere Modu: Soldan bir kapı/pencere seç ve planda istediğin duvarın üzerine tıkla (açısını otomatik hizalar).',
+        furniture: 'Tefriş Ekleme Modu: Soldaki katalogdan bir eşya seçip planda istediğin yere tıkla.',
+        room: 'Oda İşaretleme Modu: Yeni odanın köşe noktalarına sırayla tıkla, ardından soldaki "Odayı Tamamla" butonuna bas.',
+        eraser: 'Silgi Modu: Silmek istediğin duvar, eşya, kapı veya oda bölgesinin üzerine tıkla.'
+      };
+      document.getElementById('status-text').textContent = statusMap[mode] || '';
+
+      if (mode === 'door' && (!pendingCatalogItem || pendingCatalogItem.kind !== 'door')) {
+        selectDoorCatalogItem(DOOR_CATALOG[0]);
+      }
+
+      renderAll();
+    }
+
+    function onGridNodeClick(x, y, evt) {
+      evt.stopPropagation();
+      if (currentMode === 'wall') {
+        if (!activeWallNode) {
+          activeWallNode = { x, y };
+        } else {
+          if (Math.hypot(activeWallNode.x - x, activeWallNode.y - y) > 2) {
+            const wType = document.getElementById('wall-type-select').value || 'double';
+            plan.walls.push({
+              id: 'w_' + Date.now() + '_' + Math.floor(Math.random()*999),
+              x1: activeWallNode.x,
+              y1: activeWallNode.y,
+              x2: x,
+              y2: y,
+              type: wType,
+              orig: false
+            });
+            saveState(true);
+            activeWallNode = { x, y }; // continue chain
+          }
+        }
+        renderAll();
+      } else if (currentMode === 'room') {
+        // Check if clicking the first node to close polygon
+        if (activeRoomPoints.length >= 3 && Math.hypot(activeRoomPoints[0].x - x, activeRoomPoints[0].y - y) < 5) {
+          finishRoomPolygon();
+          return;
+        }
+        activeRoomPoints.push({ x, y });
+        renderPreview();
+      }
+    }
+
+    function finishActiveChain() {
+      activeWallNode = null;
+      renderPreview();
+      renderGridNodes();
+    }
+
+    function finishRoomPolygon() {
+      if (activeRoomPoints.length < 3) {
+        alert('Yeni bir oda bölgesi oluşturmak için lütfen planda en az 3 köşe noktasına tıklayın.');
+        return;
+      }
+      const title = (document.getElementById('new-room-name').value || 'YENİ ODA').toUpperCase();
+      const subtitle = document.getElementById('new-room-sub').value || '';
+      const color = document.getElementById('new-room-color').value || '#a855f7';
+      const pattern = document.getElementById('new-room-pattern').value || 'none';
+
+      // Compute centroid for label
+      let cx = 0, cy = 0;
+      for (const p of activeRoomPoints) { cx += p.x; cy += p.y; }
+      cx = +(cx / activeRoomPoints.length).toFixed(1);
+      cy = +(cy / activeRoomPoints.length).toFixed(1);
+
+      const newRoom = {
+        id: 'r_' + Date.now(),
+        title,
+        subtitle,
+        color,
+        pattern,
+        labelX: cx,
+        labelY: cy,
+        points: [...activeRoomPoints]
+      };
+      plan.rooms.push(newRoom);
+      activeRoomPoints = [];
+      saveState(true);
+      selectedRef = { kind: 'room', id: newRoom.id };
+      setMode('select');
+      renderAll();
+      updateInspector();
+    }
+
+    function cancelRoomPolygon() {
+      activeRoomPoints = [];
+      renderPreview();
+    }
+
+    // Snap a door/window onto the nearest wall segment
+    function findNearestWallSnap(x, y) {
+      let best = null;
+      let bestDist = 24; // snap threshold in px
+      for (const w of plan.walls) {
+        const dx = w.x2 - w.x1;
+        const dy = w.y2 - w.y1;
+        const len2 = dx * dx + dy * dy;
+        if (len2 === 0) continue;
+        let t = ((x - w.x1) * dx + (y - w.y1) * dy) / len2;
+        t = Math.max(0.15, Math.min(0.85, t));
+        const projX = w.x1 + t * dx;
+        const projY = w.y1 + t * dy;
+        const dist = Math.hypot(x - projX, y - projY);
+        if (dist < bestDist) {
+          bestDist = dist;
+          let angle = Math.round(Math.atan2(dy, dx) * 180 / Math.PI);
+          // Normalize angle to -60, 0, 60
+          if (angle > 90) angle -= 180;
+          if (angle <= -90) angle += 180;
+          best = { x: +projX.toFixed(1), y: +projY.toFixed(1), angle };
+        }
+      }
+      return best;
+    }
+
+    function onItemClick(id, evt) {
+      evt.stopPropagation();
+      if (currentMode === 'eraser') {
+        plan.items = plan.items.filter(i => i.id !== id);
+        if (selectedRef && selectedRef.id === id) selectedRef = null;
+        saveState(true);
+        renderAll();
+        updateInspector();
+        return;
+      }
+      selectedRef = { kind: 'item', id };
+      renderAll();
+      updateInspector();
+    }
+
+    function onWallClick(id, evt) {
+      evt.stopPropagation();
+      const w = plan.walls.find(x => x.id === id);
+      if (!w) return;
+      if (currentMode === 'eraser') {
+        if (w.orig && lockOriginalWalls) {
+          alert('🔒 Bu duvar senin çizdiğin orijinal duvarlardan biri! Silmek istersen üst çubuktaki "🔒 Orijinal Duvarlar: Kilitli" butonuna tıklayarak kilidi açabilirsin.');
+          return;
+        }
+        plan.walls = plan.walls.filter(x => x.id !== id);
+        if (selectedRef && selectedRef.id === id) selectedRef = null;
+        saveState(true);
+        renderAll();
+        updateInspector();
+        return;
+      }
+      if (currentMode === 'door' && pendingCatalogItem) {
+        // Place door directly on clicked wall
+        const pt = getSvgPoint(evt);
+        const snap = findNearestWallSnap(pt.x, pt.y) || { x: pt.x, y: pt.y, angle: 0 };
+        const newDoor = {
+          id: 'd_' + Date.now(),
+          kind: 'door',
+          type: pendingCatalogItem.type,
+          name: pendingCatalogItem.name,
+          x: snap.x,
+          y: snap.y,
+          rot: snap.angle,
+          scaleX: 1,
+          scaleY: 1
+        };
+        plan.items.push(newDoor);
+        saveState(true);
+        selectedRef = { kind: 'item', id: newDoor.id };
+        setMode('select');
+        renderAll();
+        updateInspector();
+        return;
+      }
+      selectedRef = { kind: 'wall', id };
+      renderAll();
+      updateInspector();
+    }
+
+    function onRoomClick(id, evt) {
+      evt.stopPropagation();
+      if (currentMode === 'wall' || currentMode === 'room') {
+        // Let clicks pass to canvas/grid when drawing walls or rooms
+        onCanvasClick(evt);
+        return;
+      }
+      if (currentMode === 'furniture' || currentMode === 'door') {
+        onCanvasClick(evt);
+        return;
+      }
+      if (currentMode === 'eraser') {
+        plan.rooms = plan.rooms.filter(r => r.id !== id);
+        if (selectedRef && selectedRef.id === id) selectedRef = null;
+        saveState(true);
+        renderAll();
+        updateInspector();
+        return;
+      }
+      selectedRef = { kind: 'room', id };
+      renderAll();
+      updateInspector();
+    }
+
+    // ==================== DRAG & DROP ON SVG CANVAS ====================
+    const svgEl = document.getElementById('cad-svg');
+
+    function getSvgPoint(evt) {
+      const rect = svgEl.getBoundingClientRect();
+      const scaleX = viewBox.w / rect.width;
+      const scaleY = viewBox.h / rect.height;
+      return {
+        x: +(viewBox.x + (evt.clientX - rect.left) * scaleX).toFixed(1),
+        y: +(viewBox.y + (evt.clientY - rect.top) * scaleY).toFixed(1)
+      };
+    }
+
+    function findNearestGridNode(x, y, maxDist = 14) {
+      let best = null;
+      let bestD = maxDist;
+      for (const n of GRID_NODES) {
+        const d = Math.hypot(x - n.x, y - n.y);
+        if (d < bestD) {
+          bestD = d;
+          best = n;
+        }
+      }
+      return best;
+    }
+
+    function startDragItem(id, evt) {
+      if (currentMode !== 'select') return;
+      evt.stopPropagation();
+      const it = plan.items.find(x => x.id === id);
+      if (!it) return;
+      selectedRef = { kind: 'item', id };
+      const pt = getSvgPoint(evt);
+      dragState = {
+        type: 'item',
+        id,
+        startSvgX: pt.x,
+        startSvgY: pt.y,
+        origX: it.x,
+        origY: it.y,
+        moved: false
+      };
+      renderAll();
+      updateInspector();
+    }
+
+    function startDragRoomLabel(id, evt) {
+      if (currentMode !== 'select') return;
+      evt.stopPropagation();
+      const rm = plan.rooms.find(x => x.id === id);
+      if (!rm) return;
+      selectedRef = { kind: 'room', id };
+      const pt = getSvgPoint(evt);
+      dragState = {
+        type: 'roomLabel',
+        id,
+        startSvgX: pt.x,
+        startSvgY: pt.y,
+        origX: rm.labelX || 300,
+        origY: rm.labelY || 200,
+        moved: false
+      };
+      renderAll();
+      updateInspector();
+    }
+
+    svgEl.addEventListener('mousemove', (evt) => {
+      const pt = getSvgPoint(evt);
+      mouseSvgPos = pt;
+      hoveredGridNode = snapEnabled ? findNearestGridNode(pt.x, pt.y, 16) : null;
+      document.getElementById('mouse-coords').textContent = `X: ${Math.round(pt.x)}, Y: ${Math.round(pt.y)}`;
+
+      if (dragState) {
+        const dx = pt.x - dragState.startSvgX;
+        const dy = pt.y - dragState.startSvgY;
+        if (Math.hypot(dx, dy) > 1.5) dragState.moved = true;
+
+        if (dragState.type === 'item') {
+          const it = plan.items.find(x => x.id === dragState.id);
+          if (it) {
+            let nx = +(dragState.origX + dx).toFixed(1);
+            let ny = +(dragState.origY + dy).toFixed(1);
+            if (it.kind === 'door' && snapEnabled) {
+              const snapW = findNearestWallSnap(nx, ny);
+              if (snapW) {
+                nx = snapW.x;
+                ny = snapW.y;
+                it.rot = snapW.angle;
+              }
+            }
+            it.x = nx;
+            it.y = ny;
+            renderAll();
+          }
+        } else if (dragState.type === 'roomLabel') {
+          const rm = plan.rooms.find(x => x.id === dragState.id);
+          if (rm) {
+            rm.labelX = +(dragState.origX + dx).toFixed(1);
+            rm.labelY = +(dragState.origY + dy).toFixed(1);
+            renderAll();
+          }
+        }
+      } else {
+        renderPreview();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (dragState) {
+        if (dragState.moved) saveState(true);
+        dragState = null;
+      }
+    });
+
+    function onCanvasClick(evt) {
+      const pt = getSvgPoint(evt);
+      if (currentMode === 'wall') {
+        const node = snapEnabled ? (findNearestGridNode(pt.x, pt.y, 20) || pt) : pt;
+        onGridNodeClick(node.x, node.y, evt);
+      } else if (currentMode === 'room') {
+        const node = snapEnabled ? (findNearestGridNode(pt.x, pt.y, 20) || pt) : pt;
+        onGridNodeClick(node.x, node.y, evt);
+      } else if ((currentMode === 'furniture' || currentMode === 'door') && pendingCatalogItem) {
+        let px = pt.x;
+        let py = pt.y;
+        let rot = 0;
+        if (currentMode === 'door') {
+          const snapW = findNearestWallSnap(px, py);
+          if (snapW) { px = snapW.x; py = snapW.y; rot = snapW.angle; }
+        }
+        const newItem = {
+          id: 'it_' + Date.now(),
+          kind: pendingCatalogItem.kind,
+          type: pendingCatalogItem.type,
+          name: pendingCatalogItem.name,
+          x: px,
+          y: py,
+          rot,
+          scaleX: 1,
+          scaleY: 1
+        };
+        plan.items.push(newItem);
+        saveState(true);
+        selectedRef = { kind: 'item', id: newItem.id };
+        setMode('select');
+        renderAll();
+        updateInspector();
+      } else if (currentMode === 'select') {
+        selectedRef = null;
+        renderAll();
+        updateInspector();
+      }
+    }
+
+    svgEl.addEventListener('click', onCanvasClick);
+    svgEl.addEventListener('contextmenu', (evt) => {
+      evt.preventDefault();
+      finishActiveChain();
+    });
+
+    // ==================== INSPECTOR & PROPERTY UPDATES ====================
+    function updateInspector() {
+      const emptyEl = document.getElementById('insp-empty');
+      const itemEl = document.getElementById('insp-item-controls');
+      const roomEl = document.getElementById('insp-room-controls');
+      const wallEl = document.getElementById('insp-wall-controls');
+      const badgeEl = document.getElementById('insp-type-badge');
+
+      emptyEl.className = 'hidden';
+      itemEl.className = 'hidden';
+      roomEl.className = 'hidden';
+      wallEl.className = 'hidden';
+
+      if (!selectedRef) {
+        emptyEl.className = 'py-4 text-center text-xs text-[var(--muted-foreground)] flex flex-col items-center gap-2';
+        badgeEl.textContent = 'Seçim Yok';
+        return;
+      }
+
+      if (selectedRef.kind === 'item') {
+        const it = plan.items.find(x => x.id === selectedRef.id);
+        if (!it) { selectedRef = null; return updateInspector(); }
+        itemEl.className = 'flex flex-col gap-2.5 text-xs';
+        badgeEl.textContent = it.kind === 'door' ? '🚪 Kapı / Pencere' : '🛋️ Tefrişat';
+        document.getElementById('insp-item-name').value = it.name || '';
+        document.getElementById('insp-item-rot').value = it.rot || 0;
+        document.getElementById('insp-rot-val').textContent = `${Math.round(it.rot || 0)}°`;
+        const sx = Math.abs(it.scaleX || 1);
+        const sy = Math.abs(it.scaleY || 1);
+        document.getElementById('insp-item-sx').value = sx;
+        document.getElementById('insp-sx-val').textContent = `${Math.round(sx * 100)}%`;
+        document.getElementById('insp-item-sy').value = sy;
+        document.getElementById('insp-sy-val').textContent = `${Math.round(sy * 100)}%`;
+      } else if (selectedRef.kind === 'room') {
+        const rm = plan.rooms.find(x => x.id === selectedRef.id);
+        if (!rm) { selectedRef = null; return updateInspector(); }
+        roomEl.className = 'flex flex-col gap-2.5 text-xs';
+        badgeEl.textContent = '🏷️ Oda Bölgesi';
+        document.getElementById('insp-room-title').value = rm.title || '';
+        document.getElementById('insp-room-sub').value = rm.subtitle || '';
+        document.getElementById('insp-room-color').value = rm.color || '#6366f1';
+        document.getElementById('insp-room-pattern').value = rm.pattern || 'none';
+      } else if (selectedRef.kind === 'wall') {
+        const w = plan.walls.find(x => x.id === selectedRef.id);
+        if (!w) { selectedRef = null; return updateInspector(); }
+        wallEl.className = 'flex flex-col gap-2.5 text-xs';
+        badgeEl.textContent = '🧱 Duvar';
+        document.getElementById('insp-wall-origin').textContent = w.orig ? '🔒 Orijinal Duvar' : '✨ Yeni Eklenen Duvar';
+        document.getElementById('insp-wall-type').value = w.type || 'double';
+      }
+    }
+
+    function updateSelectedProp(prop, val) {
+      if (!selectedRef || selectedRef.kind !== 'item') return;
+      const it = plan.items.find(x => x.id === selectedRef.id);
+      if (!it) return;
+      if (prop === 'scaleX') {
+        const sign = (it.scaleX || 1) < 0 ? -1 : 1;
+        it.scaleX = sign * val;
+      } else if (prop === 'scaleY') {
+        const sign = (it.scaleY || 1) < 0 ? -1 : 1;
+        it.scaleY = sign * val;
+      } else {
+        it[prop] = val;
+      }
+      saveState(true);
+      renderAll();
+      updateInspector();
+    }
+
+    function flipSelectedHorizontal() {
+      if (!selectedRef || selectedRef.kind !== 'item') return;
+      const it = plan.items.find(x => x.id === selectedRef.id);
+      if (!it) return;
+      it.scaleX = -(it.scaleX || 1);
+      saveState(true);
+      renderAll();
+    }
+
+    function flipSelectedVertical() {
+      if (!selectedRef || selectedRef.kind !== 'item') return;
+      const it = plan.items.find(x => x.id === selectedRef.id);
+      if (!it) return;
+      it.scaleY = -(it.scaleY || 1);
+      saveState(true);
+      renderAll();
+    }
+
+    function rotateSelectedBy(deltaDeg) {
+      if (!selectedRef || selectedRef.kind !== 'item') return;
+      const it = plan.items.find(x => x.id === selectedRef.id);
+      if (!it) return;
+      let r = (it.rot || 0) + deltaDeg;
+      if (r > 180) r -= 360;
+      if (r <= -180) r += 360;
+      it.rot = r;
+      saveState(true);
+      renderAll();
+      updateInspector();
+    }
+
+    function duplicateSelected() {
+      if (!selectedRef || selectedRef.kind !== 'item') return;
+      const it = plan.items.find(x => x.id === selectedRef.id);
+      if (!it) return;
+      const copy = JSON.parse(JSON.stringify(it));
+      copy.id = 'it_' + Date.now();
+      copy.x = +(it.x + 18).toFixed(1);
+      copy.y = +(it.y + 18).toFixed(1);
+      plan.items.push(copy);
+      selectedRef = { kind: 'item', id: copy.id };
+      saveState(true);
+      renderAll();
+      updateInspector();
+    }
+
+    function updateSelectedRoom(prop, val) {
+      if (!selectedRef || selectedRef.kind !== 'room') return;
+      const rm = plan.rooms.find(x => x.id === selectedRef.id);
+      if (!rm) return;
+      rm[prop] = val;
+      saveState(true);
+      renderAll();
+    }
+
+    function updateSelectedWall(prop, val) {
+      if (!selectedRef || selectedRef.kind !== 'wall') return;
+      const w = plan.walls.find(x => x.id === selectedRef.id);
+      if (!w) return;
+      w[prop] = val;
+      saveState(true);
+      renderAll();
+    }
+
+    function deleteSelected() {
+      if (!selectedRef) return;
+      if (selectedRef.kind === 'item') {
+        plan.items = plan.items.filter(x => x.id !== selectedRef.id);
+      } else if (selectedRef.kind === 'room') {
+        plan.rooms = plan.rooms.filter(x => x.id !== selectedRef.id);
+      } else if (selectedRef.kind === 'wall') {
+        const w = plan.walls.find(x => x.id === selectedRef.id);
+        if (w && w.orig && lockOriginalWalls) {
+          alert('🔒 Orijinal duvar kilidi açık! Bu duvarı silmek istersen önce üstteki "🔒 Orijinal Duvarlar: Kilitli" butonuna tıklayarak kilidi açabilirsin.');
+          return;
+        }
+        plan.walls = plan.walls.filter(x => x.id !== selectedRef.id);
+      }
+      selectedRef = null;
+      saveState(true);
+      renderAll();
+      updateInspector();
+    }
+
+    // ==================== CATALOG & SIDEBAR LISTS ====================
+    let activeCat = 'yatak';
+    function setCatalogCategory(cat) {
+      activeCat = cat;
+      const cats = ['yatak', 'banyo', 'salon', 'mutfak', 'ofis'];
+      for (const c of cats) {
+        const b = document.getElementById('cat-' + c);
+        if (!b) continue;
+        b.className = (c === cat)
+          ? 'px-2 py-1 rounded text-xs font-medium bg-indigo-600 text-white'
+          : 'px-2 py-1 rounded text-xs font-medium bg-[var(--background)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]';
+      }
+      const grid = document.getElementById('furniture-catalog-grid');
+      const items = CATALOG[cat] || [];
+      grid.innerHTML = items.map((it, idx) => `
+        <button onclick="selectCatalogItem('${cat}', ${idx})"
+          class="p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] hover:border-emerald-400 flex flex-col items-center gap-1 text-center transition group">
+          <span class="text-base">${it.icon}</span>
+          <span class="text-xs font-medium text-[var(--foreground)] group-hover:text-emerald-300 leading-tight">${it.name}</span>
+        </button>
+      `).join('');
+    }
+
+    function selectCatalogItem(cat, idx) {
+      const it = CATALOG[cat][idx];
+      if (!it) return;
+      pendingCatalogItem = { kind: 'furniture', type: it.type, name: it.name };
+      setMode('furniture');
+    }
+
+    function renderDoorCatalog() {
+      const grid = document.getElementById('door-catalog-grid');
+      grid.innerHTML = DOOR_CATALOG.map((d, idx) => `
+        <button onclick="selectDoorByIdx(${idx})"
+          class="p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] hover:border-amber-400 flex flex-col items-center gap-1 text-center transition">
+          <span class="text-base">${d.icon}</span>
+          <span class="text-xs font-medium">${d.name}</span>
+        </button>
+      `).join('');
+    }
+
+    function selectDoorByIdx(idx) {
+      selectDoorCatalogItem(DOOR_CATALOG[idx]);
+    }
+
+    function selectDoorCatalogItem(d) {
+      pendingCatalogItem = { kind: 'door', type: d.type, name: d.name };
+      setMode('door');
+    }
+
+    function renderRoomListSidebar() {
+      const cont = document.getElementById('room-list-container');
+      cont.innerHTML = plan.rooms.map(rm => {
+        const isSel = (selectedRef && selectedRef.kind === 'room' && selectedRef.id === rm.id);
+        return `
+          <div onclick="selectRoomFromList('${rm.id}')"
+               class="px-2.5 py-1.5 rounded-lg border cursor-pointer flex items-center justify-between text-xs transition ${isSel ? 'bg-indigo-600/20 border-indigo-400' : 'bg-[var(--background)] border-[var(--border)] hover:border-slate-500'}">
+            <div class="flex items-center gap-2 truncate">
+              <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${rm.color}"></span>
+              <span class="font-semibold truncate">${escapeHtml(rm.title)}</span>
+            </div>
+            <span class="text-[var(--muted-foreground)] text-xs shrink-0">Düzenle</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function selectRoomFromList(id) {
+      selectedRef = { kind: 'room', id };
+      setMode('select');
+      renderAll();
+      updateInspector();
+    }
+
+    // ==================== TOOLBAR TOGGLES & ZOOM ====================
+    function toggleLockOriginalWalls() {
+      lockOriginalWalls = !lockOriginalWalls;
+      const btn = document.getElementById('btn-lock-orig');
+      btn.textContent = lockOriginalWalls ? '🔒 Orijinal Duvarlar: Kilitli' : '🔓 Orijinal Duvarlar: Açık';
+      btn.className = lockOriginalWalls
+        ? 'px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 transition'
+        : 'px-2.5 py-1.5 rounded-lg text-xs font-medium bg-rose-500/20 text-rose-300 border border-rose-500/40 transition';
+    }
+
+    function toggleSnap() {
+      snapEnabled = !snapEnabled;
+      const btn = document.getElementById('btn-snap');
+      btn.textContent = snapEnabled ? '🧲 Izgara Mıknatısı: Açık' : '🧲 Izgara Mıknatısı: Kapalı';
+      btn.style.opacity = snapEnabled ? '1' : '0.55';
+    }
+
+    function toggleBgImage() {
+      showBgImage = !showBgImage;
+      document.getElementById('bg-orig-image').style.display = showBgImage ? 'block' : 'none';
+      const btn = document.getElementById('btn-bg-img');
+      btn.textContent = showBgImage ? '🖼️ Altlık Görsel: Açık' : '🖼️ Altlık Görsel: Kapalı';
+      btn.style.opacity = showBgImage ? '1' : '0.55';
+    }
+
+    function toggleLayerVis(layerId, visible) {
+      const el = document.getElementById(layerId);
+      if (el) el.style.display = visible ? 'block' : 'none';
+    }
+
+    function zoomBy(factor) {
+      const cx = viewBox.x + viewBox.w / 2;
+      const cy = viewBox.y + viewBox.h / 2;
+      viewBox.w = Math.max(220, Math.min(1100, viewBox.w / factor));
+      viewBox.h = Math.max(180, Math.min(900, viewBox.h / factor));
+      viewBox.x = cx - viewBox.w / 2;
+      viewBox.y = cy - viewBox.h / 2;
+      applyViewBox();
+    }
+
+    function resetZoom() {
+      viewBox = { x: 0, y: 0, w: 690, h: 568 };
+      applyViewBox();
+    }
+
+    function applyViewBox() {
+      svgEl.setAttribute('viewBox', `${viewBox.x.toFixed(1)} ${viewBox.y.toFixed(1)} ${viewBox.w.toFixed(1)} ${viewBox.h.toFixed(1)}`);
+      const pct = Math.round((690 / viewBox.w) * 100);
+      document.getElementById('zoom-label').textContent = `${pct}%`;
+    }
+
+    // ==================== AI SYNC & JSON EXPORT/IMPORT ====================
+    function openSyncModal() {
+      document.getElementById('sync-json-area').value = JSON.stringify(plan, null, 2);
+      document.getElementById('sync-modal').className = 'fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+    }
+
+    function closeSyncModal() {
+      document.getElementById('sync-modal').className = 'fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden items-center justify-center p-4';
+    }
+
+    function copyPlanJson() {
+      const area = document.getElementById('sync-json-area');
+      area.select();
+      navigator.clipboard.writeText(area.value);
+      const btn = document.getElementById('btn-copy-json');
+      btn.textContent = '✓ Kopyalandı! Sohbete Yapıştırabilirsin';
+      setTimeout(() => { btn.textContent = '📋 Plan Kodunu Kopyala (AI\'a Gönder)'; }, 2500);
+    }
+
+    function importPlanJson() {
+      try {
+        const parsed = JSON.parse(document.getElementById('sync-json-area').value);
+        if (parsed && Array.isArray(parsed.walls) && Array.isArray(parsed.rooms) && Array.isArray(parsed.items)) {
+          plan = parsed;
+          saveState(true);
+          renderAll();
+          updateInspector();
+          closeSyncModal();
+        } else {
+          alert('Geçersiz plan verisi formatı.');
+        }
+      } catch (e) {
+        alert('JSON okunamadı: ' + e.message);
+      }
+    }
+
+    function resetToAiDefault() {
+      plan = JSON.parse(JSON.stringify(INITIAL_AI_DATA));
+      saveState(true);
+      renderAll();
+      updateInspector();
+      closeSyncModal();
+    }
+
+    // Keyboard Shortcuts
+    window.addEventListener('keydown', (evt) => {
+      if (evt.target && (evt.target.tagName === 'INPUT' || evt.target.tagName === 'TEXTAREA' || evt.target.tagName === 'SELECT')) return;
+      if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'z') { evt.preventDefault(); undo(); }
+      else if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'y') { evt.preventDefault(); redo(); }
+      else if (evt.key === 'Delete' || evt.key === 'Backspace') { evt.preventDefault(); deleteSelected(); }
+      else if (evt.key === 'Escape') { finishActiveChain(); cancelRoomPolygon(); setMode('select'); }
+      else if (evt.key.toLowerCase() === 'v') setMode('select');
+      else if (evt.key.toLowerCase() === 'w') setMode('wall');
+      else if (evt.key.toLowerCase() === 'd') setMode('door');
+      else if (evt.key.toLowerCase() === 'f') setMode('furniture');
+      else if (evt.key.toLowerCase() === 'r') setMode('room');
+      else if (evt.key.toLowerCase() === 'e') setMode('eraser');
+    });
+
+    function escapeHtml(str) {
+      return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Initialize Application
+    renderVectorGrid();
+    setCatalogCategory('yatak');
+    renderDoorCatalog();
+    renderAll();
+    updateInspector();
+  </script>
+</body>
+</html>

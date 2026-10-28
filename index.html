@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kat Planı Çizici</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="logo">📐 Kat Planı</span>
+    <input id="pname" title="Proje adı" value="Yeni Proje">
+    <button class="btn" id="bNew">📄 Yeni</button>
+    <button class="btn" id="bProjects">📁 Projelerim</button>
+    <button class="btn" id="bSave" title="Tarayıcıya kaydet (Ctrl+S)">💾 Kaydet</button>
+    <button class="btn" id="bJson" title="JSON dosyası olarak indir">⬇ JSON</button>
+    <button class="btn" id="bOpen" title="JSON dosyası aç">📂 Aç</button>
+    <div class="sep"></div>
+    <button class="btn" id="bUndo" title="Geri al (Ctrl+Z)">↶</button>
+    <button class="btn" id="bRedo" title="Yinele (Ctrl+Y)">↷</button>
+    <div class="sep"></div>
+    <button class="btn" id="bPng">🖼 PNG</button>
+    <button class="btn" id="bSvg">SVG</button>
+    <button class="btn" id="bPrint">🖨 PDF / Yazdır</button>
+    <div class="spacer"></div>
+    <button class="btn on" id="b2d">2B</button>
+    <button class="btn" id="b3d">3B</button>
+    <div class="sep"></div>
+    <button class="btn" id="bTheme" title="Tema">🌓</button>
+    <button class="btn" id="bHelp">❓ Yardım</button>
+    <input type="file" id="fileOpen" accept=".json,application/json" hidden>
+    <input type="file" id="fileBg" accept="image/*" hidden>
+  </header>
+  <main>
+    <nav id="tools"></nav>
+    <aside id="lib">
+      <div class="top">
+        <input id="search" placeholder="🔍 Mobilya ara...">
+        <div id="cats"></div>
+      </div>
+      <div id="items"></div>
+    </aside>
+    <section id="stage">
+      <svg id="cv" xmlns="http://www.w3.org/2000/svg">
+        <defs id="defs"></defs>
+        <g id="world">
+          <g id="gBg"></g><g id="gGrid"></g><g id="gRooms"></g><g id="gWalls"></g><g id="gOps"></g>
+          <g id="gFurn"></g><g id="gDims"></g><g id="gTexts"></g><g id="gSel"></g><g id="gPv"></g>
+        </g>
+      </svg>
+      <div id="v3d"></div>
+      <div id="hud"></div>
+      <div id="zoomctl">
+        <button class="btn" id="zIn">+</button>
+        <button class="btn" id="zOut">−</button>
+        <button class="btn" id="zFit" title="Sığdır (0)">⤢</button>
+      </div>
+      <div id="toast"></div>
+    </section>
+    <aside id="props"></aside>
+  </main>
+  <footer>
+    <div id="floors"></div>
+    <div class="sep"></div>
+    <label><input type="checkbox" id="cSnap" checked> Yakala (G)</label>
+    <label><input type="checkbox" id="cAngle" checked> Açı 15°</label>
+    <label><input type="checkbox" id="cDims" checked> Duvar ölçüleri</label>
+    <label>Izgara
+      <select id="sGrid"><option value="5">5 cm</option><option value="10" selected>10 cm</option><option value="25">25 cm</option><option value="50">50 cm</option></select>
+    </label>
+    <div class="spacer"></div>
+    <span id="coords" class="muted"></span>
+    <span id="zoomlbl" class="muted"></span>
+  </footer>
+</div>
+<div id="modalbg"><div id="modal"></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
