@@ -64,9 +64,17 @@
     <div id="floors"></div>
     <div class="sep"></div>
     <label><input type="checkbox" id="cSnap" checked> Yakala (G)</label>
-    <label><input type="checkbox" id="cAngle" checked> Açı 15°</label>
+    <label><input type="checkbox" id="cAngle" checked> <span id="lblAngle">Açı 15°</span></label>
     <label><input type="checkbox" id="cDims" checked> Duvar ölçüleri</label>
-    <label>Izgara
+    <label>Izgara Tipi
+      <select id="sGridType">
+        <option value="square" selected>⊞ Kare</option>
+        <option value="triangle">△ Üçgen (60°)</option>
+        <option value="dots">⁙ Noktalı</option>
+        <option value="none">∅ Kapalı (Serbest)</option>
+      </select>
+    </label>
+    <label>Adım
       <select id="sGrid"><option value="5">5 cm</option><option value="10" selected>10 cm</option><option value="25">25 cm</option><option value="50">50 cm</option></select>
     </label>
     <div class="spacer"></div>

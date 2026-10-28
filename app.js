@@ -89,7 +89,7 @@ const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: nu
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true };
 
 const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [] });
-const newProject = () => ({ v: 2, name: 'Yeni Proje', grid: 10, wallT: 20, wallH: 270, bg: null, floors: [newFloor('Zemin Kat')] });
+const newProject = () => ({ v: 2, name: 'Yeni Proje', grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, floors: [newFloor('Zemin Kat')] });
 const F = () => P.floors[fi];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', dims: 'dim', texts: 'text' };
 function find(id, f = F()) {
@@ -239,9 +239,11 @@ function autosave() {
   }, 350);
 }
 function restore(s) {
-  P = JSON.parse(s); fi = clamp(fi, 0, P.floors.length - 1);
+  P = JSON.parse(s); P.gridType = P.gridType || 'square';
+  fi = clamp(fi, 0, P.floors.length - 1);
   sel = sel.filter(id => find(id));
-  $('#pname').value = P.name; $('#sGrid').value = P.grid;
+  $('#pname').value = P.name; $('#sGrid').value = P.grid; $('#sGridType').value = P.gridType;
+  $('#lblAngle').textContent = P.gridType === 'triangle' ? 'Açı 30°' : 'Açı 15°';
   refresh();
 }
 function undo() { if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
@@ -249,11 +251,12 @@ function redo() { if (hi < hist.length - 1) { hi++; restore(hist[hi]); autosave(
 function updateUndo() { $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = hi >= hist.length - 1; }
 function loadProject(obj, msg) {
   P = obj; if (!P.floors || !P.floors.length) P.floors = [newFloor('Zemin Kat')];
-  P.grid = P.grid || 10; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
+  P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; });
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
-  $('#pname').value = P.name; $('#sGrid').value = String(P.grid);
+  $('#pname').value = P.name; $('#sGrid').value = String(P.grid); $('#sGridType').value = P.gridType;
+  $('#lblAngle').textContent = P.gridType === 'triangle' ? 'Açı 30°' : 'Açı 15°';
   setTool('select'); fit(); refresh(); updateUndo(); autosave();
   if (msg) toast(msg);
 }
@@ -285,18 +288,29 @@ function fit() {
 /* ---------- Çizim (SVG) ---------- */
 const WALL_C = '#1f2937', STROKE = '#475569';
 function defsSvg() {
+  const s = P.grid, h = +(s * Math.sqrt(3) / 2).toFixed(4), h2 = +(2 * h).toFixed(4);
+  const ms = s >= 25 ? s * 4 : 100, mh = +(ms * Math.sqrt(3) / 2).toFixed(4), mh2 = +(2 * mh).toFixed(4);
+  const swMin = 0.65 / view.z, swMaj = 0.95 / view.z, rDot = Math.max(1.1, 1.5 / view.z), rDotM = Math.max(1.8, 2.3 / view.z);
   return `
   <pattern id="p-wood" width="120" height="24" patternUnits="userSpaceOnUse"><path d="M0 0H120M0 12H120M40 0V12M90 12V24" stroke="#92400e" stroke-opacity=".28" fill="none" stroke-width="1"/></pattern>
   <pattern id="p-tile" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M0 0H60V60" stroke="#475569" stroke-opacity=".3" fill="none" stroke-width="1"/></pattern>
   <pattern id="p-carpet" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r="1.1" fill="#6b7280" fill-opacity=".35"/><circle cx="7.5" cy="7.5" r="1.1" fill="#6b7280" fill-opacity=".35"/></pattern>
-  <pattern id="g-minor" width="${P.grid}" height="${P.grid}" patternUnits="userSpaceOnUse"><path d="M${P.grid} 0V${P.grid}H0" fill="none" stroke="#cbd5e1" stroke-width="${0.6 / view.z}" stroke-opacity=".7"/></pattern>
-  <pattern id="g-major" width="100" height="100" patternUnits="userSpaceOnUse"><path d="M100 0V100H0" fill="none" stroke="#94a3b8" stroke-width="${0.9 / view.z}" stroke-opacity=".8"/></pattern>`;
+  <pattern id="g-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><path d="M${s} 0V${s}H0" fill="none" stroke="#cbd5e1" stroke-width="${swMin}" stroke-opacity=".7"/></pattern>
+  <pattern id="g-major" width="100" height="100" patternUnits="userSpaceOnUse"><path d="M100 0V100H0" fill="none" stroke="#94a3b8" stroke-width="${swMaj}" stroke-opacity=".8"/></pattern>
+  <pattern id="g-tri-minor" width="${s}" height="${h2}" patternUnits="userSpaceOnUse"><path d="M0 0H${s}M0 ${h}H${s}M0 0L${s / 2} ${h}L0 ${h2}M${s / 2} 0L${s} ${h}L${s / 2} ${h2}M${s / 2} 0L0 ${h}L${s / 2} ${h2}M${s} 0L${s / 2} ${h}L${s} ${h2}" fill="none" stroke="#cbd5e1" stroke-width="${swMin}" stroke-opacity=".75"/></pattern>
+  <pattern id="g-tri-major" width="${ms}" height="${mh2}" patternUnits="userSpaceOnUse"><path d="M0 0H${ms}M0 ${mh}H${ms}M0 0L${ms / 2} ${mh}L0 ${mh2}M${ms / 2} 0L${ms} ${mh}L${ms / 2} ${mh2}M${ms / 2} 0L0 ${mh}L${ms / 2} ${mh2}M${ms} 0L${ms / 2} ${mh}L${ms} ${mh2}" fill="none" stroke="#94a3b8" stroke-width="${swMaj}" stroke-opacity=".65"/></pattern>
+  <pattern id="g-dots-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDot}" fill="#94a3b8" fill-opacity=".75"/></pattern>
+  <pattern id="g-dots-major" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDotM}" fill="#64748b" fill-opacity=".9"/></pattern>`;
 }
 function gridSvg() {
+  const gt = P.gridType || 'square';
+  if (gt === 'none') return '';
   const s = svgSize(), x0 = -view.x / view.z, y0 = -view.y / view.z, w = s.w / view.z, h = s.h / view.z;
   let out = '';
-  if (P.grid * view.z >= 6) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#g-minor)"/>`;
-  if (view.z > 0.12) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#g-major)"/>`;
+  const minId = gt === 'triangle' ? 'g-tri-minor' : gt === 'dots' ? 'g-dots-minor' : 'g-minor';
+  const majId = gt === 'triangle' ? 'g-tri-major' : gt === 'dots' ? 'g-dots-major' : 'g-major';
+  if (P.grid * view.z >= 6) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${minId})"/>`;
+  if (view.z > 0.12) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${majId})"/>`;
   return out;
 }
 function bgSvg() {
@@ -461,6 +475,22 @@ function render() {
 }
 
 /* ---------- Yakalama (snap) ---------- */
+function snapToGrid(p) {
+  const gt = P.gridType || 'square', g = P.grid;
+  if (gt === 'none') return { x: p.x, y: p.y };
+  if (gt === 'triangle') {
+    const h = g * Math.sqrt(3) / 2, r0 = Math.round(p.y / h);
+    let best = null, bd = Infinity;
+    for (let dr = -1; dr <= 1; dr++) {
+      const row = r0 + dr, y = row * h, off = (row & 1) ? g / 2 : 0;
+      const x = Math.round((p.x - off) / g) * g + off;
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d < bd) { bd = d; best = { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 }; }
+    }
+    return best;
+  }
+  return { x: rnd(p.x, g), y: rnd(p.y, g) };
+}
 function snapPt(p, from, e, ignore) {
   if (!ui.snap || (e && e.shiftKey)) return { x: p.x, y: p.y, hit: null };
   const r = 14 / view.z, f = F(); let best = null, bd = r;
@@ -470,22 +500,22 @@ function snapPt(p, from, e, ignore) {
   }
   if (!ignore) for (const rm of f.rooms) for (const q of rm.pts) { const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
   if (best) return { x: best.x, y: best.y, hit: 'end' };
-  const g = P.grid;
+  const g = P.grid, gt = P.gridType || 'square';
   if (from && ui.angle) {
     const dx = p.x - from.x, dy = p.y - from.y, l = Math.hypot(dx, dy);
     if (l < 1) return { x: from.x, y: from.y, hit: null };
-    const step = Math.PI / 12, a = Math.round(Math.atan2(dy, dx) / step) * step;
-    const L = Math.max(g, rnd(l, g));
+    const step = gt === 'triangle' ? Math.PI / 6 : Math.PI / 12;
+    const a = Math.round(Math.atan2(dy, dx) / step) * step;
+    const L = gt === 'none' ? l : Math.max(g, rnd(l, g));
     let q = { x: from.x + Math.cos(a) * L, y: from.y + Math.sin(a) * L };
     if (Math.abs(Math.cos(a)) < 1e-6) q.x = from.x; if (Math.abs(Math.sin(a)) < 1e-6) q.y = from.y;
     q.x = Math.round(q.x * 10) / 10; q.y = Math.round(q.y * 10) / 10;
-    // hizalama: diğer uç noktalarla x/y hizası
     for (const w of f.walls) for (const o of [w.a, w.b]) {
       if (Math.abs(o.x - q.x) < r / 3 && Math.abs(Math.cos(a)) < 0.01) q.x = o.x;
     }
     return { ...q, hit: null };
   }
-  return { x: rnd(p.x, g), y: rnd(p.y, g), hit: null };
+  return { ...snapToGrid(p), hit: null };
 }
 function wallNear(p, maxD = 40) {
   let best = null;
@@ -700,7 +730,8 @@ function updateGhost() {
   const p = ui.raw;
   if (placing.type === 'furn') {
     const f = mkFurn(placing.def, 0, 0, placing.rot);
-    const g = ui.snap && !ui.shift; f.x = g ? rnd(p.x, P.grid) : p.x; f.y = g ? rnd(p.y, P.grid) : p.y;
+    const g = ui.snap && !ui.shift, sp = g ? snapToGrid(p) : p;
+    f.x = sp.x; f.y = sp.y;
     if (!ui.shift) magnet(f);
     ui.ghost = f;
   } else {
@@ -787,7 +818,7 @@ cv.addEventListener('pointerdown', e => {
       else if (dist(ui.dimStart, cur) > 5) { const d = { id: uid(), a: ui.dimStart, b: { x: cur.x, y: cur.y }, off: 40 }; f.dims.push(d); sel = [d.id]; ui.dimStart = null; commit(); refresh(); }
       render(); return;
     }
-    case 'text': { const t = { id: uid(), x: rnd(raw.x, P.grid), y: rnd(raw.y, P.grid), text: 'Metin', size: 24, color: '#1e293b', rot: 0 }; f.texts.push(t); sel = [t.id]; commit(); setTool('select'); refresh(); return; }
+    case 'text': { const sp = ui.snap ? snapToGrid(raw) : raw; const t = { id: uid(), x: sp.x, y: sp.y, text: 'Metin', size: 24, color: '#1e293b', rot: 0 }; f.texts.push(t); sel = [t.id]; commit(); setTool('select'); refresh(); return; }
     case 'eraser': {
       const t = e.target.closest('[data-id]'); if (t) { deleteIds([t.dataset.id]); commit(); refresh(); } return;
     }
@@ -881,7 +912,10 @@ function startMove(raw) {
 function doMove(raw, e) {
   const d = ui.drag; let dx = raw.x - d.start.x, dy = raw.y - d.start.y;
   if (!d.moved && Math.hypot(dx, dy) * view.z < 3) return; d.moved = true;
-  if (ui.snap && !e.shiftKey) { dx = rnd(d.anchor.x + dx, P.grid) - d.anchor.x; dy = rnd(d.anchor.y + dy, P.grid) - d.anchor.y; }
+  if (ui.snap && !e.shiftKey) {
+    const sp = snapToGrid({ x: d.anchor.x + dx, y: d.anchor.y + dy });
+    dx = sp.x - d.anchor.x; dy = sp.y - d.anchor.y;
+  }
   for (const { kind, o } of selObjs()) {
     const g = d.orig.get(o.id);
     if (kind === 'wall' || kind === 'dim') { o.a = { x: g.a.x + dx, y: g.a.y + dy }; o.b = { x: g.b.x + dx, y: g.b.y + dy }; }
@@ -1384,6 +1418,11 @@ $('#cSnap').onchange = e => { ui.snap = e.target.checked; };
 $('#cAngle').onchange = e => { ui.angle = e.target.checked; };
 $('#cDims').onchange = e => { ui.dims = e.target.checked; render(); };
 $('#sGrid').onchange = e => { P.grid = +e.target.value; commit(); render(); };
+$('#sGridType').onchange = e => {
+  P.gridType = e.target.value;
+  $('#lblAngle').textContent = P.gridType === 'triangle' ? 'Açı 30°' : 'Açı 15°';
+  commit(); render();
+};
 $('#fileOpen').onchange = e => {
   const file = e.target.files[0]; if (!file) return; const r = new FileReader();
   r.onload = () => { try { const o = JSON.parse(r.result); if (!o.floors) throw new Error('geçersiz dosya'); loadProject(o, 'Dosya açıldı'); closeModal(); } catch (er) { toast('Dosya açılamadı: ' + er.message); } };
