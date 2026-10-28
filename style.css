@@ -475,6 +475,37 @@ main {
   display: block;
 }
 
+/* 3B kat seçici */
+.ctl3d {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--hud-bg);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+
+.ctl3d select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  max-width: 180px;
+}
+
 /* Precision HUD Overlay */
 #hud {
   position: absolute;

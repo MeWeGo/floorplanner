@@ -88,6 +88,8 @@ One click turns the plan into an interactive 3D model — walls with real door/w
 
 **3D editing:** click furniture to select and highlight it (orange box), drag it across the floor (`Shift` = no grid snap; a single item magnets to the nearest wall on drop), and edit width / depth / height / rotation / color in the side panel — the 3D model refreshes live. Clicking a door opens/closes it; clicking a hinged wall (or a group with saved layouts) cycles its positions.
 
+**Floor selector:** the menu at the top-left of the 3D view shows **🏢 all floors stacked**, or **only the selected floor** (e.g. just the 1st or 2nd floor) — the isolated floor is drawn at ground level for a clean, unobstructed look.
+
 ### 🌗 Dark & Light Mode
 Every surface — panels, canvas, grid, walls, openings, rooms, furniture, dimensions, text and the 3D scene — adapts to the selected theme.
 

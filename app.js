@@ -100,7 +100,7 @@ let P, fi = 0;
 let hist = [], hi = -1;
 const view = { x: 0, y: 0, z: 0.5 };
 let tool = 'select', sel = [], placing = null;
-const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true };
+const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true };
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true };
 
 const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [] });
@@ -2108,6 +2108,7 @@ function helpModal() {
     ['WASD / Q / E (3D)', 'Walk around in 3D view (Q/E: down/up, Shift: faster)'],
     ['3D: click / drag furniture', 'Select & highlight • drag to move on the floor (Shift: no grid snap) • resize via the side panel'],
     ['Wall type: Curtain Wall', 'Select a wall → Wall Type → 🪟 Curtain Wall: glass facade with aluminum frame in 2D & 3D'],
+    ['3D: Floor selector', 'Menu at the top-left of the 3D view — show all floors stacked, or isolate one floor at ground level'],
     ['Ctrl+C/V/D', 'Copy / Paste / Duplicate'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'],
     ['Ctrl+A', 'Select all on current floor'],
@@ -2141,6 +2142,7 @@ function helpModal() {
     ['WASD / Q / E (3B)', '3B görünümde gezin (Q/E: alçal/yüksel, Shift: hızlı)'],
     ['3B: mobilyaya tıkla / sürükle', 'Seç & vurgula • zeminde sürükle (Shift: ızgara yok) • boyutu sağ panelden değiştir'],
     ['Duvar tipi: Cam Cephe', 'Duvar seç → Duvar Tipi → 🪟 Cam Cephe: 2B ve 3B içinde alüminyum çerçeveli cam cephe'],
+    ['3B: Kat seçici', '3B görünümün sol üstündeki menü — tüm katlar üst üste ya da tek kat yer seviyesinde'],
     ['Ctrl+C/V/D', 'Kopyala / Yapıştır / Çoğalt'],
     ['Ctrl+Z / Ctrl+Y', 'Geri al / Yinele'],
     ['Ctrl+A', 'Tümünü seç'],
@@ -2321,6 +2323,15 @@ function exportPrint() {
 
 /* ---------- 3B Görünüm ---------- */
 let T3 = null;
+function sync3DFloors() {
+  const lbl = $('#lbl3dFloor'), selEl = $('#s3dFloor'); if (!lbl || !selEl) return;
+  lbl.textContent = L('Kat', 'Floor');
+  const fl = P && P.floors ? P.floors : [];
+  const opts = `<option value="all">${L('🏢 Tüm katlar', '🏢 All floors')}</option>` + fl.map((f, i) => `<option value="${f.id}">${esc(f.name || L('Kat', 'Floor') + ' ' + (i + 1))}</option>`).join('');
+  if (selEl.dataset.opts !== opts) { selEl.dataset.opts = opts; selEl.innerHTML = opts; }
+  if (ui.v3dFloor !== 'all' && !fl.some(x => x.id === ui.v3dFloor)) ui.v3dFloor = 'all';
+  selEl.value = ui.v3dFloor;
+}
 function show3D(on) {
   if (on && (!window.THREE || !THREE.OrbitControls)) { toast(L('3B için internet bağlantısı gerekli (Three.js yüklenemedi)', 'Internet connection required for 3D (Three.js failed to load)')); return; }
   ui.view3d = on; keys3D.clear(); $('#v3d').style.display = on ? 'block' : 'none'; $('#b2d').classList.toggle('on', !on); $('#b3d').classList.toggle('on', on);
@@ -2457,6 +2468,7 @@ function loop3D() {
   T3.ctl.update(); T3.r.render(T3.scene, T3.cam);
 }
 function build3D(keepCam = false) {
+  sync3DFloors();
   const lt = isLight(), S = T3.scene; while (S.children.length) S.remove(S.children[0]);
   S.background = new THREE.Color(lt ? 0xe8e3d9 : 0x0b0f14);
   S.add(new THREE.HemisphereLight(0xffffff, lt ? 0x667788 : 0x1e293b, lt ? 0.55 : 0.65));
@@ -2469,6 +2481,7 @@ function build3D(keepCam = false) {
   };
   let elev = 0, all = null;
   P.floors.forEach((f, fidx) => {
+    if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return; // kat seçici: yalnızca seçili kat çizilir
     const b = contentBounds(f); if (b) all = all ? { x0: Math.min(all.x0, b.x0), y0: Math.min(all.y0, b.y0), x1: Math.max(all.x1, b.x1), y1: Math.max(all.y1, b.y1) } : b;
     if (fidx === 0) {
       // zemin katı: bina kaidesi (içerik sınırları + pay)
@@ -2634,11 +2647,13 @@ function applyLangUI() {
   const gsCustom = $('#sGrid').querySelector('option[value="custom"]');
   if (gsCustom) gsCustom.textContent = L('Özel...', 'Custom...');
   $('#iGridCustom').title = L('Özel ızgara adımı (cm)', 'Custom grid step (cm)');
+  $('#lbl3dFloor').textContent = L('Kat', 'Floor');
+  if ($('#s3dFloor')) $('#s3dFloor').dataset.opts = ''; // dil değişince seçenekleri yeniden yaz
   $('#lblAngle').textContent = (P && P.gridType === 'triangle') ? L('Açı 30°', 'Angle 30°') : L('Açı 15°', 'Angle 15°');
   if (!P && ($('#pname').value === 'Yeni Proje' || $('#pname').value === 'New Project')) $('#pname').value = L('Yeni Proje', 'New Project');
   translateDefaultNames();
   buildTools(); buildLib();
-  if (P) { syncGridUI(); refresh(); }
+  if (P) { syncGridUI(); refresh(); sync3DFloors(); }
   if ($('#modalbg').style.display === 'flex') {
     if (ui.modal === 'help') helpModal();
     else if (ui.modal === 'projects') projectsModal();
@@ -2658,6 +2673,7 @@ $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
 $('#bPng').onclick = exportPng; $('#bPrint').onclick = exportPrint;
 $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { type: 'image/svg+xml' }));
 $('#b2d').onclick = () => show3D(false); $('#b3d').onclick = () => show3D(true);
+$('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && ui.view3d) build3D(true); };
 $('#bLang').onclick = () => setLang(isEN() ? 'tr' : 'en');
 $('#bTheme').onclick = () => {
   const d = document.documentElement;

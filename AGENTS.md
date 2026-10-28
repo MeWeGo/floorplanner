@@ -103,7 +103,7 @@ Key semantics:
 | `hist[]`, `hi` | Undo stack of `JSON.stringify(P)` snapshots (max 150) and pointer |
 | `view {x,y,z}` | Pan (px) and zoom (px per cm). World→screen: `s = w*z + view` |
 | `tool`, `sel[]`, `placing` | Active tool, selected ids, item currently being placed |
-| `ui` | Transient UI state: `snap, angle, dims, cur, raw, draw, typed, drag, space, cat, q, view3d, dimStart, polyPts, calib, clip, ghost, exporting, btn, lastE, pen` |
+| `ui` | Transient UI state: `snap, angle, dims, cur, raw, draw, typed, drag, space, cat, q, view3d, v3dFloor, dimStart, polyPts, calib, clip, ghost, exporting, btn, lastE, pen` |
 | `layersVis` | Layer visibility (`bg, rooms, walls, furn, dims, sketch`) — view-only, not persisted |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
@@ -213,6 +213,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 - Walls are split into boxes around each opening (below-sill, above-head); windows add a translucent pane, doors a thin leaf.
 - Floors stack with pitch `P.wallH + 20`. Built once on entering 3D (and on theme change) — it does **not** live-update; leave 3D (`Esc` or `2B`) to edit.
 - Camera travel: `keys3D` tracks held keys (`W/A/S/D`, Arrow keys, `Q/E`, `Shift`) and `loop3D()` translates both `T3.cam.position` and `T3.ctl.target` along the horizontal XZ camera forward/right vectors (or Y for `Q/E`).
+- Floor visibility: the `#s3dFloor` select (`.ctl3d`, top-left of the 3D overlay) + `sync3DFloors()`; `ui.v3dFloor` is `'all'` or a floor id. `build3D()` skips hidden floors, so an isolated floor is drawn at ground level (elevation counter only accumulates over shown floors).
 - If CDN scripts fail, `show3D` shows a toast and stays in 2D.
 
 ### Export
