@@ -63,6 +63,7 @@
 - **Connected-wall dragging** — dragging a wall keeps neighbouring wall ends glued so corners stay closed; uncheck **Connected walls** in the footer (or hold **Alt** while dragging) to move a wall independently.
 - Resize / rotate with on-canvas handles; edit numeric properties in the side panel.
 - Dimension lines, text labels, and live wall-length labels.
+- **✏️ Pen tool** — freehand sketches anywhere on the plan: hold and drag to draw any shape, arrow or note stroke; the stroke is simplified to few points, and you can move it, restyle it (stroke width & color in the side panel), copy/paste or delete it like any object. Shown as a line on the floor in 3D and included in SVG/PNG/PDF exports.
 
 ### 🏢 Project Tools
 - **Multiple floors** — add, duplicate, rename, delete; the floor below is shown faintly for alignment.
@@ -129,6 +130,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | `F` | Furniture library |
 | `M` | Dimension line |
 | `T` | Text |
+| `B` | Pen – freehand sketch (drag to draw, release to finish) |
 | `E` | Eraser |
 | `C` | Calibrate background scale |
 | `G` | Toggle snapping |

@@ -66,7 +66,8 @@ Floor = {
   "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label } ],
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet", pts:[{x,y},…] } ],
   "dims":   [ { id, a:{x,y}, b:{x,y}, off } ],
-  "texts":  [ { id, x, y, text, size, color, rot } ]
+  "texts":  [ { id, x, y, text, size, color, rot } ],
+  "sketches": [ { id, pts:[{x,y},…], w, color } ]   // pen tool: freehand strokes (already simplified)
 }
 ```
 
@@ -102,11 +103,11 @@ Key semantics:
 | `hist[]`, `hi` | Undo stack of `JSON.stringify(P)` snapshots (max 150) and pointer |
 | `view {x,y,z}` | Pan (px) and zoom (px per cm). World→screen: `s = w*z + view` |
 | `tool`, `sel[]`, `placing` | Active tool, selected ids, item currently being placed |
-| `ui` | Transient UI state: `snap, angle, dims, cur, raw, draw, typed, drag, space, cat, q, view3d, dimStart, polyPts, calib, clip, ghost, exporting, btn, lastE` |
-| `layersVis` | Layer visibility (`bg, rooms, walls, furn, dims`) — view-only, not persisted |
+| `ui` | Transient UI state: `snap, angle, dims, cur, raw, draw, typed, drag, space, cat, q, view3d, dimStart, polyPts, calib, clip, ghost, exporting, btn, lastE, pen` |
+| `layersVis` | Layer visibility (`bg, rooms, walls, furn, dims, sketch`) — view-only, not persisted |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
-`tool` values: `select pan wall rect room poly place dim text eraser calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
+`tool` values: `select pan wall rect room poly place dim text pen eraser calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
 
 ---
 
@@ -148,7 +149,7 @@ Key semantics:
 18. **Bootstrap** — event wiring and async startup (migrate → load autosave → else template picker).
 
 ### Rendering pipeline
-`render()` rebuilds SVG layer strings (`layerStrings(f, live=true)`) into fixed groups: `gBg, gGrid, gRooms, gWalls, gOps, gFurn, gDims, gTexts, gSel, gPv` (z-order bottom → top). `gPv` (preview) is redrawn alone by `drawPreview()` on mouse-move. Hit-testing uses `data-id` (objects) and `data-h` (handles) attributes with `e.target.closest(...)`; invisible `stroke="transparent"` / `fill="transparent"` shapes provide generous hit areas.
+`render()` rebuilds SVG layer strings (`layerStrings(f, live=true)`) into fixed groups: `gBg, gGrid, gRooms, gWalls, gOps, gFurn, gDims, gTexts, gSketch, gSel, gPv` (z-order bottom → top). `gPv` (preview) is redrawn alone by `drawPreview()` on mouse-move. Hit-testing uses `data-id` (objects) and `data-h` (handles) attributes with `e.target.closest(...)`; invisible `stroke="transparent"` / `fill="transparent"` shapes provide generous hit areas.
 
 When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
