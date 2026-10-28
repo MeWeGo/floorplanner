@@ -61,7 +61,7 @@
 
 ### 🏢 Project Tools
 - **Multiple floors** — add, duplicate, rename, delete; the floor below is shown faintly for alignment.
-- **Background image** import with **on-canvas drag & corner resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
+- **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
 - Layer visibility toggles, floor patterns (wood, tile, carpet), room colors.
 - Unlimited **undo / redo**, copy / paste / duplicate, box & multi-select.
 - Starter templates: Blank · Studio 1+0 · 2+1 Apartment · Office.

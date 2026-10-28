@@ -379,8 +379,8 @@ function gridSvg() {
   let out = '';
   const minId = gt === 'triangle' ? 'g-tri-minor' : gt === 'dots' ? 'g-dots-minor' : 'g-minor';
   const majId = gt === 'triangle' ? 'g-tri-major' : gt === 'dots' ? 'g-dots-major' : 'g-major';
-  if (P.grid * view.z >= 6) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${minId})"/>`;
-  if (view.z > 0.12) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${majId})"/>`;
+  if (P.grid * view.z >= 6) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${minId})" pointer-events="none"/>`;
+  if (view.z > 0.12) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${majId})" pointer-events="none"/>`;
   return out;
 }
 function bgSvg(live = true) {
@@ -560,6 +560,8 @@ function handleSvg() {
     }
     if (kind === 'bg') {
       [[o.x, o.y], [o.x + o.w, o.y], [o.x + o.w, o.y + o.h], [o.x, o.y + o.h]].forEach(([x, y], i) => s += hnd(x, y, 'bg' + i, i % 2 ? 'nesw-resize' : 'nwse-resize'));
+      s += hnd(o.x + o.w / 2, o.y, 'bgN', 'ns-resize') + hnd(o.x + o.w, o.y + o.h / 2, 'bgE', 'ew-resize')
+        + hnd(o.x + o.w / 2, o.y + o.h, 'bgS', 'ns-resize') + hnd(o.x, o.y + o.h / 2, 'bgW', 'ew-resize');
     }
   }
   return s;
@@ -1121,6 +1123,10 @@ function doHandle(raw, e) {
     else if (h === 'bg1') { o.w = Math.max(20, Math.round(p.x - x0)); o.h = sh ? Math.max(20, Math.round(y1 - p.y)) : Math.round(o.w * asp); o.y = y1 - o.h; }
     else if (h === 'bg3') { o.w = Math.max(20, Math.round(x1 - p.x)); o.h = sh ? Math.max(20, Math.round(p.y - y0)) : Math.round(o.w * asp); o.x = x1 - o.w; }
     else if (h === 'bg0') { o.w = Math.max(20, Math.round(x1 - p.x)); o.h = sh ? Math.max(20, Math.round(y1 - p.y)) : Math.round(o.w * asp); o.x = x1 - o.w; o.y = y1 - o.h; }
+    else if (h === 'bgE') { o.w = Math.max(20, Math.round(p.x - x0)); }
+    else if (h === 'bgW') { o.w = Math.max(20, Math.round(x1 - p.x)); o.x = x1 - o.w; }
+    else if (h === 'bgS') { o.h = Math.max(20, Math.round(p.y - y0)); }
+    else if (h === 'bgN') { o.h = Math.max(20, Math.round(y1 - p.y)); o.y = y1 - o.h; }
   }
   render();
 }
@@ -1914,7 +1920,7 @@ $('#fileOpen').onchange = e => {
 };
 $('#fileBg').onchange = e => {
   const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-  r.onload = () => { const im = new Image(); im.onload = () => { const w = 1200; P.bg = { id: 'bg', src: r.result, x: 0, y: 0, w, h: Math.round(w * im.height / im.width), op: 0.5, lock: false }; sel = ['bg']; setTool('select'); commit(); fit(); refresh(); toast(L('Görsel eklendi – sürükleyerek taşıyabilir, köşelerinden boyutlandırabilir veya sağ panelden konumunu ayarlayabilirsiniz', 'Image added – drag on canvas to move, drag corners to resize, or adjust position in the right panel')); }; im.src = r.result; };
+  r.onload = () => { const im = new Image(); im.onload = () => { const w = 1200; P.bg = { id: 'bg', src: r.result, x: 0, y: 0, w, h: Math.round(w * im.height / im.width), op: 0.5, lock: false }; sel = ['bg']; setTool('select'); commit(); fit(); refresh(); toast(L('Görsel eklendi – sürükleyerek taşıyabilir, köşe ve kenarlarından boyutlandırabilir veya sağ panelden konumunu ayarlayabilirsiniz', 'Image added – drag on canvas to move, drag corners or edges to resize, or adjust position in the right panel')); }; im.src = r.result; };
   r.readAsDataURL(file); e.target.value = '';
 };
 $('#tools').addEventListener('click', e => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); });
