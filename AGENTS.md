@@ -61,7 +61,7 @@ P = {
 
 Floor = {
   "id": "…", "name": "Zemin Kat",
-  "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
+  "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain", pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
   "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1 } ],   // doors & windows
   "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label } ],
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet", pts:[{x,y},…] } ],
