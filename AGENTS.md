@@ -198,7 +198,7 @@ Rasterises walls to an offscreen canvas (resolution ≥ 2 cm/px, max ≈ 1800 px
 - Single furniture runs `magnet()`; openings re-project onto the nearest wall within 60 cm.
 
 ### Handles (`handleSvg` / `startHandle` / `doHandle`)
-Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension), `rot` (furniture rotation), `c0..c3` (furniture resize). Shown only for a single selection.
+Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension), `rot` (furniture rotation), `c0..c3` (furniture resize), `bg0..bg3` (background image corner resize; preserves aspect ratio unless `Shift` is held). Shown only for a single selection. Background image (`id === 'bg'`) is selectable and movable on the canvas unless `P.bg.lock` is true.
 
 ### Storage
 - `autosave()` (debounced) writes `P` to IndexedDB `state` store key `'auto'`; `beforeunload` also writes. Fallback to `localStorage['fp_auto']` if IndexedDB fails.
@@ -206,10 +206,11 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 - `migrateLegacyStorage()` moves old `localStorage` keys (`fp_projects`, `fp_auto`) into IndexedDB once, then deletes them.
 - Bumping `DB_VER` requires handling in `onupgradeneeded`; currently version 1 with stores `projects`, `state`.
 
-### 3D (`build3D`)
+### 3D (`build3D`, `loop3D`)
 - Plan `(x, y)` → Three `(x, elevation, z=y)`. Rotation: `mesh.rotation.y = -θ` (SVG clockwise → Three counter-clockwise). Room polygons use `rotation.x = +π/2`.
 - Walls are split into boxes around each opening (below-sill, above-head); windows add a translucent pane, doors a thin leaf.
 - Floors stack with pitch `P.wallH + 20`. Built once on entering 3D (and on theme change) — it does **not** live-update; leave 3D (`Esc` or `2B`) to edit.
+- Camera travel: `keys3D` tracks held keys (`W/A/S/D`, Arrow keys, `Q/E`, `Shift`) and `loop3D()` translates both `T3.cam.position` and `T3.ctl.target` along the horizontal XZ camera forward/right vectors (or Y for `Q/E`).
 - If CDN scripts fail, `show3D` shows a toast and stays in 2D.
 
 ### Export

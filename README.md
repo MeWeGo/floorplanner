@@ -60,7 +60,7 @@
 
 ### 🏢 Project Tools
 - **Multiple floors** — add, duplicate, rename, delete; the floor below is shown faintly for alignment.
-- **Background image** import with a **scale-calibration** tool (click two known points, enter the real distance).
+- **Background image** import with **on-canvas drag & corner resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
 - Layer visibility toggles, floor patterns (wood, tile, carpet), room colors.
 - Unlimited **undo / redo**, copy / paste / duplicate, box & multi-select.
 - Starter templates: Blank · Studio 1+0 · 2+1 Apartment · Office.
@@ -70,14 +70,14 @@
 | :-- | :-- |
 | **IndexedDB** (`FloorPlannerDB`) | Background autosave + named projects with live SVG thumbnails — hundreds of MB capacity |
 | **JSON files** | Backup, sharing, moving between machines (`⬇ JSON` / `📂 Aç`) |
-| `localStorage` | Theme preference only (legacy data is auto-migrated to IndexedDB) |
+| `localStorage` | Theme & language preferences only (legacy data is auto-migrated to IndexedDB) |
 
 ### 📤 Export
 - **PNG**, **SVG**, and **PDF / Print** (A4 landscape) with title block and scale bar.
 - Exports always render on **white paper** regardless of the editor theme.
 
-### 🧊 3D View
-One click turns the plan into an orbitable 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors.
+### 🧊 3D View & WASD Walk
+One click turns the plan into an interactive 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors. Orbit/zoom with the mouse, or walk around with **`WASD` / Arrow keys** (`Q`/`E` for down/up, `Shift` for faster travel).
 
 ### 🌗 Dark & Light Mode
 Every surface — panels, canvas, grid, walls, openings, rooms, furniture, dimensions, text and the 3D scene — adapts to the selected theme.
@@ -127,7 +127,8 @@ python -m http.server 8080      # then open http://localhost:8080
 | `Shift` | Hold to bypass snapping · multi-select |
 | `[` / `]` | Rotate selected item −15° / +15° |
 | `R` / `S` *(while placing)* | Rotate furniture / flip door hinge · flip swing side |
-| Arrow keys | Nudge 1 cm (`Shift` = 10 cm) |
+| Arrow keys | Nudge selection / background image 1 cm (`Shift` = 10 cm) |
+| `WASD` / `Q` / `E` *(in 3D)* | Walk around in 3D view (`Q`/`E`: down/up, `Shift`: faster) |
 | `Ctrl+C / V / D` | Copy / Paste / Duplicate |
 | `Ctrl+Z / Ctrl+Y` | Undo / Redo |
 | `Ctrl+A` · `Ctrl+S` · `Del` | Select all · Save to browser · Delete |

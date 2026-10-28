@@ -108,6 +108,7 @@ const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10
 const F = () => P.floors[fi];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', dims: 'dim', texts: 'text' };
 function find(id, f = F()) {
+  if (id === 'bg' && P && P.bg) { P.bg.id = 'bg'; return { kind: 'bg', arr: null, o: P.bg }; }
   for (const arr in KINDS) { const o = f[arr].find(x => x.id === id); if (o) return { kind: KINDS[arr], arr, o }; }
   return null;
 }
@@ -280,6 +281,7 @@ function updateUndo() { $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = h
 function loadProject(obj, msg) {
   P = obj; if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
+  if (P.bg) P.bg.id = 'bg';
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; });
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
@@ -305,6 +307,7 @@ function zoomAt(f, sx, sy) {
 }
 function fit() {
   const s = svgSize(); let b = contentBounds();
+  if (!b && P.bg) b = { x0: P.bg.x, y0: P.bg.y, x1: P.bg.x + P.bg.w, y1: P.bg.y + P.bg.h };
   if (!b) b = { x0: 0, y0: 0, x1: 1000, y1: 700 };
   const bw = Math.max(b.x1 - b.x0, 200), bh = Math.max(b.y1 - b.y0, 200);
   view.z = clamp(Math.min(s.w / bw, s.h / bh) * 0.8, 0.05, 3);
@@ -357,9 +360,10 @@ function gridSvg() {
   if (view.z > 0.12) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${majId})"/>`;
   return out;
 }
-function bgSvg() {
+function bgSvg(live = true) {
   const b = P.bg; if (!b) return '';
-  return `<image href="${b.src}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" opacity="${b.op}" preserveAspectRatio="none" pointer-events="none"/>`;
+  const hit = live && !b.lock ? `data-id="bg" style="cursor:move"` : `pointer-events="none"`;
+  return `<image href="${b.src}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" opacity="${b.op}" preserveAspectRatio="none" ${hit}/>`;
 }
 function roomSvg(r, live) {
   const C = pal(), pts = r.pts.map(p => p.x + ',' + p.y).join(' ');
@@ -486,6 +490,7 @@ function handleSvg() {
     if (kind === 'op') { const p = opPos(o); if (p) s += `<g transform="translate(${p.x} ${p.y}) rotate(${p.ang})" pointer-events="none"><rect x="${-o.w / 2 - 3}" y="${-p.t / 2 - 5}" width="${o.w + 6}" height="${p.t + 10}" fill="#f59e0b" fill-opacity=".2" stroke="#f59e0b" stroke-width="${1.6 / z}"/></g>`; }
     if (kind === 'dim') s += `<circle cx="${o.a.x}" cy="${o.a.y}" r="${hs}" fill="#f59e0b"/><circle cx="${o.b.x}" cy="${o.b.y}" r="${hs}" fill="#f59e0b"/>`;
     if (kind === 'text') s += `<circle cx="${o.x}" cy="${o.y}" r="${hs}" fill="#f59e0b"/>`;
+    if (kind === 'bg') s += `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="none" stroke="#f59e0b" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
   }
   if (os.length === 1) {
     const { kind, o } = os[0];
@@ -500,6 +505,9 @@ function handleSvg() {
       const r = o.rot * Math.PI / 180, dd = o.d / 2 + 30 / z;
       const rx = o.x + Math.sin(r) * dd, ry = o.y - Math.cos(r) * dd, tx = o.x + Math.sin(r) * o.d / 2, ty = o.y - Math.cos(r) * o.d / 2;
       s += `<line x1="${tx}" y1="${ty}" x2="${rx}" y2="${ry}" stroke="#f59e0b" stroke-width="${1.5 / z}" pointer-events="none"/>` + hnd(rx, ry, 'rot', 'grab', 'circle');
+    }
+    if (kind === 'bg') {
+      [[o.x, o.y], [o.x + o.w, o.y], [o.x + o.w, o.y + o.h], [o.x, o.y + o.h]].forEach(([x, y], i) => s += hnd(x, y, 'bg' + i, i % 2 ? 'nesw-resize' : 'nwse-resize'));
     }
   }
   return s;
@@ -603,6 +611,7 @@ function addRectWalls(x0, y0, x1, y1) {
 }
 function deleteIds(ids) {
   const f = F(), s = new Set(ids);
+  if (s.has('bg')) P.bg = null;
   f.walls = f.walls.filter(w => !s.has(w.id));
   const wl = new Set(f.walls.map(w => w.id));
   f.ops = f.ops.filter(o => !s.has(o.id) && wl.has(o.wall));
@@ -729,8 +738,10 @@ function buildTools() {
 }
 function updateTools() {
   document.querySelectorAll('.tool').forEach(b => b.classList.toggle('on', b.dataset.tool === ui.btn));
-  $('#hud').textContent = (isEN() ? HINTS_EN : HINTS)[tool] || '';
-  $('#hud').style.display = ui.view3d ? 'none' : '';
+  $('#hud').textContent = ui.view3d
+    ? L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Esc: 2D')
+    : ((isEN() ? HINTS_EN : HINTS)[tool] || '');
+  $('#hud').style.display = '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
   document.querySelectorAll('#items .item').forEach(el => el.classList.toggle('on', !!placing && el.dataset.id === placing.def.id));
 }
@@ -989,7 +1000,7 @@ function doMove(raw, e) {
       o.x = g.x + dx; o.y = g.y + dy;
       if (sel.length === 1) { o.rot = g.rot; const r0 = o.rot; magnet(o); if (e.shiftKey) { o.x = g.x + dx; o.y = g.y + dy; o.rot = g.rot; } }
     }
-    else if (kind === 'text') { o.x = g.x + dx; o.y = g.y + dy; }
+    else if (kind === 'text' || kind === 'bg') { o.x = g.x + dx; o.y = g.y + dy; }
     else if (kind === 'op') {
       const n = wallNear(raw, 60);
       if (n) { const L = wLen(n.w); o.wall = n.w.id; o.d = clamp(ui.snap && !e.shiftKey ? rnd(n.pr.t * L, 5) : n.pr.t * L, Math.min(o.w / 2, L / 2), Math.max(L - o.w / 2, L / 2)); }
@@ -1027,6 +1038,13 @@ function doHandle(raw, e) {
     const r = -o.rot * Math.PI / 180, dx = raw.x - o.x, dy = raw.y - o.y;
     const lx = dx * Math.cos(r) - dy * Math.sin(r), ly = dx * Math.sin(r) + dy * Math.cos(r), st = ui.snap && !sh ? 5 : 1;
     o.w = Math.max(10, rnd(Math.abs(lx) * 2, st)); o.d = Math.max(10, rnd(Math.abs(ly) * 2, st));
+  } else if (h.startsWith('bg')) {
+    const g = d.orig, p = ui.snap && !sh ? snapToGrid(raw) : raw, asp = (g.h || 1) / (g.w || 1);
+    const x0 = g.x, y0 = g.y, x1 = g.x + g.w, y1 = g.y + g.h;
+    if (h === 'bg2') { o.w = Math.max(20, Math.round(p.x - x0)); o.h = sh ? Math.max(20, Math.round(p.y - y0)) : Math.round(o.w * asp); }
+    else if (h === 'bg1') { o.w = Math.max(20, Math.round(p.x - x0)); o.h = sh ? Math.max(20, Math.round(y1 - p.y)) : Math.round(o.w * asp); o.y = y1 - o.h; }
+    else if (h === 'bg3') { o.w = Math.max(20, Math.round(x1 - p.x)); o.h = sh ? Math.max(20, Math.round(p.y - y0)) : Math.round(o.w * asp); o.x = x1 - o.w; }
+    else if (h === 'bg0') { o.w = Math.max(20, Math.round(x1 - p.x)); o.h = sh ? Math.max(20, Math.round(y1 - p.y)) : Math.round(o.w * asp); o.x = x1 - o.w; o.y = y1 - o.h; }
   }
   render();
 }
@@ -1038,8 +1056,18 @@ const fld = (lbl, k, p, v, o = {}) => {
   const val = type === 'number' ? Math.round(v * 100) / 100 : v;
   return `<label class="f"><span>${lbl}</span><input type="${type}" data-k="${k}" data-p="${p}" value="${esc(val)}" ${o.step ? `step="${o.step}"` : ''} ${o.min != null ? `min="${o.min}"` : ''} ${o.max != null ? `max="${o.max}"` : ''}></label>`;
 };
-const KIND_TR = { wall: '🧱 Duvar', op: '🚪 Kapı / Pencere', furn: '🛋️ Mobilya', room: '🏠 Oda', dim: '📏 Ölçü', text: '🔤 Metin' };
-const KIND_EN = { wall: '🧱 Wall', op: '🚪 Door / Window', furn: '🛋️ Furniture', room: '🏠 Room', dim: '📏 Dimension', text: '🔤 Text' };
+const KIND_TR = { wall: '🧱 Duvar', op: '🚪 Kapı / Pencere', furn: '🛋️ Mobilya', room: '🏠 Oda', dim: '📏 Ölçü', text: '🔤 Metin', bg: '🖼 Arka Plan Görseli' };
+const KIND_EN = { wall: '🧱 Wall', op: '🚪 Door / Window', furn: '🛋️ Furniture', room: '🏠 Room', dim: '📏 Dimension', text: '🔤 Text', bg: '🖼 Background Image' };
+function bgFields(inProps = false) {
+  if (!P.bg) return '';
+  return fld(L('Konum X (cm)', 'Position X (cm)'), 'bg', 'x', P.bg.x, { step: 10 })
+    + fld(L('Konum Y (cm)', 'Position Y (cm)'), 'bg', 'y', P.bg.y, { step: 10 })
+    + fld(L('Genişlik (cm)', 'Width (cm)'), 'bg', 'w', P.bg.w, { min: 10, step: 10 })
+    + fld(L('Yükseklik (cm)', 'Height (cm)'), 'bg', 'h', P.bg.h, { min: 10, step: 10 })
+    + fld(L('Opaklık', 'Opacity'), 'bg', 'op', P.bg.op, { type: 'range', min: 0.05, max: 1, step: 0.05 })
+    + `<label class="f"><span>${L('Konumu kilitle', 'Lock position')}</span><input type="checkbox" data-k="bg" data-p="lock" ${P.bg.lock ? 'checked' : ''}></label>`
+    + `<div class="row">${inProps ? '' : `<button class="btn sm" data-act="bgsel">${L('✥ Seç / Taşı', '✥ Select & Move')}</button>`}<button class="btn sm" data-act="bgreset">${L('⌖ Sıfırla (0,0)', '⌖ Reset (0,0)')}</button><button class="btn sm" data-act="calib">${L('⚖️ Ölçeklendir', '⚖️ Calibrate')}</button><button class="btn sm" data-act="bgremove" style="color:var(--danger)">${L('🗑 Kaldır', '🗑 Remove')}</button></div>`;
+}
 function renderProps() {
   const el = $('#props'), os = selObjs();
   if (!os.length) { el.innerHTML = projectPanel(); return; }
@@ -1069,6 +1097,8 @@ function renderProps() {
     h += `<div class="stat"><span>${L('Ölçü', 'Length')}</span><b>${fmtLen(dist(o.a, o.b))}</b></div>` + fld(L('Ofset (cm)', 'Offset (cm)'), 'dim', 'off', o.off ?? 40) + acts();
   } else if (k === 'text') {
     h += fld(L('Metin', 'Text'), 'text', 'text', o.text, { type: 'text' }) + fld(L('Boyut', 'Size'), 'text', 'size', o.size, { min: 6, max: 200 }) + fld(L('Açı (°)', 'Angle (°)'), 'text', 'rot', o.rot || 0) + fld(L('Renk', 'Color'), 'text', 'color', o.color, { type: 'color' }) + acts();
+  } else if (k === 'bg') {
+    h += `<p class="muted" style="margin:0 0 8px">${L('Görseli tuvalde sürükleyerek taşıyabilir, köşelerinden boyutlandırabilirsiniz (Shift: serbest oran).', 'Drag the image on the canvas to reposition, or drag its corners to resize (Shift: free aspect ratio).')}</p>` + bgFields(true);
   }
   el.innerHTML = h;
 }
@@ -1077,7 +1107,7 @@ function projectPanel() {
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
   h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['dims', L('Ölçüler', 'Dimensions')]].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
   h += `<h4>${L('Arka plan görseli', 'Background image')}</h4>`;
-  if (P.bg) h += fld(L('Opaklık', 'Opacity'), 'bg', 'op', P.bg.op, { type: 'range', min: 0.05, max: 1, step: 0.05 }) + `<div class="row"><button class="btn sm" data-act="calib">${L('⚖️ Ölçeklendir', '⚖️ Calibrate')}</button><button class="btn sm" data-act="bgremove">${L('Kaldır', 'Remove')}</button></div>`;
+  if (P.bg) h += bgFields(false);
   else h += `<p class="muted" style="margin:0 0 6px">${L('Kroki / mevcut plan görselini altlık olarak ekleyip üzerinden çizebilirsin.', 'Import a blueprint or floor plan image as an underlay to trace over.')}</p><div class="row"><button class="btn sm" data-act="bgadd">${L('🖼 Görsel ekle', '🖼 Add image')}</button></div>`;
   const rooms = f.rooms; let tot = 0;
   h += `<h4>${L('Odalar', 'Rooms')} – ${esc(f.name)}</h4>`;
@@ -1095,7 +1125,7 @@ function applyProp(t, final) {
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
   if (k === 'layer') { layersVis[p] = v; render(); return; }
   if (k === 'proj') { P[p] = v; if (final) { commit(); } return; }
-  if (k === 'bg') { P.bg[p] = v; render(); if (final) commit(); return; }
+  if (k === 'bg' && P.bg) { P.bg[p] = v; if (p === 'lock' && v) sel = sel.filter(x => x !== 'bg'); render(); if (final) { commit(); if (p === 'lock') renderProps(); } return; }
   const os = selObjs().filter(x => x.kind === k); if (!os.length) return;
   for (const { o } of os) {
     if (k === 'wall' && p === 'len') { const L = wLen(o) || 1, ux = (o.b.x - o.a.x) / L, uy = (o.b.y - o.a.y) / L; o.b = { x: o.a.x + ux * v, y: o.a.y + uy * v }; }
@@ -1113,7 +1143,9 @@ $('#props').addEventListener('click', e => {
   if (a === 'del') return deleteSel();
   if (a === 'dup') return paste(true);
   if (a === 'bgadd') return $('#fileBg').click();
-  if (a === 'bgremove') { P.bg = null; commit(); return refresh(); }
+  if (a === 'bgsel') { if (P.bg) { P.bg.lock = false; sel = ['bg']; setTool('select'); refresh(); } return; }
+  if (a === 'bgreset') { if (P.bg) { P.bg.x = 0; P.bg.y = 0; commit(); refresh(); } return; }
+  if (a === 'bgremove') { P.bg = null; sel = sel.filter(x => x !== 'bg'); commit(); return refresh(); }
   if (a === 'calib') return setTool('calib');
   for (const { kind, o } of os) {
     if (a === 'rot90' && kind === 'furn') o.rot = (o.rot + 90) % 360;
@@ -1192,11 +1224,17 @@ function paste(fromSel) {
 }
 
 /* ---------- Klavye ---------- */
+const keys3D = new Set();
+window.addEventListener('blur', () => keys3D.clear());
 window.addEventListener('keydown', e => {
   const tag = e.target.tagName, typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
   if (typing) { if (e.key === 'Escape') e.target.blur(); return; }
-  if (ui.view3d) { if (e.key === 'Escape') show3D(false); return; }
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
+  if (ui.view3d) {
+    if (e.key === 'Escape') { show3D(false); return; }
+    if (['w', 'a', 's', 'd', 'q', 'e', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) { keys3D.add(k); e.preventDefault(); }
+    return;
+  }
   if (e.key === ' ') { ui.space = true; e.preventDefault(); return; }
   if (ctrl) {
     if (k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
@@ -1231,15 +1269,15 @@ window.addEventListener('keydown', e => {
   if (e.key === '[' || e.key === ']') { const d = e.key === ']' ? 15 : -15; let ch = false; selObjs().forEach(({ kind, o }) => { if (kind === 'furn' || kind === 'text') { o.rot = ((o.rot || 0) + d + 360) % 360; ch = true; } }); if (ch) { commit(); refresh(); } return; }
   if (e.key.startsWith('Arrow') && sel.length) {
     e.preventDefault(); const st = e.shiftKey ? 10 : 1; const dx = e.key === 'ArrowLeft' ? -st : e.key === 'ArrowRight' ? st : 0, dy = e.key === 'ArrowUp' ? -st : e.key === 'ArrowDown' ? st : 0;
-    selObjs().forEach(({ kind, o }) => { if (kind === 'wall' || kind === 'dim') { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (kind === 'room') o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
-    commit(); render(); return;
+    selObjs().forEach(({ kind, o }) => { if (kind === 'wall' || kind === 'dim') { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (kind === 'room') o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
+    commit(); render(); if (sel.includes('bg')) renderProps(); return;
   }
   const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', c: 'calib' };
   if (map[k]) { setTool(map[k]); return; }
   if (k === 'g') { $('#cSnap').click(); return; }
   if (k === '0') fit(); else if (k === '+' || k === '=') zoomBtn(1.25); else if (k === '-') zoomBtn(0.8);
 });
-window.addEventListener('keyup', e => { if (e.key === ' ') { ui.space = false; } });
+window.addEventListener('keyup', e => { if (e.key === ' ') ui.space = false; keys3D.delete(e.key.toLowerCase()); });
 function zoomBtn(f) { const s = svgSize(); zoomAt(f, s.w / 2, s.h / 2); }
 $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8); $('#zFit').onclick = fit;
 
@@ -1266,7 +1304,8 @@ function helpModal() {
     ['[ ]', 'Rotate selected furniture/text by 15°'],
     ['R (while placing)', 'Rotate furniture 90° / flip door hinge'],
     ['S (while placing)', 'Flip door swing direction'],
-    ['Arrow keys', 'Nudge selection by 1 cm (Shift: 10 cm)'],
+    ['Arrow keys', 'Nudge selection / background image by 1 cm (Shift: 10 cm)'],
+    ['WASD / Q / E (3D)', 'Walk around in 3D view (Q/E: down/up, Shift: faster)'],
     ['Ctrl+C/V/D', 'Copy / Paste / Duplicate'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'],
     ['Ctrl+A', 'Select all on current floor'],
@@ -1291,7 +1330,8 @@ function helpModal() {
     ['[ ]', 'Seçili mobilyayı 15° döndür'],
     ['R (yerleştirirken)', 'Mobilyayı döndür / kapı menteşesini çevir'],
     ['S (yerleştirirken)', 'Kapı açılış yönünü çevir'],
-    ['Ok tuşları', 'Seçileni 1 cm kaydır (Shift: 10 cm)'],
+    ['Ok tuşları', 'Seçileni / arka plan görselini 1 cm kaydır (Shift: 10 cm)'],
+    ['WASD / Q / E (3B)', '3B görünümde gezin (Q/E: alçal/yüksel, Shift: hızlı)'],
     ['Ctrl+C/V/D', 'Kopyala / Yapıştır / Çoğalt'],
     ['Ctrl+Z / Ctrl+Y', 'Geri al / Yinele'],
     ['Ctrl+A', 'Tümünü seç'],
@@ -1449,7 +1489,7 @@ function exportSvg() {
   const sb = `<g transform="translate(${x0 + 30} ${y0 + h - 70})" font-family="Segoe UI,sans-serif"><rect width="${Math.min(w - 60, 560)}" height="56" fill="none" stroke="#334155" stroke-width="2"/>
     <text x="12" y="24" font-size="22" font-weight="700" fill="#0f172a">${esc(P.name)} – ${esc(f.name)}</text><text x="12" y="46" font-size="14" fill="#475569">${date}  •  ${L('Toplam oda alanı', 'Total room area')}: ${fmtArea(f.rooms.reduce((s, r) => s + polyArea(r.pts), 0))}</text></g>
     <g transform="translate(${x0 + w - 230} ${y0 + h - 40})" font-family="Segoe UI,sans-serif"><path d="M0 0H200M0 -6V6M100 -6V6M200 -6V6" stroke="#0f172a" stroke-width="2" fill="none"/><text x="0" y="-12" font-size="13">0</text><text x="100" y="-12" font-size="13" text-anchor="middle">1 m</text><text x="200" y="-12" font-size="13" text-anchor="end">2 m</text></g>`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x0} ${y0} ${w} ${h}" width="${w}" height="${h}"><defs>${defs}</defs><rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="#fff"/>${P.bg && layersVis.bg ? bgSvg() : ''}${LS.rooms}${LS.walls}${LS.ops}${LS.furn}${LS.roomLabels}${LS.dims}${LS.texts}${sb}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x0} ${y0} ${w} ${h}" width="${w}" height="${h}"><defs>${defs}</defs><rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="#fff"/>${P.bg && layersVis.bg ? bgSvg(false) : ''}${LS.rooms}${LS.walls}${LS.ops}${LS.furn}${LS.roomLabels}${LS.dims}${LS.texts}${sb}</svg>`;
   return { svg, w, h };
 }
 function exportPng() {
@@ -1470,8 +1510,8 @@ function exportPrint() {
 let T3 = null;
 function show3D(on) {
   if (on && (!window.THREE || !THREE.OrbitControls)) { toast(L('3B için internet bağlantısı gerekli (Three.js yüklenemedi)', 'Internet connection required for 3D (Three.js failed to load)')); return; }
-  ui.view3d = on; $('#v3d').style.display = on ? 'block' : 'none'; $('#b2d').classList.toggle('on', !on); $('#b3d').classList.toggle('on', on);
-  $('#hud').style.display = on ? 'none' : ''; $('#zoomctl').style.display = on ? 'none' : '';
+  ui.view3d = on; keys3D.clear(); $('#v3d').style.display = on ? 'block' : 'none'; $('#b2d').classList.toggle('on', !on); $('#b3d').classList.toggle('on', on);
+  $('#zoomctl').style.display = on ? 'none' : ''; updateTools();
   if (on) { init3D(); build3D(); T3.run = true; loop3D(); } else if (T3) T3.run = false;
 }
 function init3D() {
@@ -1483,7 +1523,25 @@ function init3D() {
   T3 = { r, scene, cam, ctl, run: false }; resize3D(); window.addEventListener('resize', () => { if (T3 && ui.view3d) resize3D(); });
 }
 function resize3D() { const el = $('#v3d'); T3.r.setSize(el.clientWidth, el.clientHeight); T3.cam.aspect = el.clientWidth / el.clientHeight; T3.cam.updateProjectionMatrix(); }
-function loop3D() { if (!T3 || !T3.run) return; requestAnimationFrame(loop3D); T3.ctl.update(); T3.r.render(T3.scene, T3.cam); }
+function loop3D() {
+  if (!T3 || !T3.run) return;
+  requestAnimationFrame(loop3D);
+  if (keys3D.size) {
+    const spd = keys3D.has('shift') ? 22 : 9;
+    const fwd = new THREE.Vector3(); T3.cam.getWorldDirection(fwd); fwd.y = 0;
+    if (fwd.lengthSq() > 1e-6) fwd.normalize(); else fwd.set(0, 0, -1);
+    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+    const mv = new THREE.Vector3();
+    if (keys3D.has('w') || keys3D.has('arrowup')) mv.addScaledVector(fwd, spd);
+    if (keys3D.has('s') || keys3D.has('arrowdown')) mv.addScaledVector(fwd, -spd);
+    if (keys3D.has('d') || keys3D.has('arrowright')) mv.addScaledVector(right, spd);
+    if (keys3D.has('a') || keys3D.has('arrowleft')) mv.addScaledVector(right, -spd);
+    if (keys3D.has('e')) mv.y += spd;
+    if (keys3D.has('q')) mv.y -= spd;
+    if (mv.lengthSq() > 0) { T3.cam.position.add(mv); T3.ctl.target.add(mv); }
+  }
+  T3.ctl.update(); T3.r.render(T3.scene, T3.cam);
+}
 function build3D() {
   const lt = isLight(), S = T3.scene; while (S.children.length) S.remove(S.children[0]);
   S.background = new THREE.Color(lt ? 0xe8e3d9 : 0x0b0f14);
@@ -1660,7 +1718,7 @@ $('#fileOpen').onchange = e => {
 };
 $('#fileBg').onchange = e => {
   const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-  r.onload = () => { const im = new Image(); im.onload = () => { const w = 1200; P.bg = { src: r.result, x: 0, y: 0, w, h: w * im.height / im.width, op: 0.5 }; commit(); fit(); refresh(); toast(L('Görsel eklendi. “Ölçek” aracı ile gerçek ölçüye getir', 'Image added. Use the “Calibrate” tool to set real-world scale')); }; im.src = r.result; };
+  r.onload = () => { const im = new Image(); im.onload = () => { const w = 1200; P.bg = { id: 'bg', src: r.result, x: 0, y: 0, w, h: Math.round(w * im.height / im.width), op: 0.5, lock: false }; sel = ['bg']; setTool('select'); commit(); fit(); refresh(); toast(L('Görsel eklendi – sürükleyerek taşıyabilir, köşelerinden boyutlandırabilir veya sağ panelden konumunu ayarlayabilirsiniz', 'Image added – drag on canvas to move, drag corners to resize, or adjust position in the right panel')); }; im.src = r.result; };
   r.readAsDataURL(file); e.target.value = '';
 };
 $('#tools').addEventListener('click', e => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); });
