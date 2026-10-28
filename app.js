@@ -100,10 +100,10 @@ let P, fi = 0;
 let hist = [], hi = -1;
 const view = { x: 0, y: 0, z: 0.5 };
 let tool = 'select', sel = [], placing = null;
-const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all' };
+const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true };
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true };
 
-const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [] });
+const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], groups: [] });
 const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
 const F = () => P.floors[fi];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', dims: 'dim', texts: 'text' };
@@ -305,7 +305,7 @@ function loadProject(obj, msg) {
   P = obj; if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   if (P.bg) P.bg.id = 'bg';
-  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; for (const o of f.ops) if (o.open == null) o.open = 0; });
+  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; for (const o of f.ops) if (o.open == null) o.open = 0; });
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
   $('#pname').value = P.name; syncGridUI();
@@ -673,6 +673,7 @@ function deleteIds(ids) {
   const wl = new Set(f.walls.map(w => w.id));
   f.ops = f.ops.filter(o => !s.has(o.id) && wl.has(o.wall));
   for (const k of ['furn', 'rooms', 'dims', 'texts']) f[k] = f[k].filter(o => !s.has(o.id));
+  pruneGroups();
   sel = sel.filter(id => !s.has(id));
 }
 function deleteSel() { if (!sel.length) return; deleteIds(sel); commit(); refresh(); }
@@ -959,13 +960,16 @@ cv.addEventListener('dblclick', e => {
   }
 });
 function pickDataId(e) {
-  // oda etiketi (geniş görünmez alan), altındaki mobilya/nesne tıklamasını engellemesin
+  // oda etiketi (geniş görünmez alan), altındaki mobilya/nesne tıklamasını engellemesin;
+  // ama odada ≥2 kayıtlı düzen varsa etiket önceliklidir (tık = düzen döngüsü)
   let first = null;
   for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
     const t = el.closest ? el.closest('[data-id]') : null;
     if (!t) continue;
     if (!first) first = t;
     if (!t.hasAttribute('data-rlabel')) return t;
+    const rd = find(t.dataset.id);
+    if (rd && rd.kind === 'room' && rd.o.vars && rd.o.vars.length >= 2) return t;
   }
   return first;
 }
@@ -978,7 +982,7 @@ cv.addEventListener('pointerdown', e => {
   switch (tool) {
     case 'select': {
       const h = e.target.closest('[data-h]');
-      if (h) { startHandle(h.dataset.h, raw); return; }
+      if (h) { startHandle(h.dataset.h, raw, e); return; }
       const t = pickDataId(e);
       if (t) {
         const id = t.dataset.id;
@@ -991,7 +995,7 @@ cv.addEventListener('pointerdown', e => {
             for (const arr in KINDS) for (const o of f[arr]) if (o.grp === fd.o.grp) sel.push(o.id);
           } else sel = [id];
         }
-        renderProps(); startMove(raw);
+        renderProps(); startMove(raw, e);
         if (ui.drag) ui.drag.clickedId = id;
       } else { if (!e.shiftKey) sel = []; ui.drag = { type: 'box', start: raw, cur: raw, moved: false }; renderProps(); }
       render(); return;
@@ -1113,6 +1117,8 @@ cv.addEventListener('pointerup', e => {
         toast(fd.o.open ? L('Kapı açıldı (90°)', 'Door opened (90°)') : L('Kapı kapandı', 'Door closed'));
         return;
       }
+      if (fd && fd.o.grp && cycleGroupVars(fd.o.grp)) return;
+      if (fd && fd.kind === 'room' && cycleRoomVars(fd.o)) return;
     }
     if (d.moved) commit();
     refresh();
@@ -1120,11 +1126,12 @@ cv.addEventListener('pointerup', e => {
 });
 
 /* ---------- Taşıma ---------- */
-function startMove(raw) {
+function startMove(raw, e) {
+  const join = e && e.altKey ? !ui.connWalls : ui.connWalls;
   const objs = selObjs(), orig = new Map(), conn = [];
   for (const { o } of objs) orig.set(o.id, JSON.parse(JSON.stringify(o)));
   const selWalls = objs.filter(x => x.kind === 'wall').map(x => x.o), sset = new Set(selWalls.map(w => w.id));
-  if (selWalls.length) for (const w of F().walls) {
+  if (selWalls.length && join) for (const w of F().walls) {
     if (sset.has(w.id)) continue;
     for (const e of ['a', 'b']) for (const sw of selWalls) {
       const ends = Array.isArray(sw.angles) && sw.angles.length ? [wallPivot(sw)] : ['a', 'b'];
@@ -1159,12 +1166,13 @@ function doMove(raw, e) {
   for (const c of d.conn) { c.w[c.e] = { x: c.o.x + dx, y: c.o.y + dy }; }
   render();
 }
-function startHandle(h, raw) {
+function startHandle(h, raw, e) {
   const o = selObjs()[0].o, orig = JSON.parse(JSON.stringify(o)), conn = [];
-  if (h === 'wa' || h === 'wb') {
-    const e = h === 'wa' ? 'a' : 'b';
-    const isHingedFree = Array.isArray(o.angles) && o.angles.length && e === wallFree(o);
-    if (!isHingedFree) for (const w of F().walls) if (w.id !== o.id) for (const k of ['a', 'b']) if (dist(w[k], orig[e]) < 1) conn.push({ w, k });
+  const join = e && e.altKey ? !ui.connWalls : ui.connWalls;
+  if ((h === 'wa' || h === 'wb') && join) {
+    const ek = h === 'wa' ? 'a' : 'b';
+    const isHingedFree = Array.isArray(o.angles) && o.angles.length && ek === wallFree(o);
+    if (!isHingedFree) for (const w of F().walls) if (w.id !== o.id) for (const k of ['a', 'b']) if (dist(w[k], orig[ek]) < 1) conn.push({ w, k });
   }
   ui.drag = { type: 'handle', h, orig, conn, moved: false };
 }
@@ -1239,7 +1247,7 @@ function renderProps() {
     const gs = os.filter(x => GROUPABLE[x.kind]);
     const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
     const ungrp = gs.some(x => x.o.grp) ? `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>` : '';
-    el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><p class="muted">${L('Taşımak için sürükle, silmek için Del.', 'Drag to move, press Del to delete.')}</p>${grp}${ungrp}${acts()}`; return;
+    el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><p class="muted">${L('Taşımak için sürükle, silmek için Del.', 'Drag to move, press Del to delete.')}</p>${grp}${ungrp}${variantUIHtml()}${acts()}`; return;
   }
   const k = kinds[0], o = os[0].o, n = os.length;
   let h = `<h3>${(isEN() ? KIND_EN : KIND_TR)[k]}${n > 1 ? ` <span class="muted">(${n})</span>` : ''}</h3>`;
@@ -1302,6 +1310,7 @@ function renderProps() {
   const gsAll = os.filter(x => GROUPABLE[x.kind]);
   if (gsAll.length >= 2) h += `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>`;
   if (gsAll.some(x => x.o.grp)) h += `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>`;
+  h += variantUIHtml();
   el.innerHTML = h;
 }
 function projectPanel() {
@@ -1374,6 +1383,7 @@ $('#props').addEventListener('click', e => {
   if (a === 'calib') return setTool('calib');
   if (a === 'group') return groupSel();
   if (a === 'ungroup') return ungroupSel();
+  if (a === 'varInit' || a === 'varSave' || a === 'varNew' || a === 'varDel') return varAction(a);
   for (const { kind, o } of os) {
     if (kind === 'wall') {
       if (a === 'wallposInit') {
@@ -1453,7 +1463,7 @@ $('#floors').addEventListener('click', e => {
   const t = e.target.closest('[data-fl]'); if (t) { fi = +t.dataset.fl; sel = []; refresh(); return; }
   const a = e.target.closest('[data-fa]'); if (!a) return;
   if (a.dataset.fa === 'add') { P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length)); fi = P.floors.length - 1; sel = []; commit(); fit(); refresh(); }
-  if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
+  if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); c.groups = []; c.rooms.forEach(r => { delete r.vars; delete r.vIdx; }); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
   if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
 });
 $('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) { const f = P.floors[+t.dataset.fl], n = prompt(L('Kat adı:', 'Floor name:'), f.name); if (n) { f.name = n; commit(); refresh(); } } });
@@ -1465,7 +1475,12 @@ const GROUPABLE = { wall: 1, room: 1, furn: 1, dim: 1, text: 1 };
 function groupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind]);
   if (gs.length < 2) { toast(L('Gruplamak için en az 2 nesne seçin', 'Select at least 2 objects to group')); return; }
-  const g = uid(); gs.forEach(({ o }) => o.grp = g);
+  const grps = [...new Set(gs.map(x => x.o.grp).filter(Boolean))];
+  const g = grps.length === 1 ? grps[0] : uid(); // tek grup seçiliyse onu genişlet (düzenler korunur)
+  gs.forEach(({ o }) => o.grp = g);
+  const f = F(); f.groups = f.groups || [];
+  if (!f.groups.some(x => x.id === g)) f.groups.push({ id: g, vars: [], idx: 0 });
+  pruneGroups();
   commit(); refresh();
   toast(L('Seçili nesneler gruplandı – birlikte taşınırlar', 'Selected objects grouped – they move together'));
 }
@@ -1473,8 +1488,104 @@ function ungroupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind] && x.o.grp);
   if (!gs.length) return;
   gs.forEach(({ o }) => delete o.grp);
+  pruneGroups();
   commit(); refresh();
   toast(L('Grup çözüldü', 'Group dissolved'));
+}
+function pruneGroups() {
+  const f = F(); if (!f.groups) return;
+  const alive = gid => { for (const k in KINDS) if (f[k].some(o => o.grp === gid)) return true; return false; };
+  f.groups = f.groups.filter(g => alive(g.id));
+}
+
+/* ---------- Ayarlanabilir düzenler (1a → 1b → 1c döngüsü) ---------- */
+function varLabel(i) { return '1' + String.fromCharCode(97 + i % 26); }
+function snapPose(kind, o) {
+  if (kind === 'wall') return { a: { ...o.a }, b: { ...o.b } };
+  if (kind === 'room') return { pts: o.pts.map(p => ({ ...p })) };
+  if (kind === 'dim') return { a: { ...o.a }, b: { ...o.b }, off: o.off };
+  return { x: o.x, y: o.y, rot: o.rot };
+}
+function groupMemberIds(grp) {
+  const f = F(), ids = [];
+  for (const k in KINDS) for (const o of f[k]) if (o.grp === grp) ids.push(o.id);
+  return ids;
+}
+function groupPoses(ids) { const m = {}; for (const id of ids) { const fd = find(id); if (fd && GROUPABLE[fd.kind]) m[id] = snapPose(fd.kind, fd.o); } return m; }
+function furnInRoom(r) { return F().furn.filter(o => pointInPoly(o, r.pts)); }
+function roomPoses(r) { const m = { [r.id]: snapPose('room', r) }; for (const o of furnInRoom(r)) m[o.id] = snapPose('furn', o); return m; }
+function applyVarPoses(poses) {
+  for (const id in poses) {
+    const fd = find(id); if (!fd) continue;
+    const p = poses[id], o = fd.o;
+    if (fd.kind === 'wall') { o.a = { ...p.a }; o.b = { ...p.b }; }
+    else if (fd.kind === 'room') o.pts = p.pts.map(q => ({ ...q }));
+    else if (fd.kind === 'dim') { o.a = { ...p.a }; o.b = { ...p.b }; o.off = p.off; }
+    else { o.x = p.x; o.y = p.y; o.rot = p.rot; }
+  }
+}
+function cycleGroupVars(grp) {
+  const rec = (F().groups || []).find(g => g.id === grp);
+  if (!rec || !rec.vars || rec.vars.length < 2) return false;
+  rec.idx = ((rec.idx ?? 0) + 1) % rec.vars.length;
+  const v = rec.vars[rec.idx];
+  applyVarPoses(v.poses); commit(); refresh();
+  toast(L(`Düzen ${v.label} (${rec.idx + 1}/${rec.vars.length})`, `Layout ${v.label} (${rec.idx + 1}/${rec.vars.length})`));
+  return true;
+}
+function cycleRoomVars(r) {
+  if (!r.vars || r.vars.length < 2) return false;
+  r.vIdx = ((r.vIdx ?? 0) + 1) % r.vars.length;
+  const v = r.vars[r.vIdx];
+  applyVarPoses(v.poses); commit(); refresh();
+  toast(L(`Düzen ${v.label} (${r.vIdx + 1}/${r.vars.length})`, `Layout ${v.label} (${r.vIdx + 1}/${r.vars.length})`));
+  return true;
+}
+function varContainer() {
+  const os = selObjs(); if (!os.length) return null;
+  const gs = [...new Set(os.map(x => x.o.grp).filter(Boolean))];
+  if (gs.length === 1 && os.every(x => x.o.grp === gs[0])) {
+    const rec = (F().groups || []).find(g => g.id === gs[0]);
+    if (rec) return { type: 'group', rec };
+  }
+  if (os.length === 1 && os[0].kind === 'room') return { type: 'room', o: os[0].o };
+  return null;
+}
+function varAction(a) {
+  const c = varContainer(); if (!c) return;
+  const isRoom = c.type === 'room';
+  const vars = isRoom ? (c.o.vars = c.o.vars || []) : (c.rec.vars = c.rec.vars || []);
+  const idx = () => isRoom ? (c.o.vIdx ?? 0) : (c.rec.idx ?? 0);
+  const setIdx = i => { if (isRoom) c.o.vIdx = i; else c.rec.idx = i; };
+  const snap = () => isRoom ? roomPoses(c.o) : groupPoses(groupMemberIds(c.rec.id));
+  if (a === 'varInit') {
+    if (vars.length) return;
+    vars.push({ label: varLabel(0), poses: snap() }); setIdx(0);
+    toast(L('Düzen 1a kaydedildi – yeniden düzenleyip ➕ ile yeni düzen ekleyin', 'Layout 1a saved – rearrange and press ➕ to add another'));
+  } else if (a === 'varSave') {
+    if (!vars.length) return;
+    vars[idx()] = { label: vars[idx()].label, poses: snap() };
+    toast(L(`Düzen ${vars[idx()].label} güncellendi`, `Layout ${vars[idx()].label} updated`));
+  } else if (a === 'varNew') {
+    vars.push({ label: varLabel(vars.length), poses: snap() }); setIdx(vars.length - 1);
+    toast(L(`Düzen ${vars[vars.length - 1].label} eklendi`, `Layout ${vars[vars.length - 1].label} added`));
+  } else if (a === 'varDel') {
+    if (!vars.length) return;
+    vars.splice(idx(), 1);
+    if (!vars.length) { if (isRoom) delete c.o.vIdx; else delete c.rec.idx; if (isRoom) delete c.o.vars; else delete c.rec.vars; }
+    else setIdx(clamp(idx(), 0, vars.length - 1));
+  }
+  commit(); refresh(); renderProps();
+}
+function variantUIHtml() {
+  const c = varContainer(); if (!c) return '';
+  const vars = c.type === 'room' ? (c.o.vars || []) : (c.rec.vars || []);
+  if (!vars.length) return `<div class="row"><button class="btn sm primary" data-act="varInit">🔄 ${L('Ayarlanabilir Yap', 'Make Adjustable')}</button></div><p class="muted" style="margin:0 0 6px">${L('Mevcut düzeni 1a olarak kaydeder; sonraki düzenleri ➕ ile ekleyin, kanvasta tıklayarak geçin.', 'Saves the current layout as 1a; add more with ➕, cycle by clicking on canvas.')}</p>`;
+  const idx = c.type === 'room' ? (c.o.vIdx ?? 0) : (c.rec.idx ?? 0);
+  const cur = vars[Math.min(idx, vars.length - 1)];
+  return `<p style="margin:8px 0 4px"><b>${L('Düzenler', 'Layouts')}</b> <span class="muted">— ${cur.label} (${Math.min(idx, vars.length - 1) + 1}/${vars.length})</span></p>
+  <div class="row"><button class="btn sm" data-act="varSave">💾 ${L('Kaydet', 'Save')}</button><button class="btn sm primary" data-act="varNew">➕ ${L('Yeni', 'New')}</button><button class="btn sm" data-act="varDel" style="color:var(--danger)">🗑</button></div>
+  <p class="muted" style="margin:0 0 6px">${L('Kanvasda tıklayınca sıradaki düzene geçer (1a → 1b → 1c).', 'Clicking on canvas cycles layouts (1a → 1b → 1c).')}</p>`;
 }
 function copySel() { ui.clip = selObjs().map(({ kind, o }) => ({ kind, o: JSON.parse(JSON.stringify(o)) })); pasteN = 0; if (ui.clip.length) toast(ui.clip.length + L(' nesne kopyalandı', ' object(s) copied')); }
 function paste(fromSel) {
@@ -1488,7 +1599,7 @@ function paste(fromSel) {
     if (n.grp) n.grp = gmap[n.grp] || (gmap[n.grp] = uid()); // yapıştırılan kopya yeni grubuna girer
     if (kind === 'wall') { n.a = mv(n.a); n.b = mv(n.b); f.walls.push(n); }
     else if (kind === 'dim') { n.a = mv(n.a); n.b = mv(n.b); f.dims.push(n); }
-    else if (kind === 'room') { n.pts = n.pts.map(mv); f.rooms.push(n); }
+    else if (kind === 'room') { n.pts = n.pts.map(mv); delete n.vars; delete n.vIdx; f.rooms.push(n); }
     else if (kind === 'furn') { n.x += off; n.y += off; f.furn.push(n); }
     else if (kind === 'text') { n.x += off; n.y += off; f.texts.push(n); }
   }
@@ -1596,6 +1707,8 @@ function helpModal() {
     ['0 / + / −', 'Fit to screen / Zoom in / Zoom out'],
     ['Double-click', 'Rename room or edit text'],
     ['Click door', 'Open / close door (90°)'],
+    ['Click room / group', 'Cycle saved layouts (1a → 1b → 1c)'],
+    ['Alt + drag wall', 'Move wall without pulling connected walls'],
     ['Ctrl+G / Ctrl+Shift+G', 'Group / ungroup selected objects'],
   ] : [
     ['V / H', 'Seç / Kaydır (Boşluk basılı: geçici kaydır)'],
@@ -1624,6 +1737,8 @@ function helpModal() {
     ['0 / + / −', 'Sığdır / Yakınlaştır / Uzaklaştır'],
     ['Çift tık', 'Oda / metin adını düzenle'],
     ['Kapıya tıkla', 'Kapıyı aç / kapat (90°)'],
+    ['Oda / gruba tıkla', 'Kayıtlı düzenler arasında geç (1a → 1b → 1c)'],
+    ['Alt + duvar sürükle', 'Bitişik duvarları çekmeden taşı'],
     ['Ctrl+G / Ctrl+Shift+G', 'Seçili nesneleri grupla / çöz'],
   ];
   openModal(`<h2>${L('Kısayollar & İpuçları', 'Shortcuts & Tips')} <button class="btn sm" data-close>✕</button></h2><table class="kb">${rows.map(r => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
@@ -1828,7 +1943,9 @@ function init3D() {
       }
       if (cur && cur.userData?.wallId) {
         const fd = find(cur.userData.wallId);
-        if (fd && fd.kind === 'wall' && !fd.o.grp && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
+        if (fd && fd.kind === 'wall' && fd.o.grp) {
+          if (cycleGroupVars(fd.o.grp)) { sel = groupMemberIds(fd.o.grp); build3D(true); }
+        } else if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
           cycleWallPos(fd.o); sel = [fd.o.id]; commit(); refresh(); build3D(true);
           toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
         }
@@ -1973,6 +2090,8 @@ function applyLangUI() {
   $('#zFit').title = L('Sığdır (0)', 'Fit to view (0)');
   $('#lblSnap').textContent = L('Yakala (G)', 'Snap (G)');
   $('#lblDims').textContent = L('Duvar ölçüleri', 'Wall dimensions');
+  $('#lblConn').textContent = L('Bitişik duvarlar', 'Connected walls');
+  $('#cConn').title = L('Sürüklerken bitişik duvar uçları birlikte gelir (Alt basılıysa tersine döner)', 'Adjacent wall ends follow the drag (hold Alt to invert)');
   $('#lblBoxSel').textContent = L('Kutu Seçim', 'Box Select');
   const bsOpts = $('#sBoxSel') && $('#sBoxSel').options;
   if (bsOpts && bsOpts.length >= 3) {
@@ -2027,6 +2146,7 @@ $('#bTheme').onclick = () => {
 $('#pname').addEventListener('input', e => { P.name = e.target.value; autosave(); });
 $('#pname').addEventListener('change', commit);
 $('#cSnap').onchange = e => { ui.snap = e.target.checked; };
+$('#cConn').onchange = e => { ui.connWalls = e.target.checked; };
 $('#sBoxSel').onchange = e => { ui.boxSel = e.target.value; };
 $('#cAngle').onchange = e => { ui.angle = e.target.checked; };
 $('#cDims').onchange = e => { ui.dims = e.target.checked; render(); };

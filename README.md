@@ -58,6 +58,8 @@
 - **~48 furniture & structure items** in 6 categories with search (living, bedroom, kitchen, bath, office, structure & outdoor — stairs, columns, trees, pool…).
 - Furniture **magnets to walls** and rotates to face the room.
 - **Group objects** — select 2+ items (walls, rooms, furniture, texts, dimensions) and press **Group** (or `Ctrl+G`); grouped items select and move together, `Ctrl+Shift+G` ungroups. Handy for keeping a room's walls and furniture in sync while arranging.
+- **Adjustable layouts (1a / 1b / 1c)** — with a group or a room selected, press **🔄 Make Adjustable** to snapshot the current layout; rearrange, press **➕ New** to save more layouts, then simply **click the room / group on the canvas to cycle** through them (1a → 1b → 1c → 1a). Room variants move the furniture inside; group variants move every member — walls, room shapes and all.
+- **Connected-wall dragging** — dragging a wall keeps neighbouring wall ends glued so corners stay closed; uncheck **Connected walls** in the footer (or hold **Alt** while dragging) to move a wall independently.
 - Resize / rotate with on-canvas handles; edit numeric properties in the side panel.
 - Dimension lines, text labels, and live wall-length labels.
 
