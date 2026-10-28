@@ -298,21 +298,37 @@ function fit() {
 }
 
 /* ---------- Çizim (SVG) ---------- */
-const WALL_C = '#1f2937', STROKE = '#475569';
+const isLight = () => document.documentElement.dataset.theme === 'light';
+function pal(forceLight = ui.exporting) {
+  const lt = forceLight || isLight();
+  return lt ? {
+    lt: true, bg: '#ffffff', wall: '#1f2937', stroke: '#475569', furnStroke: '#475569',
+    gMin: '#cbd5e1', gMaj: '#94a3b8', dotMaj: '#64748b',
+    text: '#1e293b', sub: '#475569', halo: '#ffffff',
+    dim: '#0f766e', glass: '#e0f2fe', swing: '#94a3b8',
+    roomOp: 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280'
+  } : {
+    lt: false, bg: '#0b1220', wall: '#cbd5e1', stroke: '#94a3b8', furnStroke: '#1e293b',
+    gMin: '#1e293b', gMaj: '#334155', dotMaj: '#475569',
+    text: '#f1f5f9', sub: '#cbd5e1', halo: '#0b1220',
+    dim: '#2dd4bf', glass: '#0369a1', swing: '#64748b',
+    roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af'
+  };
+}
 function defsSvg() {
-  const s = P.grid, h = +(s * Math.sqrt(3) / 2).toFixed(4), h2 = +(2 * h).toFixed(4);
+  const C = pal(), s = P.grid, h = +(s * Math.sqrt(3) / 2).toFixed(4), h2 = +(2 * h).toFixed(4);
   const ms = s >= 100 ? s * 5 : s >= 25 ? s * 4 : 100, mh = +(ms * Math.sqrt(3) / 2).toFixed(4), mh2 = +(2 * mh).toFixed(4);
   const swMin = 0.65 / view.z, swMaj = 0.95 / view.z, rDot = Math.max(1.1, 1.5 / view.z), rDotM = Math.max(1.8, 2.3 / view.z);
   return `
-  <pattern id="p-wood" width="120" height="24" patternUnits="userSpaceOnUse"><path d="M0 0H120M0 12H120M40 0V12M90 12V24" stroke="#92400e" stroke-opacity=".28" fill="none" stroke-width="1"/></pattern>
-  <pattern id="p-tile" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M0 0H60V60" stroke="#475569" stroke-opacity=".3" fill="none" stroke-width="1"/></pattern>
-  <pattern id="p-carpet" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r="1.1" fill="#6b7280" fill-opacity=".35"/><circle cx="7.5" cy="7.5" r="1.1" fill="#6b7280" fill-opacity=".35"/></pattern>
-  <pattern id="g-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><path d="M${s} 0V${s}H0" fill="none" stroke="#cbd5e1" stroke-width="${swMin}" stroke-opacity=".7"/></pattern>
-  <pattern id="g-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><path d="M${ms} 0V${ms}H0" fill="none" stroke="#94a3b8" stroke-width="${swMaj}" stroke-opacity=".8"/></pattern>
-  <pattern id="g-tri-minor" width="${s}" height="${h2}" patternUnits="userSpaceOnUse"><path d="M0 0H${s}M0 ${h}H${s}M0 0L${s / 2} ${h}L0 ${h2}M${s / 2} 0L${s} ${h}L${s / 2} ${h2}M${s / 2} 0L0 ${h}L${s / 2} ${h2}M${s} 0L${s / 2} ${h}L${s} ${h2}" fill="none" stroke="#cbd5e1" stroke-width="${swMin}" stroke-opacity=".75"/></pattern>
-  <pattern id="g-tri-major" width="${ms}" height="${mh2}" patternUnits="userSpaceOnUse"><path d="M0 0H${ms}M0 ${mh}H${ms}M0 0L${ms / 2} ${mh}L0 ${mh2}M${ms / 2} 0L${ms} ${mh}L${ms / 2} ${mh2}M${ms / 2} 0L0 ${mh}L${ms / 2} ${mh2}M${ms} 0L${ms / 2} ${mh}L${ms} ${mh2}" fill="none" stroke="#94a3b8" stroke-width="${swMaj}" stroke-opacity=".65"/></pattern>
-  <pattern id="g-dots-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDot}" fill="#94a3b8" fill-opacity=".75"/></pattern>
-  <pattern id="g-dots-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDotM}" fill="#64748b" fill-opacity=".9"/></pattern>`;
+  <pattern id="p-wood" width="120" height="24" patternUnits="userSpaceOnUse"><path d="M0 0H120M0 12H120M40 0V12M90 12V24" stroke="${C.wood}" stroke-opacity=".3" fill="none" stroke-width="1"/></pattern>
+  <pattern id="p-tile" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M0 0H60V60" stroke="${C.tile}" stroke-opacity=".32" fill="none" stroke-width="1"/></pattern>
+  <pattern id="p-carpet" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r="1.1" fill="${C.carpet}" fill-opacity=".38"/><circle cx="7.5" cy="7.5" r="1.1" fill="${C.carpet}" fill-opacity=".38"/></pattern>
+  <pattern id="g-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><path d="M${s} 0V${s}H0" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
+  <pattern id="g-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><path d="M${ms} 0V${ms}H0" fill="none" stroke="${C.gMaj}" stroke-width="${swMaj}" stroke-opacity=".85"/></pattern>
+  <pattern id="g-tri-minor" width="${s}" height="${h2}" patternUnits="userSpaceOnUse"><path d="M0 0H${s}M0 ${h}H${s}M0 0L${s / 2} ${h}L0 ${h2}M${s / 2} 0L${s} ${h}L${s / 2} ${h2}M${s / 2} 0L0 ${h}L${s / 2} ${h2}M${s} 0L${s / 2} ${h}L${s} ${h2}" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
+  <pattern id="g-tri-major" width="${ms}" height="${mh2}" patternUnits="userSpaceOnUse"><path d="M0 0H${ms}M0 ${mh}H${ms}M0 0L${ms / 2} ${mh}L0 ${mh2}M${ms / 2} 0L${ms} ${mh}L${ms / 2} ${mh2}M${ms / 2} 0L0 ${mh}L${ms / 2} ${mh2}M${ms} 0L${ms / 2} ${mh}L${ms} ${mh2}" fill="none" stroke="${C.gMaj}" stroke-width="${swMaj}" stroke-opacity=".75"/></pattern>
+  <pattern id="g-dots-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDot}" fill="${C.gMaj}" fill-opacity=".8"/></pattern>
+  <pattern id="g-dots-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDotM}" fill="${C.dotMaj}" fill-opacity=".95"/></pattern>`;
 }
 function gridSvg() {
   const gt = P.gridType || 'square';
@@ -330,66 +346,68 @@ function bgSvg() {
   return `<image href="${b.src}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" opacity="${b.op}" preserveAspectRatio="none" pointer-events="none"/>`;
 }
 function roomSvg(r, live) {
-  const pts = r.pts.map(p => p.x + ',' + p.y).join(' ');
+  const C = pal(), pts = r.pts.map(p => p.x + ',' + p.y).join(' ');
   const c = polyCentroid(r.pts), area = polyArea(r.pts);
   const fs = clamp(Math.sqrt(area) / 12, 16, 34);
-  let s = `<polygon points="${pts}" fill="${r.color}" fill-opacity=".55" pointer-events="none"/>`;
+  let s = `<polygon points="${pts}" fill="${r.color}" fill-opacity="${C.roomOp}" pointer-events="none"/>`;
   if (r.floor && r.floor !== 'none') s += `<polygon points="${pts}" fill="url(#p-${r.floor})" pointer-events="none"/>`;
   const t1 = esc(r.name), t2 = fmtArea(area);
   const bw = Math.max(t1.length, t2.length) * fs * 0.58 + 10;
   const lab = `<g ${live ? `data-id="${r.id}"` : ''} style="cursor:pointer"><rect x="${c.x - bw / 2}" y="${c.y - fs * 0.9}" width="${bw}" height="${fs * 2.1}" fill="#fff" fill-opacity="0" />
-    <text x="${c.x}" y="${c.y}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="#1e293b" font-family="Segoe UI,sans-serif">${t1}</text>
-    <text x="${c.x}" y="${c.y + fs * 1.05}" text-anchor="middle" font-size="${fs * 0.8}" fill="#475569" font-family="Segoe UI,sans-serif">${t2}</text></g>`;
+    <text x="${c.x}" y="${c.y}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${C.text}" stroke="${C.halo}" stroke-width="${fs * 0.18}" paint-order="stroke" font-family="Segoe UI,sans-serif">${t1}</text>
+    <text x="${c.x}" y="${c.y + fs * 1.05}" text-anchor="middle" font-size="${fs * 0.8}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.16}" paint-order="stroke" font-family="Segoe UI,sans-serif">${t2}</text></g>`;
   return [s, lab];
 }
 function wallSvg(w, live) {
-  let s = `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${WALL_C}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
+  const C = pal();
+  let s = `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
   if (live) s += `<line data-id="${w.id}" x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="transparent" stroke-width="${Math.max(w.t, 12 / view.z)}" pointer-events="stroke" style="cursor:pointer"/>`;
   return s;
 }
 function wallDimSvg(w) {
   const L = wLen(w); if (L < 30) return '';
+  const C = pal();
   let ang = wAng(w) * 180 / Math.PI; const mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2;
   let flip = 1; if (ang > 90 || ang <= -90) { ang += 180; flip = -1; }
   const fs = clamp(13 / view.z, 9, 40), off = w.t / 2 + fs * 0.9;
-  return `<text transform="translate(${mx} ${my}) rotate(${ang}) translate(0 ${-off})" text-anchor="middle" font-size="${fs}" fill="#334155" stroke="#fff" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" pointer-events="none">${fmtLen(L)}</text>`;
+  return `<text transform="translate(${mx} ${my}) rotate(${ang}) translate(0 ${-off})" text-anchor="middle" font-size="${fs}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" pointer-events="none">${fmtLen(L)}</text>`;
 }
 function opSvg(op, live) {
   const p = opPos(op); if (!p) return '';
-  const w = op.w, t = p.t, hw = w / 2, ht = t / 2, sd = op.side || 1, sw = sd > 0 ? 1 : 0;
-  const stk = `stroke="${STROKE}" fill="none" stroke-width="2"`;
+  const C = pal(), w = op.w, t = p.t, hw = w / 2, ht = t / 2, sd = op.side || 1, sw = sd > 0 ? 1 : 0;
+  const stk = `stroke="${C.stroke}" fill="none" stroke-width="2"`;
   let s = `<g transform="translate(${p.x} ${p.y}) rotate(${p.ang})">`;
-  s += `<rect x="${-hw}" y="${-ht - 1}" width="${w}" height="${t + 2}" fill="#fff"/>`;
+  s += `<rect x="${-hw}" y="${-ht - 1}" width="${w}" height="${t + 2}" fill="${C.bg}"/>`;
   s += `<g transform="scale(${op.flip ? -1 : 1} 1)">`;
   if (op.type === 'door') {
-    s += `<line x1="${-hw}" y1="0" x2="${-hw}" y2="${sd * w}" ${stk}/><path d="M${hw} 0A${w} ${w} 0 0 ${sw} ${-hw} ${sd * w}" stroke="#94a3b8" fill="none" stroke-width="1.2" stroke-dasharray="4 3"/>`;
+    s += `<line x1="${-hw}" y1="0" x2="${-hw}" y2="${sd * w}" ${stk}/><path d="M${hw} 0A${w} ${w} 0 0 ${sw} ${-hw} ${sd * w}" stroke="${C.swing}" fill="none" stroke-width="1.2" stroke-dasharray="4 3"/>`;
   } else if (op.type === 'double') {
     const l = w / 2;
     s += `<line x1="${-hw}" y1="0" x2="${-hw}" y2="${sd * l}" ${stk}/><line x1="${hw}" y1="0" x2="${hw}" y2="${sd * l}" ${stk}/>
-    <path d="M0 0A${l} ${l} 0 0 ${sw} ${-hw} ${sd * l}M0 0A${l} ${l} 0 0 ${1 - sw} ${hw} ${sd * l}" stroke="#94a3b8" fill="none" stroke-width="1.2" stroke-dasharray="4 3"/>`;
+    <path d="M0 0A${l} ${l} 0 0 ${sw} ${-hw} ${sd * l}M0 0A${l} ${l} 0 0 ${1 - sw} ${hw} ${sd * l}" stroke="${C.swing}" fill="none" stroke-width="1.2" stroke-dasharray="4 3"/>`;
   } else if (op.type === 'slide') {
     s += `<rect x="${-hw}" y="${-ht * 0.7}" width="${w * 0.55}" height="${ht * 0.7}" ${stk}/><rect x="${-hw + w * 0.45}" y="0" width="${w * 0.55}" height="${ht * 0.7}" ${stk}/>`;
   } else if (op.type === 'arch') {
-    s += `<line x1="${-hw}" y1="${-ht}" x2="${hw}" y2="${-ht}" stroke="#94a3b8" stroke-dasharray="5 4" stroke-width="1.2"/><line x1="${-hw}" y1="${ht}" x2="${hw}" y2="${ht}" stroke="#94a3b8" stroke-dasharray="5 4" stroke-width="1.2"/>`;
+    s += `<line x1="${-hw}" y1="${-ht}" x2="${hw}" y2="${-ht}" stroke="${C.swing}" stroke-dasharray="5 4" stroke-width="1.2"/><line x1="${-hw}" y1="${ht}" x2="${hw}" y2="${ht}" stroke="${C.swing}" stroke-dasharray="5 4" stroke-width="1.2"/>`;
   } else {
-    s += `<rect x="${-hw}" y="${-ht}" width="${w}" height="${t}" fill="#e0f2fe" ${stk.replace('fill="none"', '')}/><line x1="${-hw}" y1="0" x2="${hw}" y2="0" stroke="${STROKE}" stroke-width="1.4"/>`;
+    s += `<rect x="${-hw}" y="${-ht}" width="${w}" height="${t}" fill="${C.glass}" fill-opacity="${C.lt ? 1 : 0.45}" stroke="${C.stroke}" stroke-width="2"/><line x1="${-hw}" y1="0" x2="${hw}" y2="0" stroke="${C.stroke}" stroke-width="1.4"/>`;
   }
   s += `</g>`;
-  s += `<line x1="${-hw}" y1="${-ht}" x2="${-hw}" y2="${ht}" stroke="${WALL_C}" stroke-width="2"/><line x1="${hw}" y1="${-ht}" x2="${hw}" y2="${ht}" stroke="${WALL_C}" stroke-width="2"/>`;
+  s += `<line x1="${-hw}" y1="${-ht}" x2="${-hw}" y2="${ht}" stroke="${C.wall}" stroke-width="2"/><line x1="${hw}" y1="${-ht}" x2="${hw}" y2="${ht}" stroke="${C.wall}" stroke-width="2"/>`;
   if (live) s += `<rect data-id="${op.id}" x="${-hw}" y="${-Math.max(ht, 8 / view.z) - 4}" width="${w}" height="${2 * Math.max(ht, 8 / view.z) + 8}" fill="transparent" style="cursor:pointer"/>`;
   return s + '</g>';
 }
 function furnBody(f) {
-  const hw = f.w / 2, hd = f.d / 2, col = f.color, sk = '#475569';
+  const C = pal(), hw = f.w / 2, hd = f.d / 2, col = f.color, sk = C.furnStroke, fop = `fill-opacity="${C.furnOp}"`;
   let s = '';
-  if (f.k === 'round') s += `<ellipse rx="${hw}" ry="${hd}" fill="${col}" stroke="${sk}" stroke-width="2"/>`;
+  if (f.k === 'round') s += `<ellipse rx="${hw}" ry="${hd}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
   else if (f.k === 'stairs') {
-    s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="${col}" stroke="${sk}" stroke-width="2"/>`;
+    s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
     const n = Math.max(3, Math.round(f.d / 25)); let l = '';
     for (let i = 1; i < n; i++) l += `M${-hw} ${-hd + f.d / n * i}H${hw}`;
     s += `<path d="${l}" stroke="${sk}" stroke-width="1.2" fill="none"/><path d="M0 ${hd - 10}V${-hd + 14}M-8 ${-hd + 26}L0 ${-hd + 12}L8 ${-hd + 26}" stroke="${sk}" stroke-width="2" fill="none"/>`;
   } else {
-    s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" rx="${Math.min(6, hw / 3)}" fill="${col}" stroke="${sk}" stroke-width="2"/>`;
+    s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" rx="${Math.min(6, hw / 3)}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
     if (f.k === 'bed') {
       const two = f.w > 130, pw = two ? f.w / 2 - 12 : f.w - 16;
       s += `<rect x="${-hw + 6}" y="${-hd + 6}" width="${pw}" height="${Math.min(40, f.d * 0.2)}" rx="6" fill="#fff" fill-opacity=".8" stroke="${sk}" stroke-width="1"/>`;
@@ -402,27 +420,29 @@ function furnBody(f) {
   return s;
 }
 function furnSvg(f, live) {
-  const fs = Math.max(12, Math.min(f.w, f.d) * 0.42);
+  const C = pal(), fs = Math.max(12, Math.min(f.w, f.d) * 0.42);
   let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${furnBody(f)}`;
   if (f.icon) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
-  if (f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="#1e293b" stroke="#fff" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
+  if (f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="${C.text}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
   return s + '</g>';
 }
 function dimSvg(d, live) {
   const L = dist(d.a, d.b); if (L < 1) return '';
-  const ux = (d.b.x - d.a.x) / L, uy = (d.b.y - d.a.y) / L, nx = -uy, ny = ux, o = d.off ?? 40;
+  const C = pal(), ux = (d.b.x - d.a.x) / L, uy = (d.b.y - d.a.y) / L, nx = -uy, ny = ux, o = d.off ?? 40;
   const A = { x: d.a.x + nx * o, y: d.a.y + ny * o }, B = { x: d.b.x + nx * o, y: d.b.y + ny * o };
   let ang = Math.atan2(uy, ux) * 180 / Math.PI; if (ang > 90 || ang <= -90) ang += 180;
-  const fs = 14, tk = 7, c = '#0f766e', sg = o >= 0 ? 1 : -1;
+  const fs = 14, tk = 7, c = C.dim, sg = o >= 0 ? 1 : -1;
   const ext = `M${d.a.x + nx * 5 * sg} ${d.a.y + ny * 5 * sg}L${A.x + nx * 6 * sg} ${A.y + ny * 6 * sg}M${d.b.x + nx * 5 * sg} ${d.b.y + ny * 5 * sg}L${B.x + nx * 6 * sg} ${B.y + ny * 6 * sg}`;
   let s = `<g ${live ? `data-id="${d.id}" style="cursor:pointer"` : ''}><path d="${ext}M${A.x} ${A.y}L${B.x} ${B.y}" stroke="${c}" stroke-width="1.3" fill="none"/>`;
   for (const P2 of [A, B]) s += `<path d="M${P2.x - (ux + nx) * tk * .7} ${P2.y - (uy + ny) * tk * .7}L${P2.x + (ux + nx) * tk * .7} ${P2.y + (uy + ny) * tk * .7}" stroke="${c}" stroke-width="2"/>`;
-  s += `<text transform="translate(${(A.x + B.x) / 2} ${(A.y + B.y) / 2}) rotate(${ang}) translate(0 ${-5})" text-anchor="middle" font-size="${fs}" fill="${c}" stroke="#fff" stroke-width="3" paint-order="stroke" font-family="Segoe UI,sans-serif">${fmtLen(L)}</text>`;
+  s += `<text transform="translate(${(A.x + B.x) / 2} ${(A.y + B.y) / 2}) rotate(${ang}) translate(0 ${-5})" text-anchor="middle" font-size="${fs}" fill="${c}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" font-family="Segoe UI,sans-serif">${fmtLen(L)}</text>`;
   if (live) s += `<path d="M${A.x} ${A.y}L${B.x} ${B.y}" stroke="transparent" stroke-width="${Math.max(10, 10 / view.z)}"/>`;
   return s + '</g>';
 }
 function textSvg(t, live) {
-  return `<text ${live ? `data-id="${t.id}" style="cursor:move"` : ''} transform="translate(${t.x} ${t.y}) rotate(${t.rot || 0})" font-size="${t.size}" fill="${t.color}" font-family="Segoe UI,sans-serif" font-weight="600">${esc(t.text)}</text>`;
+  const C = pal();
+  const col = !C.lt && (t.color === '#1e293b' || t.color === '#0f172a' || t.color === '#000000') ? C.text : t.color;
+  return `<text ${live ? `data-id="${t.id}" style="cursor:move"` : ''} transform="translate(${t.x} ${t.y}) rotate(${t.rot || 0})" font-size="${t.size}" fill="${col}" stroke="${C.halo}" stroke-width="${t.size * 0.14}" paint-order="stroke" font-family="Segoe UI,sans-serif" font-weight="600">${esc(t.text)}</text>`;
 }
 function layerStrings(f, live) {
   return {
@@ -436,13 +456,13 @@ function layerStrings(f, live) {
   };
 }
 function handleSvg() {
-  const z = view.z, hs = 6 / z, os = selObjs(); let s = '';
+  const C = pal(), z = view.z, hs = 6 / z, os = selObjs(); let s = '';
   const hnd = (x, y, id, cur = 'pointer', shape = 'rect') => shape === 'rect'
     ? `<rect data-h="${id}" x="${x - hs}" y="${y - hs}" width="${hs * 2}" height="${hs * 2}" fill="#fff" stroke="#f59e0b" stroke-width="${1.6 / z}" style="cursor:${cur}"/>`
     : `<circle data-h="${id}" cx="${x}" cy="${y}" r="${hs * 1.15}" fill="#f59e0b" stroke="#fff" stroke-width="${1.6 / z}" style="cursor:${cur}"/>`;
   for (const { kind, o } of os) {
     if (kind === 'wall') s += `<line x1="${o.a.x}" y1="${o.a.y}" x2="${o.b.x}" y2="${o.b.y}" stroke="#f59e0b" stroke-opacity=".45" stroke-width="${o.t + 6 / z}" stroke-linecap="square" pointer-events="none"/>`
-      + `<text transform="translate(${(o.a.x + o.b.x) / 2} ${(o.a.y + o.b.y) / 2})" font-size="${14 / z}" text-anchor="middle" dy="${-o.t / 2 - 6 / z}" fill="#b45309" font-weight="700" stroke="#fff" stroke-width="${3 / z}" paint-order="stroke" pointer-events="none">${fmtLen(wLen(o))}</text>`;
+      + `<text transform="translate(${(o.a.x + o.b.x) / 2} ${(o.a.y + o.b.y) / 2})" font-size="${14 / z}" text-anchor="middle" dy="${-o.t / 2 - 6 / z}" fill="${C.lt ? '#b45309' : '#fbbf24'}" font-weight="700" stroke="${C.halo}" stroke-width="${3 / z}" paint-order="stroke" pointer-events="none">${fmtLen(wLen(o))}</text>`;
     if (kind === 'furn') {
       s += `<g transform="translate(${o.x} ${o.y}) rotate(${o.rot})" pointer-events="none"><rect x="${-o.w / 2}" y="${-o.d / 2}" width="${o.w}" height="${o.d}" fill="none" stroke="#f59e0b" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${4 / z}"/></g>`;
     }
@@ -699,8 +719,8 @@ function startPlace(type, def) {
 
 /* ---------- Önizleme ---------- */
 function drawPreview() {
-  const g = $('#gPv'), z = view.z, cur = ui.cur; let s = '';
-  const lbl = (x, y, t) => `<text x="${x}" y="${y}" font-size="${13 / z}" font-weight="700" fill="#0f172a" stroke="#fff" stroke-width="${3.5 / z}" paint-order="stroke" text-anchor="middle" pointer-events="none">${t}</text>`;
+  const C = pal(), g = $('#gPv'), z = view.z, cur = ui.cur; let s = '';
+  const lbl = (x, y, t) => `<text x="${x}" y="${y}" font-size="${13 / z}" font-weight="700" fill="${C.text}" stroke="${C.halo}" stroke-width="${3.5 / z}" paint-order="stroke" text-anchor="middle" pointer-events="none">${t}</text>`;
   if (cur && cur.hit === 'end') s += `<circle cx="${cur.x}" cy="${cur.y}" r="${8 / z}" fill="none" stroke="#10b981" stroke-width="${2 / z}"/>`;
   if (tool === 'wall' && cur) {
     if (ui.draw) {
@@ -1318,7 +1338,7 @@ function thumbSvg(i) {
   } finally { P = sv; fi = sf; view.z = z; ui.dims = sd; }
 }
 function templatesModal() {
-  openModal(`<h2>Yeni proje – şablon seç <button class="btn sm" data-close>✕</button></h2><div class="cards">${TEMPLATES.map((t, i) => `<div class="card" data-tpl="${i}">${i ? thumbSvg(i) : '<svg viewBox="0 0 10 5"><text x="5" y="3" text-anchor="middle" font-size="1.5">＋</text></svg>'}<b>${t.name}</b><span class="muted">${t.desc}</span></div>`).join('')}</div>`);
+  openModal(`<h2>Yeni proje – şablon seç <button class="btn sm" data-close>✕</button></h2><div class="cards">${TEMPLATES.map((t, i) => `<div class="card" data-tpl="${i}">${i ? thumbSvg(i) : `<svg viewBox="0 0 10 5"><text x="5" y="3" text-anchor="middle" font-size="1.5" fill="currentColor">＋</text></svg>`}<b>${t.name}</b><span class="muted">${t.desc}</span></div>`).join('')}</div>`);
   $('#modal').querySelectorAll('[data-tpl]').forEach(c => c.onclick = () => {
     const i = +c.dataset.tpl; const np = newProject(); np.name = i ? TEMPLATES[i].name.replace(/ \(.*/, '') : 'Yeni Proje';
     P = np; fi = 0; TEMPLATES[i].build(); loadProject(P); closeModal();
@@ -1329,7 +1349,10 @@ function templatesModal() {
 function exportSvg() {
   const f = F(), b = contentBounds(f) || { x0: 0, y0: 0, x1: 1000, y1: 700 }, pad = 120;
   const x0 = b.x0 - pad, y0 = b.y0 - pad, w = b.x1 - b.x0 + pad * 2, h = b.y1 - b.y0 + pad * 2 + 90;
-  const z0 = view.z; view.z = 0.5; const L = layerStrings(f, false), defs = defsSvg(); view.z = z0;
+  const z0 = view.z; view.z = 0.5; ui.exporting = true;
+  let L, defs;
+  try { L = layerStrings(f, false); defs = defsSvg(); }
+  finally { view.z = z0; ui.exporting = false; }
   const date = new Date().toLocaleDateString('tr-TR');
   const sb = `<g transform="translate(${x0 + 30} ${y0 + h - 70})" font-family="Segoe UI,sans-serif"><rect width="${Math.min(w - 60, 560)}" height="56" fill="none" stroke="#334155" stroke-width="2"/>
     <text x="12" y="24" font-size="22" font-weight="700" fill="#0f172a">${esc(P.name)} – ${esc(f.name)}</text><text x="12" y="46" font-size="14" fill="#475569">${date}  •  Toplam oda alanı: ${fmtArea(f.rooms.reduce((s, r) => s + polyArea(r.pts), 0))}</text></g>
@@ -1370,11 +1393,12 @@ function init3D() {
 function resize3D() { const el = $('#v3d'); T3.r.setSize(el.clientWidth, el.clientHeight); T3.cam.aspect = el.clientWidth / el.clientHeight; T3.cam.updateProjectionMatrix(); }
 function loop3D() { if (!T3 || !T3.run) return; requestAnimationFrame(loop3D); T3.ctl.update(); T3.r.render(T3.scene, T3.cam); }
 function build3D() {
-  const S = T3.scene; while (S.children.length) S.remove(S.children[0]);
-  S.add(new THREE.HemisphereLight(0xffffff, 0x667788, 0.55));
+  const lt = isLight(), S = T3.scene; while (S.children.length) S.remove(S.children[0]);
+  S.background = new THREE.Color(lt ? 0xdbe5f1 : 0x0b1220);
+  S.add(new THREE.HemisphereLight(0xffffff, lt ? 0x667788 : 0x1e293b, lt ? 0.55 : 0.65));
   const dl = new THREE.DirectionalLight(0xffffff, 0.45); dl.position.set(600, 1500, 400); S.add(dl);
   const matCache = {}, mat = (c, o) => { const k = c + (o || ''); return matCache[k] || (matCache[k] = new THREE.MeshLambertMaterial({ color: c, ...(o ? { transparent: true, opacity: o } : {}), side: THREE.DoubleSide })); };
-  const lineMat = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: .35 });
+  const lineMat = new THREE.LineBasicMaterial({ color: lt ? 0x334155 : 0x64748b, transparent: true, opacity: .35 });
   const box = (parent, w, h, d, color, x, y, z, ry = 0, op, edges = true) => {
     const g = new THREE.BoxGeometry(w, h, d), m = new THREE.Mesh(g, mat(color, op)); m.position.set(x, y, z); m.rotation.y = ry; parent.add(m);
     if (edges && !op) { const l = new THREE.LineSegments(new THREE.EdgesGeometry(g), lineMat); l.position.copy(m.position); l.rotation.y = ry; parent.add(l); } return m;
@@ -1382,11 +1406,11 @@ function build3D() {
   let elev = 0, all = null;
   P.floors.forEach(f => {
     const b = contentBounds(f); if (b) all = all ? { x0: Math.min(all.x0, b.x0), y0: Math.min(all.y0, b.y0), x1: Math.max(all.x1, b.x1), y1: Math.max(all.y1, b.y1) } : b;
-    if (b) box(S, b.x1 - b.x0 + 200, 20, b.y1 - b.y0 + 200, 0xe2e8f0, (b.x0 + b.x1) / 2, elev - 10, (b.y0 + b.y1) / 2);
-    f.rooms.forEach(r => { const sh = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y))); const m = new THREE.Mesh(new THREE.ShapeGeometry(sh), mat(r.color)); m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6; S.add(m); });
+    if (b) box(S, b.x1 - b.x0 + 200, 20, b.y1 - b.y0 + 200, lt ? 0xe2e8f0 : 0x1e293b, (b.x0 + b.x1) / 2, elev - 10, (b.y0 + b.y1) / 2);
+    f.rooms.forEach(r => { const sh = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y))); const m = new THREE.Mesh(new THREE.ShapeGeometry(sh), mat(r.color, lt ? undefined : 0.78)); m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6; S.add(m); });
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, g = new THREE.Group(); g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
-      const seg = (s, e, y0, y1) => { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, 0xf8fafc, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); };
+      const seg = (s, e, y0, y1) => { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, lt ? 0xf8fafc : 0xe2e8f0, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); };
       const ops = f.ops.filter(o => o.wall === w.id).sort((a, c) => a.d - c.d); let pos = 0;
       ops.forEach(o => {
         const s = Math.max(pos, o.d - o.w / 2), e = Math.min(L, o.d + o.w / 2); seg(pos, s, 0, H);
@@ -1411,7 +1435,7 @@ function build3D() {
   });
   if (!all) all = { x0: 0, y0: 0, x1: 1000, y1: 700 };
   const cx = (all.x0 + all.x1) / 2, cz = (all.y0 + all.y1) / 2, sz = Math.max(all.x1 - all.x0, all.y1 - all.y0, 400);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(0xc7d2c0)); ground.rotation.x = -Math.PI / 2; ground.position.y = -21; S.add(ground);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xc7d2c0 : 0x111c33)); ground.rotation.x = -Math.PI / 2; ground.position.y = -21; S.add(ground);
   T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); T3.ctl.update();
 }
 
@@ -1423,7 +1447,13 @@ $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
 $('#bPng').onclick = exportPng; $('#bPrint').onclick = exportPrint;
 $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { type: 'image/svg+xml' }));
 $('#b2d').onclick = () => show3D(false); $('#b3d').onclick = () => show3D(true);
-$('#bTheme').onclick = () => { const d = document.documentElement; d.dataset.theme = d.dataset.theme === 'light' ? '' : 'light'; localStorage.setItem('fp_theme', d.dataset.theme || ''); };
+$('#bTheme').onclick = () => {
+  const d = document.documentElement;
+  d.dataset.theme = d.dataset.theme === 'light' ? '' : 'light';
+  localStorage.setItem('fp_theme', d.dataset.theme || '');
+  render();
+  if (ui.view3d && T3) build3D();
+};
 $('#pname').addEventListener('input', e => { P.name = e.target.value; autosave(); });
 $('#pname').addEventListener('change', commit);
 $('#cSnap').onchange = e => { ui.snap = e.target.checked; };
