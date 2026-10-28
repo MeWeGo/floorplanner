@@ -753,6 +753,56 @@ function autoRoomAt(p, silent) {
   const rm = mkRoom(r); F().rooms.push(rm); return rm;
 }
 
+/* ---------- 3B zemin plakası: duvarların çevrelediği alan (taşma yok) ---------- */
+function slabBounds(f) {
+  if (!f.walls.length) { const b = contentBounds(f); return b ? [b] : []; }
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const w of f.walls) for (const q of [w.a, w.b]) {
+    x0 = Math.min(x0, q.x - w.t / 2); y0 = Math.min(y0, q.y - w.t / 2);
+    x1 = Math.max(x1, q.x + w.t / 2); y1 = Math.max(y1, q.y + w.t / 2);
+  }
+  const M = 60, W = (x1 - x0) + 2 * M, H = (y1 - y0) + 2 * M, res = Math.max(2, Math.max(W, H) / 1400);
+  const cw = Math.ceil(W / res), ch = Math.ceil(H / res);
+  const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+  ctx.strokeStyle = '#000'; ctx.lineCap = 'square';
+  for (const w of f.walls) { ctx.lineWidth = w.t / res; ctx.beginPath(); ctx.moveTo((w.a.x - x0 + M) / res, (w.a.y - y0 + M) / res); ctx.lineTo((w.b.x - x0 + M) / res, (w.b.y - y0 + M) / res); ctx.stroke(); }
+  const data = ctx.getImageData(0, 0, cw, ch).data, N = cw * ch;
+  const free = i => data[i * 4] > 140;
+  // kenarlardan dışarıya bağlı boş alanı işaretle
+  const outside = new Uint8Array(N), st = [];
+  const seed = i => { if (free(i) && !outside[i]) { outside[i] = 1; st.push(i); } };
+  for (let x = 0; x < cw; x++) { seed(x); seed((ch - 1) * cw + x); }
+  for (let y = 0; y < ch; y++) { seed(y * cw); seed(y * cw + cw - 1); }
+  while (st.length) {
+    const i = st.pop(), x = i % cw, y = (i / cw) | 0;
+    if (x > 0 && free(i - 1) && !outside[i - 1]) { outside[i - 1] = 1; st.push(i - 1); }
+    if (x < cw - 1 && free(i + 1) && !outside[i + 1]) { outside[i + 1] = 1; st.push(i + 1); }
+    if (y > 0 && free(i - cw) && !outside[i - cw]) { outside[i - cw] = 1; st.push(i - cw); }
+    if (y < ch - 1 && free(i + cw) && !outside[i + cw]) { outside[i + cw] = 1; st.push(i + cw); }
+  }
+  // dışarıya bağlı olmayan boş bölgeler = duvarların çevrelediği alanlar
+  const seen = new Uint8Array(N), out = [];
+  for (let s0 = 0; s0 < N; s0++) {
+    if (!free(s0) || outside[s0] || seen[s0]) continue;
+    const st2 = [s0]; seen[s0] = 1;
+    let bx0 = cw, by0 = ch, bx1 = -1, by1 = -1;
+    while (st2.length) {
+      const i = st2.pop(), x = i % cw, y = (i / cw) | 0;
+      if (x < bx0) bx0 = x; if (y < by0) by0 = y; if (x > bx1) bx1 = x; if (y > by1) by1 = y;
+      if (x > 0 && free(i - 1) && !outside[i - 1] && !seen[i - 1]) { seen[i - 1] = 1; st2.push(i - 1); }
+      if (x < cw - 1 && free(i + 1) && !outside[i + 1] && !seen[i + 1]) { seen[i + 1] = 1; st2.push(i + 1); }
+      if (y > 0 && free(i - cw) && !outside[i - cw] && !seen[i - cw]) { seen[i - cw] = 1; st2.push(i - cw); }
+      if (y < ch - 1 && free(i + cw) && !outside[i + cw] && !seen[i + cw]) { seen[i + cw] = 1; st2.push(i + cw); }
+    }
+    const ox = x0 - M, oy = y0 - M, pad = Math.max(...f.walls.map(w => w.t)) / 2 + res * 2;
+    out.push({ x0: ox + bx0 * res - pad, y0: oy + by0 * res - pad, x1: ox + (bx1 + 1) * res + pad, y1: oy + (by1 + 1) * res + pad });
+  }
+  // hiç kapalı alan yoksa (açık plan): duvar dış sınırları kadar plaka
+  return out.length ? out : [{ x0, y0, x1, y1 }];
+}
+
 /* ---------- Araçlar ---------- */
 const TOOLS = [
   ['select', '↖', 'Seç', 'V', 'Select'], ['pan', '✋', 'Kaydır', 'H', 'Pan'], null,
@@ -935,8 +985,11 @@ cv.addEventListener('pointerdown', e => {
         if (e.shiftKey) { sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]; }
         else if (!sel.includes(id)) {
           const fd = find(id);
-          // gruplu mobilyaya tıklayınca tüm grup seçilir
-          sel = fd && fd.kind === 'furn' && fd.o.grp ? F().furn.filter(x => x.grp === fd.o.grp).map(x => x.id) : [id];
+          // gruplu nesneye tıklayınca tüm grup seçilir (duvar + mobilya karışık dahil)
+          if (fd && fd.o.grp) {
+            const f = F(); sel = [];
+            for (const arr in KINDS) for (const o of f[arr]) if (o.grp === fd.o.grp) sel.push(o.id);
+          } else sel = [id];
         }
         renderProps(); startMove(raw);
         if (ui.drag) ui.drag.clickedId = id;
@@ -1048,7 +1101,7 @@ cv.addEventListener('pointerup', e => {
   if (d.type === 'move' || d.type === 'handle') {
     if (!d.moved && d.type === 'move' && d.clickedId && !e.shiftKey) {
       const fd = find(d.clickedId);
-      if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
+      if (fd && fd.kind === 'wall' && !fd.o.grp && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
         cycleWallPos(fd.o);
         commit(); refresh();
         toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
@@ -1182,7 +1235,12 @@ function renderProps() {
   if (!os.length) { el.innerHTML = projectPanel(); return; }
   const kinds = [...new Set(os.map(x => x.kind))];
   const acts = (extra = '') => `<div class="row">${extra}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
-  if (kinds.length > 1) { el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><p class="muted">${L('Taşımak için sürükle, silmek için Del.', 'Drag to move, press Del to delete.')}</p>${acts()}`; return; }
+  if (kinds.length > 1) {
+    const gs = os.filter(x => GROUPABLE[x.kind]);
+    const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
+    const ungrp = gs.some(x => x.o.grp) ? `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>` : '';
+    el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><p class="muted">${L('Taşımak için sürükle, silmek için Del.', 'Drag to move, press Del to delete.')}</p>${grp}${ungrp}${acts()}`; return;
+  }
   const k = kinds[0], o = os[0].o, n = os.length;
   let h = `<h3>${(isEN() ? KIND_EN : KIND_TR)[k]}${n > 1 ? ` <span class="muted">(${n})</span>` : ''}</h3>`;
   if (k === 'wall') {
@@ -1230,8 +1288,6 @@ function renderProps() {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button><button class="btn sm" data-act="front">${L('⬆ Öne', '⬆ Bring front')}</button>`);
-    if (n > 1) h += `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>`;
-    if (o.grp) h += `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>`;
   } else if (k === 'room') {
     h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: getFloors() });
     if (n === 1) h += `<div class="stat"><span>${L('Alan', 'Area')}</span><b>${fmtArea(polyArea(o.pts))}</b></div><div class="stat"><span>${L('Çevre', 'Perimeter')}</span><b>${fmtLen(polyPerim(o.pts))}</b></div><div class="stat"><span>${L('Köşe sayısı', 'Vertices')}</span><b>${o.pts.length}</b></div>`;
@@ -1243,6 +1299,9 @@ function renderProps() {
   } else if (k === 'bg') {
     h += `<p class="muted" style="margin:0 0 8px">${L('Görseli tuvalde sürükleyerek taşıyabilir, köşelerinden boyutlandırabilirsiniz (Shift: serbest oran).', 'Drag the image on the canvas to reposition, or drag its corners to resize (Shift: free aspect ratio).')}</p>` + bgFields(true);
   }
+  const gsAll = os.filter(x => GROUPABLE[x.kind]);
+  if (gsAll.length >= 2) h += `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>`;
+  if (gsAll.some(x => x.o.grp)) h += `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>`;
   el.innerHTML = h;
 }
 function projectPanel() {
@@ -1402,17 +1461,18 @@ function refresh() { render(); renderProps(); renderFloors(); updateTools(); }
 
 /* ---------- Kopyala / yapıştır ---------- */
 let pasteN = 0;
+const GROUPABLE = { wall: 1, room: 1, furn: 1, dim: 1, text: 1 };
 function groupSel() {
-  const fs = selObjs().filter(x => x.kind === 'furn');
-  if (fs.length < 2) { toast(L('Gruplamak için en az 2 mobilya seçin', 'Select at least 2 furniture items to group')); return; }
-  const g = uid(); fs.forEach(({ o }) => o.grp = g);
+  const gs = selObjs().filter(x => GROUPABLE[x.kind]);
+  if (gs.length < 2) { toast(L('Gruplamak için en az 2 nesne seçin', 'Select at least 2 objects to group')); return; }
+  const g = uid(); gs.forEach(({ o }) => o.grp = g);
   commit(); refresh();
-  toast(L('Seçili mobilyalar gruplandı – birlikte taşınırlar', 'Selected furniture grouped – they move together'));
+  toast(L('Seçili nesneler gruplandı – birlikte taşınırlar', 'Selected objects grouped – they move together'));
 }
 function ungroupSel() {
-  const fs = selObjs().filter(x => x.kind === 'furn' && x.o.grp);
-  if (!fs.length) return;
-  fs.forEach(({ o }) => delete o.grp);
+  const gs = selObjs().filter(x => GROUPABLE[x.kind] && x.o.grp);
+  if (!gs.length) return;
+  gs.forEach(({ o }) => delete o.grp);
   commit(); refresh();
   toast(L('Grup çözüldü', 'Group dissolved'));
 }
@@ -1425,10 +1485,11 @@ function paste(fromSel) {
   for (const { kind, o } of items) {
     if (kind === 'op') continue;
     const n = JSON.parse(JSON.stringify(o)); idm[n.id] = uid(); n.id = idm[n.id]; ids.push(n.id);
+    if (n.grp) n.grp = gmap[n.grp] || (gmap[n.grp] = uid()); // yapıştırılan kopya yeni grubuna girer
     if (kind === 'wall') { n.a = mv(n.a); n.b = mv(n.b); f.walls.push(n); }
     else if (kind === 'dim') { n.a = mv(n.a); n.b = mv(n.b); f.dims.push(n); }
     else if (kind === 'room') { n.pts = n.pts.map(mv); f.rooms.push(n); }
-    else if (kind === 'furn') { n.x += off; n.y += off; if (n.grp) n.grp = gmap[n.grp] || (gmap[n.grp] = uid()); f.furn.push(n); }
+    else if (kind === 'furn') { n.x += off; n.y += off; f.furn.push(n); }
     else if (kind === 'text') { n.x += off; n.y += off; f.texts.push(n); }
   }
   for (const { kind, o } of items) if (kind === 'op' && idm[o.wall]) { const n = JSON.parse(JSON.stringify(o)); n.id = uid(); n.wall = idm[o.wall]; f.ops.push(n); ids.push(n.id); }
@@ -1535,7 +1596,7 @@ function helpModal() {
     ['0 / + / −', 'Fit to screen / Zoom in / Zoom out'],
     ['Double-click', 'Rename room or edit text'],
     ['Click door', 'Open / close door (90°)'],
-    ['Ctrl+G / Ctrl+Shift+G', 'Group / ungroup selected furniture'],
+    ['Ctrl+G / Ctrl+Shift+G', 'Group / ungroup selected objects'],
   ] : [
     ['V / H', 'Seç / Kaydır (Boşluk basılı: geçici kaydır)'],
     ['W', 'Duvar çiz (rakam + Enter: tam uzunluk)'],
@@ -1563,7 +1624,7 @@ function helpModal() {
     ['0 / + / −', 'Sığdır / Yakınlaştır / Uzaklaştır'],
     ['Çift tık', 'Oda / metin adını düzenle'],
     ['Kapıya tıkla', 'Kapıyı aç / kapat (90°)'],
-    ['Ctrl+G / Ctrl+Shift+G', 'Seçili mobilyaları grupla / çöz'],
+    ['Ctrl+G / Ctrl+Shift+G', 'Seçili nesneleri grupla / çöz'],
   ];
   openModal(`<h2>${L('Kısayollar & İpuçları', 'Shortcuts & Tips')} <button class="btn sm" data-close>✕</button></h2><table class="kb">${rows.map(r => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
   <p class="muted">${L(
@@ -1767,7 +1828,7 @@ function init3D() {
       }
       if (cur && cur.userData?.wallId) {
         const fd = find(cur.userData.wallId);
-        if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
+        if (fd && fd.kind === 'wall' && !fd.o.grp && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
           cycleWallPos(fd.o); sel = [fd.o.id]; commit(); refresh(); build3D(true);
           toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
         }
@@ -1809,9 +1870,15 @@ function build3D(keepCam = false) {
     if (edges && !op) { const l = new THREE.LineSegments(new THREE.EdgesGeometry(g), lineMat); l.position.copy(m.position); l.rotation.y = ry; parent.add(l); } return m;
   };
   let elev = 0, all = null;
-  P.floors.forEach(f => {
+  P.floors.forEach((f, fidx) => {
     const b = contentBounds(f); if (b) all = all ? { x0: Math.min(all.x0, b.x0), y0: Math.min(all.y0, b.y0), x1: Math.max(all.x1, b.x1), y1: Math.max(all.y1, b.y1) } : b;
-    if (b) box(S, b.x1 - b.x0 + 200, 20, b.y1 - b.y0 + 200, lt ? 0xded8cc : 0x171e29, (b.x0 + b.x1) / 2, elev - 10, (b.y0 + b.y1) / 2);
+    if (fidx === 0) {
+      // zemin katı: bina kaidesi (içerik sınırları + pay)
+      if (b) box(S, b.x1 - b.x0 + 200, 20, b.y1 - b.y0 + 200, lt ? 0xded8cc : 0x171e29, (b.x0 + b.x1) / 2, elev - 10, (b.y0 + b.y1) / 2);
+    } else {
+      // üst katlar: plaka duvarların çevrelediği alan kadardır – alttaki duvarları aşmaz
+      for (const s of slabBounds(f)) box(S, s.x1 - s.x0, 20, s.y1 - s.y0, lt ? 0xded8cc : 0x232b38, (s.x0 + s.x1) / 2, elev - 10, (s.y0 + s.y1) / 2);
+    }
     f.rooms.forEach(r => { const sh = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y))); const m = new THREE.Mesh(new THREE.ShapeGeometry(sh), mat(r.color, lt ? undefined : 0.78)); m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6; S.add(m); });
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);

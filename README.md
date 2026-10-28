@@ -57,7 +57,7 @@
 - **Click a door to open / close it (90°)** — works in 2D and in the 3D view; the swing stays visible as a dashed arc.
 - **~48 furniture & structure items** in 6 categories with search (living, bedroom, kitchen, bath, office, structure & outdoor — stairs, columns, trees, pool…).
 - Furniture **magnets to walls** and rotates to face the room.
-- **Group furniture** — select 2+ items and press **Group** (or `Ctrl+G`); grouped items select and move together, `Ctrl+Shift+G` ungroups.
+- **Group objects** — select 2+ items (walls, rooms, furniture, texts, dimensions) and press **Group** (or `Ctrl+G`); grouped items select and move together, `Ctrl+Shift+G` ungroups. Handy for keeping a room's walls and furniture in sync while arranging.
 - Resize / rotate with on-canvas handles; edit numeric properties in the side panel.
 - Dimension lines, text labels, and live wall-length labels.
 
