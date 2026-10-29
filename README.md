@@ -55,7 +55,7 @@
 
 ### 🚪 Objects
 - **7 door / window types** (single, double, sliding, opening, window, wide window, small window) that snap onto walls with hinge-side and swing-direction controls.
-- **Click a door to open / close it (90°)** — works in 2D and in the 3D view; the swing stays visible as a dashed arc.
+- **Click a door to open / close it (90° / slide)** — works in 2D and in the 3D view; hinged doors swing 90° with a visible dashed arc, sliding doors slide horizontally.
 - **~48 furniture & structure items** in 6 categories with search (living, bedroom, kitchen, bath, office, structure & outdoor — stairs, columns, trees, pool…).
 - Furniture **magnets to walls** and rotates to face the room.
 - **Group objects** — select 2+ items (walls, rooms, furniture, texts, dimensions) and press **Group** (or `Ctrl+G`); grouped items select and move together, `Ctrl+Shift+G` ungroups. Handy for keeping a room's walls and furniture in sync while arranging.
