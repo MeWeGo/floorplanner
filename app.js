@@ -2747,6 +2747,15 @@ function build3D(keepCam = false) {
           if (o.type === 'double') { leaf(s - L / 2, o.open ? -sd3 * a90 : 0, 1); leaf(e - L / 2, o.open ? sd3 * a90 : 0, -1); }
           else if (o.flip) leaf(e - L / 2, o.open ? sd3 * a90 : 0, -1);
           else leaf(s - L / 2, o.open ? -sd3 * a90 : 0, 1);
+        } else if (o.type === 'slide') {
+          // sürgülü kapı: 2B'deki gibi hafif ofsetli iki kayar panel (cam)
+          const span = e - s;
+          if (span > 1) {
+            const pw = span * 0.55, pt = Math.max(2, Math.min(4, w.t * 0.25)), my = o.sill + o.h / 2;
+            const sgn = o.flip ? -1 : 1;
+            box(g, pw, o.h * 0.98, pt, 0x7dd3fc, s + pw / 2 - L / 2, my, -sgn * pt * 0.65, 0, 0.55, false);
+            box(g, pw, o.h * 0.98, pt, 0x7dd3fc, e - pw / 2 - L / 2, my, sgn * pt * 0.65, 0, 0.55, false);
+          }
         }
         pos = Math.max(pos, e);
       });
