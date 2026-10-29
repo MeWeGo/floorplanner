@@ -535,7 +535,8 @@ function opSvg(op, live) {
     else s += `<line x1="${-hw}" y1="0" x2="0" y2="0" ${stk}/><line x1="0" y1="0" x2="${hw}" y2="0" ${stk}/>`;
     s += `<path d="M0 0A${l} ${l} 0 0 ${sw} ${-hw} ${sd * l}M0 0A${l} ${l} 0 0 ${1 - sw} ${hw} ${sd * l}" stroke="${C.swing}" fill="none" stroke-width="1.2" stroke-dasharray="4 3"/>`;
   } else if (op.type === 'slide') {
-    s += `<rect x="${-hw}" y="${-ht * 0.7}" width="${w * 0.55}" height="${ht * 0.7}" ${stk}/><rect x="${-hw + w * 0.45}" y="0" width="${w * 0.55}" height="${ht * 0.7}" ${stk}/>`;
+    const sx = op.open ? -hw : -hw + w * 0.45;
+    s += `<rect x="${-hw}" y="${-ht * 0.7}" width="${w * 0.55}" height="${ht * 0.7}" ${stk}/><rect x="${sx}" y="0" width="${w * 0.55}" height="${ht * 0.7}" ${stk}/>`;
   } else if (op.type === 'arch') {
     s += `<line x1="${-hw}" y1="${-ht}" x2="${hw}" y2="${-ht}" stroke="${C.swing}" stroke-dasharray="5 4" stroke-width="1.2"/><line x1="${-hw}" y1="${ht}" x2="${hw}" y2="${ht}" stroke="${C.swing}" stroke-dasharray="5 4" stroke-width="1.2"/>`;
   } else {
@@ -1397,10 +1398,10 @@ cv.addEventListener('pointerup', e => {
         toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
         return;
       }
-      if (fd && fd.kind === 'op' && (fd.o.type === 'door' || fd.o.type === 'double')) {
+      if (fd && fd.kind === 'op' && (fd.o.type === 'door' || fd.o.type === 'double' || fd.o.type === 'slide')) {
         fd.o.open = fd.o.open ? 0 : 90;
         commit(); refresh();
-        toast(fd.o.open ? L('Kapı açıldı (90°)', 'Door opened (90°)') : L('Kapı kapandı', 'Door closed'));
+        toast(fd.o.open ? (fd.o.type === 'slide' ? L('Sürgülü kapı açıldı', 'Sliding door opened') : L('Kapı açıldı (90°)', 'Door opened (90°)')) : (fd.o.type === 'slide' ? L('Sürgülü kapı kapandı', 'Sliding door closed') : L('Kapı kapandı', 'Door closed')));
         return;
       }
       if (d.badgeClick) {
@@ -1649,7 +1650,9 @@ function renderProps() {
     h += fld(L('Tür', 'Type'), 'op', 'type', o.type, { sel: isEN() ? { door: 'Door', double: 'Double door', slide: 'Sliding', arch: 'Archway', window: 'Window' } : { door: 'Kapı', double: 'Çift kapı', slide: 'Sürgülü', arch: 'Açıklık', window: 'Pencere' } });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'op', 'w', o.w, { min: 20, max: 500 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'op', 'h', o.h, { min: 20, max: 400 }) + fld(L('Denizlik (cm)', 'Sill height (cm)'), 'op', 'sill', o.sill, { min: 0, max: 300 });
     if (o.type === 'door' || o.type === 'double') h += `<label class="f"><span>${L('Açık (90°)', 'Open (90°)')}</span><input type="checkbox" data-k="op" data-p="open" ${o.open ? 'checked' : ''}></label>`;
-    h += acts(`<button class="btn sm" data-act="opflip">${L('↔ Menteşe', '↔ Hinge')}</button><button class="btn sm" data-act="opside">${L('↕ Açılış yönü', '↕ Swing side')}</button>`);
+    else if (o.type === 'slide') h += `<label class="f"><span>${L('Açık', 'Open')}</span><input type="checkbox" data-k="op" data-p="open" ${o.open ? 'checked' : ''}></label>`;
+    if (o.type === 'slide') h += acts(`<button class="btn sm" data-act="opflip">${L('↔ Yön', '↔ Flip')}</button>`);
+    else h += acts(`<button class="btn sm" data-act="opflip">${L('↔ Menteşe', '↔ Hinge')}</button><button class="btn sm" data-act="opside">${L('↕ Açılış yönü', '↕ Swing side')}</button>`);
   } else if (k === 'furn') {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
@@ -2659,9 +2662,9 @@ function init3D() {
     let hit3 = false;
     if (cur && cur.userData?.opId) {
       const fd = findAnyFloor(cur.userData.opId);
-      if (fd && fd.kind === 'op' && (fd.o.type === 'door' || fd.o.type === 'double')) {
+      if (fd && fd.kind === 'op' && (fd.o.type === 'door' || fd.o.type === 'double' || fd.o.type === 'slide')) {
         fd.o.open = fd.o.open ? 0 : 90; sel = [fd.o.id]; commit(); refresh(); build3D(true);
-        toast(fd.o.open ? L('Kapı açıldı (90°)', 'Door opened (90°)') : L('Kapı kapandı', 'Door closed'));
+        toast(fd.o.open ? (fd.o.type === 'slide' ? L('Sürgülü kapı açıldı', 'Sliding door opened') : L('Kapı açıldı (90°)', 'Door opened (90°)')) : (fd.o.type === 'slide' ? L('Sürgülü kapı kapandı', 'Sliding door closed') : L('Kapı kapandı', 'Door closed')));
       }
       hit3 = true;
     } else if (cur && cur.userData?.wallId) {
@@ -2753,8 +2756,12 @@ function build3D(keepCam = false) {
           if (span > 1) {
             const pw = span * 0.55, pt = Math.max(2, Math.min(4, w.t * 0.25)), my = o.sill + o.h / 2;
             const sgn = o.flip ? -1 : 1;
-            box(g, pw, o.h * 0.98, pt, 0x7dd3fc, s + pw / 2 - L / 2, my, -sgn * pt * 0.65, 0, 0.55, false);
-            box(g, pw, o.h * 0.98, pt, 0x7dd3fc, e - pw / 2 - L / 2, my, sgn * pt * 0.65, 0, 0.55, false);
+            const pFixed = o.flip ? (e - pw / 2 - L / 2) : (s + pw / 2 - L / 2);
+            const pSlideClosed = o.flip ? (s + pw / 2 - L / 2) : (e - pw / 2 - L / 2);
+            const pSlide = o.open ? pFixed : pSlideClosed;
+            const m1 = box(g, pw, o.h * 0.98, pt, 0x7dd3fc, pFixed, my, -sgn * pt * 0.65, 0, 0.55, false);
+            const m2 = box(g, pw, o.h * 0.98, pt, 0x7dd3fc, pSlide, my, sgn * pt * 0.65, 0, 0.55, false);
+            m1.userData = { opId: o.id }; m2.userData = { opId: o.id };
           }
         }
         pos = Math.max(pos, e);
