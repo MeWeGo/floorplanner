@@ -100,11 +100,11 @@ let P, fi = 0;
 let hist = [], hi = -1;
 const view = { x: 0, y: 0, z: 0.5 };
 let tool = 'select', sel = [], placing = null;
-const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true };
+const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' } };
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true };
 
 const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [] });
-const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
+const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
 const F = () => P.floors[fi];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', dims: 'dim', texts: 'text', sketches: 'sketch' };
 function find(id, f = F()) {
@@ -321,6 +321,7 @@ function updateUndo() { $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = h
 function loadProject(obj, msg) {
   P = obj; if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
+  P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
   if (P.bg) P.bg.id = 'bg';
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid'; });
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
@@ -549,6 +550,7 @@ function furnBody(f) {
   const C = pal(), hw = f.w / 2, hd = f.d / 2, col = f.color, sk = C.furnStroke, fop = `fill-opacity="${C.furnOp}"`;
   let s = '';
   if (f.k === 'round') s += `<ellipse rx="${hw}" ry="${hd}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
+  else if (f.k === 'poly') s += `<polygon points="${(f.pts || []).map(p => p.x + ',' + p.y).join(' ')}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
   else if (f.k === 'stairs') {
     s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
     const n = Math.max(3, Math.round(f.d / 25)); let l = '';
@@ -815,7 +817,7 @@ function mkOp(def, wall, d) {
   const L = wLen(wall); const w = def.w;
   return { id: uid(), wall: wall.id, d: L >= w ? clamp(d, w / 2, L - w / 2) : L / 2, w, h: def.h, sill: def.sill, type: opType(def.id), flip: 0, side: 1, open: 0 };
 }
-function mkFurn(def, x, y, rot = 0) { return { id: uid(), type: def.id, name: itemName(def), icon: def.icon, k: def.k, w: def.w, d: def.d, h: def.h, color: def.color, x, y, rot, label: '' }; }
+function mkFurn(def, x, y, rot = 0) { const o = { id: uid(), type: def.id, name: itemName(def), icon: def.icon, k: def.k, w: def.w, d: def.d, h: def.h, color: def.color, x, y, rot, label: '' }; if (def.k === 'poly' && def.pts) o.pts = JSON.parse(JSON.stringify(def.pts)); return o; }
 function mkRoom(pts, name) {
   const n = F().rooms.length;
   return { id: uid(), name: name || L('Oda ', 'Room ') + (n + 1), color: ROOMCOL[n % ROOMCOL.length], floor: 'none', pts };
@@ -977,7 +979,7 @@ function slabBounds(f) {
 /* ---------- Araçlar ---------- */
 const TOOLS = [
   ['select', '↖', 'Seç', 'V', 'Select'], ['pan', '✋', 'Kaydır', 'H', 'Pan'], null,
-  ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], null,
+  ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
   ['door', '🚪', 'Kapı', 'D', 'Door'], ['window', '🪟', 'Pencere', 'N', 'Window'], ['furn', '🛋️', 'Mobilya', 'F', 'Furniture'], null,
   ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
@@ -988,6 +990,7 @@ const HINTS = {
   rect: 'Dikdörtgen oda: köşeden köşeye sürükle (4 duvar + oda oluşturur)',
   room: 'Kapalı bir alanın içine tıkla: oda otomatik algılanır (alan ve ölçüler hesaplanır)',
   poly: 'Oda çiz: köşelere tıkla • ilk noktaya tıkla / Enter: tamamla • Esc: iptal',
+  shape: 'Şekil: tür ve modu üstteki çubuktan seç • Üçgen/Dörtgen/Çokgen(N)/Elips: köşeden köşeye sürükle • Serbest: bas-sürükle-bırak • Nesne modu adlandırılabilir özel nesne, Duvar modu duvar silüesi çizer',
   place: 'Yerleştir: tıkla • R: döndür • Esc / sağ tık: bitir',
   pen: 'Kalem: serbest çiz (basılı tutup sürükle) • bırak → çizim tamamlanır • Shift: yakalamayı kapat',
   dim: 'Ölçü: iki noktaya tıkla',
@@ -1002,6 +1005,7 @@ const HINTS_EN = {
   rect: 'Rect Room: drag corner to corner (creates 4 walls + room)',
   room: 'Click inside an enclosed area to auto-detect room & area',
   poly: 'Draw Room: click corners • click first point / Enter: finish • Esc: cancel',
+  shape: 'Shapes: pick type & mode in the top bar • Triangle/Quad/N-gon/Circle: drag corner to corner • Free: hold-drag-release • Object mode makes a nameable custom item, Walls mode draws wall outlines',
   place: 'Place: click • R: rotate / flip hinge • S: flip swing • Esc / right-click: finish',
   pen: 'Pen: freehand draw (hold & drag) • release to finish the stroke • Shift: disable snap',
   dim: 'Dimension: click two points',
@@ -1009,6 +1013,19 @@ const HINTS_EN = {
   eraser: 'Click any object to delete it',
   calib: 'Calibrate: click two points with a known distance on the background image, then enter real distance',
 };
+function buildShapeBar() {
+  const sh = ui.shape, b = (k, ic, lbl) => `<button class="sbtn ${sh.kind === k ? 'on' : ''}" data-sh="${k}" title="${lbl}"><span>${ic}</span><small>${lbl}</small></button>`,
+    m = (k, ic, lbl) => `<button class="sbtn ${sh.mode === k ? 'on' : ''}" data-shmode="${k}" title="${lbl}"><span>${ic}</span><small>${lbl}</small></button>`;
+  $('#shapeBar').innerHTML = b('tri', '△', L('Üçgen', 'Triangle')) + b('quad', '▢', L('Dörtgen', 'Quad'))
+    + b('ngon', '⬠', L('Çokgen', 'N-gon')) + `<input type="number" data-shn min="3" max="24" step="1" value="${sh.n}" title="${L('Çokgen kenar sayısı', 'N-gon sides')}">`
+    + b('circle', '◯', L('Elips / Daire', 'Circle')) + b('free', '✏️', L('Serbest', 'Free'))
+    + `<i class="sdiv"></i>` + m('object', '🛋️', L('Nesne', 'Object')) + m('walls', '🧱', L('Duvar', 'Walls'));
+}
+$('#shapeBar').addEventListener('click', e => {
+  const sk = e.target.closest('[data-sh]'); if (sk) { ui.shape.kind = sk.dataset.sh; buildShapeBar(); return; }
+  const sm = e.target.closest('[data-shmode]'); if (sm) { ui.shape.mode = sm.dataset.shmode; buildShapeBar(); }
+});
+$('#shapeBar').addEventListener('change', e => { const t = e.target; if (t.dataset.shn != null) { ui.shape.n = clamp(Math.round(+t.value) || 6, 3, 24); t.value = ui.shape.n; } });
 function buildTools() {
   $('#tools').innerHTML = TOOLS.map(t => {
     if (!t) return '<div class="tdiv"></div>';
@@ -1024,6 +1041,10 @@ function updateTools() {
   $('#hud').style.display = '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
   document.querySelectorAll('#items .item').forEach(el => el.classList.toggle('on', !!placing && el.dataset.id === placing.def.id));
+  const bar = $('#shapeBar'), showShape = tool === 'shape' && !ui.view3d, was = bar.dataset.on === '1';
+  bar.style.display = showShape ? 'flex' : 'none';
+  bar.dataset.on = showShape ? '1' : '0';
+  if (showShape) buildShapeBar();
 }
 function setTool(t) {
   ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null;
@@ -1072,9 +1093,14 @@ function drawPreview() {
   }
   if (tool === 'dim' && ui.dimStart && cur) s += `<line x1="${ui.dimStart.x}" y1="${ui.dimStart.y}" x2="${cur.x}" y2="${cur.y}" stroke="#0f766e" stroke-width="${2 / z}" stroke-dasharray="${5 / z}"/>` + lbl((ui.dimStart.x + cur.x) / 2, (ui.dimStart.y + cur.y) / 2 - 8 / z, fmtLen(dist(ui.dimStart, cur)));
   if (tool === 'calib' && ui.calib && cur) s += `<line x1="${ui.calib.x}" y1="${ui.calib.y}" x2="${cur.x}" y2="${cur.y}" stroke="#e11d48" stroke-width="${2 / z}"/>`;
-  if (tool === 'pen' && ui.pen) {
+  if ((tool === 'pen' || tool === 'shape') && ui.pen) {
     const pts = ui.pen.pts.concat(ui.raw ? [{ x: ui.raw.x, y: ui.raw.y }] : []);
     if (pts.length > 1) s += `<polyline points="${pts.map(p => p.x + ',' + p.y).join(' ')}" fill="none" stroke="${ac}" stroke-opacity=".7" stroke-width="${Math.max(2 / z, 4)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  if (tool === 'shape' && d && d.type === 'shape' && d.cur) {
+    const pts = shapePts(ui.shape.kind, ui.shape.n, d.start, d.cur), sw = Math.abs(d.cur.x - d.start.x), sh = Math.abs(d.cur.y - d.start.y);
+    s += `<polygon points="${pts.map(p => p.x + ',' + p.y).join(' ')}" fill="${ac}" fill-opacity=".12" stroke="${ac}" stroke-width="${P.wallT / 2}" stroke-opacity=".65"/>`;
+    s += lbl((d.start.x + d.cur.x) / 2, Math.min(d.start.y, d.cur.y) - P.wallT / 2 - 8 / z, `${fmtLen(sw)} × ${fmtLen(sh)}`);
   }
   if (tool === 'place' && placing && ui.raw) {
     if (placing.type === 'furn') {
@@ -1114,7 +1140,7 @@ function setCursor(e) {
   else if (tool === 'dim' && ui.dimStart) from = ui.dimStart;
   else if (tool === 'poly' && ui.polyPts && ui.polyPts.length) from = ui.polyPts[ui.polyPts.length - 1];
   else if (tool === 'calib' && ui.calib) from = null;
-  ui.cur = ['wall', 'rect', 'poly', 'dim', 'calib'].includes(tool) ? snapPt(raw, from, e) : null;
+  ui.cur = ['wall', 'rect', 'poly', 'dim', 'calib', 'shape'].includes(tool) ? snapPt(raw, from, e) : null;
   if (tool === 'wall' && ui.draw && ui.typed) {
     const a = ui.draw.start, l = parseFloat(ui.typed) || 0, dx = ui.cur.x - a.x, dy = ui.cur.y - a.y, m = Math.hypot(dx, dy) || 1;
     ui.cur = { x: a.x + dx / m * l, y: a.y + dy / m * l, hit: null };
@@ -1205,6 +1231,11 @@ cv.addEventListener('pointerdown', e => {
       ui.polyPts.push({ x: cur.x, y: cur.y }); render(); return;
     }
     case 'place': placeAt(raw); return;
+    case 'shape': {
+      if (ui.shape.kind === 'free') { ui.pen = { pts: [ui.snap && !e.shiftKey ? snapPt(raw, null, e) : { x: raw.x, y: raw.y }] }; render(); }
+      else ui.drag = { type: 'shape', start: { x: cur.x, y: cur.y }, cur: null };
+      return;
+    }
     case 'pen': ui.pen = { pts: [ui.snap && !e.shiftKey ? snapPt(raw, null, e) : { x: raw.x, y: raw.y }] }; render(); return;
     case 'dim': {
       if (!ui.dimStart) ui.dimStart = { x: cur.x, y: cur.y };
@@ -1257,6 +1288,49 @@ function finishPen() {
   }
   ui.pen = null; render();
 }
+
+/* ---------- Şekiller (S) ---------- */
+function shapePts(kind, n, a, b) {
+  const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y), w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y), cx = x0 + w / 2, cy = y0 + h / 2;
+  if (kind === 'circle') {
+    const out = [], N = 24;
+    for (let i = 0; i < N; i++) { const t = i / N * 2 * Math.PI; out.push({ x: Math.round((cx + Math.cos(t) * w / 2) * 100) / 100, y: Math.round((cy + Math.sin(t) * h / 2) * 100) / 100 }); }
+    return out;
+  }
+  if (kind === 'tri') return [{ x: x0, y: y0 + h }, { x: x0 + w, y: y0 + h }, { x: cx, y: y0 }];
+  if (kind === 'quad') return [{ x: x0, y: y0 }, { x: x0 + w, y: y0 }, { x: x0 + w, y: y0 + h }, { x: x0, y: y0 + h }];
+  const N = clamp(Math.round(n) || 6, 3, 24), out = [];
+  for (let i = 0; i < N; i++) { const t = -Math.PI / 2 + i / N * 2 * Math.PI; out.push({ x: Math.round((cx + Math.cos(t) * w / 2) * 100) / 100, y: Math.round((cy + Math.sin(t) * h / 2) * 100) / 100 }); }
+  return out;
+}
+function mkShapeFurn(pts, round = false) {
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y), x0 = Math.min(...xs), y0 = Math.min(...ys), x1 = Math.max(...xs), y1 = Math.max(...ys);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const o = { id: uid(), type: 'shape', name: L('Şekil', 'Shape'), icon: round ? '⬤' : '⬡', k: round ? 'round' : 'poly', w: Math.max(10, Math.round(x1 - x0)), d: Math.max(10, Math.round(y1 - y0)), h: 80, color: '#bcaaa4', x: Math.round(cx), y: Math.round(cy), rot: 0, label: '' };
+  if (!round) o.pts = pts.map(p => ({ x: Math.round((p.x - cx) * 10) / 10, y: Math.round((p.y - cy) * 10) / 10 }));
+  return o;
+}
+function wallsFromPts(pts, closed, e) {
+  const g = e && ui.snap && !e.shiftKey, qs = pts.map(p => g ? snapToGrid(p) : { x: p.x, y: p.y });
+  if (closed && qs.length > 2 && dist(qs[0], qs[qs.length - 1]) < 30) qs[qs.length - 1] = { ...qs[0] };
+  const last = closed ? qs.length : qs.length - 1;
+  for (let i = 0; i < last; i++) F().walls.push(mkWall(qs[i], qs[(i + 1) % qs.length]));
+}
+function finishShapeFree() {
+  if (ui.pen && ui.pen.pts.length >= 2 && (ui.shape.mode === 'walls' || ui.pen.pts.length >= 3)) {
+    const pts = simplifyStroke(ui.pen.pts, Math.max(1.2, 2 / view.z)).map(q => ({ x: Math.round(q.x * 10) / 10, y: Math.round(q.y * 10) / 10 }));
+    if (ui.shape.mode === 'walls') { wallsFromPts(pts, false); commit(); toast(L('Duvar zinciri eklendi – “Oda algıla” ile oda oluşturabilirsin', 'Wall chain added – use “Auto Room” to create a room')); }
+    else { let len = 0; for (let i = 1; i < pts.length; i++) len += dist(pts[i - 1], pts[i]); if (len * view.z > 8) { const o = mkShapeFurn(pts); F().furn.push(o); sel = [o.id]; commit(); toast(L('Şekil eklendi – sağ panelden etiket verin, 💾 ile kütüphaneye kaydedin', 'Shape added – set a label in the side panel, 💾 saves it to the library')); } else { toast(L('Çizim çok kısa', 'Drawing too short')); } }
+  } else toast(L('Serbest şekil en az 3 nokta ister (Duvar modu çizgi için yeterli)', 'Free shape needs at least 3 points (Walls mode accepts a line)'));
+  ui.pen = null; refresh();
+}
+function finishShapeDrag(d, e) {
+  const end = ui.cur || d.cur || ui.raw, kk = ui.shape.kind;
+  if (!end || dist(d.start, end) < 20 / view.z) return;
+  const pts = shapePts(kk, ui.shape.n, d.start, end);
+  if (ui.shape.mode === 'walls') { wallsFromPts(pts, true, e); commit(); toast(L('Duvarlar eklendi – “Oda algıla” ile oda oluşturabilirsin', 'Walls added – use “Auto Room” to create a room')); }
+  else { const o = mkShapeFurn(pts, kk === 'circle'); F().furn.push(o); sel = [o.id]; commit(); toast(L('Şekil eklendi – sağ panelden etiket verin, 💾 ile kütüphaneye kaydedin', 'Shape added – set a label in the side panel, 💾 saves it to the library')); }
+}
 function placeAt(raw) {
   const f = F();
   if (!ui.ghost) { if (placing.type === 'op') toast(L('Kapı/pencere için bir duvarın yakınına tıkla', 'Click near a wall to place a door/window')); return; }
@@ -1268,7 +1342,7 @@ function placeAt(raw) {
 }
 cv.addEventListener('pointermove', e => {
   setCursor(e); const d = ui.drag;
-  if (tool === 'pen' && ui.pen) {
+  if ((tool === 'pen' || tool === 'shape') && ui.pen) {
     const p = ui.raw, last = ui.pen.pts[ui.pen.pts.length - 1];
     if (p && dist(p, last) > 2.5 / view.z) { ui.pen.pts.push({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 }); drawPreview(); }
     return;
@@ -1276,13 +1350,14 @@ cv.addEventListener('pointermove', e => {
   if (d) {
     if (d.type === 'pan') { view.x = d.vx + e.clientX - d.sx; view.y = d.vy + e.clientY - d.sy; render(); return; }
     if (d.type === 'box') { d.cur = ui.raw; d.moved = true; drawPreview(); return; }
+    if (d.type === 'shape') { d.cur = ui.cur || ui.raw; drawPreview(); return; }
     if (d.type === 'move') { doMove(ui.raw, e); return; }
     if (d.type === 'handle') { doHandle(ui.raw, e); return; }
   }
   updateGhost(); drawPreview();
 });
 cv.addEventListener('pointerup', e => {
-  if (tool === 'pen' && ui.pen) { finishPen(); return; }
+  if ((tool === 'pen' || tool === 'shape') && ui.pen) { tool === 'shape' ? finishShapeFree() : finishPen(); return; }
   const d = ui.drag; if (!d) return; ui.drag = null; setCursor(e);
   if (d.type === 'pan') { updateTools(); return; }
   if (d.type === 'box') {
@@ -1303,6 +1378,7 @@ cv.addEventListener('pointerup', e => {
     }
     refresh(); return;
   }
+  if (d.type === 'shape') { if ((d.cur || ui.cur) && dist(d.start, d.cur || ui.cur) > 20 / view.z) finishShapeDrag(d, e); refresh(); return; }
   if (d.type === 'rect') {
     const c = ui.cur;
     if (Math.abs(c.x - d.start.x) > 30 && Math.abs(c.y - d.start.y) > 30) {
@@ -1469,6 +1545,7 @@ function doHandle(raw, e) {
         const rot = ((g.rot || 0) % 180 + 180) % 180, swap = rot >= 45 && rot < 135;
         mo.w = Math.max(10, Math.round(g.w * (swap ? sy : sx)));
         mo.d = Math.max(10, Math.round(g.d * (swap ? sx : sy)));
+        if (g.k === 'poly' && g.pts) mo.pts = g.pts.map(p => ({ x: Math.round(p.x * (mo.w / g.w) * 10) / 10, y: Math.round(p.y * (mo.d / g.d) * 10) / 10 }));
       } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
       else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
     }
@@ -1483,6 +1560,7 @@ function doHandle(raw, e) {
     const r = -o.rot * Math.PI / 180, dx = raw.x - o.x, dy = raw.y - o.y;
     const lx = dx * Math.cos(r) - dy * Math.sin(r), ly = dx * Math.sin(r) + dy * Math.cos(r), st = ui.snap && !sh ? 5 : 1;
     o.w = Math.max(10, rnd(Math.abs(lx) * 2, st)); o.d = Math.max(10, rnd(Math.abs(ly) * 2, st));
+    if (o.k === 'poly' && d.orig && d.orig.pts && d.orig.w && d.orig.d) o.pts = d.orig.pts.map(p => ({ x: Math.round(p.x * (o.w / d.orig.w) * 10) / 10, y: Math.round(p.y * (o.d / d.orig.d) * 10) / 10 }));
   } else if (h.startsWith('bg')) {
     const g = d.orig, p = ui.snap && !sh ? snapToGrid(raw) : raw, asp = (g.h || 1) / (g.w || 1);
     const x0 = g.x, y0 = g.y, x1 = g.x + g.w, y1 = g.y + g.h;
@@ -1576,6 +1654,7 @@ function renderProps() {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button><button class="btn sm" data-act="front">${L('⬆ Öne', '⬆ Bring front')}</button>`);
+    if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
     h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: getFloors() });
     if (n === 1) {
@@ -1730,7 +1809,16 @@ $('#props').addEventListener('click', e => {
       }
     }
     if (a === 'rot90' && kind === 'furn') o.rot = (o.rot + 90) % 360;
-    if (a === 'swapwd' && kind === 'furn') [o.w, o.d] = [o.d, o.w];
+    if (a === 'swapwd' && kind === 'furn') { [o.w, o.d] = [o.d, o.w]; if (o.k === 'poly' && o.pts) o.pts = o.pts.map(p => ({ x: p.y, y: p.x })); }
+    if (a === 'saveshape' && kind === 'furn') {
+      const nm = prompt(L('Şekil adı:', 'Shape name:'), o.name || L('Şekil', 'Shape'));
+      if (nm) {
+        P.lib = P.lib || { shapes: [] }; P.lib.shapes = P.lib.shapes || [];
+        P.lib.shapes.push({ id: uid(), name: nm, en: nm, k: o.k, pts: o.pts ? JSON.parse(JSON.stringify(o.pts)) : undefined, w: o.w, d: o.d, h: o.h, color: o.color, icon: o.k === 'round' ? '⬤' : '⬡' });
+        commit(); buildLib(); toast(L(`“${nm}” kütüphaneye eklendi (⬡ Şekillerim)`, `“${nm}” added to the library (⬡ My Shapes)`));
+        return;
+      }
+    }
     if (a === 'front' && kind === 'furn') { f.furn = f.furn.filter(x => x !== o); f.furn.push(o); }
     if (a === 'opflip' && kind === 'op') o.flip = o.flip ? 0 : 1;
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
@@ -1745,18 +1833,22 @@ $('#props').addEventListener('click', e => {
 });
 
 /* ---------- Kütüphane ---------- */
-const LIBCATS = ['Kapı & Pencere', ...CATS];
-const LIBCATS_EN = ['Doors & Windows', ...CATS_EN];
+const LIBCATS = ['Kapı & Pencere', ...CATS, '⬡ Şekillerim'];
+const LIBCATS_EN = ['Doors & Windows', ...CATS_EN, '⬡ My Shapes'];
 function buildLib() {
   const cats = isEN() ? LIBCATS_EN : LIBCATS;
   $('#cats').innerHTML = cats.map((c, i) => `<button class="chip ${i === ui.cat && !ui.q ? 'on' : ''}" data-cat="${i}">${c}</button>`).join('');
   const q = ui.q.toLowerCase(); let items = '';
   const card = (type, d, sz) => `<button class="item" data-type="${type}" data-id="${d.id}"><div class="ic">${d.icon || '▭'}</div><div>${itemName(d)}</div><div class="sz">${sz}</div></button>`;
+  const shapeCard = d => `<button class="item" data-type="def" data-id="${d.id}"><div class="ic">${d.icon || '⬡'}</div><div>${esc(itemName(d))}</div><div class="sz">${Math.round(d.w)}×${Math.round(d.d)} cm</div><span class="delsh" data-delsh="${d.id}" title="${L('Kütüphaneden sil', 'Remove from library')}">✕</span></button>`;
   const matches = d => d.name.toLowerCase().includes(q) || (d.en && d.en.toLowerCase().includes(q));
+  const shapes = P && P.lib && P.lib.shapes || [];
   if (q) {
     items += OPENINGS.filter(matches).map(o => card('op', o, o.w + ' cm')).join('');
     items += CATALOG.filter(matches).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
+    items += shapes.filter(matches).map(shapeCard).join('');
   } else if (ui.cat === 0) items = OPENINGS.map(o => card('op', o, o.w + ' cm')).join('');
+  else if (ui.cat === LIBCATS.length - 1) items = shapes.map(shapeCard).join('');
   else items = CATALOG.filter(c => c.cat === ui.cat - 1).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
   $('#items').innerHTML = items || `<p class="muted">${L('Sonuç yok', 'No results')}</p>`;
   updateTools();
@@ -1764,8 +1856,16 @@ function buildLib() {
 $('#cats').addEventListener('click', e => { const b = e.target.closest('[data-cat]'); if (b) { ui.cat = +b.dataset.cat; ui.q = ''; $('#search').value = ''; buildLib(); } });
 $('#search').addEventListener('input', e => { ui.q = e.target.value; buildLib(); });
 $('#items').addEventListener('click', e => {
+  const x = e.target.closest('[data-delsh]');
+  if (x) {
+    const i = (P.lib.shapes || []).findIndex(s => s.id === x.dataset.delsh);
+    if (i >= 0 && confirm(L(`“${itemName(P.lib.shapes[i])}” kütüphaneden silinsin mi?`, `Delete “${itemName(P.lib.shapes[i])}” from the library?`))) { P.lib.shapes.splice(i, 1); commit(); buildLib(); toast(L('Şekil kütüphaneden silindi', 'Shape removed from library')); }
+    return;
+  }
   const b = e.target.closest('.item'); if (!b) return;
-  startPlace(b.dataset.type, b.dataset.type === 'op' ? OPDEF[b.dataset.id] : BYID[b.dataset.id]);
+  let type = b.dataset.type, def = type === 'op' ? OPDEF[b.dataset.id] : type === 'def' ? (P.lib.shapes || []).find(s => s.id === b.dataset.id) : BYID[b.dataset.id];
+  if (type === 'def') { if (!def) return; type = 'furn'; def = { id: 'sh_' + def.id, name: def.name, en: def.en, k: def.k, pts: def.pts, w: def.w, d: def.d, h: def.h, color: def.color, icon: def.icon }; }
+  startPlace(type, def);
 });
 
 /* ---------- Katlar ---------- */
@@ -2182,7 +2282,7 @@ window.addEventListener('keydown', e => {
     selObjs().forEach(({ kind, o }) => { if (kind === 'wall' || kind === 'dim') { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (kind === 'room' || kind === 'sketch') o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
     commit(); render(); if (sel.includes('bg')) renderProps(); if (ui.view3d && T3) schedBuild3D(); return;
   }
-  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', c: 'calib', b: 'pen' };
+  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', c: 'calib', b: 'pen' };
   if (map[k]) { setTool(map[k]); return; }
   if (k === 'g') { $('#cSnap').click(); return; }
   if (k === '0') fit(); else if (k === '+' || k === '=') zoomBtn(1.25); else if (k === '-') zoomBtn(0.8);
@@ -2203,6 +2303,7 @@ function helpModal() {
     ['R', 'Rect room (draws 4 walls + room)'],
     ['O', 'Auto-detect room inside enclosed walls'],
     ['P', 'Draw custom polygon room'],
+    ['S', 'Shapes: triangle / quad / N-gon / ellipse / freeform — draw as wall outlines or name & save as custom library items'],
     ['D / N', 'Place Door / Window'],
     ['F', 'Open Furniture library'],
     ['M', 'Add Dimension line'],
@@ -2238,6 +2339,7 @@ function helpModal() {
     ['R', 'Oda (dikdörtgen duvar)'],
     ['O', 'Kapalı alandan oda algıla'],
     ['P', 'Çokgen oda çiz'],
+    ['S', 'Şekiller: üçgen / dörtgen / N-gen / elips / serbest — duvar silüesi çizer ya da adlandırıp kütüphaneye kaydeder'],
     ['D / N', 'Kapı / Pencere'],
     ['F', 'Mobilya kütüphanesi'],
     ['M', 'Ölçü ekle'],
@@ -2667,6 +2769,7 @@ function build3D(keepCam = false) {
       const ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, elev, o.y); g.rotation.y = ry; g.userData = { furnId: o.id, elev }; S.add(g);
       if (o.k === 'stairs') { const n = Math.max(6, Math.round(o.h / 18)); for (let i = 0; i < n; i++) { const sh = o.h / n * (i + 1); box(g, o.w, sh, o.d / n, o.color, 0, sh / 2, o.d / n * (n / 2 - i - .5)); } }
       else if (o.k === 'round') { const m = new THREE.Mesh(new THREE.CylinderGeometry(o.w / 2, o.w / 2, o.h, 28), mat(o.color)); m.scale.z = o.d / o.w; m.position.y = o.h / 2; g.add(m); }
+      else if (o.k === 'poly' && o.pts && o.pts.length >= 3) { const sh = new THREE.Shape(o.pts.map(p => new THREE.Vector2(p.x, -p.y))); const geo = new THREE.ExtrudeGeometry(sh, { depth: Math.max(2, o.h), bevelEnabled: false }); geo.rotateX(-Math.PI / 2); g.add(new THREE.Mesh(geo, mat(o.color))); }
       else {
         box(g, o.w, o.h, o.d, o.color, 0, o.h / 2, 0);
         if (o.k === 'sofa') box(g, o.w, o.h, o.d * .25, o.color, 0, o.h * 0.75, -o.d * .375);

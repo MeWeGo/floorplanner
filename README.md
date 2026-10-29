@@ -66,6 +66,8 @@
 - Dimension lines, text labels, and live wall-length labels.
 - **✏️ Pen tool** — freehand sketches anywhere on the plan: hold and drag to draw any shape, arrow or note stroke; the stroke is simplified to few points, and you can move it, restyle it (stroke width & color in the side panel), copy/paste or delete it like any object. Shown as a line on the floor in 3D and included in SVG/PNG/PDF exports.
 
+- **⬡ Shape tool (`S`)** — draw anything the catalogue doesn't have: **triangle**, **quad**, **N-gon** (3–24 sides, adjustable in the top bar), **circle/ellipse** (drag corner to corner) or **freeform** (hold-drag-release). Two modes: **Object** creates a nameable custom item (move/rotate/resize like furniture, extruded in 3D); **Walls** draws the same outline as real walls you can attach doors to and auto-detect a room inside. Press **💾 Save shape to library** in the side panel to name it and reuse it from the **⬡ My Shapes** library category (✕ removes a saved shape).
+
 ### 🏢 Project Tools
 - **Multiple floors** — add, duplicate, rename, delete; the floor below is shown faintly for alignment.
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
@@ -129,6 +131,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | `R` | Room from rectangle |
 | `O` | Detect room from a closed area |
 | `P` | Polygon room |
+| `S` | Shape tool (triangle / quad / N-gon / circle / free) |
 | `D` / `N` | Door / Window |
 | `F` | Furniture library |
 | `M` | Dimension line |
