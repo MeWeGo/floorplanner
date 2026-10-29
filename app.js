@@ -190,6 +190,37 @@ function bboxOf(kind, o) {
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
   return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
 }
+function selectionBounds(os = selObjs()) {
+  let bb = null;
+  for (const { kind, o } of os) {
+    const b = bboxOf(kind, o); if (!b) continue;
+    bb = bb ? { x0: Math.min(bb.x0, b.x0), y0: Math.min(bb.y0, b.y0), x1: Math.max(bb.x1, b.x1), y1: Math.max(bb.y1, b.y1) } : { ...b };
+  }
+  return bb;
+}
+function rotatePoint(p, c, rad) {
+  const dx = p.x - c.x, dy = p.y - c.y, cs = Math.cos(rad), sn = Math.sin(rad);
+  return { x: Math.round((c.x + dx * cs - dy * sn) * 100) / 100, y: Math.round((c.y + dx * sn + dy * cs) * 100) / 100 };
+}
+function rotateSelection(deg, os = selObjs(), bb = selectionBounds(os), origAll = null) {
+  if (!bb) return false;
+  const c = { x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2 }, rad = deg * Math.PI / 180;
+  let changed = false;
+  for (const { kind, o } of os) {
+    const g = origAll?.get(o.id) || o;
+    if (kind === 'wall' || kind === 'dim') {
+      o.a = rotatePoint(g.a, c, rad); o.b = rotatePoint(g.b, c, rad);
+      if (kind === 'wall' && Array.isArray(g.angles) && g.angles.length) o.angles = g.angles.map(a => Math.round((((a + deg) % 360) + 360) % 360 * 10) / 10);
+      changed = true;
+    } else if (kind === 'room' || kind === 'sketch') {
+      o.pts = g.pts.map(p => rotatePoint(p, c, rad)); changed = true;
+    } else if (kind === 'furn' || kind === 'text') {
+      const p = rotatePoint(g, c, rad);
+      o.x = p.x; o.y = p.y; o.rot = ((g.rot || 0) + deg + 360) % 360; changed = true;
+    }
+  }
+  return changed;
+}
 function contentBounds(f = F()) {
   let b = null;
   for (const arr in KINDS) for (const o of f[arr]) {
@@ -718,14 +749,14 @@ function handleSvg() {
         + hnd(o.x + o.w / 2, o.y + o.h, 'bgS', 'ns-resize') + hnd(o.x, o.y + o.h / 2, 'bgW', 'ew-resize');
     }
   } else if (os.length > 1 && os.some(x => GRESIZE[x.kind])) {
-    let bb = null;
-    for (const { kind, o } of os) {
-      const b = bboxOf(kind, o); if (!b) continue;
-      bb = bb ? { x0: Math.min(bb.x0, b.x0), y0: Math.min(bb.y0, b.y0), x1: Math.max(bb.x1, b.x1), y1: Math.max(bb.y1, b.y1) } : { ...b };
-    }
+    const bb = selectionBounds(os);
     if (bb && bb.x1 - bb.x0 > 5 && bb.y1 - bb.y0 > 5) {
       s += `<rect x="${bb.x0}" y="${bb.y0}" width="${bb.x1 - bb.x0}" height="${bb.y1 - bb.y0}" fill="none" stroke="#f59e0b" stroke-width="${1.6 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
       [[bb.x0, bb.y0], [bb.x1, bb.y0], [bb.x1, bb.y1], [bb.x0, bb.y1]].forEach(([x, y], i) => s += hnd(x, y, 'g' + i, i % 2 ? 'nesw-resize' : 'nwse-resize'));
+      if (os.some(x => ['wall', 'dim', 'room', 'sketch', 'furn', 'text'].includes(x.kind))) {
+        const cx = (bb.x0 + bb.x1) / 2, ty = bb.y0, ry = ty - 30 / z;
+        s += `<line x1="${cx}" y1="${ty}" x2="${cx}" y2="${ry}" stroke="#f59e0b" stroke-width="${1.5 / z}" pointer-events="none"/>` + hnd(cx, ry, 'grot', 'grab', 'circle');
+      }
     }
   }
   return s;
@@ -1513,11 +1544,12 @@ function startHandle(h, raw, e) {
     origAll = new Map();
     for (const { kind, o: mo } of os) {
       origAll.set(mo.id, JSON.parse(JSON.stringify(mo)));
-      const b = bboxOf(kind, mo); if (!b) continue;
-      origBb = origBb ? { x0: Math.min(origBb.x0, b.x0), y0: Math.min(origBb.y0, b.y0), x1: Math.max(origBb.x1, b.x1), y1: Math.max(origBb.y1, b.y1) } : { ...b };
     }
+    origBb = selectionBounds(os);
   }
-  ui.drag = { type: 'handle', h, orig, conn, origAll, origBb, moved: false };
+  const origCenter = origBb && { x: (origBb.x0 + origBb.x1) / 2, y: (origBb.y0 + origBb.y1) / 2 };
+  const origAngle = h === 'grot' && origCenter ? Math.atan2(raw.y - origCenter.y, raw.x - origCenter.x) * 180 / Math.PI : 0;
+  ui.drag = { type: 'handle', h, orig, conn, origAll, origBb, origCenter, origAngle, moved: false };
 }
 function doHandle(raw, e) {
   const d = ui.drag, h = d.h, o = selObjs()[0]?.o; if (!o) return; d.moved = true;
@@ -1544,6 +1576,11 @@ function doHandle(raw, e) {
     const delta = (p.x - (p1.x + p2.x) / 2) * nx + (p.y - (p1.y + p2.y) / 2) * ny;
     o.pts[i] = { x: Math.round(p1.x + nx * delta), y: Math.round(p1.y + ny * delta) };
     o.pts[j] = { x: Math.round(p2.x + nx * delta), y: Math.round(p2.y + ny * delta) };
+  } else if (h === 'grot' && d.origBb && d.origAll && d.origCenter) {
+    let deg = Math.atan2(raw.y - d.origCenter.y, raw.x - d.origCenter.x) * 180 / Math.PI - d.origAngle;
+    deg = ((deg + 540) % 360) - 180;
+    if (ui.snap && !sh) deg = rnd(deg, P.gridType === 'triangle' ? 30 : 15);
+    rotateSelection(deg, selObjs(), d.origBb, d.origAll);
   } else if (h[0] === 'g' && d.origBb && d.origAll) {
     const bb = d.origBb, p = ui.snap && !sh ? snapToGrid(raw) : raw;
     const w0 = Math.max(10, bb.x1 - bb.x0), h0 = Math.max(10, bb.y1 - bb.y0);
@@ -2305,8 +2342,9 @@ window.addEventListener('keydown', e => {
     if (k === 's' && placing.type === 'op') { placing.side = -(placing.side || 1); updateGhost(); drawPreview(); return; }
   }
   if (e.key === '[' || e.key === ']') {
-    const d = e.key === ']' ? 15 : -15; let ch = false;
-    selObjs().forEach(({ kind, o }) => {
+    const d = e.key === ']' ? 15 : -15, os = selObjs(); let ch = false;
+    if (os.length > 1) ch = rotateSelection(d, os);
+    else os.forEach(({ kind, o }) => {
       if (kind === 'furn' || kind === 'text') { o.rot = ((o.rot || 0) + d + 360) % 360; ch = true; }
       else if (kind === 'wall') { setWallDeg(o, wallDeg(o) + d, true); ch = true; }
     });
@@ -2349,7 +2387,7 @@ function helpModal() {
     ['C', 'Calibrate background image scale'],
     ['G', 'Toggle grid & endpoint snap'],
     ['Shift', 'Hold to disable snap • multi-select in Select mode'],
-    ['[ ]', 'Rotate selected furniture/text by 15°'],
+    ['[ ]', 'Rotate selection by 15° (multi-selections turn as one rigid layout)'],
     ['R (while placing)', 'Rotate furniture 90° / flip door hinge'],
     ['S (while placing)', 'Flip door swing direction'],
     ['Arrow keys', 'Nudge selection / background image by 1 cm (Shift: 10 cm)'],
@@ -2385,7 +2423,7 @@ function helpModal() {
     ['C', 'Arka plan ölçekle'],
     ['G', 'Yakalamayı aç/kapa'],
     ['Shift', 'Basılıyken yakalama kapalı • seçimde çoklu seçim'],
-    ['[ ]', 'Seçili mobilyayı 15° döndür'],
+    ['[ ]', 'Seçimi 15° döndür (çoklu seçimler tek parça düzen olarak döner)'],
     ['R (yerleştirirken)', 'Mobilyayı döndür / kapı menteşesini çevir'],
     ['S (yerleştirirken)', 'Kapı açılış yönünü çevir'],
     ['Ok tuşları', 'Seçileni / arka plan görselini 1 cm kaydır (Shift: 10 cm)'],

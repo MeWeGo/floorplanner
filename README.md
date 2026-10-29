@@ -58,7 +58,7 @@
 - **Click a door to open / close it (90° / slide)** — works in 2D and in the 3D view; hinged doors swing 90° with a visible dashed arc, sliding doors slide horizontally.
 - **~48 furniture & structure items** in 6 categories with search (living, bedroom, kitchen, bath, office, structure & outdoor — stairs, columns, trees, pool…).
 - Furniture **magnets to walls** and rotates to face the room.
-- **Group objects** — select 2+ items (walls, rooms, furniture, texts, dimensions) and press **Group** (or `Ctrl+G`); grouped items select and move together, `Ctrl+Shift+G` ungroups. Handy for keeping a room's walls and furniture in sync while arranging.
+- **Group objects** — select 2+ items (walls, rooms, furniture, texts, dimensions) and press **Group** (or `Ctrl+G`); grouped items select, move and rotate together, `Ctrl+Shift+G` ungroups. Drag the group rotation handle or use `[` / `]` to turn the whole layout around its centre without breaking wall corners.
 - **Adjustable layouts (1a / 1b / 1c)** — with a group or a room selected, press **🔄 Make Adjustable** to snapshot the current layout; rearrange, press **➕ New** to save more layouts, then simply **click the room / group on the canvas to cycle** through them (1a → 1b → 1c → 1a). Room variants move the furniture inside; group variants move every member — walls, room shapes and all.
 - **Connected-wall dragging** — dragging a wall keeps neighbouring wall ends glued so corners stay closed; uncheck **Connected walls** in the footer (or hold **Alt** while dragging) to move a wall independently.
 - **Room drag moves contents** — dragging a single room takes the furniture and text labels inside it along (the panel's X/Y fields behave the same); room resize only reshapes the polygon.
@@ -141,7 +141,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | `C` | Calibrate background scale |
 | `G` | Toggle snapping |
 | `Shift` | Hold to bypass snapping · multi-select |
-| `[` / `]` | Rotate selected item −15° / +15° |
+| `[` / `]` | Rotate selection −15° / +15° (multi-selections rotate as one rigid layout) |
 | `R` / `S` *(while placing)* | Rotate furniture / flip door hinge · flip swing side |
 | Arrow keys | Nudge selection / background image 1 cm (`Shift` = 10 cm) |
 | `WASD` / `Q` / `E` *(in 3D)* | Walk around in 3D view (`Q`/`E`: down/up, `Shift`: faster) |
