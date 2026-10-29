@@ -927,28 +927,64 @@ function autoRoomAt(p, silent) {
   const rm = mkRoom(r); F().rooms.push(rm); return rm;
 }
 
-/* ---------- 3B zemin plakası: duvarların çevrelediği alan (taşma yok) ---------- */
-function slabBounds(f) {
-  if (!f.walls.length) { const b = contentBounds(f); return b ? [b] : []; }
+/* ---------- 3B zemin plakası: duvarların dış konturunu izleyen poligon (taşma yok) ---------- */
+function rectPoly(b) { return [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }, { x: b.x0, y: b.y1 }]; }
+// maskelenmiş piksellerin dış kenarlarını kapalı poligonlar olarak döndürür
+function traceMaskLoops(mask, cw, ch, x0, y0, res) {
+  const V = cw + 1, edges = new Map(), add = (a, b) => { if (!edges.has(a)) edges.set(a, []); edges.get(a).push(b); };
+  const inM = (x, y) => x >= 0 && y >= 0 && x < cw && y < ch && mask[y * cw + x];
+  for (let i = 0; i < cw * ch; i++) {
+    if (!mask[i]) continue;
+    const x = i % cw, y = (i / cw) | 0;
+    if (!inM(x, y - 1)) add(y * V + x, y * V + x + 1);
+    if (!inM(x + 1, y)) add(y * V + x + 1, (y + 1) * V + x + 1);
+    if (!inM(x, y + 1)) add((y + 1) * V + x + 1, (y + 1) * V + x);
+    if (!inM(x - 1, y)) add((y + 1) * V + x, y * V + x);
+  }
+  const loops = [];
+  while (edges.size) {
+    const start = edges.keys().next().value, loop = [start];
+    let cur = start;
+    for (;;) {
+      const arr = edges.get(cur); if (!arr) break;
+      const nxt = arr.pop(); if (!arr.length) edges.delete(cur);
+      if (nxt === start) break;
+      loop.push(nxt); cur = nxt;
+      if (loop.length > 400000) break;
+    }
+    if (loop.length > 3) loops.push(loop.map(k => ({ x: x0 + (k % V) * res, y: y0 + Math.floor(k / V) * res })));
+  }
+  return loops;
+}
+function slabPolys(f) {
+  if (!f.walls.length) { const b = contentBounds(f); return b ? [rectPoly(b)] : []; }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const w of f.walls) for (const q of [w.a, w.b]) {
     x0 = Math.min(x0, q.x - w.t / 2); y0 = Math.min(y0, q.y - w.t / 2);
     x1 = Math.max(x1, q.x + w.t / 2); y1 = Math.max(y1, q.y + w.t / 2);
   }
-  const M = 60, W = (x1 - x0) + 2 * M, H = (y1 - y0) + 2 * M, res = Math.max(2, Math.max(W, H) / 1400);
-  const cw = Math.ceil(W / res), ch = Math.ceil(H / res);
-  const c = document.createElement('canvas'); c.width = cw; c.height = ch;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
-  ctx.strokeStyle = '#000'; ctx.lineCap = 'square';
-  for (const w of f.walls) { ctx.lineWidth = w.t / res; ctx.beginPath(); ctx.moveTo((w.a.x - x0 + M) / res, (w.a.y - y0 + M) / res); ctx.lineTo((w.b.x - x0 + M) / res, (w.b.y - y0 + M) / res); ctx.stroke(); }
-  const data = ctx.getImageData(0, 0, cw, ch).data, N = cw * ch;
-  const free = i => data[i * 4] > 140;
-  // kenarlardan dışarıya bağlı boş alanı işaretle
+  const W = x1 - x0, H = y1 - y0;
+  if (W <= 0 || H <= 0) return [];
+  const M = 40, res = Math.max(2, Math.min(6, Math.max(W, H) / 300));
+  const cw = Math.ceil((W + 2 * M) / res), ch = Math.ceil((H + 2 * M) / res), N = cw * ch;
+  const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#fff';
+  for (const w of f.walls) {
+    ctx.lineWidth = Math.max(1, w.t / res);
+    ctx.beginPath();
+    ctx.moveTo((w.a.x - x0 + M) / res, (w.a.y - y0 + M) / res);
+    ctx.lineTo((w.b.x - x0 + M) / res, (w.b.y - y0 + M) / res);
+    ctx.stroke();
+  }
+  const id = ctx.getImageData(0, 0, cw, ch).data;
+  const free = i => id[i * 4] < 128; // siyah piksel = boş alan
+  // dış sınır flood-fill
   const outside = new Uint8Array(N), st = [];
-  const seed = i => { if (free(i) && !outside[i]) { outside[i] = 1; st.push(i); } };
-  for (let x = 0; x < cw; x++) { seed(x); seed((ch - 1) * cw + x); }
-  for (let y = 0; y < ch; y++) { seed(y * cw); seed(y * cw + cw - 1); }
+  for (let x = 0; x < cw; x++) { if (free(x)) { outside[x] = 1; st.push(x); } const b = (ch - 1) * cw + x; if (free(b)) { outside[b] = 1; st.push(b); } }
+  for (let y = 0; y < ch; y++) { const l = y * cw; if (free(l)) { outside[l] = 1; st.push(l); } const r = y * cw + cw - 1; if (free(r)) { outside[r] = 1; st.push(r); } }
   while (st.length) {
     const i = st.pop(), x = i % cw, y = (i / cw) | 0;
     if (x > 0 && free(i - 1) && !outside[i - 1]) { outside[i - 1] = 1; st.push(i - 1); }
@@ -956,25 +992,22 @@ function slabBounds(f) {
     if (y > 0 && free(i - cw) && !outside[i - cw]) { outside[i - cw] = 1; st.push(i - cw); }
     if (y < ch - 1 && free(i + cw) && !outside[i + cw]) { outside[i + cw] = 1; st.push(i + cw); }
   }
-  // dışarıya bağlı olmayan boş bölgeler = duvarların çevrelediği alanlar
-  const seen = new Uint8Array(N), out = [];
-  for (let s0 = 0; s0 < N; s0++) {
-    if (!free(s0) || outside[s0] || seen[s0]) continue;
-    const st2 = [s0]; seen[s0] = 1;
-    let bx0 = cw, by0 = ch, bx1 = -1, by1 = -1;
-    while (st2.length) {
-      const i = st2.pop(), x = i % cw, y = (i / cw) | 0;
-      if (x < bx0) bx0 = x; if (y < by0) by0 = y; if (x > bx1) bx1 = x; if (y > by1) by1 = y;
-      if (x > 0 && free(i - 1) && !outside[i - 1] && !seen[i - 1]) { seen[i - 1] = 1; st2.push(i - 1); }
-      if (x < cw - 1 && free(i + 1) && !outside[i + 1] && !seen[i + 1]) { seen[i + 1] = 1; st2.push(i + 1); }
-      if (y > 0 && free(i - cw) && !outside[i - cw] && !seen[i - cw]) { seen[i - cw] = 1; st2.push(i - cw); }
-      if (y < ch - 1 && free(i + cw) && !outside[i + cw] && !seen[i + cw]) { seen[i + cw] = 1; st2.push(i + cw); }
-    }
-    const ox = x0 - M, oy = y0 - M, pad = Math.max(...f.walls.map(w => w.t)) / 2 + res * 2;
-    out.push({ x0: ox + bx0 * res - pad, y0: oy + by0 * res - pad, x1: ox + (bx1 + 1) * res + pad, y1: oy + (by1 + 1) * res + pad });
+  // plaka = duvarlar + duvarların çevrelediği boş alanlar.
+  // Açık planda yalnızca duvar izi kalır; böylece dikdörtgen bbox taşması olmaz.
+  const mask = new Uint8Array(N);
+  for (let i = 0; i < N; i++) mask[i] = (!free(i) || !outside[i]) ? 1 : 0;
+  const loops = traceMaskLoops(mask, cw, ch, x0 - M, y0 - M, res), out = [];
+  for (const loop of loops) {
+    if (Math.abs(polyArea(loop)) < 100) continue; // raster gürültüsü
+    let pts = loop.filter((q, i) => {
+      const pr = loop[(i - 1 + loop.length) % loop.length], nx = loop[(i + 1) % loop.length];
+      return Math.abs((q.x - pr.x) * (nx.y - q.y) - (q.y - pr.y) * (nx.x - q.x)) > 1e-6;
+    });
+    pts = simplifyLoop(pts, res * 2.2);
+    if (pts.length < 3) continue;
+    out.push(pts.map(q => ({ x: Math.round(q.x * 10) / 10, y: Math.round(q.y * 10) / 10 })));
   }
-  // hiç kapalı alan yoksa (açık plan): duvar dış sınırları kadar plaka
-  return out.length ? out : [{ x0, y0, x1, y1 }];
+  return out;
 }
 
 /* ---------- Araçlar ---------- */
@@ -2720,12 +2753,15 @@ function build3D(keepCam = false) {
   P.floors.forEach((f, fidx) => {
     if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return; // kat seçici: yalnızca seçili kat çizilir
     const b = contentBounds(f); if (b) all = all ? { x0: Math.min(all.x0, b.x0), y0: Math.min(all.y0, b.y0), x1: Math.max(all.x1, b.x1), y1: Math.max(all.y1, b.y1) } : b;
-    if (fidx === 0) {
-      // zemin katı: bina kaidesi (içerik sınırları + pay)
-      if (b) box(S, b.x1 - b.x0 + 200, 20, b.y1 - b.y0 + 200, lt ? 0xded8cc : 0x171e29, (b.x0 + b.x1) / 2, elev - 10, (b.y0 + b.y1) / 2);
-    } else {
-      // üst katlar: plaka duvarların çevrelediği alan kadardır – alttaki duvarları aşmaz
-      for (const s of slabBounds(f)) box(S, s.x1 - s.x0, 20, s.y1 - s.y0, lt ? 0xded8cc : 0x232b38, (s.x0 + s.x1) / 2, elev - 10, (s.y0 + s.y1) / 2);
+    // zemin plakası: duvarların dış konturunu izleyen poligon — açılı planlarda AABB gibi taşmaz
+    const slabCol = lt ? 0xded8cc : (fidx === 0 ? 0x171e29 : 0x232b38);
+    for (const pts of slabPolys(f)) {
+      const sh = new THREE.Shape(pts.map(p => new THREE.Vector2(p.x, p.y)));
+      const geo = new THREE.ExtrudeGeometry(sh, { depth: 20, bevelEnabled: false });
+      geo.rotateX(Math.PI / 2);
+      const m = new THREE.Mesh(geo, mat(slabCol));
+      m.position.y = elev;
+      S.add(m);
     }
     f.rooms.forEach(r => { const sh = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y))); const m = new THREE.Mesh(new THREE.ShapeGeometry(sh), mat(r.color, lt ? undefined : 0.78)); m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6; S.add(m); });
     f.walls.forEach(w => {

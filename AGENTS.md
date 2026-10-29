@@ -225,7 +225,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 ### 3D (`build3D`, `loop3D`)
 - Plan `(x, y)` → Three `(x, elevation, z=y)`. Rotation: `mesh.rotation.y = -θ` (SVG clockwise → Three counter-clockwise). Room polygons use `rotation.x = +π/2`.
 - Walls are split into boxes around each opening (below-sill, above-head); windows add a translucent pane, doors a thin leaf, sliding doors two offset translucent panels.
-- Floors stack with pitch `P.wallH + 20`. Built once on entering 3D (and on theme change) — it does **not** live-update; leave 3D (`Esc` or `2B`) to edit.
+- Floors stack with pitch `P.wallH + 20`. Floor slabs follow the outer contour of walls and enclosed spaces (via `slabPolys` and `ExtrudeGeometry`) rather than axis-aligned bounding boxes, eliminating overhang on angled walls. Built once on entering 3D (and on theme change) — it does **not** live-update; leave 3D (`Esc` or `2B`) to edit.
 - Camera travel: `keys3D` tracks held keys (`W/A/S/D`, Arrow keys, `Q/E`, `Shift`) and `loop3D()` translates both `T3.cam.position` and `T3.ctl.target` along the horizontal XZ camera forward/right vectors (or Y for `Q/E`).
 - Floor visibility: the `#s3dFloor` select (`.ctl3d`, top-left of the 3D overlay) + `sync3DFloors()`; `ui.v3dFloor` is `'all'` or a floor id. `build3D()` skips hidden floors, so an isolated floor is drawn at ground level (elevation counter only accumulates over shown floors).
 - If CDN scripts fail, `show3D` shows a toast and stays in 2D.
@@ -325,6 +325,39 @@ To script UI state, create a temporary copy of `index.html` that appends a `<scr
 
 ---
 
-## 13. Roadmap Ideas (not implemented)
+## 13. GitHub Issues
+
+Issues live at <https://github.com/MeWeGo/floorplanner/issues>. Every new issue must carry:
+
+- exactly **one type label** — what kind of work it is;
+- exactly **one priority label** — when it should be picked up.
+
+Bugs also get a `severity:` label (impact). Severity is separate from priority: severity says how bad it is, priority says when to schedule it.
+
+| Group | Label | Use for |
+| :-- | :-- | :-- |
+| Type | `bug` | Broken behaviour, regressions, crashes |
+| Type | `enhancement` | New features and user-visible improvements |
+| Type | `documentation` | README / AGENTS.md / help text only |
+| Type | `question` | Clarification, design discussion, support |
+| Priority | `priority: high` | Blocks a release or a core workflow; pick up next |
+| Priority | `priority: medium` | Important, but a workaround exists; schedule after high |
+| Priority | `priority: low` | Nice-to-have, polish, long-term ideas |
+| Severity (bugs) | `severity: high` / `medium` / `low` | Impact if the bug is hit |
+
+- `duplicate`, `invalid` and `wontfix` are closing states, not types. `accessibility`, `help wanted` and `good first issue` are optional extras.
+- A high-severity bug is not automatically high priority (e.g. a rare crash on an unused path), and a low-severity bug can be high priority (e.g. a typo in the main toolbar).
+- Do not invent labels — check `gh label list` first.
+- Body: summary, current behaviour, repro steps (bugs) or scope / non-goals (features), acceptance criteria, test notes.
+
+```bash
+gh issue create --title "..." \
+  --label bug --label "severity: medium" --label "priority: high" \
+  --body-file issue.md
+```
+
+---
+
+## 14. Roadmap Ideas (not implemented)
 
 Imperial units · roof & terrain in 3D · cost / materials list · wall-linked room polygons (auto-update) · PWA / offline caching of Three.js · custom user templates · touch-gesture pinch-zoom · curved walls · LICENSE file.
