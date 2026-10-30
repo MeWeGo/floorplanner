@@ -2370,6 +2370,32 @@ function openModal(html, kind = null) { ui.modal = kind; $('#modal').innerHTML =
 function closeModal() { ui.modal = null; $('#modalbg').style.display = 'none'; }
 $('#modalbg').addEventListener('mousedown', e => { if (e.target.id === 'modalbg') closeModal(); });
 $('#modal').addEventListener('click', e => { if (e.target.closest('[data-close]')) closeModal(); });
+/* ---------- AI (MCP) help: copy-ready prompt for the user's agent ---------- */
+function copyText(text) {
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch (e) { return false; }
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(() => true, fallback);
+    }
+  } catch (e) { }
+  return Promise.resolve(fallback());
+}
+function aiSetupPrompt() {
+  return isEN()
+    ? 'Set up live editing for my floor planner so you can change my plan directly:\n1. In the project folder, run "node mcp/bridge.js" in the background and keep it running.\n2. Tell me to open http://127.0.0.1:8787/ in my browser.\n3. When I say it is open, call pull_from_browser to read my current plan. Apply changes with push_to_browser, and read the requests I type in the app with get_user_requests (ack them with ack_user_requests).'
+    : 'Kat planımı doğrudan düzenleyebilmen için canlı köprüyü kur:\n1. Proje klasöründe "node mcp/bridge.js" komutunu arka planda çalıştır ve açık bırak.\n2. Tarayıcıda http://127.0.0.1:8787/ adresini açmamı söyle.\n3. Açtığımı söyleyince pull_from_browser ile güncel planımı oku. Değişiklikleri push_to_browser ile uygula, uygulamada yazdığım istekleri get_user_requests ile oku (işleyince ack_user_requests ile kapat).';
+}
 function helpModal() {
   const rows = isEN() ? [
     ['V / H', 'Select / Pan (hold Space for temporary pan)'],
@@ -2444,11 +2470,36 @@ function helpModal() {
     ['Odayı sürükle', 'Oda + içindeki mobilya ve metinler birlikte taşınır (tek oda)'],
     ['Ctrl+G / Ctrl+Shift+G', 'Seçili nesneleri grupla / çöz'],
   ];
-  openModal(`<h2>${L('Kısayollar & İpuçları', 'Shortcuts & Tips')} <button class="btn sm" data-close>✕</button></h2><table class="kb">${rows.map(r => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
+  const aiBlock = `<h3 style="margin:0 0 6px">${L('🤖 AI ile düzenleme', '🤖 Edit with AI')}</h3>
+  <p class="muted" style="margin:0 0 8px">${L(
+    'Yapay zekâ aracınız (OpenCode, Claude Desktop, Cursor…) planı sizin için çizebilir. Aşağıdaki istemi kopyalayıp aracınıza yapıştırın; köprüyü kendisi başlatır.',
+    'Your AI agent (OpenCode, Claude Desktop, Cursor…) can draw the plan for you. Copy the prompt below and paste it into your agent — it starts the bridge itself.'
+  )}</p>
+  <pre id="aiPromptText" style="margin:0 0 8px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;font:11.5px/1.55 var(--font-mono);white-space:pre-wrap;user-select:text">${esc(aiSetupPrompt())}</pre>
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <button class="btn sm" data-ai-prompt>${L('📋 İstemi kopyala', '📋 Copy prompt')}</button>
+    <span class="muted" id="aiPromptState"></span>
+  </div>
+  <p class="muted" style="margin:10px 0 0">${L(
+    'Köprüyü kendiniz başlatmak isterseniz: <code>node mcp/bridge.js</code> çalıştırın, sonra uygulamayı <code>http://127.0.0.1:8787/</code> adresinde açın.',
+    'Prefer to start it yourself? Run <code>node mcp/bridge.js</code>, then open the app at <code>http://127.0.0.1:8787/</code>.'
+  )}</p>`;
+  openModal(`<h2>${L('Kısayollar & İpuçları', 'Shortcuts & Tips')} <button class="btn sm" data-close>✕</button></h2>
+  ${aiBlock}
+  <h3 style="margin:22px 0 8px">${L('Klavye kısayolları', 'Keyboard shortcuts')}</h3>
+  <table class="kb">${rows.map(r => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
   <p class="muted">${L(
     'İpucu: Hızlı başlamak için <b>R</b> ile bir oda çiz, <b>D</b>/<b>N</b> ile kapı pencere ekle, <b>F</b> ile mobilyaları yerleştir. Mobilyalar duvara yaklaşınca otomatik yapışır ve döner. Üstteki <b>3B</b> düğmesi planı üç boyutlu gösterir.',
     'Tip: Press <b>R</b> to draw a rectangular room, <b>D</b>/<b>N</b> to add doors and windows, and <b>F</b> to place furniture. Furniture automatically snaps and aligns to nearby walls. Click <b>3D</b> in the top bar for an interactive 3D preview.'
   )}</p>`, 'help');
+  const aiBtn = document.querySelector('#modal [data-ai-prompt]');
+  if (aiBtn) aiBtn.onclick = async () => {
+    const ok = await copyText(aiSetupPrompt());
+    const st = document.getElementById('aiPromptState');
+    if (st) st.textContent = ok
+      ? L('Kopyalandı — aracınıza yapıştırın ✓', 'Copied — paste it into your agent ✓')
+      : L('Kopyalanamadı — metni seçip elle kopyalayın', 'Copy failed — select the text and copy it manually');
+  };
 }
 function projectThumbSvg(proj) {
   const sv = P, sf = fi, z = view.z, sd = ui.dims;

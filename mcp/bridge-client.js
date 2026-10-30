@@ -123,7 +123,6 @@
   let host = null, pill = null, dot = null, label = null, revPill = null, panel = null;
   let statusLine = null, detailLine = null, reqList = null, input = null, sendBtn = null, sendState = null;
   let helpBox = null, helpToggle = null, helpOpen = true, helpTouched = false;
-  const CMD = 'node mcp/bridge.js';
   const BRIDGE_URL = 'http://127.0.0.1:8787/';
 
   const isLight = () => { try { return document.documentElement.dataset.theme === 'light'; } catch (e) { return false; } };
@@ -153,7 +152,7 @@
     if (sendState) sendState.style.color = c.sub;
     if (helpBox) {
       helpBox.style.color = c.fg;
-      for (const el of helpBox.querySelectorAll('code')) {
+      for (const el of helpBox.querySelectorAll('code, pre')) {
         el.style.background = c.inp; el.style.border = '1px solid ' + c.bd; el.style.color = c.fg;
       }
       for (const el of helpBox.querySelectorAll('button')) {
@@ -247,12 +246,48 @@
     }
   }
 
-  /* ---------------- connection instructions ---------------- */
+  /* ---------------- connection instructions (copy-ready agent prompt) ---------------- */
+  function agentPrompt() {
+    return T(
+      'Kat planımı doğrudan düzenleyebilmen için canlı köprüyü kur:\n' +
+      '1. Proje klasöründe "node mcp/bridge.js" komutunu arka planda çalıştır ve açık bırak.\n' +
+      '2. Tarayıcıda http://127.0.0.1:8787/ adresini açmamı söyle.\n' +
+      '3. Açtığımı söyleyince pull_from_browser ile güncel planımı oku. Değişiklikleri push_to_browser ile uygula, ' +
+      'uygulamada yazdığım istekleri get_user_requests ile oku (işleyince ack_user_requests ile kapat).',
+      'Set up live editing for my floor planner so you can change my plan directly:\n' +
+      '1. In the project folder, run "node mcp/bridge.js" in the background and keep it running.\n' +
+      '2. Tell me to open http://127.0.0.1:8787/ in my browser.\n' +
+      '3. When I say it is open, call pull_from_browser to read my current plan. Apply changes with push_to_browser, ' +
+      'and read the requests I type in the app with get_user_requests (ack them with ack_user_requests).'
+    );
+  }
+
+  function copyText(text) {
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0';
+        document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return ok;
+      } catch (e) { return false; }
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).then(() => true, fallback);
+      }
+    } catch (e) { }
+    return Promise.resolve(fallback());
+  }
+
   function applyHelp() {
     if (!helpBox || !helpToggle) return;
     helpBox.style.display = helpOpen ? 'block' : 'none';
     helpToggle.textContent = helpOpen
-      ? T('Bağlantı adımlarını gizle', 'Hide connection steps')
+      ? T('Adımları gizle', 'Hide steps')
       : T('Nasıl bağlanır?', 'How do I connect?');
   }
 
@@ -267,87 +302,36 @@
       return d;
     };
 
-    const s1 = line('1. ' + T('Proje klasöründe köprüyü başlat:', 'Start the bridge in the project folder:'), 'margin-top:2px;');
+    const s1 = line(T('Bu istemi kopyalayıp yapay zekâ aracınıza yapıştırın:',
+      'Copy this prompt and paste it into your AI agent:'), 'margin-top:2px;');
 
-    const cmdRow = document.createElement('div');
-    cmdRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:4px 0 6px;';
-    const code = document.createElement('code');
-    code.textContent = CMD;
-    code.style.cssText = 'flex:1;min-width:0;padding:4px 6px;border-radius:6px;font:11px/1.4 ui-monospace,Consolas,monospace;overflow-x:auto;white-space:nowrap;';
-    const copy = document.createElement('button');
-    copy.type = 'button';
-    copy.textContent = T('Kopyala', 'Copy');
-    copy.style.cssText = 'flex:0 0 auto;border-radius:6px;padding:3px 7px;cursor:pointer;font:inherit;font-size:10.5px;';
-    copy.onclick = async () => {
-      try { await navigator.clipboard.writeText(CMD); copy.textContent = T('Kopyalandı ✓', 'Copied ✓'); }
-      catch (e) { copy.textContent = T('Kopyalanamadı', 'Copy failed'); }
-      setTimeout(() => { copy.textContent = T('Kopyala', 'Copy'); }, 2000);
+    const promptBox = document.createElement('pre');
+    promptBox.textContent = agentPrompt();
+    promptBox.style.cssText = 'margin:4px 0;padding:6px 8px;border-radius:6px;font:10.5px/1.45 ui-monospace,Consolas,monospace;white-space:pre-wrap;max-height:132px;overflow:auto;';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0 6px;';
+    const copyPrompt = document.createElement('button');
+    copyPrompt.type = 'button';
+    copyPrompt.textContent = T('📋 İstemi kopyala', '📋 Copy prompt');
+    copyPrompt.style.cssText = 'border:0;border-radius:6px;padding:4px 9px;cursor:pointer;font:inherit;font-size:11px;font-weight:700;';
+    copyPrompt.onclick = async () => {
+      const ok = await copyText(agentPrompt());
+      copyPrompt.textContent = ok
+        ? T('Kopyalandı ✓ — aracınıza yapıştırın', 'Copied ✓ — paste it into your agent')
+        : T('Kopyalanamadı — metni seçin', 'Could not copy — select the text');
+      setTimeout(() => { copyPrompt.textContent = T('📋 İstemi kopyala', '📋 Copy prompt'); }, 3000);
     };
-    cmdRow.append(code, copy);
+    btnRow.append(copyPrompt);
 
-    const s2text = document.createElement('div');
-    s2text.textContent = '2. ' + T('Bu adreste aç (veya sayfayı yenile):', 'Open the app here (or refresh):');
-    const s2 = document.createElement('div');
-    s2.append(s2text);
-    const link = document.createElement('a');
-    link.href = BRIDGE_URL;
-    link.textContent = BRIDGE_URL;
-    link.style.cssText = 'display:block;margin-top:2px;text-decoration:underline;word-break:break-all;overflow-wrap:anywhere;';
-    s2.append(link);
+    const s2 = line(T('Aracınız köprüyü başlatır ve size açacağınız adresi söyler. İstekleriniz aracıya kendiliğinden gitmez; sohbette sorunca okunur.',
+      'Your agent starts the bridge and tells you which address to open. Requests are queued, not pushed to the model — your agent reads them when you ask.'), 'margin-top:2px;opacity:.75;');
 
-    const s3 = line('3. ' + T('Aracına "uygulamadaki istekleri kontrol et" de — bekleyen istekleri get_user_requests ile okur.',
-      'Tell your agent "check the app requests" — it reads them with get_user_requests.'), 'margin-top:6px;');
+    const adv = line(T('Kendiniz başlatmak isterseniz: node mcp/bridge.js → ' + BRIDGE_URL,
+      'Prefer to run it yourself: node mcp/bridge.js → ' + BRIDGE_URL), 'margin-top:6px;opacity:.6;word-break:break-word;');
 
-    const note = line(T('İstekler aracıya kendiliğinden gitmez; sohbette sorunca okunur. Planlar 127.0.0.1:8787 origin\'inde saklanır (file:// deposundan ayrıdır).',
-      'Requests are queued, not pushed to the model — your agent reads them when you ask. Plans live in the 127.0.0.1:8787 origin (separate from file:// storage).'), 'margin-top:6px;opacity:.7;');
-
-    helpBox.append(s1, cmdRow, s2, s3, note);
+    helpBox.append(s1, promptBox, btnRow, s2, adv);
     applyHelp();
-  }
-
-  /* ---------------- "AI connection" section in the app's Help modal ---------------- */
-  function aiHelpSection() {
-    const wrap = document.createElement('div');
-    wrap.id = 'fpAiHelpSection';
-
-    const h = document.createElement('h3');
-    h.textContent = T('🤖 AI bağlantısı (MCP)', '🤖 AI connection (MCP)');
-    h.style.cssText = 'margin:18px 0 6px;';
-
-    const table = document.createElement('table');
-    table.className = 'kb';
-    const rows = connected ? [
-      ['AI', T('Bağlı. Sol alttaki düğme canlı revizyonu gösterir; tıklayıp aracıya istek yazabilirsiniz.',
-        'Connected. The bottom-left pill shows the live revision; click it to queue a request for your agent.')],
-      ['get_user_requests', T('Aracı bekleyen istekleri bununla okur, ack_user_requests ile kapatır.',
-        'Your agent reads queued requests with this, and clears them with ack_user_requests.')],
-    ] : [
-      [CMD, T('Köprüyü başlat (proje klasöründe, ayrı bir terminalde)', 'Start the bridge (project folder, in a separate terminal)')],
-      [BRIDGE_URL, T('Uygulamayı bu adreste açın veya sayfayı yenileyin', 'Open the app at this address, or refresh the page')],
-      ['AI', T('Sol alttaki düğme: bağlantı durumu + canlı revizyon; tıklayınca istek kutusu açılır',
-        'Bottom-left pill: connection status + live revision; click it for the request box')],
-      ['get_user_requests', T('Aracınıza "uygulamadaki istekleri kontrol et" deyin — istekleri bununla okur',
-        'Tell your agent "check the app requests" — it reads them with this tool')],
-    ];
-    for (const pair of rows) {
-      const tr = document.createElement('tr');
-      const td1 = document.createElement('td');
-      const kbd = document.createElement('kbd');
-      kbd.textContent = pair[0];
-      td1.appendChild(kbd);
-      const td2 = document.createElement('td');
-      td2.textContent = pair[1];
-      tr.append(td1, td2);
-      table.appendChild(tr);
-    }
-
-    const note = document.createElement('p');
-    note.className = 'muted';
-    note.textContent = T('İstekler aracıya kendiliğinden iletilmez: sohbette sorunca okunur (get_user_requests). Planlar 127.0.0.1:8787 origin\'inde, file:// deposundan ayrı saklanır; taşımak için ⬇ JSON / 📂 Aç kullanın.',
-      'Requests are not pushed to the model by themselves — your agent reads them when you ask (get_user_requests). Plans are stored in the 127.0.0.1:8787 origin, separate from file:// storage; use ⬇ JSON / 📂 Open JSON to move plans between them.');
-
-    wrap.append(h, table, note);
-    return wrap;
   }
 
   function installHelpHook() {
@@ -355,11 +339,7 @@
     const orig = helpModal;
     helpModal = function () {
       const r = orig.apply(this, arguments);
-      try {
-        if (panel) panel.style.display = 'none';   // don't cover the modal
-        const modal = document.getElementById('modal');
-        if (modal && !document.getElementById('fpAiHelpSection')) modal.appendChild(aiHelpSection());
-      } catch (e) { }
+      try { if (panel) panel.style.display = 'none'; } catch (e) { }   // don't cover the modal
       return r;
     };
     helpModal.__fpWrapped = true;
@@ -404,7 +384,7 @@
     pill.append(dot, label, revPill);
 
     panel = document.createElement('div');
-    panel.style.cssText = 'display:none;position:absolute;left:0;bottom:calc(100% + 8px);width:300px;max-height:min(72vh, 560px);overflow-y:auto;border-radius:12px;padding:10px;box-shadow:0 12px 34px rgba(0,0,0,.34);';
+    panel.style.cssText = 'display:none;position:absolute;left:0;bottom:calc(100% + 8px);width:340px;max-height:min(72vh, 560px);overflow-y:auto;border-radius:12px;padding:10px;box-shadow:0 12px 34px rgba(0,0,0,.34);';
 
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;';
