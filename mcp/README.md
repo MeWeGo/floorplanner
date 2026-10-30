@@ -38,7 +38,9 @@ The injected client adds a small floating **`AI`** pill to the app (bottom-left,
 | 🟢 `AI · rev 12` | SSE connected; the AI is bridged and revision 12 is live |
 | ⚪ `AI` | Bridge unreachable (not running / tab opened without the bridge) |
 
-Clicking the pill opens a panel with the bridge status (plan name, revision, connected tabs, last update time) and the pending request list. The **Ask AI** input queues an instruction — for example *"add a 12 m² bathroom with a shower and a toilet"* — through `POST /__requests`. It is **not** delivered to the model by itself; the agent reads it when you ask it to ("check the app / any new requests?") via `get_user_requests`, does the work, then calls `ack_user_requests`. Acknowledging clears the row live in the panel (SSE `requests-changed`).
+Clicking the pill opens a panel with the bridge status (plan name, revision, connected tabs, last update time) and the pending request list. A **"How do I connect?"** block inside the panel spells out the three steps — run `node mcp/bridge.js` (with a copy button), open/refresh `http://127.0.0.1:8787/`, then ask your agent to check the requests. It expands automatically while the bridge is offline, and the same instructions appear in the app's **❓ Help** modal (injected at runtime, so the committed app files stay untouched).
+
+The **Ask AI** input queues an instruction — for example *"add a 12 m² bathroom with a shower and a toilet"* — through `POST /__requests`. It is **not** delivered to the model by itself; the agent reads it when you ask it to ("check the app / any new requests?") via `get_user_requests`, does the work, then calls `ack_user_requests`. Acknowledging clears the row live in the panel (SSE `requests-changed`).
 
 The panel is bilingual (`tr`/`en` via the app's `L()`) and follows the dark/light theme.
 

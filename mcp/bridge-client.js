@@ -122,6 +122,9 @@
   /* ---------------- floating status pill + "Ask AI" panel ---------------- */
   let host = null, pill = null, dot = null, label = null, revPill = null, panel = null;
   let statusLine = null, detailLine = null, reqList = null, input = null, sendBtn = null, sendState = null;
+  let helpBox = null, helpToggle = null, helpOpen = true, helpTouched = false;
+  const CMD = 'node mcp/bridge.js';
+  const BRIDGE_URL = 'http://127.0.0.1:8787/';
 
   const isLight = () => { try { return document.documentElement.dataset.theme === 'light'; } catch (e) { return false; } };
   function palette() {
@@ -148,25 +151,36 @@
     if (detailLine) detailLine.style.color = c.sub;
     if (statusLine) statusLine.style.color = c.fg;
     if (sendState) sendState.style.color = c.sub;
+    if (helpBox) {
+      helpBox.style.color = c.fg;
+      for (const el of helpBox.querySelectorAll('code')) {
+        el.style.background = c.inp; el.style.border = '1px solid ' + c.bd; el.style.color = c.fg;
+      }
+      for (const el of helpBox.querySelectorAll('button')) {
+        el.style.background = c.inp; el.style.border = '1px solid ' + c.bd; el.style.color = c.fg;
+      }
+      for (const el of helpBox.querySelectorAll('a')) el.style.color = c.acc;
+    }
   }
 
   function setConnected(ok) {
     connected = !!ok;
     if (!label) return;
-    label.textContent = connected ? 'AI' : 'AI';
+    label.textContent = 'AI';
     pill.title = connected
       ? T('AI köprüsü bağlı — tıklayarak istek gönderin', 'AI bridge connected — click to send a request')
-      : T('AI köprüsüne bağlanılamadı', 'AI bridge is offline');
+      : T('AI köprüsü kapalı — bağlantı adımları için tıklayın', 'AI bridge offline — click for connection steps');
     paint();
     if (statusLine) statusLine.textContent = connected
       ? T('Bağlı — AI planı canlı düzenleyebilir', 'Connected — the AI can edit live')
-      : T('Bağlantı yok — köprü çalışmıyor olabilir', 'Offline — is the bridge running?');
+      : T('Bağlı değil — köprü çalışmıyor', 'Not connected — the bridge is not running');
     if (detailLine && !connected) detailLine.textContent = location.origin;
+    if (!helpTouched && helpOpen === connected) { helpOpen = !connected; applyHelp(); }
   }
 
   function uiTick() {
     if (!revPill) return;
-    revPill.textContent = rev ? '· rev ' + rev : '';
+    revPill.textContent = rev ? ' · rev ' + rev : '';
     paint();
   }
 
@@ -233,11 +247,149 @@
     }
   }
 
+  /* ---------------- connection instructions ---------------- */
+  function applyHelp() {
+    if (!helpBox || !helpToggle) return;
+    helpBox.style.display = helpOpen ? 'block' : 'none';
+    helpToggle.textContent = helpOpen
+      ? T('Bağlantı adımlarını gizle', 'Hide connection steps')
+      : T('Nasıl bağlanır?', 'How do I connect?');
+  }
+
+  function buildHelp() {
+    if (!helpBox || helpBox.dataset.built === '1') return;
+    helpBox.dataset.built = '1';
+
+    const line = (txt, extra) => {
+      const d = document.createElement('div');
+      d.textContent = txt;
+      if (extra) d.style.cssText = extra;
+      return d;
+    };
+
+    const s1 = line('1. ' + T('Proje klasöründe köprüyü başlat:', 'Start the bridge in the project folder:'), 'margin-top:2px;');
+
+    const cmdRow = document.createElement('div');
+    cmdRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:4px 0 6px;';
+    const code = document.createElement('code');
+    code.textContent = CMD;
+    code.style.cssText = 'flex:1;min-width:0;padding:4px 6px;border-radius:6px;font:11px/1.4 ui-monospace,Consolas,monospace;overflow-x:auto;white-space:nowrap;';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = T('Kopyala', 'Copy');
+    copy.style.cssText = 'flex:0 0 auto;border-radius:6px;padding:3px 7px;cursor:pointer;font:inherit;font-size:10.5px;';
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(CMD); copy.textContent = T('Kopyalandı ✓', 'Copied ✓'); }
+      catch (e) { copy.textContent = T('Kopyalanamadı', 'Copy failed'); }
+      setTimeout(() => { copy.textContent = T('Kopyala', 'Copy'); }, 2000);
+    };
+    cmdRow.append(code, copy);
+
+    const s2text = document.createElement('div');
+    s2text.textContent = '2. ' + T('Bu adreste aç (veya sayfayı yenile):', 'Open the app here (or refresh):');
+    const s2 = document.createElement('div');
+    s2.append(s2text);
+    const link = document.createElement('a');
+    link.href = BRIDGE_URL;
+    link.textContent = BRIDGE_URL;
+    link.style.cssText = 'display:block;margin-top:2px;text-decoration:underline;word-break:break-all;overflow-wrap:anywhere;';
+    s2.append(link);
+
+    const s3 = line('3. ' + T('Aracına "uygulamadaki istekleri kontrol et" de — bekleyen istekleri get_user_requests ile okur.',
+      'Tell your agent "check the app requests" — it reads them with get_user_requests.'), 'margin-top:6px;');
+
+    const note = line(T('İstekler aracıya kendiliğinden gitmez; sohbette sorunca okunur. Planlar 127.0.0.1:8787 origin\'inde saklanır (file:// deposundan ayrıdır).',
+      'Requests are queued, not pushed to the model — your agent reads them when you ask. Plans live in the 127.0.0.1:8787 origin (separate from file:// storage).'), 'margin-top:6px;opacity:.7;');
+
+    helpBox.append(s1, cmdRow, s2, s3, note);
+    applyHelp();
+  }
+
+  /* ---------------- "AI connection" section in the app's Help modal ---------------- */
+  function aiHelpSection() {
+    const wrap = document.createElement('div');
+    wrap.id = 'fpAiHelpSection';
+
+    const h = document.createElement('h3');
+    h.textContent = T('🤖 AI bağlantısı (MCP)', '🤖 AI connection (MCP)');
+    h.style.cssText = 'margin:18px 0 6px;';
+
+    const table = document.createElement('table');
+    table.className = 'kb';
+    const rows = connected ? [
+      ['AI', T('Bağlı. Sol alttaki düğme canlı revizyonu gösterir; tıklayıp aracıya istek yazabilirsiniz.',
+        'Connected. The bottom-left pill shows the live revision; click it to queue a request for your agent.')],
+      ['get_user_requests', T('Aracı bekleyen istekleri bununla okur, ack_user_requests ile kapatır.',
+        'Your agent reads queued requests with this, and clears them with ack_user_requests.')],
+    ] : [
+      [CMD, T('Köprüyü başlat (proje klasöründe, ayrı bir terminalde)', 'Start the bridge (project folder, in a separate terminal)')],
+      [BRIDGE_URL, T('Uygulamayı bu adreste açın veya sayfayı yenileyin', 'Open the app at this address, or refresh the page')],
+      ['AI', T('Sol alttaki düğme: bağlantı durumu + canlı revizyon; tıklayınca istek kutusu açılır',
+        'Bottom-left pill: connection status + live revision; click it for the request box')],
+      ['get_user_requests', T('Aracınıza "uygulamadaki istekleri kontrol et" deyin — istekleri bununla okur',
+        'Tell your agent "check the app requests" — it reads them with this tool')],
+    ];
+    for (const pair of rows) {
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td');
+      const kbd = document.createElement('kbd');
+      kbd.textContent = pair[0];
+      td1.appendChild(kbd);
+      const td2 = document.createElement('td');
+      td2.textContent = pair[1];
+      tr.append(td1, td2);
+      table.appendChild(tr);
+    }
+
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = T('İstekler aracıya kendiliğinden iletilmez: sohbette sorunca okunur (get_user_requests). Planlar 127.0.0.1:8787 origin\'inde, file:// deposundan ayrı saklanır; taşımak için ⬇ JSON / 📂 Aç kullanın.',
+      'Requests are not pushed to the model by themselves — your agent reads them when you ask (get_user_requests). Plans are stored in the 127.0.0.1:8787 origin, separate from file:// storage; use ⬇ JSON / 📂 Open JSON to move plans between them.');
+
+    wrap.append(h, table, note);
+    return wrap;
+  }
+
+  function installHelpHook() {
+    if (typeof helpModal !== 'function' || helpModal.__fpWrapped) return;
+    const orig = helpModal;
+    helpModal = function () {
+      const r = orig.apply(this, arguments);
+      try {
+        if (panel) panel.style.display = 'none';   // don't cover the modal
+        const modal = document.getElementById('modal');
+        if (modal && !document.getElementById('fpAiHelpSection')) modal.appendChild(aiHelpSection());
+      } catch (e) { }
+      return r;
+    };
+    helpModal.__fpWrapped = true;
+    try { const b = document.getElementById('bHelp'); if (b) b.onclick = helpModal; } catch (e) { }
+  }
+
+  /* keep the pill just above the footer (its height changes with the window width) */
+  function placePill() {
+    if (!host) return;
+    let h = 54;
+    try {
+      const f = document.querySelector('footer') || document.querySelector('.foot');
+      if (f) {
+        const r = f.getBoundingClientRect();
+        if (r && r.height > 0 && r.height < innerHeight * 0.6) h = Math.round(r.height);
+      }
+    } catch (e) { }
+    host.style.bottom = (h + 10) + 'px';
+    if (panel) {
+      const top = host.getBoundingClientRect().top;
+      panel.style.maxHeight = Math.max(180, Math.round(top - 16)) + 'px';
+    }
+  }
+
   function uiInit() {
     if (host) return;
     host = document.createElement('div');
     host.id = 'fpAiBridgeUi';
-    host.style.cssText = 'position:fixed;left:64px;bottom:54px;z-index:900;font:12px/1.45 "Plus Jakarta Sans",system-ui,sans-serif;';
+    host.style.cssText = 'position:fixed;left:64px;z-index:95;font:12px/1.45 "Plus Jakarta Sans",system-ui,sans-serif;';
+    placePill();
 
     pill = document.createElement('button');
     pill.type = 'button';
@@ -252,7 +404,7 @@
     pill.append(dot, label, revPill);
 
     panel = document.createElement('div');
-    panel.style.cssText = 'display:none;position:absolute;left:0;bottom:calc(100% + 8px);width:300px;border-radius:12px;padding:10px;box-shadow:0 12px 34px rgba(0,0,0,.34);';
+    panel.style.cssText = 'display:none;position:absolute;left:0;bottom:calc(100% + 8px);width:300px;max-height:min(72vh, 560px);overflow-y:auto;border-radius:12px;padding:10px;box-shadow:0 12px 34px rgba(0,0,0,.34);';
 
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;';
@@ -272,6 +424,15 @@
 
     detailLine = document.createElement('div');
     detailLine.style.cssText = 'font-size:11px;opacity:.75;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+
+    helpToggle = document.createElement('button');
+    helpToggle.type = 'button';
+    helpToggle.style.cssText = 'border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;font-size:11px;opacity:.8;padding:0;margin:0 0 6px;text-decoration:underline;';
+    helpToggle.onclick = () => { helpOpen = !helpOpen; helpTouched = true; applyHelp(); };
+
+    helpBox = document.createElement('div');
+    helpBox.style.cssText = 'display:none;font-size:11px;line-height:1.5;margin-bottom:8px;';
+    helpBox.textContent = '';
 
     reqList = document.createElement('div');
     reqList.style.cssText = 'max-height:120px;overflow:auto;margin-bottom:8px;font-size:11.5px;';
@@ -297,9 +458,20 @@
     sendState.textContent = T('Aracı: get_user_requests', 'Agent tool: get_user_requests');
     sendState.style.cssText = 'font-size:10.5px;opacity:.65;margin-top:6px;';
 
-    panel.append(head, statusLine, detailLine, reqList, row, sendState);
+    panel.append(head, statusLine, detailLine, helpToggle, helpBox, reqList, row, sendState);
     host.append(panel, pill);
     document.body.appendChild(host);
+    buildHelp();
+    applyHelp();
+    placePill();
+    setTimeout(placePill, 400);
+    setTimeout(placePill, 1500);
+    if (typeof ResizeObserver === 'function') {
+      try {
+        const f = document.querySelector('footer') || document.querySelector('.foot');
+        if (f) new ResizeObserver(placePill).observe(f);
+      } catch (e) { }
+    }
 
     pill.onclick = () => {
       const open = panel.style.display === 'none' || !panel.style.display;
@@ -343,7 +515,9 @@
 
   /* ---------------- boot ---------------- */
   function start() {
+    try { installHelpHook(); } catch (e) { console.warn('[ai-bridge] help hook failed', e); }
     try { uiInit(); } catch (e) { console.warn('[ai-bridge] UI failed', e); }
+    window.addEventListener('resize', placePill);
     setConnected(false);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
