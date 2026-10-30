@@ -3212,11 +3212,55 @@ function init3D() {
 function resize3D() { const el = $('#v3d'); T3.r.setSize(el.clientWidth, el.clientHeight); T3.cam.aspect = el.clientWidth / el.clientHeight; T3.cam.updateProjectionMatrix(); }
 function set3DCam(kind) {
   if (!T3 || !T3.fit) return;
-  const { cx, cz, sz, elev } = T3.fit;
-  if (kind === 'top') { T3.cam.position.set(cx, sz * 2.1 + elev, cz + 1); T3.ctl.target.set(cx, elev * 0.4, cz); }
-  else if (kind === 'eye') { T3.cam.position.set(cx + sz * 0.18, 160, cz + sz * 0.95); T3.ctl.target.set(cx, 140, cz); }
-  else { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); }
+  const f = T3.fit;
+  const { cx, cz, sz, elev } = f;
+  const x0 = f.x0 != null ? f.x0 : cx - sz / 2, x1 = f.x1 != null ? f.x1 : cx + sz / 2;
+  const z0 = f.z0 != null ? f.z0 : cz - sz / 2, z1 = f.z1 != null ? f.z1 : cz + sz / 2;
+  const w = Math.max(x1 - x0, 200), d = Math.max(z1 - z0, 200);
+
+  if (kind === 'top') {
+    T3.cam.position.set(cx, elev + sz * 2.1, cz + 1);
+    T3.ctl.target.set(cx, 0, cz);
+  } else if (kind === 'eye') {
+    // Stand in the LARGEST room and look across it — placing the camera along
+    // the building axis just parks it against a partition wall.
+    // (The old code sat at cz + 0.95·sz, i.e. outside the building entirely.)
+    const r = eyeRoom();
+    const px0 = r ? r.x0 : x0, px1 = r ? r.x1 : x1;
+    const pz0 = r ? r.z0 : z0, pz1 = r ? r.z1 : z1;
+    const eCx = (px0 + px1) / 2;
+    const longZ = (pz1 - pz0) >= (px1 - px0);
+    if (longZ) {
+      T3.cam.position.set(eCx, elev + 165, pz1 - Math.min(60, (pz1 - pz0) / 4));
+      T3.ctl.target.set(eCx, elev + 115, pz0 + (pz1 - pz0) * 0.35);
+    } else {
+      T3.cam.position.set(px1 - Math.min(60, (px1 - px0) / 4), elev + 165, (pz0 + pz1) / 2);
+      T3.ctl.target.set(px0 + (px1 - px0) * 0.35, elev + 115, (pz0 + pz1) / 2);
+    }
+  } else {
+    const dist = Math.max(w, d) * 1.15 + 300;
+    T3.cam.position.set(cx + w * 0.35, elev + dist * 0.85, cz + dist);
+    T3.ctl.target.set(cx, elev + 40, cz);
+  }
   T3.ctl.update();
+}
+/* Bounding box of the biggest room on the current floor — the best spot to stand. */
+function eyeRoom() {
+  const f = P && P.floors[fi];
+  if (!f || !f.rooms || !f.rooms.length) return null;
+  let best = null, bestArea = 0;
+  for (const r of f.rooms) {
+    if (!r.pts || r.pts.length < 3) continue;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const p of r.pts) {
+      if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
+      if (p.y < z0) z0 = p.y; if (p.y > z1) z1 = p.y;
+    }
+    const a = (x1 - x0) * (z1 - z0);
+    if (a > bestArea) { bestArea = a; best = { x0, x1, z0, z1, area: a }; }
+  }
+  // ignore slivers/degenerate polygons
+  return best && best.area > 10000 ? best : null;
 }
 function loop3D() {
   if (!T3 || !T3.run) return;
@@ -3722,7 +3766,7 @@ function build3D(keepCam = false) {
   });
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xd8d2c5 : 0x11161e));
   ground.rotation.x = -Math.PI / 2; ground.position.y = -21; ground.receiveShadow = true; S.add(ground);
-  T3.fit = { cx, cz, sz, elev };
+  T3.fit = { cx, cz, sz, elev, x0: all.x0, x1: all.x1, z0: all.y0, z1: all.y1 };
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); }
   T3.mats = Object.values(matCache).concat(extraMats, [lineMat]); // sonraki build3D çağrısında dispose edilmek üzere
   T3.texs = texs;
