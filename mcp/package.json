@@ -1,0 +1,9 @@
+{
+  "name": "floorplanner-mcp",
+  "version": "1.0.0",
+  "description": "Zero-dependency MCP server for Kat Planı Çizici / Floor Planner — AI agents create & edit floor plan JSON that the web app opens.",
+  "bin": { "floorplanner-mcp": "./server.js" },
+  "engines": { "node": ">=16" },
+  "license": "UNLICENSED",
+  "private": true
+}

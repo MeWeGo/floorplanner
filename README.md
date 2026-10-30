@@ -25,6 +25,7 @@
 | **Live app** | <https://mewego.github.io/floorplanner/> |
 | **Source code** | <https://github.com/MeWeGo/floorplanner> |
 | **Developer / AI-agent guide** | [`AGENTS.md`](AGENTS.md) |
+| **AI / MCP server** | [`mcp/README.md`](mcp/README.md) |
 | **Original prototype** | [`legacy-index.html`](legacy-index.html) |
 
 > **Bilingual UI (English & Turkish):** Automatically detects your browser language (`en` / `tr`) on first visit, and lets you switch anytime with the **🌐 EN / TR** button in the top bar.
@@ -85,6 +86,19 @@
 ### 📤 Export
 - **PNG**, **SVG**, and **PDF / Print** (A4 landscape) with title block and scale bar.
 - Exports always render on **white paper** regardless of the editor theme.
+
+### 🤖 AI Integration (MCP)
+An optional [MCP server](mcp/README.md) lets AI agents (Claude Desktop, OpenCode, Cursor, …) **draw plans for you**: ask for *"a 2+1 apartment with a 4×5 m living room"* and open the saved `.json` in the app. Zero dependencies, no build — it edits the exact same project JSON the app imports/exports:
+
+```sh
+node mcp/server.js      # stdio MCP server, 21 tools, Node ≥ 16
+```
+
+**Live mode:** with `node mcp/bridge.js` running and the app open at <http://127.0.0.1:8787/>, AI edits show up **instantly in the open tab**, and the app autosaves them to IndexedDB — so a **refresh keeps the changes** and the AI can pull your own edits back. Nothing in `index.html` / `app.js` changes (the bridge injects a small client script when serving).
+
+**Frontend indicator:** the bridge-injected client shows a floating **AI** pill (green dot = connected, grey = bridge offline, with the live plan revision). Click it to see the bridge details and an **Ask AI** box — type an instruction such as *"add a 12 m² bathroom with a shower"* and the agent can pick it up with `get_user_requests` (then mark it done with `ack_user_requests`).
+
+Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_project` · `add_wall` / `add_rect_walls` · `add_opening` · `add_furniture` · `add_room` · `add_text` · `update_object` / `delete_objects` · `add_floor` · `summarize` / `list_catalog` · `browser_status` / `push_to_browser` / `pull_from_browser` / `get_user_requests` / `ack_user_requests`. Client configuration and the full workflow are in [`mcp/README.md`](mcp/README.md).
 
 ### 🧊 3D View & WASD Walk
 One click turns the plan into an interactive 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors. Orbit/zoom with the mouse, or walk around with **`WASD` / Arrow keys** (`Q`/`E` for down/up, `Shift` for faster travel).
@@ -160,6 +174,9 @@ floorplanner/
 ├── index.html          # App shell: header, tool rail, library, canvas, panels, footer
 ├── style.css           # Theme variables (dark default, [data-theme=light]) and layout
 ├── app.js              # All application logic (~1 500 lines, no dependencies)
+├── mcp/server.js       # Optional MCP server for AI agents (zero-dependency, Node ≥ 16)
+├── mcp/README.md       # MCP setup: Claude Desktop / OpenCode / Cursor + tool list
+├── opencode.jsonc      # Registers the MCP server for OpenCode
 ├── legacy-index.html   # Original single-file prototype (kept for reference)
 ├── README.md           # You are here
 └── AGENTS.md           # Architecture & conventions for developers / AI agents

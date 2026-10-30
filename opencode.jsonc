@@ -1,0 +1,13 @@
+{
+  // Kat Planı Çizici — local zero-dependency MCP server (AI floor-plan tools).
+  // Companion live bridge (optional): node mcp/bridge.js → http://127.0.0.1:8787/
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "floorplanner": {
+        "type": "local",
+        "command": ["node", "mcp/server.js"]
+      }
+    }
+  }
+}

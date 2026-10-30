@@ -25,6 +25,11 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 | `index.html` | DOM shell. Element **ids are the contract** with `app.js` (see §6) |
 | `style.css` | CSS variables for chrome theming; layout; components |
 | `app.js` | The entire application (single file, ordered by section banners `/* ---------- … ---------- */`) |
+| `mcp/server.js` | **Optional** zero-dependency MCP server (stdio) so AI agents can create/edit plans as JSON — see §8 |
+| `mcp/bridge.js` | Optional local HTTP bridge + app server; injects `bridge-client.js` for live AI editing — see §8 |
+| `mcp/bridge-client.js` | Injected into `index.html` at request time by the bridge (not linked from the app) |
+| `mcp/README.md` | MCP client setup (Claude Desktop, OpenCode, Cursor) + tool reference |
+| `opencode.jsonc` | Registers `mcp/server.js` as a project-local OpenCode MCP server |
 | `legacy-index.html` | Original prototype. **Do not edit**; kept for reference only |
 | `README.md` | User-facing docs. Keep shortcuts / features in sync with the code |
 
@@ -32,7 +37,7 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 
 ## 2. Golden Rules (read first)
 
-1. **No dependencies, no build.** Do not introduce npm, bundlers, frameworks or TypeScript. The app must work by double-clicking `index.html`.
+1. **No dependencies, no build.** Do not introduce npm, bundlers, frameworks or TypeScript. The app must work by double-clicking `index.html`. The only exception is the optional `mcp/` tooling, which is also zero-dependency Node and must never be loaded by `app.js`.
 2. **Keep all UI text bilingual (`tr` / `en`)** using `L('Türkçe', 'English')` (labels, toasts, prompts, modal text, catalog items). Code identifiers and comments may be English or Turkish — match the surrounding code.
 3. **State is the single source of truth.** Mutate `P` (project) → call `commit()` → call `refresh()`/`render()`. Never read geometry back from the DOM.
 4. **Always `commit()` after a completed user action** (not on every mousemove) so undo/redo and autosave work.
@@ -232,6 +237,15 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 
 ### Export
 `exportSvg()` → `{svg,w,h}`; PNG rasterises that SVG via `Image` + canvas; PDF opens a print window (`window.open` + `print()`). Includes a title block (project, floor, date, total room area) and a 2 m scale bar. Background image is included only if its layer is visible.
+
+### MCP server (`mcp/server.js`)
+- **Optional tooling, not part of the app.** A zero-dependency Node (≥ 16) MCP server over stdio — JSON-RPC 2.0 is implemented by hand, so there is no `npm install` and no build. It lets AI agents (Claude Desktop, OpenCode, Cursor, …) author plans as JSON: `new_project`, `add_wall` / `add_rect_walls`, `add_opening`, `add_furniture`, `add_room`, `add_text`, `update_object`, `delete_objects`, `add_floor`, `summarize`, `list_catalog`, `load_project` / `save_project` / `get_project` / `set_project`.
+- **Live browser bridge (`mcp/bridge.js`).** IndexedDB is per-origin and a Node process cannot write it, so the bridge serves the app at `http://127.0.0.1:8787/` and **injects `mcp/bridge-client.js` into `index.html` at request time** (the committed app files stay untouched). Pushed plans (`push_to_browser` → `PUT /__plan.json` → SSE `event: plan`) are applied through the app's own `loadProject()`, so autosave persists them to IndexedDB (refresh keeps them); local edits are pushed back on every `autosave()` (debounced, guarded against echo loops). `browser_status` / `pull_from_browser` cover the AI side.
+- **User → agent request queue.** The injected client also renders a floating, read-only **`AI` pill** (green = SSE connected, grey = bridge offline, live revision) that opens a panel with bridge details and an **Ask AI** box. Submissions go to `POST /__requests`, are kept in bridge memory, and are read by the agent with `get_user_requests` / cleared with `ack_user_requests` (SSE `requests-changed` refreshes the open panel). Requests are **not** pushed to the model automatically — the user asks the agent to check them. The UI is bilingual via `L()` and repaints on `data-theme` changes (MutationObserver); the pill has no pause switch by design.
+- No `seed` event on SSE connect — the client pulls on load (`/__plan.json`) once the app has booted (it wraps `loadProject` to detect that), otherwise a pre-boot apply gets overwritten by the app's startup.
+- The workflow is file-based too: the agent saves a plan `.json`, the user opens it in the app via **📂 Aç**; exports from the app (**⬇ JSON**) can be loaded back with `load_project`.
+- `CATALOG`, `OPENINGS`, `ROOMCOL`, `newProject`/`newFloor` defaults and the `mkWall`/`mkOp`/`mkFurn`/`mkRoom`/`addRectWalls`/`deleteIds` mirrors must stay **in sync with `app.js`** — when you change the data model or catalogue, update both files (and `node --check mcp/server.js`). The bridge client depends on the global names `loadProject`, `autosave`, `templatesModal`, `toast`, `L`, `schedBuild3D`, `ui`.
+- `opencode.jsonc` registers the server for OpenCode (`node mcp/server.js`). Never `require()`/import it from `app.js`: the app must remain dependency-free and `file://`-runnable.
 
 ---
 
