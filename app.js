@@ -3799,7 +3799,7 @@ function applyLangUI() {
   $('#bLang').title = L('Switch to English', 'Türkçe diline geç');
   $('#bTheme').title = L('Tema (Açık / Koyu)', 'Theme (Light / Dark)');
   $('#bHelp').textContent = L('❓ Yardım', '❓ Help');
-  $('#bAi').title = L('AI ile düzenle (kurulum gerekmez)', 'Edit with AI (no install needed)');
+  $('#bAi').title = L('AI ile düzenle (ajanınız planı canlı düzenler)', 'Edit with AI (your agent edits the plan live)');
   $('#search').placeholder = L('🔍 Mobilya ara...', '🔍 Search furniture...');
   $('#zFit').title = L('Sığdır (0)', 'Fit to view (0)');
   $('#lblSnap').textContent = L('Yakala (G)', 'Snap (G)');
