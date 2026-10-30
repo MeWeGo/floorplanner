@@ -1,0 +1,51 @@
+name: Deploy to GitHub Pages
+
+# main only deploys after the whole CI suite passes. This replaces the old
+# "deploy from a branch" behaviour, which published every push immediately —
+# including one that crashed the app on boot (#b3dFit).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test before deploy
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Publish
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Enables Pages with "GitHub Actions" as the source. If the token cannot
+      # change repository settings, set Settings ▸ Pages ▸ Source to
+      # "GitHub Actions" once and this step becomes a no-op.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      # The site is the repo root (index.html, app.js, style.css), exactly what
+      # the branch deploy used to publish. Agent tooling and tests ship too but
+      # are inert; keep the repo lean if that matters.
+      - name: Upload the static site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

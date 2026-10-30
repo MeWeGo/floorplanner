@@ -29,6 +29,8 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 | `mcp/bridge.js` | Optional local HTTP bridge: SSE plan sync + user request queue (the client lives in `app.js`) — see §8 |
 | `mcp/README.md` | MCP client setup (Claude Desktop, OpenCode, Cursor) + tool reference |
 | `opencode.jsonc` | Registers `mcp/server.js` as a project-local OpenCode MCP server |
+| `tests/` | Zero-dependency test suite (`node --test tests/*.test.js`, `node tests/browser-smoke.js`) — see §10 |
+| `.github/workflows/` | `ci.yml` (tests) and `deploy.yml` (test-gated Pages publish) — see §12 |
 | `legacy-index.html` | Original prototype. **Do not edit**; kept for reference only |
 | `README.md` | User-facing docs. Keep shortcuts / features in sync with the code |
 
@@ -288,14 +290,36 @@ Increment `P.v` in `newProject()`, add a migration branch in `loadProject()`, ke
 
 ## 10. Verification Checklist
 
-No test framework exists. Before committing:
+Run the suite first — it covers what used to be manual and is what CI enforces:
 
-1. **Syntax:** `node --check app.js`
-2. **Smoke test in a browser** (or headless): load `index.html`; pick each template; draw a wall, rect room, detect a room, place a door/window/furniture; undo/redo; save → reopen from *Projelerim*.
-3. **Both themes:** toggle 🌓 and confirm walls, openings, rooms, furniture, labels, grid and 3D are legible.
-4. **Grid modes:** square / triangle / dots / off; presets `1 m`, `3 m`, `5 m` and **Özel…**.
-5. **Exports:** PNG/SVG/PDF come out on white paper in dark mode.
-6. **Old data:** open a JSON saved before your change.
+```bash
+node --test tests/*.test.js     # fast, no browser: syntax, DOM contract, MCP, bridge
+node tests/browser-smoke.js     # boots the app in headless Chromium and drives it
+```
+
+| File | Guards against |
+| :-- | :-- |
+| `tests/syntax.test.js` | a JS parse error; inline `<script>` creeping back; a broken `opencode.jsonc` |
+| `tests/dom-contract.test.js` | **`$('#id')` lookups with no element** — the `#b3dFit` class of crash that once shipped to main; also duplicate ids |
+| `tests/mcp.test.js` | tool surface shrinking, a broken plan round-trip, `CATALOG`/`OPENINGS` drifting from `app.js` |
+| `tests/bridge.test.js` | plan store/revisioning, the request queue, SSE, and the **`Access-Control-Allow-Private-Network`** header the deployed page needs |
+| `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build |
+
+`browser-smoke.js` skips itself (exit 0) when no Chromium is found; set `CHROME_BIN` to point at one. In CI it always runs.
+
+**Still verify by eye** (the suite cannot judge these):
+
+1. **Both themes:** toggle 🌓 and confirm walls, openings, rooms, furniture, labels, grid and 3D are legible.
+2. **Grid modes:** square / triangle / dots / off; presets `1 m`, `3 m`, `5 m` and **Özel…**.
+3. **Exports:** PNG/SVG/PDF come out on white paper in dark mode.
+4. **Old data:** open a JSON saved before your change.
+5. **AI flow:** `node mcp/bridge.js`, then confirm the floating `AI` pill appears and a `push_to_browser` lands in the tab.
+
+### Adding a test
+
+Tests are **zero-dependency** (`node:test`, `node:assert`, global `fetch`/`WebSocket`). No `package.json`, no `npm install` — keep it that way so the app stays double-clickable. Put pure logic in `tests/helpers/` so it can be proven against synthetic input (see the `#b3dFit` regression test).
+
+When you add a toolbar button or panel, add its id to `index.html` **and** to the `DOM contract` expectation list in `tests/dom-contract.test.js` if it is user-facing.
 
 Headless screenshot (Windows, Edge) — useful for visual regression:
 
@@ -334,15 +358,23 @@ To script UI state, create a temporary copy of `index.html` that appends a `<scr
 ## 12. Git & Deployment
 
 - Default branch: `main`. Remote: `origin` → `git@github.com:MeWeGo/floorplanner.git`.
-- **GitHub Pages** is enabled for `main` / root; a push deploys within ~1 minute to <https://mewego.github.io/floorplanner/>.
+- **Deployment is gated by CI.** `.github/workflows/deploy.yml` runs the whole test suite (`ci.yml`) and only then publishes to <https://mewego.github.io/floorplanner/>. A failing test on `main` leaves the live site on the previous good build.
+- **Pages source must be "GitHub Actions"**, not "Deploy from a branch". The old branch mode published every push immediately, which is how a boot crash reached production. `configure-pages` asks to switch it (`enablement: true`); if the token lacks admin rights, set it once in **Settings ▸ Pages ▸ Source**.
+- Workflow map:
+  | File | Trigger | What it does |
+  | :-- | :-- | :-- |
+  | `ci.yml` | push to any non-`main` branch, all PRs, `workflow_call` | static tests + browser smoke |
+  | `deploy.yml` | push to `main`, manual dispatch | calls `ci.yml`, then publishes |
 - Commit style: short imperative subject (`Add triangle grid`, `Fix door swing on flipped walls`), body for rationale if non-obvious.
 - Typical flow:
   ```bash
-  node --check app.js
-  git add index.html app.js style.css README.md AGENTS.md
+  node --test tests/*.test.js
+  node tests/browser-smoke.js
+  git add index.html app.js style.css tests .github README.md AGENTS.md
   git commit -m "<message>"
   git push
   ```
+- Prefer a PR for risky changes: CI runs on the branch, and branch protection (if enabled) blocks a red merge. A direct push to `main` still cannot deploy broken code, but it does consume a failed deploy run.
 - Do **not** commit: temp test pages, screenshots, scratch scripts, `node_modules`.
 - Keep `legacy-index.html` untouched.
 
