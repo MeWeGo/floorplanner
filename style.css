@@ -506,6 +506,21 @@ main {
   max-width: 180px;
 }
 
+/* 3B kamera ön ayarları */
+.ctl3dCam {
+  top: 54px;
+  padding: 3px;
+  gap: 3px;
+}
+
+.ctl3dCam .btn {
+  min-width: 28px;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 13px;
+  line-height: 1;
+}
+
 /* Precision HUD Overlay */
 #hud {
   position: absolute;
