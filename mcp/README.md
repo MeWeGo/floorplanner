@@ -62,24 +62,20 @@ load_project                         │
 
 ## Requirements
 
-- [Node.js](https://nodejs.org/) ≥ 16 — **only for the live bridge / MCP tools**. The copy-paste flow needs nothing but a browser.
+- [Node.js](https://nodejs.org/) ≥ 16 — for the MCP server and the local bridge. The browser side needs nothing.
 
-## Two ways to use AI
+## How it works
 
-| | No install (any browser) | Live (agent) |
-| :-- | :-- | :-- |
-| Where | app UI → **🤖 AI** | any open app tab (Pages, `file://`, local) |
-| How | copy prompt + plan → paste into any AI chat → paste JSON back | agent runs `mcp/bridge.js`; the page connects itself and calls `push_to_browser` / `pull_from_browser` |
-| Needs | nothing | Node.js + the project folder |
-| Works on GitHub Pages | ✅ | ✅ (the page stays on Pages) |
+| | Live editing |
+| :-- | :-- |
+| Where | any open app tab (GitHub Pages, `file://`, local) |
+| How | the agent runs `mcp/bridge.js`; the page connects to it by itself and calls `push_to_browser` / `pull_from_browser` |
+| Needs | Node.js + the project folder on the agent's machine |
+| Works on GitHub Pages | ✅ — the page stays on Pages, nothing is installed in the browser |
 
-### No-install flow
+### Flow
 
-Click **🤖 AI** in the top bar: describe the change, **📋 Copy prompt + plan**, paste into ChatGPT / Claude / Gemini, then paste the returned JSON into the second box and **✔ Apply plan**. The prompt includes the plan JSON and the rules the model must follow (centimetres, Y down, stable ids, openings paramétrica on their wall, rooms as independent polygons). Take a **⬇ Backup JSON** first if the plan matters.
-
-### Live flow
-
-The agent runs `node mcp/bridge.js`; the open app tab connects to it automatically. The prompt in the AI modal / Help tells the agent exactly what to do.
+The agent runs `node mcp/bridge.js` and the app tab connects automatically; after that, the user types requests in the app's **AI** panel (or in chat) and the agent edits the live plan. The prompt in the AI modal / Help tells the agent exactly what to do.
 
 ## Tools exposed
 

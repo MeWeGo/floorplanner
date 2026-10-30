@@ -2472,20 +2472,18 @@ function helpModal() {
   ];
   const aiBlock = `<h3 style="margin:0 0 6px">${L('🤖 AI ile düzenleme', '🤖 Edit with AI')}</h3>
   <p class="muted" style="margin:0 0 8px">${L(
-    '<b>Kurulum gerekmez:</b> istemi kopyalayıp sohbet aracınıza yapıştırın, dönen JSON\'u uygulamaya geri yapıştırın. Planı üzerine yazar, önce yedek alabilirsiniz.',
-    '<b>No install needed:</b> copy the prompt into any AI chat, then paste the returned JSON back into the app. It replaces the current plan, so take a backup first if you like.'
-  )}</p>
-  <div style="margin:0 0 14px"><button class="btn sm" data-ai-open>${L('🤖 AI ile düzenle', '🤖 Edit with AI')}</button></div>
-  <h3 style="margin:0 0 6px">${L('Canlı bağlantı (kendi bilgisayarınızda)', 'Live connection (on your own computer)')}</h3>
-  <p class="muted" style="margin:0 0 8px">${L(
-    'Aracınız planı doğrudan düzenlesin isterseniz aşağıdaki istemi yapıştırın — köprüyü kendisi başlatır. Bu yol Node.js ve proje klasörünü gerektirir; GitHub Pages sürümünde çalışmaz.',
-    'If you want your agent to edit the plan directly, paste the prompt below — it starts the bridge itself. This path needs Node.js and the project folder; it does not work on the GitHub Pages build.'
+    'Yapay zekâ aracınız (OpenCode, Claude Desktop, Cursor…) planı doğrudan düzenleyebilir. Aşağıdaki istemi yapıştırın — köprüyü kendisi başlatır, bu sayfa da ona otomatik bağlanır. Sonra soldaki <b>AI</b> düğmesinden istek yazmanız yeterli.',
+    'Your AI agent (OpenCode, Claude Desktop, Cursor…) can edit the plan directly. Paste the prompt below — it starts the bridge and this page connects to it automatically. After that, just type requests in the <b>AI</b> panel (bottom-left).'
   )}</p>
   <pre id="aiPromptText" style="margin:0 0 8px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;font:11.5px/1.55 var(--font-mono);white-space:pre-wrap;user-select:text">${esc(aiSetupPrompt())}</pre>
-  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <button class="btn sm" data-ai-prompt>${L('📋 Canlı bağlantı istemini kopyala', '📋 Copy live-connection prompt')}</button>
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px">
+    <button class="btn sm" data-ai-prompt>${L('📋 Ajan istemini kopyala', '📋 Copy agent prompt')}</button>
     <span class="muted" id="aiPromptState"></span>
-  </div>`;
+  </div>
+  <p class="muted" style="margin:0 0 14px;opacity:.75">${L(
+    'Bu yol ajan tarafında Node.js ve proje klasörünü gerektirir; planınız yine bu sekmede (kendi depolama alanınızda) kalır.',
+    'This needs Node.js and the project folder on the agent side; your plan still stays in this tab (in your own storage).'
+  )}</p>`;
   openModal(`<h2>${L('Kısayollar & İpuçları', 'Shortcuts & Tips')} <button class="btn sm" data-close>✕</button></h2>
   ${aiBlock}
   <h3 style="margin:22px 0 8px">${L('Klavye kısayolları', 'Keyboard shortcuts')}</h3>
@@ -2494,8 +2492,6 @@ function helpModal() {
     'İpucu: Hızlı başlamak için <b>R</b> ile bir oda çiz, <b>D</b>/<b>N</b> ile kapı pencere ekle, <b>F</b> ile mobilyaları yerleştir. Mobilyalar duvara yaklaşınca otomatik yapışır ve döner. Üstteki <b>3B</b> düğmesi planı üç boyutlu gösterir.',
     'Tip: Press <b>R</b> to draw a rectangular room, <b>D</b>/<b>N</b> to add doors and windows, and <b>F</b> to place furniture. Furniture automatically snaps and aligns to nearby walls. Click <b>3D</b> in the top bar for an interactive 3D preview.'
   )}</p>`, 'help');
-  const aiOpen = document.querySelector('#modal [data-ai-open]');
-  if (aiOpen) aiOpen.onclick = () => aiModal();
   const aiBtn = document.querySelector('#modal [data-ai-prompt]');
   if (aiBtn) aiBtn.onclick = async () => {
     const ok = await copyText(aiSetupPrompt());
@@ -2505,122 +2501,27 @@ function helpModal() {
       : L('Kopyalanamadı — metni seçip elle kopyalayın', 'Copy failed — select the text and copy it manually');
   };
 }
-/* ---------- AI: zero-install (copy prompt → paste JSON) ---------- */
-let aiReq = '';
-function planForAi() {
-  let c;
-  try { c = JSON.parse(JSON.stringify(P)); } catch (e) { return JSON.stringify(P); }
-  if (c && c.bg && c.bg.src) { c.bg.src = null; }   // data URLs are huge — leave the image out
-  return JSON.stringify(c);
-}
-function aiPromptFor(task) {
-  const omitted = !!(P && P.bg && P.bg.src);
-  const rules = isEN()
-    ? ['You are editing a floor plan for "Kat Planı Çizici", a browser floor planner.',
-      'Reply with ONLY the complete updated project JSON in one ```json code block — no explanations.',
-      'Rules:',
-      '- All coordinates are centimetres and the Y axis points DOWN.',
-      '- Keep every field and id you were not asked to change exactly as given.',
-      '- ids are unique 7-character strings.',
-      '- Openings belong to a wall: {wall: <wall id>, d: cm from that wall\'s "a" end to the opening centre}.',
-      '- Rooms are independent polygons: if you move walls, update the room pts as well.',
-      '- Furniture uses k = rect | round | stairs | bed | sofa, plus w/d/h/color/x/y/rot/label.']
-    : ['"Kat Planı Çizici" (tarayıcıda çalışan kat planı uygulaması) için bir plan düzenliyorsun.',
-      'Yalnızca güncellenmiş proje JSON\'unu tek bir ```json bloğunda döndür — açıklama yazma.',
-      'Kurallar:',
-      '- Tüm koordinatlar santimetre, Y ekseni AŞAĞI bakar.',
-      '- İstenmeyen alanları ve id\'leri birebir koru.',
-      '- id\'ler benzersiz 7 karakterli dizelerdir.',
-      '- Kapı/pencere duvara bağlıdır: {wall: <duvar id>, d: duvarın "a" ucundan açıklık merkezine cm}.',
-      '- Odalar bağımsız çokgenlerdir: duvarı taşırsan oda pts\'lerini de güncelle.',
-      '- Mobilya k = rect | round | stairs | bed | sofa; w/d/h/color/x/y/rot/label.'];
-  if (omitted) rules.push(isEN()
-    ? '- The background image pixels were omitted (bg.src is null); leave bg untouched.'
-    : '- Arka plan görseli verisi dışarıda bırakıldı (bg.src null); bg\'yi değiştirme.');
-  return rules.join('\n') + '\n\n'
-    + (isEN() ? 'Task: ' : 'Görev: ') + (String(task || '').trim() || (isEN() ? '(no task given)' : '(görev yazılmadı)'))
-    + '\n\n' + (isEN() ? 'Current project JSON:' : 'Mevcut proje JSON:') + '\n' + planForAi();
-}
-function aiParsePlan(text) {
-  const s = String(text || '').trim();
-  if (!s) throw new Error(L('Yapıştırılan metin boş', 'Nothing was pasted'));
-  const candidates = [s];
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) candidates.push(fence[1].trim());
-  const a = s.indexOf('{'), b = s.lastIndexOf('}');
-  if (a >= 0 && b > a) candidates.push(s.slice(a, b + 1));
-  for (const c of candidates) {
-    try {
-      const o = JSON.parse(c);
-      if (o && Array.isArray(o.floors) && o.floors.length) return o;
-    } catch (e) { }
-  }
-  throw new Error(L('Geçerli plan JSON\'u bulunamadı (floors dizisi yok)', 'No valid plan JSON found (no floors[] array)'));
-}
+/* ---------- AI: live editing (agent drives the plan through mcp/bridge.js) ---------- */
 function aiModal() {
-  const box = 'width:100%;box-sizing:border-box;padding:8px 10px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;color:var(--text);font:11.5px/1.55 var(--font-mono);resize:vertical';
   openModal(`<h2>${L('🤖 AI ile düzenle', '🤖 Edit with AI')} <button class="btn sm" data-close>✕</button></h2>
-  <h3 style="margin:0 0 6px">${L('1) Canlı düzenleme', '1) Live editing')}</h3>
-  <p class="muted" id="aiLiveState" style="margin:0 0 8px"></p>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 8px">
-    <button class="btn sm" id="aiLiveRetry">${L('🔌 Bağlanmayı dene', '🔌 Try to connect')}</button>
-    <button class="btn sm" id="aiLivePrompt">${L('📋 Ajan istemini kopyala', '📋 Copy agent prompt')}</button>
+  <p class="muted" id="aiLiveState" style="margin:0 0 10px"></p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 10px">
+    <button class="btn" id="aiLivePrompt">${L('📋 Ajan istemini kopyala', '📋 Copy agent prompt')}</button>
+    <button class="btn" id="aiLiveRetry">${L('🔌 Bağlanmayı dene', '🔌 Try to connect')}</button>
     <span class="muted" id="aiLiveState2"></span>
   </div>
-  <pre id="aiLivePromptText" style="display:none;margin:0 0 10px;padding:8px 10px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;font:11px/1.5 var(--font-mono);white-space:pre-wrap;max-height:130px;overflow:auto">${esc(aiSetupPrompt())}</pre>
-  <h3 style="margin:18px 0 6px;padding-top:12px;border-top:1px solid var(--line)">${L('2) Kurulumsuz: kopyala → yapıştır', '2) No install: copy → paste')}</h3>
-  <p class="muted" style="margin:0 0 10px">${L(
-    'Canlı bağlantı yoksa (ör. ajanınız yok) bu yolu kullanın. İstemi kopyalayıp sohbet aracınıza yapıştırın, dönen JSON\'u aşağıya yapıştırın.',
-    'Use this when there is no live connection (e.g. no agent). Copy the prompt into any AI chat, then paste the JSON it returns below.'
+  <pre id="aiLivePromptText" style="display:none;margin:0 0 12px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;font:11.5px/1.55 var(--font-mono);white-space:pre-wrap;max-height:160px;overflow:auto">${esc(aiSetupPrompt())}</pre>
+  <p class="muted" style="margin:0 0 8px">${L(
+    'İstemi yapay zekâ aracınıza yapıştırın; köprüyü kendisi başlatır ve bu sayfa ona otomatik bağlanır. Sonra soldaki AI düğmesinden istek yazabilir veya doğrudan sohbette söyleyebilirsiniz — değişiklikler bu planda anında görünür ve otomatik kaydedilir.',
+    'Paste the prompt into your AI agent; it starts the bridge and this page connects automatically. After that, type requests in the AI panel (bottom-left) or just tell the agent in chat — changes appear in this plan immediately and are saved automatically.'
   )}</p>
-  <label style="display:block;margin:0 0 4px;font-weight:600">${L('Ne değişsin?', 'What should change?')}</label>
-  <input id="aiReq" value="${esc(aiReq)}" placeholder="${L('örn. 12 m² banyo ekle, kapıyı sağa al', 'e.g. add a 12 m² bathroom, move the door to the right')}" style="${box};font-family:inherit">
-  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0">
-    <button class="btn sm" id="aiCopy">${L('📋 İstem + planı kopyala', '📋 Copy prompt + plan')}</button>
-    <button class="btn sm" id="aiShow">${L('Metni göster', 'Show text')}</button>
-    <button class="btn sm" id="aiBackup">${L('⬇ Yedek JSON', '⬇ Backup JSON')}</button>
-    <span class="muted" id="aiState"></span>
-  </div>
-  <textarea id="aiPromptBox" readonly spellcheck="false" style="${box};display:none;height:160px"></textarea>
-  <h3 style="margin:16px 0 6px">${L('Dönen JSON\'u yapıştırın', 'Paste the returned JSON')}</h3>
-  <textarea id="aiReply" spellcheck="false" placeholder='{"v":2,"floors":[…]}' style="${box};height:120px"></textarea>
-  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
-    <button class="btn primary" id="aiApply">${L('✔ Planı uygula', '✔ Apply plan')}</button>
-    <span class="muted" id="aiApplyState">${L('Mevcut planın üzerine yazar — isterseniz önce yedek alın.', 'This replaces the current plan — take a backup first if needed.')}</span>
-  </div>`, 'ai');
+  <p class="muted" style="margin:0">${L(
+    'Canlı bağlantı Node.js ve proje klasörünü gerektirir (ajan tarafında). Planınız bu sekmede kalır; köprü yalnızca JSON alışverişi yapar.',
+    'Live editing needs Node.js and the project folder on the agent side. Your plan stays in this tab; the bridge only exchanges JSON.'
+  )}</p>`, 'ai');
 
-  const promptState = () => aiPromptFor(aiReq);
   const setState = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
 
-  const reqEl = $('#aiReq');
-  reqEl.oninput = () => { aiReq = reqEl.value; };
-
-  $('#aiCopy').onclick = async () => {
-    const txt = promptState();
-    const ok = await copyText(txt);
-    setState('aiState', ok
-      ? L('Kopyalandı ✓ — aracınıza yapıştırın', 'Copied ✓ — paste it into your AI chat')
-      : L('Kopyalanamadı — "Metni göster" ile seçip elle kopyalayın', 'Could not copy — use "Show text" and copy manually'));
-    const pb = $('#aiPromptBox');
-    if (pb) { pb.value = txt; if (!ok) pb.style.display = 'block'; }
-  };
-  $('#aiShow').onclick = () => {
-    const pb = $('#aiPromptBox');
-    if (!pb) return;
-    const showing = pb.style.display !== 'none';
-    pb.value = promptState();
-    pb.style.display = showing ? 'none' : 'block';
-    if (!showing) { pb.focus(); pb.select(); }
-  };
-  $('#aiBackup').onclick = () => { downloadJson(); setState('aiState', L('Yedek indirildi', 'Backup downloaded')); };
-  $('#aiLiveRetry').onclick = async () => {
-    $('#aiLiveRetry').disabled = true;
-    const ok = await brgConnect();
-    $('#aiLiveRetry').disabled = false;
-    if (!ok) setState('aiLiveState2', L('Bağlanamadı — köprü çalışmıyor ya da tarayıcı izin istedi.', 'Could not connect — bridge not running, or the browser needs permission.'));
-    else { setState('aiLiveState2', ''); brgInitialSync(); }
-    aiSyncLiveRow();
-  };
   $('#aiLivePrompt').onclick = async () => {
     const ok = await copyText(aiSetupPrompt());
     const pre = $('#aiLivePromptText');
@@ -2629,18 +2530,15 @@ function aiModal() {
       ? L('Kopyalandı ✓ — ajanınıza yapıştırın', 'Copied ✓ — paste it into your agent')
       : L('Kopyalanamadı — metni seçip elle kopyalayın', 'Copy failed — select the text below'));
   };
-  aiSyncLiveRow();
-  $('#aiApply').onclick = () => {
-    let plan;
-    try { plan = aiParsePlan($('#aiReply').value); }
-    catch (e) { setState('aiApplyState', '⚠ ' + e.message); return; }
-    try {
-      loadProject(plan, L('🤖 AI planı uygulandı', '🤖 AI plan applied'));
-      closeModal();
-    } catch (e) {
-      setState('aiApplyState', '⚠ ' + (e.message || e));
-    }
+  $('#aiLiveRetry').onclick = async () => {
+    $('#aiLiveRetry').disabled = true;
+    const ok = await brgConnect();
+    $('#aiLiveRetry').disabled = false;
+    if (!ok) setState('aiLiveState2', L('Bağlanamadı — köprü çalışmıyor ya da tarayıcı izin istedi.', 'Could not connect — bridge not running, or the browser needs permission.'));
+    else { setState('aiLiveState2', ''); brgInitialSync(); }
+    aiSyncLiveRow();
   };
+  aiSyncLiveRow();
 }
 /* ---------- AI köprüsü istemcisi / AI bridge client ----------
    Makes the app itself talk to the local bridge (mcp/bridge.js), so the page on
@@ -3186,10 +3084,6 @@ function init3D() {
   if (T3) { resize3D(); return; }
   const el = $('#v3d'), r = new THREE.WebGLRenderer({ antialias: true });
   r.setPixelRatio(Math.min(2, devicePixelRatio)); el.appendChild(r.domElement);
-  // yumuşak gölgeler + sinematik ton eşleme (r128 API'si)
-  if (THREE.PCFSoftShadowMap) { r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap; }
-  if (THREE.sRGBEncoding) r.outputEncoding = THREE.sRGBEncoding;
-  if (THREE.ACESFilmicToneMapping) { r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.05; }
   const scene = new THREE.Scene(); scene.background = new THREE.Color(0xdbe5f1);
   const cam = new THREE.PerspectiveCamera(50, 1, 10, 50000);
   // 3B mobilya etkileşimi: OrbitControls'ten ÖNCE kaydedilir ki sürüklerken yörünge devre dışı kalabilsin
@@ -3312,14 +3206,6 @@ function init3D() {
   T3 = { r, scene, cam, ctl, run: false }; resize3D(); window.addEventListener('resize', () => { if (T3 && ui.view3d) resize3D(); });
 }
 function resize3D() { const el = $('#v3d'); T3.r.setSize(el.clientWidth, el.clientHeight); T3.cam.aspect = el.clientWidth / el.clientHeight; T3.cam.updateProjectionMatrix(); }
-function set3DCam(kind) {
-  if (!T3 || !T3.fit) return;
-  const { cx, cz, sz, elev } = T3.fit;
-  if (kind === 'top') { T3.cam.position.set(cx, sz * 2.1 + elev, cz + 1); T3.ctl.target.set(cx, elev * 0.4, cz); }
-  else if (kind === 'eye') { T3.cam.position.set(cx + sz * 0.18, 160, cz + sz * 0.95); T3.ctl.target.set(cx, 140, cz); }
-  else { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); }
-  T3.ctl.update();
-}
 function loop3D() {
   if (!T3 || !T3.run) return;
   requestAnimationFrame(loop3D);
@@ -3339,388 +3225,36 @@ function loop3D() {
   }
   T3.ctl.update(); T3.r.render(T3.scene, T3.cam);
 }
-/* ---------- 3B malzeme & mobilya detayı ---------- */
-// Renk yardımcıları: katalog renginden açık/koyu tonlar türetilir (t: -1..1)
-function hex2rgb(h) {
-  if (typeof h === 'number') return [(h >> 16) & 255, (h >> 8) & 255, h & 255];
-  let s = String(h || '#cbd5e1').replace('#', '');
-  if (s.length === 3) s = s.split('').map(c => c + c).join('');
-  const n = parseInt(s.slice(0, 6), 16) || 0x888888;
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-function shade(hex, t) {
-  const [r, g, b] = hex2rgb(hex), f = v => clamp(Math.round(t >= 0 ? v + (255 - v) * t : v * (1 + t)), 0, 255);
-  return '#' + [f(r), f(g), f(b)].map(v => v.toString(16).padStart(2, '0')).join('');
-}
-// Oda zemin dokusu: 2B'deki desenlerin 3B karşılığı, oda rengiyle harmanlanır
-function mixHex(a, b, t) {
-  const x = hex2rgb(a), y = hex2rgb(b), f = i => Math.round(x[i] + (y[i] - x[i]) * t);
-  return '#' + [f(0), f(1), f(2)].map(v => v.toString(16).padStart(2, '0')).join('');
-}
-function floorTexture(kind, color, lt, C) {
-  const key = kind + '|' + color + '|' + (lt ? 'l' : 'd');
-  if (C.floorTex[key]) return C.floorTex[key];
-  const accent = kind === 'wood' ? '#b08968' : kind === 'tile' ? '#94a3b8' : '#9ca3af';
-  const px = 256, cv = document.createElement('canvas'); cv.width = cv.height = px;
-  const g = cv.getContext('2d');
-  // oda rengi korunur ama malzeme tonuna doğru harmanlanır (pastel renkler bembeyaz olmasın)
-  const base = lt ? mixHex(color, accent, 0.5) : mixHex(mixHex(color, accent, 0.55), '#0b0f14', 0.45);
-  const line = lt ? shade(base, -0.3) : shade(base, 0.16);
-  g.fillStyle = base; g.fillRect(0, 0, px, px);
-  if (kind === 'wood') {
-    g.strokeStyle = line; g.lineWidth = 2;
-    for (let i = 0; i <= 4; i++) { const y = i * px / 4; g.beginPath(); g.moveTo(0, y); g.lineTo(px, y); g.stroke(); }
-    for (let i = 0; i < 4; i++) {
-      const y = i * px / 4, x = (i % 2 ? px * 0.5 : px * 0.18);
-      g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + px / 4); g.stroke();
-      g.beginPath(); g.moveTo(x + px * 0.5, y); g.lineTo(x + px * 0.5, y + px / 4); g.stroke();
-    }
-  } else if (kind === 'tile') {
-    g.strokeStyle = line; g.lineWidth = 3;
-    for (let i = 0; i <= 2; i++) { const p = i * px / 2; g.beginPath(); g.moveTo(p, 0); g.lineTo(p, px); g.moveTo(0, p); g.lineTo(px, p); g.stroke(); }
-  } else if (kind === 'carpet') {
-    g.fillStyle = line;
-    for (let y = 8; y < px; y += 16) for (let x = 8; x < px; x += 16) { g.beginPath(); g.arc(x + ((y / 16) % 2 ? 8 : 0), y, 2.4, 0, 6.2832); g.fill(); }
-  }
-  const t = new THREE.CanvasTexture(cv);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.encoding = THREE.sRGBEncoding;
-  t.anisotropy = 4;
-  const rep = kind === 'wood' ? 160 : kind === 'tile' ? 120 : 80; // cm cinsinden karo boyu
-  t.repeat.set(1 / rep, 1 / rep);
-  C.floorTex[key] = t; C.texs.push(t);
-  return t;
-}
-// Katalog kimliğine göre parametrik mobilya: ölçüler o.w/d/h'den türetilir
-function furn3D(g, o, C) {
-  const { box, cyl, sph } = C, ed = C.det;
-  const w = o.w, d = o.d, h = o.h, col = o.color || '#cbd5e1';
-  const sh = t => shade(col, t);
-  const wood = '#b08968', woodD = '#8a6a4f', metal = '#a9b4c0', steel = '#8e9aa8';
-  const white = '#f8fafc', dark = '#374151', glass = 0x9fd3ee;
-  // b: merkez y; bb: taban y
-  const b = (bw, bh, bd, c, x, y, z, ry = 0, op, e) => box(g, bw, bh, bd, c, x, y, z, ry, op, e === undefined ? 0 : e);
-  const bb = (bw, bh, bd, c, x, y0, z, ry = 0, e) => b(bw, bh, bd, c, x, y0 + bh / 2, z, ry, 0, e);
-  switch (o.type) {
-    case 'sofa3': case 'sofa2': case 'armchair': {
-      const n = Math.max(1, Math.round(w / 75));
-      bb(w * 0.98, h * 0.1, d * 0.98, sh(-0.18), 0, 0, 0, 0, ed);
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) bb(w * 0.05, h * 0.09, w * 0.05, woodD, sx * (w / 2 - w * 0.06), 0, sz * (d / 2 - w * 0.06));
-      bb(w * 0.94, h * 0.18, d * 0.62, sh(0.03), 0, h * 0.16, d * 0.08);
-      const cw = (w * 0.9) / n;
-      for (let i = 0; i < n; i++) bb(cw * 0.94, h * 0.15, d * 0.56, sh(0.11), (i + 0.5) * cw - w * 0.45, h * 0.34, d * 0.1, 0, ed && i === 0);
-      bb(w * 0.96, h * 0.5, d * 0.2, sh(-0.06), 0, h * 0.26, -d * 0.4, 0, ed);
-      for (const sx of [-1, 1]) bb(w * 0.07, h * 0.32, d * 0.86, sh(-0.03), sx * (w / 2 - w * 0.035), h * 0.2, d * 0.04, 0, ed);
-      break;
-    }
-    case 'chair': {
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) bb(w * 0.07, h * 0.46, d * 0.07, woodD, sx * (w / 2 - w * 0.08), 0, sz * (d / 2 - d * 0.08));
-      bb(w * 0.92, h * 0.1, d * 0.92, col, 0, h * 0.46, 0, 0, ed);
-      bb(w * 0.92, h * 0.5, d * 0.08, col, 0, h * 0.56, -d / 2 + d * 0.06, 0, ed);
-      break;
-    }
-    case 'ochair': {
-      bb(w * 0.82, h * 0.08, d * 0.78, col, 0, h * 0.46, 0, 0, ed);
-      bb(w * 0.78, h * 0.46, d * 0.12, sh(-0.1), 0, h * 0.56, -d * 0.34, 0, ed);
-      for (const sx of [-1, 1]) bb(w * 0.07, h * 0.2, d * 0.6, sh(-0.04), sx * w * 0.4, h * 0.5, 0);
-      cyl(g, w * 0.06, h * 0.36, steel, 0, h * 0.28, 0, 12);
-      for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2; bb(w * 0.5, h * 0.05, w * 0.09, dark, Math.cos(a) * w * 0.2, h * 0.02, Math.sin(a) * w * 0.2, -a); }
-      break;
-    }
-    case 'coffee': case 'table4': case 'table6': case 'table_o': case 'desk': case 'deskL': case 'meet': case 'vanity': {
-      const top = Math.max(3, Math.min(5, h * 0.07));
-      bb(w, top, d, col, 0, h - top, 0, 0, ed);
-      if (o.type === 'meet' || o.type === 'deskL' || w > 220) {
-        for (const sx of [-1, 1]) bb(w * 0.05, h - top, d * 0.78, sh(-0.12), sx * w * 0.3, 0, 0);
-      } else {
-        const t = Math.max(4, w * 0.05);
-        for (const sx of [-1, 1]) for (const sz of [-1, 1]) bb(t, h - top, t, sh(-0.18), sx * (w / 2 - t * 1.6), 0, sz * (d / 2 - t * 1.6));
-      }
-      if (o.type === 'desk' || o.type === 'vanity') bb(w * 0.86, h * 0.24, d * 0.74, sh(0.05), 0, h * 0.44, 0);
-      break;
-    }
-    case 'tableR': {
-      cyl(g, w * 0.5, 4, col, 0, h - 2, 0, 32);
-      cyl(g, w * 0.09, h - 8, sh(-0.15), 0, (h - 4) / 2, 0, 20);
-      cyl(g, w * 0.28, 4, sh(-0.2), 0, 2, 0, 24);
-      break;
-    }
-    case 'bed1': case 'bed2': case 'bedK': case 'bunk': case 'crib': {
-      bb(w, h * 0.3, d, sh(-0.18), 0, 0, 0, 0, ed);
-      bb(w * 0.95, h * 0.34, d * 0.95, white, 0, h * 0.3, 0);
-      const np = w > 120 ? 2 : 1;
-      for (let i = 0; i < np; i++) bb(w * 0.36, h * 0.16, d * 0.16, '#ffffff', (i - (np - 1) / 2) * w * 0.42, h * 0.6, -d * 0.36, 0, ed);
-      bb(w * 0.97, h * 0.22, d * 0.6, sh(0.06), 0, h * 0.5, d * 0.17, 0, ed);
-      bb(w, h * 1.3, Math.max(5, d * 0.045), woodD, 0, 0, -d / 2 + Math.max(3, d * 0.022), 0, ed);
-      if (o.type === 'bunk') { bb(w, h * 0.08, d, sh(-0.18), 0, h * 0.52, 0); bb(w * 0.95, h * 0.18, d * 0.95, white, 0, h * 0.6, 0); }
-      break;
-    }
-    case 'wardrobe': {
-      bb(w, h * 0.96, d, sh(-0.06), 0, h * 0.02, 0, 0, ed);
-      bb(w * 0.94, h * 0.06, d * 0.96, sh(-0.22), 0, 0, 0);
-      const dw = w * 0.47;
-      for (const sx of [-1, 1]) {
-        bb(dw, h * 0.9, 2, sh(0.05), sx * dw * 0.52, h * 0.06, d / 2 + 1, 0, ed);
-        bb(2.5, h * 0.18, 2.5, metal, sx * 5, h * 0.46, d / 2 + 3);
-      }
-      break;
-    }
-    case 'dresser': case 'night': case 'shelf': case 'bookcase': {
-      const open = o.type === 'shelf' || o.type === 'bookcase';
-      bb(w, h * 0.96, d, sh(-0.06), 0, h * 0.02, 0, 0, ed);
-      if (open) {
-        const ns = Math.max(2, Math.round(h / 40));
-        for (let i = 1; i < ns; i++) bb(w * 0.96, 2.5, d * 0.9, sh(-0.16), 0, (i / ns) * h * 0.94, 0);
-      } else {
-        const nd = Math.max(2, Math.round(h / 28));
-        for (let i = 0; i < nd; i++) {
-          const dh = (h * 0.9) / nd;
-          bb(w * 0.9, dh * 0.84, 2, sh(0.05), 0, h * 0.05 + i * dh + dh * 0.08, d / 2 + 1);
-          bb(w * 0.2, 2.5, 2.5, metal, 0, h * 0.05 + i * dh + dh * 0.5, d / 2 + 3);
-        }
-      }
-      break;
-    }
-    case 'fridge': {
-      bb(w * 0.98, h * 0.97, d * 0.98, sh(0.02), 0, 0, 0, 0, ed);
-      const cut = h > 140 ? h * 0.62 : h * 0.92;
-      bb(w * 0.9, cut * 0.94, 2, sh(0.09), 0, h * 0.03, d / 2 + 1, 0, ed);
-      if (cut < h * 0.85) bb(w * 0.9, (h - cut) * 0.9, 2, sh(0.09), 0, cut + h * 0.03, d / 2 + 1);
-      bb(3, cut * 0.5, 3, steel, -w * 0.38, cut * 0.5, d / 2 + 3);
-      if (cut < h * 0.85) bb(3, (h - cut) * 0.5, 3, steel, -w * 0.38, cut + (h - cut) * 0.5, d / 2 + 3);
-      break;
-    }
-    case 'dish': case 'wm': {
-      bb(w * 0.98, h * 0.97, d * 0.98, sh(0.02), 0, 0, 0, 0, ed);
-      bb(w * 0.86, h * 0.8, 2, sh(0.09), 0, h * 0.08, d / 2 + 1, 0, ed);
-      if (ed) { const ring = cyl(g, w * 0.27, 2, steel, 0, h * 0.44, d / 2 + 2, 24); ring.rotation.x = Math.PI / 2; }
-      bb(w * 0.28, 4, 3, dark, 0, h * 0.84, d / 2 + 2);
-      break;
-    }
-    case 'stove': {
-      bb(w, h * 0.94, d, sh(-0.02), 0, 0, 0, 0, ed);
-      bb(w, 4, d, dark, 0, h * 0.94, 0, 0, ed);
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) cyl(g, w * 0.13, 1.5, '#4b5563', sx * w * 0.23, h * 0.94 + 4.5, sz * d * 0.23, 18);
-      bb(w * 0.9, h * 0.5, 2, sh(0.1), 0, h * 0.12, d / 2 + 1, 0, ed);
-      bb(w * 0.8, 3, 3, metal, 0, h * 0.54, d / 2 + 3);
-      break;
-    }
-    case 'sinkK': case 'counter': case 'counter2': case 'island': {
-      bb(w, h * 0.9, d, sh(-0.05), 0, 0, 0, 0, ed);
-      bb(w * 1.01, 5, d * 1.02, sh(0.12), 0, h * 0.9, 0, 0, ed);
-      if (o.type === 'sinkK') {
-        bb(w * 0.5, 2, d * 0.45, steel, 0, h * 0.9 - 1, 0);
-        cyl(g, 2, h * 0.16, steel, -w * 0.34, h * 0.9 + h * 0.08, -d * 0.3, 12);
-        bb(2.5, 2.5, d * 0.3, steel, -w * 0.34, h * 0.9 + h * 0.14, -d * 0.22);
-      }
-      break;
-    }
-    case 'basin': case 'basin2': {
-      bb(w, 6, d, white, 0, h * 0.88, 0, 0, ed);
-      if (o.type === 'basin2') for (const sx of [-1, 1]) bb(w * 0.4, 2, d * 0.6, steel, sx * w * 0.24, h * 0.88 - 1, 0);
-      else bb(w * 0.6, 2, d * 0.6, steel, 0, h * 0.88 - 1, 0);
-      if (o.type === 'basin') bb(w * 0.35, h * 0.88, d * 0.7, sh(-0.02), 0, 0, 0, 0, ed);
-      else bb(w, h * 0.82, d * 0.8, sh(-0.04), 0, 0, 0, 0, ed);
-      cyl(g, 2, h * 0.14, steel, 0, h * 0.88 + h * 0.07, -d * 0.36, 12);
-      break;
-    }
-    case 'wc': case 'bidet': {
-      bb(w * 0.85, h * 0.52, d * 0.25, white, 0, 0, -d * 0.36, 0, ed);
-      bb(w * 0.9, h * 0.34, d * 0.62, white, 0, 0, d * 0.06, 0, ed);
-      const bowl = cyl(g, w * 0.44, h * 0.3, white, 0, h * 0.29, d * 0.14, 22, 0, d * 0.42);
-      if (ed) bb(w * 0.9, 2.5, d * 0.5, sh(0.05), 0, h * 0.44, d * 0.14, 0, false);
-      break;
-    }
-    case 'tub': {
-      bb(w, h, d, sh(0.05), 0, 0, 0, 0, ed);
-      bb(w * 0.86, h * 0.5, d * 0.76, sh(-0.16), 0, h * 0.42, 0);
-      bb(w * 0.88, 1.5, d * 0.78, '#bae6fd', 0, h * 0.9, 0);
-      break;
-    }
-    case 'shower': {
-      bb(w, 6, d, white, 0, 0, 0, 0, ed);
-      bb(w * 0.9, 1.5, d * 0.9, '#bae6fd', 0, 6, 0);
-      b(2, h * 0.88, d, glass, -w / 2 + 2, 8 + h * 0.44, 0, 0, 0.34);
-      b(w, h * 0.88, 2, glass, 0, 8 + h * 0.44, -d / 2 + 2, 0, 0.34);
-      cyl(g, 1.5, h * 0.45, steel, -w * 0.3, h * 0.72, -d * 0.3, 10);
-      break;
-    }
-    case 'plant': case 'tree': {
-      const potH = o.type === 'tree' ? h * 0.12 : h * 0.3, potR = Math.min(w, d) * 0.26;
-      cyl(g, potR, potH, '#c2410c', 0, potH / 2, 0, 18);
-      cyl(g, Math.max(1.5, potR * 0.1), h * 0.46, woodD, 0, potH + h * 0.2, 0, 8);
-      const fo = o.type === 'tree' ? h * 0.26 : Math.min(w, d) * 0.32;
-      sph(g, fo, sh(-0.06), 0, potH + h * 0.56, 0, 1, 0.92, 1);
-      if (ed) { sph(g, fo * 0.78, sh(0.1), fo * 0.45, potH + h * 0.72, fo * 0.2); sph(g, fo * 0.72, sh(0.2), -fo * 0.4, potH + h * 0.68, -fo * 0.2); }
-      break;
-    }
-    case 'tv': {
-      bb(w, h * 0.75, d, sh(-0.06), 0, 0, 0, 0, ed);
-      bb(w * 0.98, 3, d * 0.98, sh(-0.2), 0, h * 0.75, 0);
-      const sw = w * 0.72, shh = h * 1.1;
-      b(sw, shh, 3, '#1f2937', 0, h * 0.78 + shh / 2, -d * 0.12, 0, 0, ed);
-      b(sw * 0.94, shh * 0.9, 1, '#0ea5e9', 0, h * 0.78 + shh / 2, -d * 0.12 + 2, 0, 0.9);
-      bb(w * 0.2, 2, d * 0.5, dark, 0, h * 0.75, 0);
-      break;
-    }
-    case 'rug': {
-      b(w, 2, d, sh(-0.1), 0, 1, 0);
-      b(w * 0.9, 2.6, d * 0.86, col, 0, 1.2, 0);
-      break;
-    }
-    case 'car': {
-      bb(w, h * 0.42, d, col, 0, h * 0.15, 0, 0, ed);
-      bb(w * 0.82, h * 0.36, d * 0.45, sh(0.14), 0, h * 0.55, -d * 0.02, 0, ed);
-      b(w * 0.78, h * 0.28, 2, glass, 0, h * 0.7, d * 0.2, 0, 0.5);
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const wh = cyl(g, h * 0.16, w * 0.08, '#1f2937', sx * w * 0.46, h * 0.16, sz * d * 0.32, 18); wh.rotation.z = Math.PI / 2; }
-      break;
-    }
-    case 'pool': {
-      b(w, 8, d, '#e2e8f0', 0, 4, 0, 0, 0, ed);
-      b(w * 0.94, 2, d * 0.94, '#38bdf8', 0, 7, 0, 0, 0.75);
-      break;
-    }
-    case 'column': case 'colSq': {
-      if (o.type === 'colSq') {
-        bb(w * 1.25, h * 0.05, d * 1.25, sh(-0.1), 0, 0, 0, 0, ed);
-        bb(w, h * 0.9, d, col, 0, h * 0.05, 0, 0, ed);
-        bb(w * 1.25, h * 0.05, d * 1.25, sh(-0.1), 0, h * 0.95, 0, 0, ed);
-      } else {
-        cyl(g, w * 0.62, h * 0.05, sh(-0.1), 0, h * 0.025, 0, 24);
-        cyl(g, w * 0.45, h * 0.9, col, 0, h * 0.5, 0, 24);
-        cyl(g, w * 0.62, h * 0.05, sh(-0.1), 0, h * 0.975, 0, 24);
-      }
-      break;
-    }
-    case 'fireplace': {
-      bb(w, h * 0.95, d, col, 0, 0, 0, 0, ed);
-      b(w * 0.45, h * 0.5, 4, '#111827', 0, h * 0.3, d / 2 + 0.5, 0, 0, false);
-      bb(w * 1.08, h * 0.08, d * 1.08, sh(-0.14), 0, h * 0.95, 0, 0, ed);
-      break;
-    }
-    case 'printer': {
-      bb(w, h * 0.7, d, sh(0.06), 0, 0, 0, 0, ed);
-      bb(w * 0.8, h * 0.15, d * 0.6, sh(-0.12), 0, h * 0.52, -d * 0.1);
-      b(w * 0.5, 3, 2, dark, 0, h * 0.32, d / 2 + 1);
-      break;
-    }
-    case 'stairs': {
-      const n = Math.max(6, Math.round(h / 18));
-      for (let i = 0; i < n; i++) { const shp = h / n * (i + 1); bb(w, shp, d / n, col, 0, 0, d / n * (n / 2 - i - .5), 0, ed && i === 0); }
-      if (ed) {
-        const rx = w / 2 - 3;
-        for (let i = 0; i < n; i++) { const shp = h / n * (i + 1); bb(3, 92, 3, metal, rx, shp, d / n * (n / 2 - i - .5)); }
-        bb(3.5, 4, d, metal, rx, h + 90, 0);
-      }
-      break;
-    }
-    default: {
-      if (o.k === 'poly' && o.pts && o.pts.length >= 3) {
-        const shp = new THREE.Shape(o.pts.map(p => new THREE.Vector2(p.x, -p.y)));
-        const geo = new THREE.ExtrudeGeometry(shp, { depth: Math.max(2, h), bevelEnabled: false });
-        geo.rotateX(-Math.PI / 2); g.add(new THREE.Mesh(geo, C.mat(col)));
-      } else if (o.k === 'round') {
-        cyl(g, w / 2, h, col, 0, h / 2, 0, 28, 0, d / 2);
-      } else {
-        b(w, h, d, col, 0, h / 2, 0, 0, 0, ed);
-        if (o.k === 'sofa') b(w, h, d * .25, col, 0, h * .75, -d * .375);
-        if (o.k === 'bed') b(w, h * 1.5, 10, 0xb08968, 0, h * .75, -d / 2 + 5);
-      }
-    }
-  }
-}
 function build3D(keepCam = false) {
   sync3DFloors();
   const lt = isLight(), S = T3.scene;
   // önceki sahnenin GPU kaynaklarını serbest bırak (sık yeniden yapılanmalarda sızıntı olmasın)
-  if (T3.mats) {
-    const geos = new Set(); S.traverse(o => { if (o.geometry) geos.add(o.geometry); });
-    for (const gg of geos) gg.dispose();
-    for (const m of T3.mats) m.dispose();
-    if (T3.texs) for (const t of T3.texs) t.dispose();
-  }
+  if (T3.mats) { S.traverse(o => { if (o.geometry) o.geometry.dispose(); }); for (const m of T3.mats) m.dispose(); }
   while (S.children.length) S.remove(S.children[0]);
   S.background = new THREE.Color(lt ? 0xe8e3d9 : 0x0b0f14);
-
-  // sahne sınırları (ışık gölge kamerası ve kamera sığdırma için) — çizimden ÖNCE hesaplanır
-  let all = null;
-  P.floors.forEach(f => {
-    if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return;
-    const b = contentBounds(f);
-    if (b) all = all ? { x0: Math.min(all.x0, b.x0), y0: Math.min(all.y0, b.y0), x1: Math.max(all.x1, b.x1), y1: Math.max(all.y1, b.y1) } : b;
-  });
-  if (!all) all = { x0: 0, y0: 0, x1: 1000, y1: 700 };
-  const cx = (all.x0 + all.x1) / 2, cz = (all.y0 + all.y1) / 2, sz = Math.max(all.x1 - all.x0, all.y1 - all.y0, 400);
-  // detay seviyesi: çok yoğun planlarda parça kenarları/kasa/gölge detayı otomatik azaltılır
-  let nObj = 0;
-  P.floors.forEach(f => { if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return; nObj += f.walls.length * 5 + f.ops.length * 6 + f.furn.length * 8 + f.rooms.length; });
-  const det = nObj < 3000 ? 1 : 0;
-
-  S.add(new THREE.HemisphereLight(0xffffff, lt ? 0x667788 : 0x1e293b, lt ? 0.32 : 0.5));
-  const dl = new THREE.DirectionalLight(0xfff6e8, lt ? 0.5 : 0.45);
-  dl.position.set(cx + sz * 0.75, sz * 1.7, cz + sz * 0.85);
-  dl.target.position.set(cx, 0, cz); S.add(dl.target);
-  dl.castShadow = true;
-  const shadowRes = nObj < 700 ? 2048 : 1024;
-  dl.shadow.mapSize.set(shadowRes, shadowRes);
-  const ext = sz * 0.95 + 200, sc3 = dl.shadow.camera;
-  sc3.left = -ext; sc3.right = ext; sc3.top = ext; sc3.bottom = -ext; sc3.near = 10; sc3.far = sz * 5 + 4000;
-  sc3.updateProjectionMatrix();
-  dl.shadow.bias = -0.0004; dl.shadow.normalBias = 1.2;
-  S.add(dl);
-  const fill = new THREE.DirectionalLight(0xdbeafe, lt ? 0.14 : 0.24);
-  fill.position.set(cx - sz * 0.9, sz * 0.55, cz - sz * 0.7); S.add(fill);
-
-  const matCache = {}, extraMats = [], texs = [], floorTex = {};
-  const mat = (c, o) => { const k = c + '|' + (o || ''); return matCache[k] || (matCache[k] = new THREE.MeshLambertMaterial({ color: c, ...(o ? { transparent: true, opacity: o } : {}), side: THREE.DoubleSide })); };
+  S.add(new THREE.HemisphereLight(0xffffff, lt ? 0x667788 : 0x1e293b, lt ? 0.55 : 0.65));
+  const dl = new THREE.DirectionalLight(0xffffff, 0.45); dl.position.set(600, 1500, 400); S.add(dl);
+  const matCache = {}, mat = (c, o) => { const k = c + (o || ''); return matCache[k] || (matCache[k] = new THREE.MeshLambertMaterial({ color: c, ...(o ? { transparent: true, opacity: o } : {}), side: THREE.DoubleSide })); };
   const lineMat = new THREE.LineBasicMaterial({ color: lt ? 0x334155 : 0x64748b, transparent: true, opacity: .35 });
-  // paylaşılan birim geometriler: her parça için yeni tampon ayırmak yerine ölçeklenir
-  const unitBox = new THREE.BoxGeometry(1, 1, 1), unitEdges = new THREE.EdgesGeometry(unitBox);
-  const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 24), unitSph = new THREE.SphereGeometry(1, 16, 12);
-  const box = (parent, w, h, d, color, x, y, z, ry = 0, op, edges = true, cast) => {
-    const m = new THREE.Mesh(unitBox, mat(color, op));
-    m.scale.set(w, h, d); m.position.set(x, y, z); m.rotation.y = ry; parent.add(m);
-    m.receiveShadow = true; m.castShadow = cast === undefined ? (!op && w * h * d > 6000) : cast;
-    if (edges && !op) { const l = new THREE.LineSegments(unitEdges, lineMat); l.scale.copy(m.scale); l.position.copy(m.position); l.rotation.y = ry; parent.add(l); }
-    return m;
+  const box = (parent, w, h, d, color, x, y, z, ry = 0, op, edges = true) => {
+    const g = new THREE.BoxGeometry(w, h, d), m = new THREE.Mesh(g, mat(color, op)); m.position.set(x, y, z); m.rotation.y = ry; parent.add(m);
+    if (edges && !op) { const l = new THREE.LineSegments(new THREE.EdgesGeometry(g), lineMat); l.position.copy(m.position); l.rotation.y = ry; parent.add(l); } return m;
   };
-  const cyl = (parent, r, hh, color, x, y, z, seg = 20, op, rz) => {
-    const m = new THREE.Mesh(unitCyl, mat(color, op)); m.scale.set(r, hh, rz || r); m.position.set(x, y, z);
-    m.receiveShadow = true; m.castShadow = !op && r * r * hh > 1200; parent.add(m); return m;
-  };
-  const sph = (parent, r, color, x, y, z, sx = 1, sy = 1, sz = 1) => {
-    const m = new THREE.Mesh(unitSph, mat(color)); m.scale.set(r * sx, r * sy, r * sz); m.position.set(x, y, z);
-    m.receiveShadow = true; m.castShadow = r * r * r > 1200; parent.add(m); return m;
-  };
-  const furnCtx = { box, cyl, sph, mat, det };
-  let elev = 0;
+  let elev = 0, all = null;
   P.floors.forEach((f, fidx) => {
     if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return; // kat seçici: yalnızca seçili kat çizilir
+    const b = contentBounds(f); if (b) all = all ? { x0: Math.min(all.x0, b.x0), y0: Math.min(all.y0, b.y0), x1: Math.max(all.x1, b.x1), y1: Math.max(all.y1, b.y1) } : b;
     // zemin plakası: duvarların dış konturunu izleyen poligon — açılı planlarda AABB gibi taşmaz
     const slabCol = lt ? 0xded8cc : (fidx === 0 ? 0x171e29 : 0x232b38);
     for (const pts of slabPolys(f)) {
-      const shp = new THREE.Shape(pts.map(p => new THREE.Vector2(p.x, p.y)));
-      const geo = new THREE.ExtrudeGeometry(shp, { depth: 20, bevelEnabled: false });
+      const sh = new THREE.Shape(pts.map(p => new THREE.Vector2(p.x, p.y)));
+      const geo = new THREE.ExtrudeGeometry(sh, { depth: 20, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
       const m = new THREE.Mesh(geo, mat(slabCol));
-      m.position.y = elev; m.receiveShadow = true;
+      m.position.y = elev;
       S.add(m);
     }
-    f.rooms.forEach(r => {
-      if (!r.pts || r.pts.length < 3) return;
-      const shp = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y)));
-      const geo = new THREE.ShapeGeometry(shp);
-      let m;
-      const kind = r.floor && r.floor !== 'none' ? r.floor : null;
-      if (kind && det) {
-        const tex = floorTexture(kind, r.color || '#cbd5e1', lt, { floorTex, texs });
-        const mm = new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide }); extraMats.push(mm);
-        m = new THREE.Mesh(geo, mm);
-      } else {
-        m = new THREE.Mesh(geo, mat(r.color, lt ? undefined : 0.78));
-      }
-      m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6; m.receiveShadow = true; S.add(m);
-    });
+    f.rooms.forEach(r => { const sh = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y))); const m = new THREE.Mesh(new THREE.ShapeGeometry(sh), mat(r.color, lt ? undefined : 0.78)); m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6; S.add(m); });
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
       const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
@@ -3733,66 +3267,33 @@ function build3D(keepCam = false) {
       };
       const ops = f.ops.filter(o => o.wall === w.id).sort((a, c) => a.d - c.d); let pos = 0;
       ops.forEach(o => {
-        const s = Math.max(pos, o.d - o.w / 2), e = Math.min(L, o.d + o.w / 2);
-        seg(pos, s, 0, H);
+        const s = Math.max(pos, o.d - o.w / 2), e = Math.min(L, o.d + o.w / 2); seg(pos, s, 0, H);
         if (o.sill > 0) seg(s, e, 0, o.sill); seg(s, e, Math.min(H, o.sill + o.h), H);
-        const span = e - s, xm = (s + e) / 2 - L / 2;
-        if (span >= 1) {
-          // kapı/sürgü grubu: opId taşır ki 3B tıklama çalışsın
-          const isLeaf = o.type === 'door' || o.type === 'double' || o.type === 'slide';
-          let og = g;
-          if (isLeaf) { og = new THREE.Group(); og.userData = { opId: o.id }; g.add(og); }
-          const fCol = shade(wCol, -0.22), fr = Math.min(6, Math.max(2, span * 0.07));
-          if (det && !curt) {
-            // kasa: söveler + üst lento (+ pencere denizliği)
-            box(og, fr, o.h, w.t * 1.06, fCol, s + fr / 2 - L / 2, o.sill + o.h / 2, 0, 0, 0, false);
-            box(og, fr, o.h, w.t * 1.06, fCol, e - fr / 2 - L / 2, o.sill + o.h / 2, 0, 0, 0, false);
-            box(og, span, fr, w.t * 1.06, fCol, xm, o.sill + o.h - fr / 2, 0, 0, 0, false);
-            if (o.type === 'window') box(og, span + fr * 1.6, 4, w.t * 1.5, fCol, xm, Math.max(2, o.sill - 2), 0, 0, 0, false);
-          }
-          if (o.type === 'window') {
-            box(og, span, o.h, w.t * 0.25, 0x9fd3ee, xm, o.sill + o.h / 2, 0, 0, 0.45, false);
-            if (det && span > 100) box(og, 4, o.h, w.t * 0.34, frameCol, xm, o.sill + o.h / 2, 0, 0, 0, false); // orta kayıt
-          } else if (o.type === 'door' || o.type === 'double') {
-            // closed: yapraklar boşluğu doldurur; open: menteşeden 90° açık döner
-            const sd3 = o.side || 1, a90 = Math.PI / 2, lw = span * (o.type === 'double' ? 0.48 : 0.96);
-            const leaf = (hx, ry, sgn) => {
-              const lg = new THREE.Group(); lg.position.set(hx, 0, 0); lg.rotation.y = ry; og.add(lg);
-              box(lg, lw, o.h * 0.97, 4, 0xb08968, sgn * lw / 2, o.h / 2, 0, 0, 0, det);
-              if (det) {
-                box(lg, lw * 0.68, o.h * 0.62, 1.5, 0xd7b494, sgn * lw / 2, o.h * 0.53, 2.8, 0, 0, false);
-                const hd = cyl(lg, 1.6, 8, 0x9aa6b2, sgn * (lw - 9), o.h * 0.47, 5.5, 12); hd.rotation.x = Math.PI / 2;
-              }
-            };
-            if (o.type === 'double') { leaf(s - L / 2, o.open ? -sd3 * a90 : 0, 1); leaf(e - L / 2, o.open ? sd3 * a90 : 0, -1); }
-            else if (o.flip) leaf(e - L / 2, o.open ? sd3 * a90 : 0, -1);
-            else leaf(s - L / 2, o.open ? -sd3 * a90 : 0, 1);
-          } else if (o.type === 'slide') {
-            // sürgülü kapı: 2B'deki gibi hafif ofsetli iki kayar panel + üst ray
+        if (o.type === 'window') box(g, e - s, o.h, w.t * 0.25, 0x7dd3fc, (s + e) / 2 - L / 2, o.sill + o.h / 2, 0, 0, 0.45, false);
+        else if (o.type === 'door' || o.type === 'double') {
+          // closed: yapraklar boşluğu doldurur; open: menteşeden 90° açık döner
+          const sd3 = o.side || 1, a90 = Math.PI / 2, lw = (e - s) * (o.type === 'double' ? 0.48 : 0.96);
+          const leaf = (hx, ry, sgn) => { const lg = new THREE.Group(); lg.position.set(hx, 0, 0); lg.rotation.y = ry; g.add(lg); const m = box(lg, lw, o.h * 0.98, 4, 0xb08968, sgn * lw / 2, o.h / 2, 0, 0, 0.9, false); m.userData = { opId: o.id }; };
+          if (o.type === 'double') { leaf(s - L / 2, o.open ? -sd3 * a90 : 0, 1); leaf(e - L / 2, o.open ? sd3 * a90 : 0, -1); }
+          else if (o.flip) leaf(e - L / 2, o.open ? sd3 * a90 : 0, -1);
+          else leaf(s - L / 2, o.open ? -sd3 * a90 : 0, 1);
+        } else if (o.type === 'slide') {
+          // sürgülü kapı: 2B'deki gibi hafif ofsetli iki kayar panel (cam)
+          const span = e - s;
+          if (span > 1) {
             const pw = span * 0.55, pt = Math.max(2, Math.min(4, w.t * 0.25)), my = o.sill + o.h / 2;
             const sgn = o.flip ? -1 : 1;
             const pFixed = o.flip ? (e - pw / 2 - L / 2) : (s + pw / 2 - L / 2);
-            const pSlide = o.open ? pFixed : (o.flip ? (s + pw / 2 - L / 2) : (e - pw / 2 - L / 2));
-            box(og, pw, o.h * 0.98, pt, 0x7dd3fc, pFixed, my, -sgn * pt * 0.65, 0, 0.55, false);
-            box(og, pw, o.h * 0.98, pt, 0x7dd3fc, pSlide, my, sgn * pt * 0.65, 0, 0.55, false);
-            if (det) box(og, span, 6, w.t * 0.5, frameCol, xm, o.sill + o.h - 3, 0, 0, 0, false);
+            const pSlideClosed = o.flip ? (s + pw / 2 - L / 2) : (e - pw / 2 - L / 2);
+            const pSlide = o.open ? pFixed : pSlideClosed;
+            const m1 = box(g, pw, o.h * 0.98, pt, 0x7dd3fc, pFixed, my, -sgn * pt * 0.65, 0, 0.55, false);
+            const m2 = box(g, pw, o.h * 0.98, pt, 0x7dd3fc, pSlide, my, sgn * pt * 0.65, 0, 0.55, false);
+            m1.userData = { opId: o.id }; m2.userData = { opId: o.id };
           }
         }
         pos = Math.max(pos, e);
       });
       seg(pos, L, 0, H);
-      if (!curt && det) {
-        // süpürgelik: kapı boşluklarını atlar, pencere altında devam eder
-        const skirt = (s0, e0) => {
-          if (e0 - s0 < 4) return;
-          const sw2 = e0 - s0, sx2 = (s0 + e0) / 2 - L / 2, scf = shade(wCol, -0.16), sd = 1.6;
-          for (const zs of [-1, 1]) box(g, sw2, 6, sd, scf, sx2, 3, zs * (w.t / 2 + sd / 2 - 0.2), 0, 0, false, false);
-        };
-        let p0 = 0;
-        ops.filter(o => o.sill <= 2).forEach(o => { const s = Math.max(p0, o.d - o.w / 2), e = Math.min(L, o.d + o.w / 2); skirt(p0, s); p0 = Math.max(p0, e); });
-        skirt(p0, L);
-        box(g, L, 3.5, w.t * 1.02, shade(wCol, -0.08), 0, H - 1.75, 0, 0, 0, false, false); // üst kapak
-      }
       if (curt) {
         // dikmeler: açıklıkların üstüne binmesin
         const nM = Math.max(1, Math.round(L / 120));
@@ -3809,7 +3310,14 @@ function build3D(keepCam = false) {
     });
     f.furn.forEach(o => {
       const ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, elev, o.y); g.rotation.y = ry; g.userData = { furnId: o.id, elev }; S.add(g);
-      furn3D(g, o, furnCtx);
+      if (o.k === 'stairs') { const n = Math.max(6, Math.round(o.h / 18)); for (let i = 0; i < n; i++) { const sh = o.h / n * (i + 1); box(g, o.w, sh, o.d / n, o.color, 0, sh / 2, o.d / n * (n / 2 - i - .5)); } }
+      else if (o.k === 'round') { const m = new THREE.Mesh(new THREE.CylinderGeometry(o.w / 2, o.w / 2, o.h, 28), mat(o.color)); m.scale.z = o.d / o.w; m.position.y = o.h / 2; g.add(m); }
+      else if (o.k === 'poly' && o.pts && o.pts.length >= 3) { const sh = new THREE.Shape(o.pts.map(p => new THREE.Vector2(p.x, -p.y))); const geo = new THREE.ExtrudeGeometry(sh, { depth: Math.max(2, o.h), bevelEnabled: false }); geo.rotateX(-Math.PI / 2); g.add(new THREE.Mesh(geo, mat(o.color))); }
+      else {
+        box(g, o.w, o.h, o.d, o.color, 0, o.h / 2, 0);
+        if (o.k === 'sofa') box(g, o.w, o.h, o.d * .25, o.color, 0, o.h * 0.75, -o.d * .375);
+        if (o.k === 'bed') box(g, o.w, o.h * 1.5, 10, 0xb08968, 0, o.h * 0.75, -o.d / 2 + 5);
+      }
     });
     (f.sketches || []).forEach(sk => {
       if (!sk.pts || sk.pts.length < 2) return;
@@ -3820,12 +3328,11 @@ function build3D(keepCam = false) {
     });
     elev += P.wallH + 20;
   });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xd8d2c5 : 0x11161e));
-  ground.rotation.x = -Math.PI / 2; ground.position.y = -21; ground.receiveShadow = true; S.add(ground);
-  T3.fit = { cx, cz, sz, elev };
+  if (!all) all = { x0: 0, y0: 0, x1: 1000, y1: 700 };
+  const cx = (all.x0 + all.x1) / 2, cz = (all.y0 + all.y1) / 2, sz = Math.max(all.x1 - all.x0, all.y1 - all.y0, 400);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xd8d2c5 : 0x11161e)); ground.rotation.x = -Math.PI / 2; ground.position.y = -21; S.add(ground);
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); }
-  T3.mats = Object.values(matCache).concat(extraMats, [lineMat]); // sonraki build3D çağrısında dispose edilmek üzere
-  T3.texs = texs;
+  T3.mats = Object.values(matCache).concat([lineMat]); // sonraki build3D çağrısında dispose edilmek üzere
   T3.ctl.update();
   refreshSel3D();
 }
@@ -3899,7 +3406,7 @@ function applyLangUI() {
   $('#bLang').title = L('Switch to English', 'Türkçe diline geç');
   $('#bTheme').title = L('Tema (Açık / Koyu)', 'Theme (Light / Dark)');
   $('#bHelp').textContent = L('❓ Yardım', '❓ Help');
-  $('#bAi').title = L('AI ile düzenle (kurulum gerekmez)', 'Edit with AI (no install needed)');
+  $('#bAi').title = L('AI ile düzenle (ajanınız planı canlı düzenler)', 'Edit with AI (your agent edits the plan live)');
   $('#search').placeholder = L('🔍 Mobilya ara...', '🔍 Search furniture...');
   $('#zFit').title = L('Sığdır (0)', 'Fit to view (0)');
   $('#lblSnap').textContent = L('Yakala (G)', 'Snap (G)');
@@ -3926,9 +3433,6 @@ function applyLangUI() {
   if (gsCustom) gsCustom.textContent = L('Özel...', 'Custom...');
   $('#iGridCustom').title = L('Özel ızgara adımı (cm)', 'Custom grid step (cm)');
   $('#lbl3dFloor').textContent = L('Kat', 'Floor');
-  if ($('#b3dFit')) $('#b3dFit').title = L('Sığdır', 'Fit');
-  if ($('#b3dTop')) $('#b3dTop').title = L('Üstten görünüm', 'Top view');
-  if ($('#b3dEye')) $('#b3dEye').title = L('Göz hizası (1.6 m)', 'Eye level (1.6 m)');
   if ($('#s3dFloor')) $('#s3dFloor').dataset.opts = ''; // dil değişince seçenekleri yeniden yaz
   $('#lblAngle').textContent = (P && P.gridType === 'triangle') ? L('Açı 30°', 'Angle 30°') : L('Açı 15°', 'Angle 15°');
   if (!P && ($('#pname').value === 'Yeni Proje' || $('#pname').value === 'New Project')) $('#pname').value = L('Yeni Proje', 'New Project');
@@ -3956,9 +3460,6 @@ $('#bPng').onclick = exportPng; $('#bPrint').onclick = exportPrint;
 $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { type: 'image/svg+xml' }));
 $('#b2d').onclick = () => show3D(false); $('#b3d').onclick = () => show3D(true);
 $('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && ui.view3d) build3D(true); };
-$('#b3dFit').onclick = () => set3DCam('fit');
-$('#b3dTop').onclick = () => set3DCam('top');
-$('#b3dEye').onclick = () => set3DCam('eye');
 $('#bLang').onclick = () => setLang(isEN() ? 'tr' : 'en');
 $('#bTheme').onclick = () => {
   const d = document.documentElement;
