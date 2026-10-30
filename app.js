@@ -2472,18 +2472,20 @@ function helpModal() {
   ];
   const aiBlock = `<h3 style="margin:0 0 6px">${L('🤖 AI ile düzenleme', '🤖 Edit with AI')}</h3>
   <p class="muted" style="margin:0 0 8px">${L(
-    'Yapay zekâ aracınız (OpenCode, Claude Desktop, Cursor…) planı sizin için çizebilir. Aşağıdaki istemi kopyalayıp aracınıza yapıştırın; köprüyü kendisi başlatır.',
-    'Your AI agent (OpenCode, Claude Desktop, Cursor…) can draw the plan for you. Copy the prompt below and paste it into your agent — it starts the bridge itself.'
+    '<b>Kurulum gerekmez:</b> istemi kopyalayıp sohbet aracınıza yapıştırın, dönen JSON\'u uygulamaya geri yapıştırın. Planı üzerine yazar, önce yedek alabilirsiniz.',
+    '<b>No install needed:</b> copy the prompt into any AI chat, then paste the returned JSON back into the app. It replaces the current plan, so take a backup first if you like.'
+  )}</p>
+  <div style="margin:0 0 14px"><button class="btn sm" data-ai-open>${L('🤖 AI ile düzenle', '🤖 Edit with AI')}</button></div>
+  <h3 style="margin:0 0 6px">${L('Canlı bağlantı (kendi bilgisayarınızda)', 'Live connection (on your own computer)')}</h3>
+  <p class="muted" style="margin:0 0 8px">${L(
+    'Aracınız planı doğrudan düzenlesin isterseniz aşağıdaki istemi yapıştırın — köprüyü kendisi başlatır. Bu yol Node.js ve proje klasörünü gerektirir; GitHub Pages sürümünde çalışmaz.',
+    'If you want your agent to edit the plan directly, paste the prompt below — it starts the bridge itself. This path needs Node.js and the project folder; it does not work on the GitHub Pages build.'
   )}</p>
   <pre id="aiPromptText" style="margin:0 0 8px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;font:11.5px/1.55 var(--font-mono);white-space:pre-wrap;user-select:text">${esc(aiSetupPrompt())}</pre>
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <button class="btn sm" data-ai-prompt>${L('📋 İstemi kopyala', '📋 Copy prompt')}</button>
+    <button class="btn sm" data-ai-prompt>${L('📋 Canlı bağlantı istemini kopyala', '📋 Copy live-connection prompt')}</button>
     <span class="muted" id="aiPromptState"></span>
-  </div>
-  <p class="muted" style="margin:10px 0 0">${L(
-    'Köprüyü kendiniz başlatmak isterseniz: <code>node mcp/bridge.js</code> çalıştırın, sonra uygulamayı <code>http://127.0.0.1:8787/</code> adresinde açın.',
-    'Prefer to start it yourself? Run <code>node mcp/bridge.js</code>, then open the app at <code>http://127.0.0.1:8787/</code>.'
-  )}</p>`;
+  </div>`;
   openModal(`<h2>${L('Kısayollar & İpuçları', 'Shortcuts & Tips')} <button class="btn sm" data-close>✕</button></h2>
   ${aiBlock}
   <h3 style="margin:22px 0 8px">${L('Klavye kısayolları', 'Keyboard shortcuts')}</h3>
@@ -2492,6 +2494,8 @@ function helpModal() {
     'İpucu: Hızlı başlamak için <b>R</b> ile bir oda çiz, <b>D</b>/<b>N</b> ile kapı pencere ekle, <b>F</b> ile mobilyaları yerleştir. Mobilyalar duvara yaklaşınca otomatik yapışır ve döner. Üstteki <b>3B</b> düğmesi planı üç boyutlu gösterir.',
     'Tip: Press <b>R</b> to draw a rectangular room, <b>D</b>/<b>N</b> to add doors and windows, and <b>F</b> to place furniture. Furniture automatically snaps and aligns to nearby walls. Click <b>3D</b> in the top bar for an interactive 3D preview.'
   )}</p>`, 'help');
+  const aiOpen = document.querySelector('#modal [data-ai-open]');
+  if (aiOpen) aiOpen.onclick = () => aiModal();
   const aiBtn = document.querySelector('#modal [data-ai-prompt]');
   if (aiBtn) aiBtn.onclick = async () => {
     const ok = await copyText(aiSetupPrompt());
@@ -2499,6 +2503,122 @@ function helpModal() {
     if (st) st.textContent = ok
       ? L('Kopyalandı — aracınıza yapıştırın ✓', 'Copied — paste it into your agent ✓')
       : L('Kopyalanamadı — metni seçip elle kopyalayın', 'Copy failed — select the text and copy it manually');
+  };
+}
+/* ---------- AI: zero-install (copy prompt → paste JSON) ---------- */
+let aiReq = '';
+function planForAi() {
+  let c;
+  try { c = JSON.parse(JSON.stringify(P)); } catch (e) { return JSON.stringify(P); }
+  if (c && c.bg && c.bg.src) { c.bg.src = null; }   // data URLs are huge — leave the image out
+  return JSON.stringify(c);
+}
+function aiPromptFor(task) {
+  const omitted = !!(P && P.bg && P.bg.src);
+  const rules = isEN()
+    ? ['You are editing a floor plan for "Kat Planı Çizici", a browser floor planner.',
+      'Reply with ONLY the complete updated project JSON in one ```json code block — no explanations.',
+      'Rules:',
+      '- All coordinates are centimetres and the Y axis points DOWN.',
+      '- Keep every field and id you were not asked to change exactly as given.',
+      '- ids are unique 7-character strings.',
+      '- Openings belong to a wall: {wall: <wall id>, d: cm from that wall\'s "a" end to the opening centre}.',
+      '- Rooms are independent polygons: if you move walls, update the room pts as well.',
+      '- Furniture uses k = rect | round | stairs | bed | sofa, plus w/d/h/color/x/y/rot/label.']
+    : ['"Kat Planı Çizici" (tarayıcıda çalışan kat planı uygulaması) için bir plan düzenliyorsun.',
+      'Yalnızca güncellenmiş proje JSON\'unu tek bir ```json bloğunda döndür — açıklama yazma.',
+      'Kurallar:',
+      '- Tüm koordinatlar santimetre, Y ekseni AŞAĞI bakar.',
+      '- İstenmeyen alanları ve id\'leri birebir koru.',
+      '- id\'ler benzersiz 7 karakterli dizelerdir.',
+      '- Kapı/pencere duvara bağlıdır: {wall: <duvar id>, d: duvarın "a" ucundan açıklık merkezine cm}.',
+      '- Odalar bağımsız çokgenlerdir: duvarı taşırsan oda pts\'lerini de güncelle.',
+      '- Mobilya k = rect | round | stairs | bed | sofa; w/d/h/color/x/y/rot/label.'];
+  if (omitted) rules.push(isEN()
+    ? '- The background image pixels were omitted (bg.src is null); leave bg untouched.'
+    : '- Arka plan görseli verisi dışarıda bırakıldı (bg.src null); bg\'yi değiştirme.');
+  return rules.join('\n') + '\n\n'
+    + (isEN() ? 'Task: ' : 'Görev: ') + (String(task || '').trim() || (isEN() ? '(no task given)' : '(görev yazılmadı)'))
+    + '\n\n' + (isEN() ? 'Current project JSON:' : 'Mevcut proje JSON:') + '\n' + planForAi();
+}
+function aiParsePlan(text) {
+  const s = String(text || '').trim();
+  if (!s) throw new Error(L('Yapıştırılan metin boş', 'Nothing was pasted'));
+  const candidates = [s];
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) candidates.push(fence[1].trim());
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a >= 0 && b > a) candidates.push(s.slice(a, b + 1));
+  for (const c of candidates) {
+    try {
+      const o = JSON.parse(c);
+      if (o && Array.isArray(o.floors) && o.floors.length) return o;
+    } catch (e) { }
+  }
+  throw new Error(L('Geçerli plan JSON\'u bulunamadı (floors dizisi yok)', 'No valid plan JSON found (no floors[] array)'));
+}
+function aiModal() {
+  const box = 'width:100%;box-sizing:border-box;padding:8px 10px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;color:var(--text);font:11.5px/1.55 var(--font-mono);resize:vertical';
+  openModal(`<h2>${L('🤖 AI ile düzenle', '🤖 Edit with AI')} <button class="btn sm" data-close>✕</button></h2>
+  <p class="muted" style="margin:0 0 10px">${L(
+    'Kurulum gerekmez. İstemi kopyalayıp sohbet aracınıza (ChatGPT, Claude, Gemini…) yapıştırın, dönen JSON\'u aşağıya yapıştırın.',
+    'No install needed. Copy the prompt into any AI chat (ChatGPT, Claude, Gemini…), then paste the JSON it returns below.'
+  )}</p>
+  <label style="display:block;margin:0 0 4px;font-weight:600">${L('1) Ne değişsin?', '1) What should change?')}</label>
+  <input id="aiReq" value="${esc(aiReq)}" placeholder="${L('örn. 12 m² banyo ekle, kapıyı sağa al', 'e.g. add a 12 m² bathroom, move the door to the right')}" style="${box};font-family:inherit">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0">
+    <button class="btn sm" id="aiCopy">${L('📋 İstem + planı kopyala', '📋 Copy prompt + plan')}</button>
+    <button class="btn sm" id="aiShow">${L('Metni göster', 'Show text')}</button>
+    <button class="btn sm" id="aiBackup">${L('⬇ Yedek JSON', '⬇ Backup JSON')}</button>
+    <span class="muted" id="aiState"></span>
+  </div>
+  <textarea id="aiPromptBox" readonly spellcheck="false" style="${box};display:none;height:160px"></textarea>
+  <h3 style="margin:16px 0 6px">${L('2) Dönen JSON\'u yapıştırın', '2) Paste the returned JSON')}</h3>
+  <textarea id="aiReply" spellcheck="false" placeholder='{"v":2,"floors":[…]}' style="${box};height:120px"></textarea>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+    <button class="btn primary" id="aiApply">${L('✔ Planı uygula', '✔ Apply plan')}</button>
+    <span class="muted" id="aiApplyState">${L('Mevcut planın üzerine yazar — isterseniz önce yedek alın.', 'This replaces the current plan — take a backup first if needed.')}</span>
+  </div>
+  <p class="muted" style="margin:14px 0 0;padding-top:10px;border-top:1px solid var(--line)">${L(
+    'Canlı bağlantı (kendi bilgisayarınızda çalışır): yapay zekâ aracınız planı doğrudan düzenlesin isterseniz ❓ Yardım bölümündeki istemi kullanın.',
+    'Live connection (runs on your own computer): to let your agent edit the plan directly, use the prompt in ❓ Help.'
+  )} <button class="btn sm" id="aiLive">${L('Yardımı aç', 'Open Help')}</button></p>`, 'ai');
+
+  const promptState = () => aiPromptFor(aiReq);
+  const setState = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+
+  const reqEl = $('#aiReq');
+  reqEl.oninput = () => { aiReq = reqEl.value; };
+
+  $('#aiCopy').onclick = async () => {
+    const txt = promptState();
+    const ok = await copyText(txt);
+    setState('aiState', ok
+      ? L('Kopyalandı ✓ — aracınıza yapıştırın', 'Copied ✓ — paste it into your AI chat')
+      : L('Kopyalanamadı — "Metni göster" ile seçip elle kopyalayın', 'Could not copy — use "Show text" and copy manually'));
+    const pb = $('#aiPromptBox');
+    if (pb) { pb.value = txt; if (!ok) pb.style.display = 'block'; }
+  };
+  $('#aiShow').onclick = () => {
+    const pb = $('#aiPromptBox');
+    if (!pb) return;
+    const showing = pb.style.display !== 'none';
+    pb.value = promptState();
+    pb.style.display = showing ? 'none' : 'block';
+    if (!showing) { pb.focus(); pb.select(); }
+  };
+  $('#aiBackup').onclick = () => { downloadJson(); setState('aiState', L('Yedek indirildi', 'Backup downloaded')); };
+  $('#aiLive').onclick = () => helpModal();
+  $('#aiApply').onclick = () => {
+    let plan;
+    try { plan = aiParsePlan($('#aiReply').value); }
+    catch (e) { setState('aiApplyState', '⚠ ' + e.message); return; }
+    try {
+      loadProject(plan, L('🤖 AI planı uygulandı', '🤖 AI plan applied'));
+      closeModal();
+    } catch (e) {
+      setState('aiApplyState', '⚠ ' + (e.message || e));
+    }
   };
 }
 function projectThumbSvg(proj) {
@@ -3004,6 +3124,7 @@ function applyLangUI() {
   $('#bLang').title = L('Switch to English', 'Türkçe diline geç');
   $('#bTheme').title = L('Tema (Açık / Koyu)', 'Theme (Light / Dark)');
   $('#bHelp').textContent = L('❓ Yardım', '❓ Help');
+  $('#bAi').title = L('AI ile düzenle (kurulum gerekmez)', 'Edit with AI (no install needed)');
   $('#search').placeholder = L('🔍 Mobilya ara...', '🔍 Search furniture...');
   $('#zFit').title = L('Sığdır (0)', 'Fit to view (0)');
   $('#lblSnap').textContent = L('Yakala (G)', 'Snap (G)');
@@ -3038,6 +3159,7 @@ function applyLangUI() {
   if (P) { syncGridUI(); refresh(); sync3DFloors(); }
   if ($('#modalbg').style.display === 'flex') {
     if (ui.modal === 'help') helpModal();
+    else if (ui.modal === 'ai') aiModal();
     else if (ui.modal === 'projects') projectsModal();
     else if (ui.modal === 'templates') templatesModal();
   }
@@ -3050,7 +3172,7 @@ function setLang(nl) {
 
 $('#bNew').onclick = templatesModal; $('#bProjects').onclick = projectsModal; $('#bSave').onclick = saveBrowser;
 $('#bJson').onclick = () => downloadJson(P);
-$('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpModal;
+$('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpModal; $('#bAi').onclick = () => aiModal();
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
 $('#bPng').onclick = exportPng; $('#bPrint').onclick = exportPrint;
 $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { type: 'image/svg+xml' }));

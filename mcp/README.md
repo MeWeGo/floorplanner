@@ -60,7 +60,24 @@ load_project                         │
 
 ## Requirements
 
-- [Node.js](https://nodejs.org/) ≥ 16 (no `npm install` — there are no dependencies; Node ≥ 18 also gives the MCP server global `fetch`-free HTTP via `http`)
+- [Node.js](https://nodejs.org/) ≥ 16 — **only for the live bridge / MCP tools**. The copy-paste flow needs nothing but a browser.
+
+## Two ways to use AI
+
+| | No install (any browser) | Live (local) |
+| :-- | :-- | :-- |
+| Where | app UI → **🤖 AI** | app at `http://127.0.0.1:8787/` |
+| How | copy prompt + plan → paste into any AI chat → paste JSON back | agent calls `push_to_browser` / `pull_from_browser` |
+| Needs | nothing | Node.js + the project folder |
+| Works on GitHub Pages | ✅ | ❌ |
+
+### No-install flow
+
+Click **🤖 AI** in the top bar: describe the change, **📋 Copy prompt + plan**, paste into ChatGPT / Claude / Gemini, then paste the returned JSON into the second box and **✔ Apply plan**. The prompt includes the plan JSON and the rules the model must follow (centimetres, Y down, stable ids, openings paramétrica on their wall, rooms as independent polygons). Take a **⬇ Backup JSON** first if the plan matters.
+
+### Live flow
+
+Run `node mcp/bridge.js` and open <http://127.0.0.1:8787/>; the agent then edits the open tab directly.
 
 ## Tools exposed
 
