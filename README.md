@@ -91,15 +91,9 @@
 
 **No install needed (works on the live site).** Click **🤖 AI** in the top bar (or **❓ Help**), describe the change, and hit **📋 Copy prompt + plan**. Paste it into any AI chat (ChatGPT, Claude, Gemini…), then paste the JSON it returns into the second box and press **✔ Apply plan**. The prompt carries the plan JSON plus the schema rules (cm, Y down, ids, parametric openings), so the answer can be applied directly. Use **⬇ Backup JSON** first — applying replaces the current plan. Background-image pixels are stripped from the prompt (`bg.src` → `null`) to keep it small.
 
-**Live mode (local only).** For an agent that edits the plan itself, run the optional MCP server:
+**Live mode (agent).** For an agent that edits the plan itself, use the optional MCP server (`mcp/server.js`, 21 tools, Node ≥ 16). Your agent starts `node mcp/bridge.js`, and **the page you already have open connects to it automatically** — the deployed GitHub Pages tab, a `file://` copy, or a local one. AI edits then appear instantly in that tab and autosave to its IndexedDB, so a refresh keeps them; the agent can pull your own edits back. Nothing is injected and you never open a second URL. In Chrome/Edge the first connection may ask once for **local network** permission (allow it — only a local server can answer).
 
-```sh
-node mcp/server.js      # stdio MCP server, 21 tools, Node ≥ 16
-```
-
-With `node mcp/bridge.js` running and the app open at <http://127.0.0.1:8787/>, AI edits show up **instantly in the open tab**, and the app autosaves them to IndexedDB — so a **refresh keeps the changes** and the AI can pull your own edits back. The bridge injects a small client script when serving, so `index.html` / `style.css` stay untouched.
-
-**Frontend indicator:** the bridge-injected client shows a floating **AI** pill (green dot = connected, grey = bridge offline, with the live plan revision). Click it for the bridge details and an **Ask AI** box — type an instruction such as *"add a 12 m² bathroom with a shower"* and the agent can pick it up with `get_user_requests` (then mark it done with `ack_user_requests`). The panel (and **❓ Help**) offers a **copy-ready prompt** for your agent — paste it into OpenCode / Claude Desktop / Cursor and the agent starts the bridge itself and connects. Users who prefer it can still run `node mcp/bridge.js` manually. This path needs Node.js and the project folder; it does not work on the GitHub Pages build, which is why the zero-install flow above exists.
+**Frontend indicator:** while connected, a floating **AI** pill shows the live plan revision. Click it for bridge details and an **Ask AI** box — type *"add a 12 m² bathroom with a shower"* and the agent can pick it up with `get_user_requests` (then mark it done with `ack_user_requests`). The **🤖 AI** modal offers a **copy-ready prompt** for your agent, so you never touch a terminal yourself.
 
 Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_project` · `add_wall` / `add_rect_walls` · `add_opening` · `add_furniture` · `add_room` · `add_text` · `update_object` / `delete_objects` · `add_floor` · `summarize` / `list_catalog` · `browser_status` / `push_to_browser` / `pull_from_browser` / `get_user_requests` / `ack_user_requests`. Client configuration and the full workflow are in [`mcp/README.md`](mcp/README.md).
 

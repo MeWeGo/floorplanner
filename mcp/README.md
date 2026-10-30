@@ -6,37 +6,39 @@ The server speaks the **same JSON project format** the app imports and exports. 
 
 ### 1. Live browser mode (recommended)
 
-Run the bridge, open the app once, and AI edits appear **instantly in the open tab** and **survive a refresh**:
+Your agent starts the bridge; **the app connects to it by itself** — no second URL, no exported files:
 
 ```sh
-node mcp/bridge.js          # → open http://127.0.0.1:8787/
+node mcp/bridge.js          # the agent runs this; keep it running
 ```
 
 ```
-AI agent                     bridge (localhost)              browser tab
-─────────                    ───────────────────             ───────────
+AI agent                     bridge (localhost)              browser tab (any origin)
+─────────                    ───────────────────             ────────────────────────
 push_to_browser ───────────▶ /__plan.json ───────SSE──────▶ loadProject()
-                                                              │
-                                                              └─ autosave ▶ IndexedDB
-                                                                              │
+                                                               │
+                                                               └─ autosave ▶ IndexedDB
+                                                                               │
 your edits ◀─────────────── /__plan.json ◀── autosave hook ◀─────────────────┘
 refresh the page  ─────────────────────────────────────────────▶ same plan ✔
 ```
 
-IndexedDB lives inside a browser **origin**, so a Node process cannot write it directly. The bridge solves that: it serves the app at `http://127.0.0.1:8787/` and injects a small client script (`mcp/bridge-client.js`) on the fly — **`index.html` / `app.js` are not modified** and GitHub Pages is unaffected. The client applies pushed plans through the app's own `loadProject()`, and the app's autosave then stores them in that origin's IndexedDB, so a refresh (or a later visit) shows the change. Local edits are pushed back to the bridge automatically, so `pull_from_browser` starts the AI from your latest work.
+IndexedDB lives inside a browser **origin**, so a Node process cannot write it directly. The bridge solves that: the app applies pushed plans through its own `loadProject()`, and its autosave then stores them in *whatever origin you are using* — so a refresh shows the change. **The client lives in `app.js`**, so it works on the deployed <https://mewego.github.io/floorplanner/>, on a local `file://` copy, and on the bridge's own page; nothing is injected and no local URL has to be opened. Local edits are pushed back automatically, so `pull_from_browser` starts the agent from your latest work.
 
 - Bind address: `127.0.0.1` only (dev tool — do not expose it).
 - Port: `8787` (override with `FP_BRIDGE_PORT`); MCP tools accept a `url` argument or `FP_BRIDGE_URL`.
-- Storage note: plans made on `http://127.0.0.1:8787/` live in a **separate IndexedDB origin** from `file:///…/index.html`. Use the bridge URL while working with the AI; export JSON if you want to carry plans between origins.
+- Storage note: your projects stay in the origin you already use (Pages or `file://`) — the bridge only exchanges JSON with the page.
+- Chrome/Edge may ask once for **local network** permission when a `https://` page talks to `127.0.0.1`. Allow it; only a local server can answer.
+- The page retries every 10 s while open, so a tab that was already open picks up a bridge started later.
 
 ### Frontend indicator & Ask AI box
 
-The injected client adds a small floating **`AI`** pill to the app (bottom-left, above the footer):
+Once connected, the app shows a small floating **`AI`** pill (bottom-left, above the footer). It is hidden while offline:
 
 | State | Meaning |
 | :-- | :-- |
 | 🟢 `AI · rev 12` | SSE connected; the AI is bridged and revision 12 is live |
-| ⚪ `AI` | Bridge unreachable (not running / tab opened without the bridge) |
+| (no pill) | No bridge reachable — the ❓ Help / 🤖 AI modal shows the connection steps |
 
 Clicking the pill opens a panel with the bridge status (plan name, revision, connected tabs, last update time) and the pending request list. Its **"How do I connect?"** section is written for non-technical users: it shows a **copy-ready prompt** ("Set up live editing for my floor planner…"), a copy button, and a one-line note that the agent starts the bridge and says which address to open. The raw `node mcp/bridge.js` command stays as a small "prefer to run it yourself" footnote. The same prompt is available in the app's **❓ Help → 🤖 Edit with AI** section, which is part of `app.js` and therefore also works when the app is opened from `file://`.
 
@@ -64,12 +66,12 @@ load_project                         │
 
 ## Two ways to use AI
 
-| | No install (any browser) | Live (local) |
+| | No install (any browser) | Live (agent) |
 | :-- | :-- | :-- |
-| Where | app UI → **🤖 AI** | app at `http://127.0.0.1:8787/` |
-| How | copy prompt + plan → paste into any AI chat → paste JSON back | agent calls `push_to_browser` / `pull_from_browser` |
+| Where | app UI → **🤖 AI** | any open app tab (Pages, `file://`, local) |
+| How | copy prompt + plan → paste into any AI chat → paste JSON back | agent runs `mcp/bridge.js`; the page connects itself and calls `push_to_browser` / `pull_from_browser` |
 | Needs | nothing | Node.js + the project folder |
-| Works on GitHub Pages | ✅ | ❌ |
+| Works on GitHub Pages | ✅ | ✅ (the page stays on Pages) |
 
 ### No-install flow
 
@@ -77,7 +79,7 @@ Click **🤖 AI** in the top bar: describe the change, **📋 Copy prompt + plan
 
 ### Live flow
 
-Run `node mcp/bridge.js` and open <http://127.0.0.1:8787/>; the agent then edits the open tab directly.
+The agent runs `node mcp/bridge.js`; the open app tab connects to it automatically. The prompt in the AI modal / Help tells the agent exactly what to do.
 
 ## Tools exposed
 
@@ -160,10 +162,11 @@ Or ask an agent: *"Load plan.json, add a 3×4 m bathroom with a toilet and a sho
 | File | Purpose |
 | :-- | :-- |
 | `server.js` | MCP stdio server (JSON-RPC 2.0, hand-rolled) |
-| `bridge.js` | Local HTTP bridge + app server with script injection |
-| `bridge-client.js` | Injected in the app page: apply pushed plans, push local edits, AI pill + Ask AI box |
+| `bridge.js` | Local HTTP bridge: plan store + SSE + request queue (no injection) |
 | `package.json` | Metadata only (no dependencies) |
+
+The browser side lives in `../app.js` (section *AI köprüsü istemcisi*): it probes the bridge, applies pushed plans, mirrors local edits, and renders the `AI` pill / Ask AI box.
 
 ## Keeping it in sync
 
-`CATALOG`, `OPENINGS` and `ROOMCOL` at the top of [`server.js`](server.js) are **mirrors of the constants in [`app.js`](../app.js)**, and the object factories mirror `mkWall` / `mkOp` / `mkFurn` / `mkRoom` / `addRectWalls` / `deleteIds`. The bridge client hooks `loadProject()` / `autosave()` / `templatesModal()` by name. If you change the data model, catalogue or those functions in the app, update the MCP files to match (and vice versa).
+`CATALOG`, `OPENINGS` and `ROOMCOL` at the top of [`server.js`](server.js) are **mirrors of the constants in [`app.js`](../app.js)**, and the object factories mirror `mkWall` / `mkOp` / `mkFurn` / `mkRoom` / `addRectWalls` / `deleteIds`. If you change the data model, catalogue or those functions in the app, update the MCP files to match (and vice versa).

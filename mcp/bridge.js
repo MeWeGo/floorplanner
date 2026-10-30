@@ -8,17 +8,16 @@
             ▲                 │                                            │
             └──── info ───────┘                         the change survives a refresh
 
-   It also serves the app itself and injects `bridge-client.js` into
-   index.html on the fly, so NOTHING in the app has to change:
-   - injects the live-link client (applies pushed plans, pushes local edits)
-   - the app's own autosave then persists the plan to IndexedDB
-     (same origin, so a refresh — or a later visit — shows the change)
+   The app itself contains the client (the AI bridge section of app.js), so it
+   connects to this server from ANY origin — the deployed GitHub Pages build,
+   a local file:// copy, or the page this server hosts at 127.0.0.1:8787.
+   Nothing is injected and no file has to be loaded from here.
 
-   Usage:   node mcp/bridge.js            → open http://127.0.0.1:8787/
+   Usage:   node mcp/bridge.js            (your agent runs this; the app connects)
    Env:     FP_BRIDGE_PORT (default 8787), FP_BRIDGE_HOST (default 127.0.0.1)
 
    Endpoints:
-     GET  /                 the app with the bridge client injected
+     GET  /                 a local copy of the app (optional; Pages works too)
      GET  /__plan.json      { rev, plan, updatedAt } — latest plan
      PUT  /__plan.json      { plan, tab } — store + broadcast to other tabs
      GET  /__events?tab=ID  SSE stream (event: plan, request, requests-changed)
@@ -73,23 +72,28 @@ function addRequest(text) {
 const pendingRequests = () => requests.filter(r => r.status === 'pending');
 
 /* ---------- helpers ---------- */
+// Shared CORS headers. `Allow-Private-Network` lets the GitHub Pages build
+// (a public origin) reach this local server in Chrome/Edge.
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Private-Network': 'true',
+};
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
-  res.writeHead(code, {
+  res.writeHead(code, Object.assign({
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
     'Cache-Control': 'no-store',
-  });
+  }, CORS));
   res.end(body);
 }
 function sendText(res, code, text, mime) {
-  res.writeHead(code, { 'Content-Type': mime || 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(code, Object.assign({ 'Content-Type': mime || 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }, CORS));
   res.end(text);
 }
 function serveFile(res, rel, mimeKey) {
   try {
     const buf = fs.readFileSync(path.join(ROOT, rel));
-    res.writeHead(200, { 'Content-Type': MIME[mimeKey] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    res.writeHead(200, Object.assign({ 'Content-Type': MIME[mimeKey] || 'application/octet-stream', 'Cache-Control': 'no-store' }, CORS));
     res.end(buf);
   } catch (e) {
     sendText(res, 404, 'Not found: ' + rel);
@@ -97,10 +101,10 @@ function serveFile(res, rel, mimeKey) {
 }
 function serveIndex(res) {
   try {
-    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8')
-      // inject the live-link client after app.js (bootstrap of the app)
-      .replace('</body>', '<script src="/__bridge.js"></script>\n</body>');
-    res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-store' });
+    // app.js now contains the bridge client, so nothing needs injecting:
+    // the page connects on its own (from Pages, file:// or this origin).
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    res.writeHead(200, Object.assign({ 'Content-Type': MIME['.html'], 'Cache-Control': 'no-store' }, CORS));
     res.end(html);
   } catch (e) {
     sendText(res, 500, 'Could not read index.html: ' + e.message);
@@ -125,13 +129,12 @@ function validPlan(p) {
 
 /* ---------- SSE ---------- */
 function sse(req, res, tab) {
-  res.writeHead(200, {
+  res.writeHead(200, Object.assign({
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-store',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
     'X-Accel-Buffering': 'no',
-  });
+  }, CORS));
   res.write('retry: 2000\n\n');
   const client = { res, tab };
   clients.add(client);
@@ -161,6 +164,9 @@ const server = http.createServer(async (req, res) => {
       'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
       'Access-Control-Max-Age': '86400',
+      // Chrome's Private Network Access: a page on a public origin (GitHub
+      // Pages) may only reach 127.0.0.1 when the server opts in explicitly.
+      'Access-Control-Allow-Private-Network': 'true',
     });
     return res.end();
   }
@@ -168,7 +174,6 @@ const server = http.createServer(async (req, res) => {
   try {
     /* --- app + assets (injected) --- */
     if (p === '/' || p === '/index.html') return serveIndex(res);
-    if (p === '/__bridge.js') return serveFile(res, 'mcp/bridge-client.js', '.js');
     if (p === '/app.js') return serveFile(res, 'app.js', '.js');
     if (p === '/style.css') return serveFile(res, 'style.css', '.css');
     if (p === '/favicon.ico') { res.writeHead(204); return res.end(); }
@@ -194,7 +199,7 @@ const server = http.createServer(async (req, res) => {
         process.stdout.write('[bridge] user request: "' + text.slice(0, 120) + '"\n');
         return sendJson(res, 200, { ok: true, request: r });
       }
-      res.writeHead(405, { Allow: 'GET, POST, OPTIONS', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(405, Object.assign({ Allow: 'GET, POST, OPTIONS' }, CORS));
       return res.end();
     }
     if (p === '/__requests/ack' && req.method === 'POST') {
@@ -227,7 +232,7 @@ const server = http.createServer(async (req, res) => {
         process.stdout.write('[bridge] plan v' + rev + ' received from ' + updatedBy + ' → broadcast to ' + clients.size + ' tab(s)\n');
         return sendJson(res, 200, { ok: true, rev, clients: clients.size });
       }
-      res.writeHead(405, { Allow: 'GET, PUT, POST, OPTIONS', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(405, Object.assign({ Allow: 'GET, PUT, POST, OPTIONS' }, CORS));
       return res.end();
     }
 
