@@ -325,6 +325,44 @@ check('project tabs keep separate plans and undo, and paste across (issue #17)',
   return '2 tabs, separate undo, cross-tab paste, close';
 });
 
+check('overlapping objects: Ctrl+click cycles, right-click lists, layers reorder, 3D lifts', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F(), p1 = mkFurn(BYID.pool, 200, 200), p2 = mkFurn(BYID.pool, 400, 200);
+    f.furn.push(p1, p2); commit(); view.z = 0.5; view.x = 100; view.y = 50; setTool('select'); render();
+    const r = cv.getBoundingClientRect(), s = w2s({ x: 300, y: 200 });
+    const ev = (type, extra = {}) => cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0, ...extra }));
+    const out = { under: idsAt(r.left + s.x, r.top + s.y) };
+    ev('pointerdown'); ev('pointerup'); out.plain = sel.slice();
+    ev('pointerdown', { ctrlKey: true }); ev('pointerup', { ctrlKey: true }); out.ctrl1 = sel.slice();
+    ev('pointerdown', { ctrlKey: true }); ev('pointerup', { ctrlKey: true }); out.ctrl2 = sel.slice();
+    cv.dispatchEvent(new MouseEvent('contextmenu', { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, button: 2 }));
+    const m = document.getElementById('ctxMenu');
+    out.menuItems = m ? m.querySelectorAll('[data-cmsel]').length : 0;
+    out.menuLayers = m ? m.querySelectorAll('[data-cmlayer]').length : 0;
+    sel = [p2.id]; if (m) m.querySelector('[data-cmlayer="back"]').click();
+    out.order = F().furn.map(o => o.id === p1.id ? 'p1' : 'p2').join(',');
+    out.menuClosed = !document.getElementById('ctxMenu');
+    document.getElementById('b3d').click();
+    if (ui.view3d) {
+      const ys = F().furn.map(o => { const g = T3.scene.children.find(c => c.userData && c.userData.furnId === o.id); const ig = g && g.children[0]; return ig && ig.isGroup ? ig.position.y : 0; });
+      out.lift = ys; show3D(false);
+    }
+    out.ids = { p1: p1.id, p2: p2.id };
+    sel = []; refresh();                                 // leave no selection for the next check
+    return out;
+  })()`);
+  const { p1, p2 } = info.ids;
+  if (info.under.length !== 2) throw new Error('expected 2 objects under the cursor, got ' + JSON.stringify(info.under));
+  if (info.plain[0] !== p2) throw new Error('plain click should pick the top (later) pool');
+  if (info.ctrl1[0] !== p1) throw new Error('Ctrl+click did not reach the pool underneath: ' + JSON.stringify(info));
+  if (info.ctrl2[0] !== p2) throw new Error('Ctrl+click did not wrap back to the top');
+  if (info.menuItems !== 2 || info.menuLayers !== 4) throw new Error('right-click menu incomplete: ' + JSON.stringify(info));
+  if (info.order !== 'p2,p1' || !info.menuClosed) throw new Error('send-to-back did not reorder: ' + info.order);
+  if (info.lift && !(info.lift[1] > info.lift[0])) throw new Error('3D does not lift the upper pool: ' + JSON.stringify(info.lift));
+  return 'pick under, list, reorder' + (info.lift ? ', 3D lift ' + info.lift.join('/') : '');
+});
+
 check('3D: a real render is produced, and PNG follows the active view', async page => {
   const info = await page.evaluate(`(async () => {
     document.getElementById('b3d').click();

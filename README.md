@@ -74,6 +74,7 @@
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
 - Object snap tracking: while drawing walls / rooms / dimensions or dragging wall ends and room corners, the cursor aligns with existing corners horizontally and vertically and shows a dashed guide (Shift or Snap off disables it).
 - Project tabs: keep several projects open, switch with one click (each keeps its own undo history and view), copy/paste between them, ＋ for a new tab, double-click to rename, × to close (asks if unsaved). Opening a template, saved project or file never replaces work in progress — it opens a new tab.
+- Layering: overlapping objects can be picked with Ctrl+click or the right-click list, and reordered (front / forward / backward / back). 3D follows the 2D order, so overlapping rooms or items (e.g. a river made of pools) no longer flicker.
 - Layer visibility toggles, floor patterns (wood, tile, carpet, marble, concrete, stone), room colors.
 - Wall paint: pick a colour or a preset swatch for one or many selected walls (2D paint strips, full colour in 3D).
 - Floor slab material per floor (project panel): areas without a room — balconies, hallways, terraces — get a finish in 3D too.
@@ -161,6 +162,9 @@ python -m http.server 8080      # then open http://localhost:8080
 | `B` | Pen – freehand sketch (drag to draw, release to finish) |
 | `E` | Eraser |
 | `X` | Trim — cut a crossing wall back to the intersection |
+| `Ctrl+click` | Select the object underneath (repeat to go deeper) |
+| Right-click | List of objects under the cursor + layer order |
+| `Ctrl+]` / `Ctrl+[` | Bring forward / send backward (`Shift`: to front / to back) |
 | `C` | Calibrate background scale |
 | `G` | Toggle snapping |
 | `Shift` | Hold to bypass snapping · multi-select |

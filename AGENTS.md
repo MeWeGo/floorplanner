@@ -212,6 +212,11 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - Persistence: `autosave()` also writes `tabsState()` to IndexedDB `state`/`'tabs'` (project JSON only, not history; empty list with a single tab). Boot loads `'auto'` as before, then `restoreTabs()`; the active tab's content comes from `'auto'`.
 - `closeTab()` asks to confirm unless the plan is pristine or identical to its saved copy in the `projects` store; closing the last tab opens a blank project. `normalizeProject()` is the back-compat default filler shared by `loadProject()` and tab restore.
 
+### Layering / overlapping objects
+- **Order = array order** within a kind (`LAYER_ARR`: furn, rooms, texts, sketches, dims); later draws on top in 2D. `reorderSel('front'|'back'|'up'|'down')` rewrites those arrays — `up`/`down` jump past the next *overlapping* item (bbox), so one step always changes what is visible. Panel row (`data-act="layer"`), right-click menu and `Ctrl+]` / `Ctrl+[` (`e.code`, so it works on non-US layouts; `Shift` = to front/back).
+- **Picking:** `idsAt(x, y)` lists every `data-id` under the cursor (top first). `Ctrl+click` (`cycleStackAt`) selects the next one down; it clears `ui.drag.clickedId` so it never toggles a door or cycles a layout. In the select tool, right-click opens `#ctxMenu` (created on demand, not in `index.html`).
+- **3D:** `stackLevels(list, kind)` gives each item 1 + the level of the highest earlier item whose bbox it overlaps. Rooms sit at `elev + 0.6 + level·0.5`, furniture is built inside an inner group lifted by `level·0.5` cm. Without this, coplanar surfaces (overlapping room floors, pools laid end to end) z-fight and flicker, and the 3D stacking ignored the 2D order. Guard: `tests/layers.test.js`.
+
 ### Room detection (`detectRoom`)
 Rasterises walls to an offscreen canvas (resolution ≥ 2 cm/px, max ≈ 1800 px), flood-fills from the click, returns `'open'` if the fill reaches the border (leak), otherwise traces the outer boundary and simplifies it (Douglas-Peucker, ε≈1.1·res). Doors/windows do **not** open rooms because the walls underneath are rasterised solid.
 
@@ -330,6 +335,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/wall-joints.test.js` | wall corners closing: miter/bevel maths of `wallJoints()` and that both 2D and 3D draw the fillers |
 | `tests/wall-trim.test.js` | trim tool / split at intersection / join corner geometry and opening re-basing |
 | `tests/snap-tracking.test.js` | object snap tracking: L→U closes exactly with/without angle lock, Shift disables it, guides reach the preview |
+| `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |
 | `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed) |

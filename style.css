@@ -1127,3 +1127,71 @@ kbd {
 @media (max-width: 700px) {
   #props { display: none; }
 }
+
+/* ---------- Right-click object list & layers ---------- */
+.ctxmenu {
+  position: fixed;
+  z-index: 120;
+  min-width: 220px;
+  max-width: 320px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+
+.ctxmenu button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ctxmenu button:hover {
+  background: var(--panel2);
+}
+
+.ctxmenu button.on {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ctxmenu kbd {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-family: inherit;
+}
+
+.ctxmenu .cm-h {
+  padding: 4px 8px 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ctxmenu .cm-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--line);
+}
+
+.layer-row {
+  align-items: center;
+}
+
+.layer-row .muted {
+  margin-right: 2px;
+  font-size: 11.5px;
+}
