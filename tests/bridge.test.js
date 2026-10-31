@@ -33,7 +33,11 @@ const json = async (p, opt) => (await get(p, opt)).json();
 async function startBridge(extraEnv) {
   const proc = spawn(process.execPath, [path.join(ROOT, 'mcp', 'bridge.js')], {
     cwd: ROOT,
-    env: Object.assign({}, process.env, { FP_BRIDGE_PORT: String(PORT), FP_BRIDGE_HOST: '127.0.0.1' }, extraEnv || {}),
+    // tests must never write into the repo's real .fp-history/
+    env: Object.assign({
+      FP_BRIDGE_PORT: String(PORT), FP_BRIDGE_HOST: '127.0.0.1',
+      FP_HISTORY_DIR: path.join(os.tmpdir(), 'fp-hist-test-' + PORT),
+    }, extraEnv || {}),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   for (let i = 0; i < 80; i++) {
@@ -180,6 +184,70 @@ test('bridge: SSE broadcasts a pushed plan with its revision', async t => {
   assert.strictEqual(ev.data.plan.name, 'Live');
   assert.strictEqual(ev.data.tab, 'mcp');
   assert.ok(ev.data.rev >= 1);
+});
+
+test('bridge: AI pushes are snapshotted so "go back" restores the previous plan', async t => {
+  const dir = path.join(os.tmpdir(), 'fp-hist-' + process.pid + '-' + Date.now());
+  const env = { FP_HISTORY_DIR: dir, FP_HISTORY_MAX: '10' };
+  let bridge = await startBridge(env);
+  t.after(() => {
+    bridge.kill();
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { }
+  });
+
+  // an app autosave is not an "AI edit" — it must not fill the history
+  await get('/__plan.json', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan: plan('Before', 'A'), tab: 'browser-1' }),
+  });
+  let snap = await json('/__snapshots');
+  assert.deepStrictEqual(snap.snapshots, [], 'a browser autosave must not create a snapshot');
+
+  // an AI push stores the plan it overwrites AND the plan it installs
+  const pushed = await json('/__plan.json', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan: plan('After', 'B'), tab: 'mcp', label: 'add a wall' }),
+  });
+  assert.match(pushed.snapshot, /^h/, 'the push response should name its snapshot');
+
+  snap = await json('/__snapshots');
+  assert.strictEqual(snap.snapshots.length, 2, 'expected a before/after pair');
+  assert.strictEqual(snap.snapshots[0].reason, 'after-ai', 'newest entry should be the resulting plan');
+  assert.strictEqual(snap.snapshots[1].reason, 'before-ai');
+  assert.strictEqual(snap.snapshots[1].name, 'Before', 'the before snapshot must hold the overwritten plan');
+  assert.strictEqual(pushed.snapshot, snap.snapshots[0].id);
+  assert.strictEqual(snap.snapshots[0].label, 'add a wall');
+  assert.strictEqual(snap.snapshots[0].walls, 1);
+  assert.ok(snap.snapshots[0].at >= snap.snapshots[1].at);
+
+  const files = fs.readdirSync(dir).filter(n => /\.json$/.test(n));
+  assert.ok(files.length >= 3, 'snapshot files (and index.json) must exist on disk');
+
+  // restore the overwritten plan: it becomes the live plan as a new revision
+  const before = snap.snapshots[1];
+  const restored = await json('/__snapshots/restore', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: before.id }),
+  });
+  assert.strictEqual(restored.ok, true);
+  assert.strictEqual(restored.restored.id, before.id);
+  assert.strictEqual(restored.plan.name, 'Before');
+
+  const live = await json('/__plan.json');
+  assert.strictEqual(live.plan.name, 'Before', 'the restored plan must be live');
+  assert.strictEqual(live.rev, pushed.rev + 1, 'a restore is a normal new revision');
+
+  const dead = await get('/__snapshots/restore', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: '../../etc/passwd' }),
+  });
+  assert.strictEqual(dead.status, 404, 'unknown / traversal ids must be rejected');
+
+  // history survives a bridge restart (index.json on disk)
+  bridge.kill();
+  await sleep(600);
+  bridge = await startBridge(env);
+  const again = await json('/__snapshots');
+  assert.ok(again.snapshots.length >= 2, 'snapshots from a previous bridge run should still be listed');
+  assert.ok(again.snapshots.some(s => s.id === before.id), 'the restored-from snapshot is gone');
 });
 
 test('bridge: serves the app from the repo root (no injection needed)', async t => {

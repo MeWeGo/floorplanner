@@ -2590,7 +2590,7 @@ async function brgPush() {
   } catch (e) { /* offline — stay quiet */ }
 }
 
-function brgApply(remotePlan, newRev) {
+function brgApply(remotePlan, newRev, kind) {
   if (!remotePlan || !remotePlan.floors) return;
   brgApplying = true;
   try { loadProject(remotePlan); }
@@ -2600,7 +2600,10 @@ function brgApply(remotePlan, newRev) {
   try { if (ui.modal === 'templates' || ui.modal === 'help' || ui.modal === 'projects') closeModal(); } catch (e) { }
   if (ui.view3d && typeof schedBuild3D === 'function') schedBuild3D();
   setTimeout(() => { brgApplying = false; }, 700);
-  toast(L('🤖 AI planı uygulandı', '🤖 AI plan applied'));
+  toast(kind === 'restore'
+    ? L('↩ Kayıtlı sürüm geri yüklendi', '↩ Saved version restored')
+    : L('🤖 AI planı uygulandı', '🤖 AI plan applied'));
+  if (brgPanelOpen() && typeof aiRefreshSnapshots === 'function') aiRefreshSnapshots();
   brgTick();
 }
 
@@ -2660,7 +2663,7 @@ async function brgConnect() {
         if (!brgHydrated) return;                 // initial sync catches up
         if (!msg.plan || !msg.plan.floors) return;
         if (msg.rev && msg.rev <= brgRev) return;
-        brgApply(msg.plan, msg.rev);
+        brgApply(msg.plan, msg.rev, msg.tab === 'restore' ? 'restore' : 'ai');
       } catch (e) { }
     });
     es.addEventListener('requests-changed', () => { brgRefreshPending(); });
@@ -2742,6 +2745,11 @@ function aiBridgeBuild() {
     <div data-ai-detail style="font-size:11px;opacity:.75;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
     <div style="font-weight:600;font-size:11px;margin:0 0 4px">${L('Bekleyen istekler', 'Pending requests')}</div>
     <div data-ai-reqs style="max-height:110px;overflow:auto;margin-bottom:8px;font-size:11.5px"></div>
+    <div style="font-weight:600;font-size:11px;margin:0 0 4px;display:flex;align-items:center;gap:6px">
+      ${L('Son kayıtlar', 'Recent saves')}
+      <span data-ai-snapinfo style="margin-left:auto;font-weight:400;font-size:10px;opacity:.55"></span>
+    </div>
+    <div data-ai-snaps style="max-height:96px;overflow:auto;margin-bottom:8px;font-size:11.5px"></div>
     <div style="display:flex;gap:6px">
       <input data-ai-input placeholder="${L('AI isteği yazın…', 'Ask the AI…')}" maxlength="2000"
         style="flex:1;min-width:0;border-radius:8px;padding:6px 8px;font:inherit;outline:none">
@@ -2764,7 +2772,7 @@ function aiBridgeBuild() {
   pill.onclick = () => {
     const open = panel.style.display === 'none';
     panel.style.display = open ? 'block' : 'none';
-    if (open) { aiRefreshRequests(); aiRefreshDetail(); brgRefreshPending(); }
+    if (open) { aiRefreshRequests(); aiRefreshDetail(); brgRefreshPending(); aiRefreshSnapshots(); }
   };
   panel.querySelector('[data-ai-close]').onclick = () => { panel.style.display = 'none'; };
   panel.querySelector('[data-ai-send]').onclick = () => aiSendRequest();
@@ -2939,6 +2947,66 @@ async function aiRefreshRequests() {
     txt.textContent = r.text;
     row.append(when, txt);
     box.appendChild(row);
+  }
+}
+
+/* --- saved versions --------------------------------------------------------
+   The bridge writes a JSON snapshot around every AI edit (before + after), so
+   "go back" works even when the agent deleted the whole plan by accident, and
+   even without an agent: the list below restores through the same endpoint. */
+async function aiRefreshSnapshots() {
+  const panel = document.getElementById('aiBridgePanel');
+  if (!panel) return;
+  const box = panel.querySelector('[data-ai-snaps]');
+  const info = panel.querySelector('[data-ai-snapinfo]');
+  if (!box) return;
+  let list = [];
+  try { list = (await (await brgFetch('/__snapshots', null, 2500)).json()).snapshots || []; } catch (e) { }
+  const c = aiPal();
+  box.innerHTML = '';
+  if (info) info.textContent = list.length ? list.length + L(' sürüm', ' saved') : '';
+  if (!list.length) {
+    box.innerHTML = '<div style="padding:6px 2px;opacity:.65">'
+      + L('Kayıt yok — her AI düzenlemesinde otomatik alınır', 'No saves yet — one is taken on every AI edit') + '</div>';
+    return;
+  }
+  for (const s of list.slice(0, 8)) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 2px;border-bottom:1px dashed ' + c.bd;
+    const d = new Date(s.at);
+    const when = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    const kind = s.reason === 'before-ai' ? L('AI öncesi', 'before AI')
+      : s.reason === 'after-ai' ? L('AI sonrası', 'after AI')
+        : s.reason === 'before-restore' ? L('geri alış öncesi', 'before restore') : s.reason;
+    const txt = document.createElement('span');
+    txt.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    txt.textContent = when + ' · ' + (s.label || kind) + ' · ' + s.walls + 'w ' + s.furn + 'f ' + s.rooms + 'r';
+    txt.title = new Date(s.at).toLocaleString() + ' · ' + kind + (s.label ? ' · ' + s.label : '')
+      + L('\n' + s.walls + ' duvar, ' + s.furn + ' eşya, ' + s.rooms + ' oda', '\n' + s.walls + ' walls, ' + s.furn + ' furniture, ' + s.rooms + ' rooms');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '↩';
+    btn.title = L('Bu sürüme dön', 'Restore this version');
+    btn.style.cssText = 'border:1px solid ' + c.bd + ';background:transparent;color:inherit;border-radius:6px;padding:1px 6px;cursor:pointer;font:inherit';
+    btn.onclick = () => aiRestoreSnapshot(s.id);
+    row.append(txt, btn);
+    box.appendChild(row);
+  }
+}
+
+async function aiRestoreSnapshot(id) {
+  if (!confirm(L('Bu kayıtlı sürüme geri dönülsün mü?', 'Restore this saved version?'))) return;
+  try {
+    const res = await brgFetch('/__snapshots/restore', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
+    }, 8000);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    // the SSE broadcast may already have applied it — only apply if it has not
+    if (j && j.plan && j.rev > brgRev) brgApply(j.plan, j.rev, 'restore');
+    aiRefreshSnapshots();
+  } catch (e) {
+    toast(L('Geri yüklenemedi', 'Could not restore'));
   }
 }
 

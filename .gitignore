@@ -2,6 +2,9 @@
 .DS_Store
 Thumbs.db
 
-# Node (only used by optional tooling like mcp/ — the app itself has no deps)
+# Node (only used by optional tooling like mcp/ - the app itself has no deps)
 node_modules/
 package-lock.json
+
+# plan snapshots written by mcp/bridge.js (local user data, never committed)
+.fp-history/

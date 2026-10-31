@@ -120,8 +120,19 @@ The agent runs `node mcp/bridge.js` and the app tab connects automatically; afte
 | `pull_from_browser` | Load the plan currently in the browser (user's latest edits) |
 | `get_user_requests` | Read instructions the user typed into the app's floating **Ask AI** box |
 | `ack_user_requests` | Mark those requests handled (by id, or `all: true`) |
+| `list_snapshots` | Saved plan versions around every AI edit — use it for "go back" / "undo that" |
+| `restore_snapshot` | Put a saved version back (undo for AI edits; the app updates live) |
 
 All coordinates are **centimetres**, **Y axis points down** (screen convention), ids are the 7-char strings shown by `summarize`.
+
+### Saved versions ("go back")
+
+An AI edit replaces the whole plan, so the bridge saves **JSON snapshots** around every agent push — the plan that is about to be overwritten (`before-ai`) and the plan installed (`after-ai`). Files go to `.fp-history/` in the project root (gitignored, `FP_HISTORY=0` disables, `FP_HISTORY_MAX` sets the count, default 60). App autosaves are **not** snapshotted; they are constant and the app already has its own undo stack.
+
+- **Agent:** `list_snapshots` → `restore_snapshot { id }`. Pass a `label` to `push_to_browser` so the rows are readable ("add a bathroom").
+- **User, without an agent:** the **AI** pill panel lists the last 8 saves with a ↩ button.
+- Every agent push also returns the snapshot id, so an agent can undo its own edit immediately.
+- Restoring is a normal new revision (SSE + autosave), and the outgoing plan is snapshotted first, so a restore is itself undoable. History survives a bridge restart (`index.json`).
 
 ## Configure your client
 

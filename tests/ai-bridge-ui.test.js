@@ -64,6 +64,22 @@ test('the panel changes its wording when the bridge can wake the agent', () => {
   assert.match(sliceFn('aiPendingTitle'), /brgWake/, 'the pill tooltip never mentions waking');
 });
 
+test('the panel offers a "go back" list backed by real snapshot files', () => {
+  assert.match(js, /data-ai-snaps/, 'the panel has no saved-versions list');
+  const refresh = sliceFn('aiRefreshSnapshots');
+  assert.match(refresh, /\/__snapshots/, 'the list never reads /__snapshots');
+  assert.match(refresh, /L\(/, 'the saved-versions list must be bilingual');
+  const restore = sliceFn('aiRestoreSnapshot');
+  assert.match(restore, /\/__snapshots\/restore/, 'restore does not call the restore endpoint');
+  assert.match(restore, /confirm\(/, 'restoring must ask before replacing the plan');
+  // the bridge must actually persist snapshots, not just advertise them
+  const bridge = read('mcp/bridge.js');
+  assert.match(bridge, /function checkpoint\(/, 'the bridge has no checkpoint()');
+  assert.match(bridge, /\.fp-history|HIST_DIR/, 'snapshots are not written to disk');
+  assert.match(bridge, /p === '\/__snapshots'/, 'GET /__snapshots is gone');
+  assert.match(bridge, /p === '\/__snapshots\/restore'/, 'POST /__snapshots/restore is gone');
+});
+
 test('the bridge keeps the endpoints this UI depends on', () => {
   const bridge = read('mcp/bridge.js');
   assert.match(bridge, /p === '\/__requests'/, 'GET/POST /__requests is gone');

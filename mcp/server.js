@@ -388,20 +388,25 @@ tool('browser_status',
       + '  plan name: ' + (j.planName || '(empty)') + '\n'
       + '  connected app tabs: ' + j.clients + '\n'
       + '  pending user requests: ' + (j.pendingRequests || 0) + '\n'
-      + '  last update: ' + (j.updatedAt ? new Date(j.updatedAt).toISOString() : '—') + '\n'
+      + '  saved plan versions: ' + (j.snapshots || 0) + '\n'
+      + '  last update: ' + (j.updatedAt ? new Date(j.updatedAt).toISOString() : '-') + '\n'
       + '  open the app at ' + u.origin + '/ for live editing.';
   });
 
 tool('push_to_browser',
-  'Push the working project into the open app tab(s) through the browser bridge. Tabs update immediately, the app autosaves to IndexedDB, so a refresh keeps the change. Requires node mcp/bridge.js running and the app open at http://127.0.0.1:8787/.',
-  bridgeArgs, [],
+  'Push the working project into the open app tab(s) through the browser bridge. Tabs update immediately, the app autosaves to IndexedDB, so a refresh keeps the change. Requires node mcp/bridge.js running and the app open at http://127.0.0.1:8787/. Every push is snapshotted in .fp-history/ so the user can undo an AI edit.',
+  Object.assign({
+    label: { type: 'string', description: 'Short description of this edit, shown in the app\'s history and snapshot files, e.g. "add a bathroom".' },
+  }, bridgeArgs), [],
   async a => {
     const u = bridgeUrl(a);
-    const j = await httpJson('PUT', new URL('/__plan.json', u), { plan: proj(), tab: 'mcp' }, 20000);
-    return 'Pushed plan revision ' + j.rev + ' to ' + j.clients + ' connected tab(s). '
+    const j = await httpJson('PUT', new URL('/__plan.json', u), { plan: proj(), tab: 'mcp', label: a.label || '' }, 20000);
+    return 'Pushed plan revision ' + j.rev + ' to ' + j.clients + ' connected tab(s).'
+      + (j.snapshot ? ' Saved as snapshot ' + j.snapshot + ' (undo with restore_snapshot).' : '')
+      + '\n'
       + (j.clients
         ? 'They now show "' + P.name + '" live; a refresh keeps it (autosaved to IndexedDB).'
-        : 'No tab is connected yet — open ' + u.origin + '/ in the browser, then call push_to_browser again.');
+        : 'No tab is connected yet - open ' + u.origin + '/ in the browser, then call push_to_browser again.');
   });
 
 tool('pull_from_browser',
@@ -413,6 +418,36 @@ tool('pull_from_browser',
     if (!j || !j.plan) throw new Error('The bridge has no plan yet. Open ' + u.origin + '/ (the tab pushes your current plan automatically) or call push_to_browser first.');
     P = normalizeProject(j.plan);
     return 'Pulled plan revision ' + j.rev + ' ("' + P.name + '") from the browser.\n\n' + summarize();
+  });
+
+tool('list_snapshots',
+  'List the saved plan versions the bridge keeps — one JSON pair (before/after) around every AI push. Use it when the user says "go back", "undo that", "restore", or when an AI edit deleted more than intended.',
+  bridgeArgs, [],
+  async a => {
+    const u = bridgeUrl(a);
+    const j = await httpJson('GET', new URL('/__snapshots', u));
+    const list = (j && j.snapshots) || [];
+    if (!list.length) return 'No snapshots yet. The bridge saves one before and after every AI push (files in .fp-history/).';
+    const rows = list.map((s, i) => (i + 1) + '. ' + new Date(s.at).toLocaleString()
+      + ' · ' + s.reason + (s.label ? ' · ' + s.label : '')
+      + ' · ' + s.walls + ' walls, ' + s.furn + ' furniture, ' + s.rooms + ' rooms'
+      + '   (id ' + s.id + ')');
+    return 'Saved versions, newest first (' + list.length + ' in ' + j.dir + '):\n\n' + rows.join('\n')
+      + '\n\nRestore one with restore_snapshot { id }. If the user did not name a version, ask which one.';
+  });
+
+tool('restore_snapshot',
+  'Put a saved plan version back — the undo for an AI edit. Applies to the open tab through the bridge and to this working project. Call list_snapshots first.',
+  Object.assign({
+    id: { type: 'string', description: 'Snapshot id from list_snapshots (e.g. "h3-m2x9k1").' },
+  }, bridgeArgs), ['id'],
+  async a => {
+    const u = bridgeUrl(a);
+    const j = await httpJson('POST', new URL('/__snapshots/restore', u), { id: a.id }, 20000);
+    if (!j || !j.plan) throw new Error('Restore failed: ' + JSON.stringify(j));
+    P = normalizeProject(j.plan);
+    return 'Restored snapshot ' + a.id + ' (from ' + new Date(j.restored.at).toLocaleString() + ') as revision ' + j.rev
+      + ' — ' + j.stats.walls + ' walls, ' + j.stats.furn + ' furniture, ' + j.stats.rooms + ' rooms are live in the tab.\n\n' + summarize();
   });
 
 tool('get_user_requests',
@@ -628,7 +663,9 @@ const INSTRUCTIONS =
   'Room polygons do not follow walls. Doors/windows are parametric on their wall (d = distance from the wall a-end to the opening centre). ' +
   'LIVE EDITING: if the user runs "node mcp/bridge.js" and opens http://127.0.0.1:8787/, use push_to_browser to make edits appear ' +
   'instantly in their open tab (and persist to IndexedDB across refresh) and pull_from_browser to start from their latest changes. ' +
-  'The user can queue natural-language instructions in the app\'s floating AI panel — read them with get_user_requests and mark them done with ack_user_requests.';
+  'The user can queue natural-language instructions in the app\'s floating AI panel - read them with get_user_requests and mark them done with ack_user_requests. ' +
+  'SAFETY: every push_to_browser is snapshotted (before + after) by the bridge; if the user says "go back" / "undo that" / "restore", call list_snapshots then restore_snapshot. ' +
+  'Pass a short label to push_to_browser ("add a bathroom") so the history is readable.';
 
 async function handle(msg) {
   const m = msg.method, params = msg.params || {};

@@ -55,7 +55,7 @@ test('MCP: initialize, tool surface and plan round-trip', async t => {
     'add_room', 'add_text', 'update_object', 'delete_objects', 'add_floor',
     'summarize', 'list_catalog', 'save_project', 'load_project', 'get_project', 'set_project',
     'browser_status', 'push_to_browser', 'pull_from_browser',
-    'get_user_requests', 'ack_user_requests',
+    'get_user_requests', 'ack_user_requests', 'list_snapshots', 'restore_snapshot',
   ]) assert.ok(names.includes(required), `missing tool: ${required}`);
 
   // every tool needs a schema, or MCP clients cannot call it
