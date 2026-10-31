@@ -93,7 +93,7 @@ Let an AI agent edit the plan for you. It uses the optional MCP server (`mcp/ser
 
 **Getting started:** open **🤖 AI** in the top bar (or **❓ Help**) and press **📋 Copy agent prompt**, then paste it into OpenCode / Claude Desktop / Cursor. The agent sets everything up; after that you just type what you want.
 
-**Frontend indicator:** while connected, a floating **AI** pill shows the live plan revision. Click it for bridge details and an **Ask AI** box — type *"add a 12 m² bathroom with a shower"* and the agent can pick it up with `get_user_requests` (then mark it done with `ack_user_requests`).
+**Frontend indicator:** while connected, a floating **AI** pill shows the live plan revision. Click it for bridge details and an **Ask AI** box — type *"add a 12 m² bathroom with a shower"* and the agent can pick it up with `get_user_requests` (then mark it done with `ack_user_requests`). Sent requests are queued, so the pill shows an amber counter and the panel keeps a **⏳ waiting for your agent** note until they are picked up — telling your agent *"check the app requests"* is what triggers it, since a model cannot be woken by the page.
 
 Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_project` · `add_wall` / `add_rect_walls` · `add_opening` · `add_furniture` · `add_room` · `add_text` · `update_object` / `delete_objects` · `add_floor` · `summarize` / `list_catalog` · `browser_status` / `push_to_browser` / `pull_from_browser` / `get_user_requests` / `ack_user_requests`. Client configuration and the full workflow are in [`mcp/README.md`](mcp/README.md).
 

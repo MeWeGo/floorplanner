@@ -2515,6 +2515,10 @@ function aiModal() {
     'İstemi yapay zekâ aracınıza yapıştırın; köprüyü kendisi başlatır ve bu sayfa ona otomatik bağlanır. Sonra soldaki AI düğmesinden istek yazabilir veya doğrudan sohbette söyleyebilirsiniz — değişiklikler bu planda anında görünür ve otomatik kaydedilir.',
     'Paste the prompt into your AI agent; it starts the bridge and this page connects automatically. After that, type requests in the AI panel (bottom-left) or just tell the agent in chat — changes appear in this plan immediately and are saved automatically.'
   )}</p>
+  <p class="muted" style="margin:0 0 8px">${L(
+    'İstekler bir kuyruğa girer; AI düğmesinde turuncu sayaç görürseniz ajanınıza “uygulamadaki istekleri kontrol et” deyin — kuyruğu o okur ve sayfayı canlı düzenler.',
+    'Requests go into a queue. If the AI pill shows an orange counter, tell your agent “check the app requests” — that is when it reads the queue and edits this page live.'
+  )}</p>
   <p class="muted" style="margin:0">${L(
     'Canlı bağlantı Node.js ve proje klasörünü gerektirir (ajan tarafında). Planınız bu sekmede kalır; köprü yalnızca JSON alışverişi yapar.',
     'Live editing needs Node.js and the project folder on the agent side. Your plan stays in this tab; the bridge only exchanges JSON.'
@@ -2553,6 +2557,8 @@ const BRIDGE_SEEN = 'fp_bridge_rev';
 const bridgeTab = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let brgRev = 0, brgConnected = false, brgHydrated = false, brgApplying = false;
 let brgPushTimer = null, brgProbeTimer = null, brgEs = null;
+let brgPending = 0;              // queued requests the agent has not picked up yet
+let brgAckAt = 0;                // when the queue last went from >0 to 0 (agent picked it up)
 
 function brgUrl(p) { return BRIDGE_BASE + p; }
 
@@ -2656,10 +2662,12 @@ async function brgConnect() {
         brgApply(msg.plan, msg.rev);
       } catch (e) { }
     });
-    es.addEventListener('requests-changed', () => { if (brgPanelOpen()) aiRefreshRequests(); });
+    es.addEventListener('requests-changed', () => { brgRefreshPending(); });
+    es.addEventListener('request', () => { brgRefreshPending(); });
     es.onopen = () => {
       brgSetConnected(true);
       if (!brgHydrated) brgInitialSync(); else brgSync();
+      brgRefreshPending();
     };
     es.onerror = () => { brgSetConnected(false); };
   } catch (e) { return false; }
@@ -2672,14 +2680,17 @@ function brgDisconnect() {
   brgSetConnected(false);
 }
 
-/* probe once on boot and then keep looking while the app stays open */
+/* keep looking for the bridge while the app stays open: it can be started,
+   restarted or stopped at any time, and a dropped SSE stream must not be final */
+function brgStartProbe() {
+  if (brgProbeTimer || brgEs) return;
+  brgProbeTimer = setInterval(async () => {
+    if (brgEs) { brgStopProbe(); return; }
+    if (await brgConnect()) brgStopProbe();
+  }, 10000);
+}
 function brgProbe() {
-  brgConnect().then(ok => {
-    if (ok) { brgStopProbe(); return; }
-    if (!brgProbeTimer && !brgEs) brgProbeTimer = setInterval(async () => {
-      if (await brgConnect()) brgStopProbe();
-    }, 10000);
-  });
+  brgConnect().then(ok => { if (!ok) brgStartProbe(); });
 }
 function brgStopProbe() { clearInterval(brgProbeTimer); brgProbeTimer = null; }
 
@@ -2694,6 +2705,7 @@ autosave = function () {
 function brgSetConnected(ok) {
   brgConnected = !!ok;
   if (!ok && brgEs) { try { brgEs.close(); } catch (e) { } brgEs = null; }
+  if (!brgConnected) brgStartProbe();        // the bridge may come back — keep looking
   if (brgConnected && !aiBridgePill()) aiBridgeBuild();
   if (aiBridgePill()) aiBridgePaint();
   aiSyncLiveRow();
@@ -2743,6 +2755,7 @@ function aiBridgeBuild() {
   pill.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 11px;border-radius:999px;cursor:pointer;font:inherit;box-shadow:0 4px 14px rgba(0,0,0,.28)';
   pill.innerHTML = '<span data-ai-dot style="width:8px;height:8px;border-radius:50%;flex:0 0 auto"></span>'
     + '<span style="font-weight:700;letter-spacing:.3px">AI</span>'
+    + '<span data-ai-pending style="display:none;min-width:16px;height:16px;padding:0 5px;border-radius:999px;font-weight:700;font-size:10.5px;line-height:16px;text-align:center"></span>'
     + '<span data-ai-rev style="opacity:.6;font-variant-numeric:tabular-nums"></span>';
   host.appendChild(pill);
   document.body.appendChild(host);
@@ -2750,7 +2763,7 @@ function aiBridgeBuild() {
   pill.onclick = () => {
     const open = panel.style.display === 'none';
     panel.style.display = open ? 'block' : 'none';
-    if (open) { aiRefreshRequests(); aiRefreshDetail(); }
+    if (open) { aiRefreshRequests(); aiRefreshDetail(); brgRefreshPending(); }
   };
   panel.querySelector('[data-ai-close]').onclick = () => { panel.style.display = 'none'; };
   panel.querySelector('[data-ai-send]').onclick = () => aiSendRequest();
@@ -2792,8 +2805,15 @@ function aiBridgePaint() {
   pill.style.color = c.fg;
   pill.querySelector('[data-ai-dot]').style.background = brgConnected ? c.ok : c.off;
   pill.title = brgConnected
-    ? L('AI köprüsü bağlı — tıklayarak istek gönderin', 'AI bridge connected — click to send a request')
+    ? (brgPending
+      ? L('AI köprüsü bağlı — ' + brgPending + ' istek ajanınızı bekliyor', 'AI bridge connected — ' + brgPending + ' request(s) waiting for your agent')
+      : L('AI köprüsü bağlı — tıklayarak istek gönderin', 'AI bridge connected — click to send a request'))
     : L('AI köprüsü kapalı', 'AI bridge offline');
+  const badge = pill.querySelector('[data-ai-pending]');
+  if (badge) {
+    badge.style.background = aiIsLight() ? '#d97706' : '#fbbf24';
+    badge.style.color = aiIsLight() ? '#fff' : '#1a1200';
+  }
   panel.style.background = c.bg;
   panel.style.border = '1px solid ' + c.bd;
   panel.style.color = c.fg;
@@ -2804,8 +2824,9 @@ function aiBridgePaint() {
   const det = panel.querySelector('[data-ai-detail]');
   if (det) det.style.color = c.sub;
   const ss = panel.querySelector('[data-ai-sendstate]');
-  if (ss) ss.style.color = c.sub;
+  if (ss) ss.style.color = brgPending ? (aiIsLight() ? '#b45309' : '#fbbf24') : c.sub;
   aiSyncStatusText();
+  aiSyncSendState();
 }
 
 function brgTick() {
@@ -2814,6 +2835,58 @@ function brgTick() {
   const rv = pill.querySelector('[data-ai-rev]');
   if (rv) rv.textContent = brgRev ? ' · rev ' + brgRev : '';
   aiBridgePaint();
+}
+
+/* --- request feedback ------------------------------------------------------
+   A queued request is passive: the bridge stores it, but nothing can wake the
+   agent's model up. The app therefore has to be honest about the state —
+   "waiting for your agent" stays visible until get_user_requests/ack runs,
+   instead of a 5-second toast that makes it look like the request vanished. */
+async function brgRefreshPending() {
+  try {
+    const res = await brgFetch('/__requests', null, 2500);
+    if (!res.ok) return;
+    const j = await res.json();
+    brgSetPending((j.requests || []).length);
+  } catch (e) { /* bridge offline — keep the last known count */ }
+}
+
+function brgSetPending(n) {
+  const had = brgPending;
+  brgPending = Math.max(0, n | 0);
+  if (had > 0 && !brgPending) { brgAckAt = Date.now(); setTimeout(aiSyncSendState, 8000); }   // clear the "picked up" note
+  const pill = aiBridgePill();
+  const badge = pill && pill.querySelector('[data-ai-pending]');
+  if (badge) {
+    badge.textContent = brgPending ? String(brgPending) : '';
+    badge.style.display = brgPending ? '' : 'none';
+  }
+  if (pill && brgConnected) {
+    pill.title = brgPending
+      ? L('AI köprüsü bağlı — ' + brgPending + ' istek ajanınızı bekliyor', 'AI bridge connected — ' + brgPending + ' request(s) waiting for your agent')
+      : L('AI köprüsü bağlı — tıklayarak istek gönderin', 'AI bridge connected — click to send a request');
+  }
+  aiSyncSendState();
+  if (brgPanelOpen()) aiRefreshRequests();
+}
+
+function aiSyncSendState() {
+  const panel = document.getElementById('aiBridgePanel');
+  if (!panel) return;
+  const st = panel.querySelector('[data-ai-sendstate]');
+  if (!st) return;
+  if (!brgConnected) {
+    st.textContent = L('Köprü kapalı — ajanınız mcp/bridge.js çalıştırsın', 'Bridge offline — have your agent start mcp/bridge.js');
+  } else if (brgPending) {
+    st.textContent = L(
+      '⏳ ' + brgPending + ' istek ajanınızı bekliyor — sohbette "uygulamadaki istekleri kontrol et" deyin',
+      '⏳ ' + brgPending + ' request(s) waiting — tell your agent "check the app requests"'
+    );
+  } else if (brgAckAt && Date.now() - brgAckAt < 8000) {
+    st.textContent = L('✓ Ajanınız isteği aldı — planda göreceksiniz', '✓ Your agent picked it up — watch the plan');
+  } else {
+    st.textContent = L('Aracı: get_user_requests', 'Agent tool: get_user_requests');
+  }
 }
 
 function aiSyncStatusText() {
@@ -2878,9 +2951,9 @@ async function aiSendRequest() {
     }, 5000);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     inp.value = '';
-    st.textContent = L('Gönderildi ✓ — aracınıza "uygulamadaki istekleri kontrol et" deyin',
+    await brgRefreshPending();
+    if (!brgPending) st.textContent = L('Gönderildi ✓ — aracınıza "uygulamadaki istekleri kontrol et" deyin',
       'Sent ✓ — ask your agent to check the app requests');
-    setTimeout(() => { st.textContent = L('Aracı: get_user_requests', 'Agent tool: get_user_requests'); }, 5000);
     aiRefreshRequests();
   } catch (e) {
     st.textContent = L('Gönderilemedi — köprü kapalı', 'Could not send — bridge offline');
