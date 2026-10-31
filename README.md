@@ -86,7 +86,7 @@
 ### 📤 Export
 - **PNG**, **SVG**, and **PDF / Print** (A4 landscape) with title block and scale bar.
 - Exports always render on **white paper** regardless of the editor theme.
-- **3D render:** while the 3D view is open, the same **🖼 PNG** button saves the current camera as a high-resolution PNG, and the **📸** button in the 3D overlay does the same from inside the view. Files are named `<project>-3d-render.png` and are oversampled 2–3× (capped at 3840 px / 12 MP), so they stay sharp in a presentation. SVG and PDF always describe the **2D plan**.
+- **3D render:** while the 3D view is open, the **🖼 PNG** button renders the scene (and the **🎬** button in the 3D overlay does the same from inside the view). This is a real render, not a screenshot: the camera outlines are removed, the backdrop becomes a studio white, shadows are rebuilt at high resolution and several supersampled passes are averaged, so edges come out smooth instead of jagged. Files are named `<project>-3d-render.png`. **Shift-click** either button for a quick capture of exactly what is on screen (`-3d-view.png`). SVG and PDF always describe the **2D plan**.
 
 ### 🤖 AI Integration
 
@@ -105,7 +105,7 @@ One click turns the plan into an interactive 3D model — walls with real door/w
 
 **Detail comes from the plan, not from extra settings:** furniture is modelled per catalogue item (sofa cushions, table legs, wardrobe doors and handles, fridge panels, WC bowl and tank, basin and faucet, plant foliage, TV screen, car wheels, stairs with a handrail …) purely from its type, size and colour, so existing plans and saved JSON improve with no migration. Openings get frames, sills and handles, solid walls get skirting boards and a top cap, `wood`/`tile`/`carpet` room floors become tiled textures tinted with the room colour, and a soft-shadowed sun lights the scene.
 
-**Camera presets:** three small buttons next to the floor selector give **fit**, **top-down** and **eye level (1.6 m)** views. The **📸** button beside them saves the current view as a high-resolution PNG render (the top-bar **🖼 PNG** button does the same while you are in 3D).
+**Camera presets:** three small buttons next to the floor selector give **fit**, **top-down** and **eye level (1.6 m)** views. The **🎬** button beside them renders the current view to a high-resolution PNG (the top-bar **🖼 PNG** does the same while you are in 3D; hold **Shift** for a quick capture).
 
 **3D editing:** click furniture to select and highlight it (orange box), drag it across the floor (`Shift` = no grid snap; a single item magnets to the nearest wall on drop), and edit width / depth / height / rotation / color in the side panel — the 3D model refreshes live. Clicking a door opens/closes it; clicking a hinged wall (or a group with saved layouts) cycles its positions.
 

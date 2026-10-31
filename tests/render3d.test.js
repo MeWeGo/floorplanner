@@ -78,23 +78,69 @@ test('the 3D capture is reachable from both UIs, with a 3D-named file', () => {
   for (const id of ['b3dFit', 'b3dTop', 'b3dEye', 'b3dShot']) {
     assert.ok(cam.includes('id="' + id + '"'), `#${id} should sit in the camera overlay bar`);
   }
-  assert.match(js, /\$\('#b3dShot'\)\.onclick = export3DRender/, 'the 📸 button is not wired');
+  assert.match(js, /\$\('#b3dShot'\)\.onclick = e => export3DRender\(e && e\.shiftKey\)/, 'the render button is not wired (Shift = quick capture)');
 
   const fn = sliceFn('export3DRender');
   assert.match(fn, /-3d-render\.png/, 'the exported file must be named "<project>-3d-render.png"');
+  assert.match(fn, /-3d-view\.png/, 'the quick capture needs its own name so the two never overwrite each other');
   assert.match(fn, /fname\('png'\)/, 'the filename should reuse the existing sanitiser');
   assert.match(fn, /ui\.shot/, 'a double click would capture twice — keep the re-entrancy guard');
   assert.match(fn, /ui\.view3d/, 'export3DRender() must refuse to run outside 3D');
 });
 
+test('the default export is a rendered image, not a viewport screenshot', () => {
+  const fn = sliceFn('export3DRender');
+  // the regression this guards: "it just takes a photo of the scene"
+  assert.match(fn, /render3DHQ\(\)/, 'the button no longer runs the high-quality render');
+  assert.match(fn, /let url = quick \? fast\(\) : await render3DHQ\(\)/, 'Shift should keep the cheap capture');
+  assert.match(fn, /render3DDataUrl\(\)/, 'the quick/fallback capture must still exist');
+
+  const hq = sliceFn('render3DHQ');
+  assert.match(hq, /drawImage/, 'the passes must be composited into an accumulation canvas');
+  assert.match(hq, /globalAlpha = 1 \/ \(i \+ 1\)/, 'the passes are not averaged — that is what removes aliasing');
+  assert.match(hq, /halton\(/, 'the jitter pattern is gone — edges will alias again');
+  assert.match(hq, /projectionMatrix\.elements\[8\]/, 'no sub-pixel jitter is applied to the camera');
+  assert.match(hq, /mapSize\.set\(4096/, 'the render should use a sharper shadow map than the live view');
+  assert.match(hq, /shadow\.camera/, 'the shadow frustum should be tightened for the render');
+  assert.match(hq, /shadowMap\.autoUpdate = false/, 'the static shadow map is rebuilt on every pass — that is seconds wasted');
+  assert.match(hq, /isLineSegments/, 'the CAD outline helpers must be hidden for a render (they read as a viewport)');
+  assert.match(hq, /scene\.background = new THREE\.Color\(0xffffff\)/, 'a render uses a studio backdrop, not the dark viewport sky');
+  assert.match(hq, /finally\s*{[\s\S]*mapSize\.copy/, 'the shadow map settings must be restored');
+  assert.match(hq, /finally\s*{[\s\S]*e\.visible = true/, 'the outline helpers must be restored');
+  assert.match(hq, /finally\s*{[\s\S]*scene\.background = oldBg/, 'the backdrop must be restored');
+  assert.match(hq, /finally\s*{[\s\S]*T3\.run = oldRun/, 'the animation loop must be restored');
+  assert.match(hq, /projectionMatrix\.elements\[9\] = 0/, 'the camera jitter must be cleared after the render');
+  assert.match(hq, /supersample|bufK/, 'the supersampled buffer is what makes the downscale produce smooth edges');
+  assert.match(js, /function sharpenCanvas/, 'the downscale needs an unsharp pass to stay crisp');
+});
+
+test('the jitter pattern is a Halton sequence, not a random walk', () => {
+  // mirror of halton() — deterministic offsets are what make averaging converge
+  function halton(i, base) {
+    let f = 1, r = 0, n = i;
+    while (n > 0) { f /= base; r += f * (n % base); n = Math.floor(n / base); }
+    return r;
+  }
+  const xs = [];
+  for (let i = 1; i <= 8; i++) {
+    const x = halton(i, 2), y = halton(i, 3);
+    assert.ok(x > 0 && x < 1 && y > 0 && y < 1, 'jitter must stay inside one pixel');
+    xs.push(x + '|' + y);
+  }
+  assert.strictEqual(new Set(xs).size, 8, 'every pass needs a distinct sub-pixel offset');
+  // a sample-based estimate of the mean should be near 0.5 for a decent spread
+  const meanX = Array.from({ length: 64 }, (_, i) => halton(i + 1, 2)).reduce((a, b) => a + b, 0) / 64;
+  assert.ok(Math.abs(meanX - 0.5) < 0.02, 'the jitter does not average out around the pixel centre');
+});
+
 test('the top-bar PNG button follows the active view', () => {
-  assert.match(js, /\$\('#bPng'\)\.onclick = \(\) => \(ui\.view3d \? export3DRender\(\) : exportPng\(\)\)/,
-    'the PNG button must export the 3D render while in 3D and the 2D plan otherwise');
+  assert.match(js, /\$\('#bPng'\)\.onclick = e => \(ui\.view3d \? export3DRender\(e && e\.shiftKey\) : exportPng\(\)\)/,
+    'the PNG button must render while in 3D and export the 2D plan otherwise');
   assert.match(js, /function syncExportTitles/, 'the PNG button has no context-aware tooltip');
   assert.match(sliceFn('syncExportTitles'), /L\(/, 'the tooltip must be bilingual');
   assert.match(sliceFn('show3D'), /syncExportTitles\(\)/, 'entering/leaving 3D must refresh the tooltip');
   // SVG / PDF stay 2D plan exports in both modes (they carry a title block + scale bar)
   assert.match(js, /\$\('#bSvg'\)\.onclick = \(\) => download\(fname\('svg'\)/, 'the SVG export changed');
   assert.match(js, /\$\('#bPrint'\)\.onclick = exportPrint/, 'the print export changed');
-  assert.match(js, /if \(\$\('#b3dShot'\)\) \$\('#b3dShot'\)\.title = L\(/, 'the 📸 button tooltip is not translated');
+  assert.match(js, /if \(\$\('#b3dShot'\)\) \$\('#b3dShot'\)\.title = L\(/, 'the render button tooltip is not translated');
 });

@@ -89,8 +89,9 @@ async function connect(port, pageUrl) {
     }
     if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
       const t = String(msg.params.entry.text || '');
-      // CDN/WebGL noise is environmental, not a regression in our code
-      if (!/three\.js|cdnjs|jsdelivr|WebGL|GPU|GroupMarkerNotSet|favicon/i.test(t)) problems.push('log: ' + t);
+      // CDN/WebGL noise is environmental, not a regression in our code. The
+      // AI bridge probe also expects no server on 8787 during the smoke run.
+      if (!/three\.js|cdnjs|jsdelivr|WebGL|GPU|GroupMarkerNotSet|favicon|ERR_CONNECTION_REFUSED/i.test(t)) problems.push('log: ' + t);
     }
   };
   const send = (method, params) => new Promise(res => {
@@ -253,8 +254,8 @@ check('3D view builds, or degrades cleanly without WebGL', async page => {
   return 'built ' + info.meshes + ' scene nodes';
 });
 
-check('3D: the camera view can be captured, and PNG follows the active view', async page => {
-  const info = await page.evaluate(`(() => {
+check('3D: a real render is produced, and PNG follows the active view', async page => {
+  const info = await page.evaluate(`(async () => {
     document.getElementById('b3d').click();
     const toast = document.getElementById('toast');
     if (!(typeof ui !== 'undefined' && ui.view3d && typeof T3 !== 'undefined' && T3)) {
@@ -262,38 +263,54 @@ check('3D: the camera view can be captured, and PNG follows the active view', as
     }
     const el = document.getElementById('v3d');
     const before = { w: T3.r.domElement.width, h: T3.r.domElement.height, ratio: T3.r.getPixelRatio() };
-    const scale = 1.5;
-    const url = render3DDataUrl(scale);
+    const shadowBefore = T3.scene.children.filter(o => o.isDirectionalLight && o.castShadow).map(l => l.shadow.mapSize.x);
+
+    // 1. the quick capture (one synchronous pass)
+    const quickUrl = render3DDataUrl(1.5);
+
+    // 2. the real render: fewer passes and no upscale to keep the test quick
+    const hqUrl = await render3DHQ({ frames: 2, scale: 1, supersample: 2 });
     const after = { w: T3.r.domElement.width, h: T3.r.domElement.height, ratio: T3.r.getPixelRatio() };
+    const shadowAfter = T3.scene.children.filter(o => o.isDirectionalLight && o.castShadow).map(l => l.shadow.mapSize.x);
+
     const shot = document.getElementById('b3dShot');
     const camBtns = [...document.querySelectorAll('#c3dCam button')].map(b => b.id);
 
-    // capture the download instead of writing a file, then hit both entry points
+    // 3. capture the downloads instead of writing files, then hit both entry points
     const saved = [];
     const realDownload = window.download;
     window.download = (name, blob) => saved.push({ name, size: blob && blob.size || 0, type: blob && blob.type });
+    await export3DRender();                 // default = high quality
+    await export3DRender(true);             // Shift = quick view
     let pngHandler = '';
-    document.getElementById('bPng').click();
-    const in3d = saved.length ? saved[saved.length - 1].name : '(no download)';
     show3D(false);
     window.exportPng = () => { pngHandler = '2d'; };
     document.getElementById('bPng').click();
     window.download = realDownload;
 
     return {
-      view3d: true, urlHead: String(url).slice(0, 22), urlLen: url.length,
-      before, after, shotBtn: !!shot, shotTitle: shot ? shot.title : '', camBtns,
-      in3d, size: saved.length ? saved[0].size : 0, type: saved.length ? saved[0].type : '',
+      view3d: true, quickHead: String(quickUrl).slice(0, 22), quickLen: quickUrl.length,
+      hqHead: String(hqUrl).slice(0, 22), hqLen: hqUrl.length,
+      before, after, shadowBefore, shadowAfter, shotBtn: !!shot, shotTitle: shot ? shot.title : '', camBtns,
+      names: saved.map(x => x.name), sizes: saved.map(x => x.size), types: saved.map(x => x.type),
       pngHandler, tooltip2d: document.getElementById('bPng').title,
     };
   })()`);
-
   if (!info.view3d) return 'skipped: WebGL/Three.js unavailable (' + (info.toast || '').slice(0, 60) + ')';
 
   // a blank capture is the classic failure: the WebGL buffer was already gone
-  if (info.urlHead !== 'data:image/png;base64,') throw new Error('capture is not a PNG data URL: ' + info.urlHead);
-  if (info.urlLen < 5000) throw new Error('capture looks blank (' + info.urlLen + ' chars) — the drawing buffer was lost');
+  if (info.quickHead !== 'data:image/png;base64,') throw new Error('quick capture is not a PNG: ' + info.quickHead);
+  if (info.quickLen < 5000) throw new Error('quick capture looks blank (' + info.quickLen + ' chars)');
 
+  // the render must come back as a real image, not an empty string (which would
+  // silently fall back to a plain capture — exactly the bug this guards)
+  if (info.hqHead !== 'data:image/png;base64,') throw new Error('render3DHQ() produced no PNG: ' + info.hqHead);
+  if (info.hqLen < 5000) throw new Error('render looks blank (' + info.hqLen + ' chars)');
+
+  // the render boosts the shadow map and must put it back
+  if (info.shadowBefore.join() !== info.shadowAfter.join()) {
+    throw new Error('shadow map not restored: ' + info.shadowBefore + ' -> ' + info.shadowAfter);
+  }
   // the viewport must come back exactly as it was
   if (info.after.w !== info.before.w || info.after.h !== info.before.h) {
     throw new Error('viewport not restored: ' + JSON.stringify({ before: info.before, after: info.after }));
@@ -304,15 +321,16 @@ check('3D: the camera view can be captured, and PNG follows the active view', as
   for (const id of ['b3dFit', 'b3dTop', 'b3dEye', 'b3dShot']) {
     if (!info.camBtns.includes(id)) throw new Error('#' + id + ' is not in the camera bar: ' + info.camBtns.join(','));
   }
-  if (!/-3d-render\.png$/.test(info.in3d)) throw new Error('3D PNG filename is wrong: ' + info.in3d);
-  if (info.size < 3000) throw new Error('downloaded render is suspiciously small: ' + info.size + ' bytes');
-  if (!/^image/.test(info.type || '')) throw new Error('render blob has no image type: ' + info.type);
-  if (!info.shotTitle) throw new Error('the 📸 button has no tooltip');
+  if (!/-3d-render\.png$/.test(info.names[0] || '')) throw new Error('3D render filename is wrong: ' + info.names[0]);
+  if (!/-3d-view\.png$/.test(info.names[1] || '')) throw new Error('quick capture filename is wrong: ' + info.names[1]);
+  if (info.sizes[0] < 3000) throw new Error('rendered PNG is suspiciously small: ' + info.sizes[0] + ' bytes');
+  if (!/^image/.test(info.types[0] || '')) throw new Error('render blob has no image type: ' + info.types[0]);
+  if (!info.shotTitle) throw new Error('the render button has no tooltip');
   if (info.pngHandler !== '2d') throw new Error('leaving 3D must restore the 2D PNG export');
   if (!info.tooltip2d) throw new Error('the PNG tooltip does not follow the view');
 
   await page.evaluate(`(() => { show3D(false); return true; })()`);
-  return 'captured ' + Math.round(info.size / 1024) + ' KB · ' + info.in3d;
+  return 'render ' + Math.round(info.sizes[0] / 1024) + ' KB · ' + info.names[0];
 });
 
 /* ---------- main ---------- */

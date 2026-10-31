@@ -2421,7 +2421,7 @@ function helpModal() {
     ['3D: click / drag furniture', 'Select & highlight • drag to move on the floor (Shift: no grid snap) • resize via the side panel'],
     ['Wall type: Curtain Wall', 'Select a wall → Wall Type → 🪟 Curtain Wall: glass facade with aluminum frame in 2D & 3D'],
     ['3D: Floor selector', 'Menu at the top-left of the 3D view — show all floors stacked, or isolate one floor at ground level'],
-    ['3D: 📸 render', 'Save the current 3D camera view as a high-resolution PNG (the top-bar 🖼 PNG button does the same while in 3D)'],
+    ['3D: 🎬 render', 'Render the current 3D view to a high-resolution PNG — studio backdrop, no CAD outlines, anti-aliased (Shift-click: quick capture of what is on screen). The top-bar 🖼 PNG does the same while in 3D'],
     ['Ctrl+C/V/D', 'Copy / Paste / Duplicate'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'],
     ['Ctrl+A', 'Select all on current floor'],
@@ -2458,7 +2458,7 @@ function helpModal() {
     ['3B: mobilyaya tıkla / sürükle', 'Seç & vurgula • zeminde sürükle (Shift: ızgara yok) • boyutu sağ panelden değiştir'],
     ['Duvar tipi: Cam Cephe', 'Duvar seç → Duvar Tipi → 🪟 Cam Cephe: 2B ve 3B içinde alüminyum çerçeveli cam cephe'],
     ['3B: Kat seçici', '3B görünümün sol üstündeki menü — tüm katlar üst üste ya da tek kat yer seviyesinde'],
-    ['3B: 📸 render', 'Mevcut 3B kamera görünümünü yüksek çözünürlüklü PNG olarak kaydet (3B açıkken üstteki 🖼 PNG de aynısını yapar)'],
+    ['3B: 🎬 render', '3B görünümü yüksek çözünürlüklü PNG olarak render eder — stüdyo fonu, CAD çizgileri yok, kenarlar yumuşatılmış (Shift: ekrandaki görünümü hızlıca kaydeder). 3B açıkken üstteki 🖼 PNG de aynısını yapar'],
     ['Ctrl+C/V/D', 'Kopyala / Yapıştır / Çoğalt'],
     ['Ctrl+Z / Ctrl+Y', 'Geri al / Yinele'],
     ['Ctrl+A', 'Tümünü seç'],
@@ -3256,27 +3256,237 @@ function render3DDataUrl(scale) {
   return url;
 }
 
-function export3DRender() {
+/* ---------- 3B yüksek kaliteli render ----------
+   A viewport capture is still a screenshot: one sample, the live shadow map,
+   whatever MSAA the browser gives. A render is built from many samples:
+
+     1. a bigger drawing buffer (up to 4096 px / 9 MP),
+     2. N sub-pixel jittered passes averaged together — this is real
+        anti-aliasing, and it also smooths shadow edges,
+     3. a temporary 4096² shadow map with a frustum tightened to the plan, so
+        contact shadows stop looking mushy.
+
+   The accumulation uses gl.readPixels(), not toDataURL(): pixels come back
+   synchronously, so frames can be averaged and the UI can breathe between
+   passes. Everything is restored in a finally block. */
+
+/** Halton sequence (2,3) — a cheap low-discrepancy jitter pattern. */
+function halton(i, base) {
+  let f = 1, r = 0, n = i;
+  while (n > 0) { f /= base; r += f * (n % base); n = Math.floor(n / base); }
+  return r;
+}
+
+const nextFrame = () => new Promise(r => setTimeout(r, 0));
+
+/** Shadow-casting directional lights of the scene. */
+function shadowLights(scene) {
+  const out = [];
+  if (scene && scene.traverse) scene.traverse(o => { if (o.isDirectionalLight && o.castShadow) out.push(o); });
+  return out;
+}
+
+/** High-quality render → PNG data URL. Falls back to '' when WebGL says no.
+    Two stages: (1) many jittered passes are averaged into a 2× buffer,
+    (2) that buffer is downscaled to the final size, which is where the extra
+    samples turn into genuinely smooth edges instead of a soft upscale. */
+async function render3DHQ(opts) {
+  opts = opts || {};
+  if (!ui.view3d || !T3 || !T3.r) return '';
+  const { r, scene, cam, ctl } = T3, el = $('#v3d');
+  const gl = r.getContext && r.getContext();
+  if (!gl || typeof gl.readPixels !== 'function') return '';      // caller falls back to a capture
+  const w = Math.max(1, el.clientWidth), h = Math.max(1, el.clientHeight);
+
+  // 1. final image size (what the user gets) and the buffer we render into
+  const outK = opts.scale || shot3DScale(w, h, 2600, 6e6);
+  const outW = Math.max(2, Math.round(w * outK)), outH = Math.max(2, Math.round(h * outK));
+  const bufK = Math.max(1, Math.min(opts.supersample || 2, 4096 / Math.max(outW, outH)));
+  const W = Math.max(2, Math.round(outW * bufK)), H = Math.max(2, Math.round(outH * bufK));
+  // 2×2 supersampling already removes most stair-stepping, so a couple of
+  // jittered passes on top are enough (measured: ramp quality within 0.5 px of
+  // 4 passes); without supersampling, more passes are needed to compensate.
+  const frames = Math.max(1, Math.min(24, opts.frames || (bufK >= 2 ? 2 : 8)));
+
+  const oldRatio = r.getPixelRatio(), oldAspect = cam.aspect, oldRun = T3.run;
+  const lights = shadowLights(scene);
+  const saved = lights.map(l => ({
+    l, size: l.shadow.mapSize.clone(),
+    left: l.shadow.camera.left, right: l.shadow.camera.right,
+    top: l.shadow.camera.top, bottom: l.shadow.camera.bottom,
+  }));
+  // The thin dark outlines on every box are a modelling-viewer tell: they read as
+  // CAD, not as a rendered image. A render shows shaded surfaces only, so the
+  // edge helpers (LineSegments) are hidden for the passes and restored after.
+  const edges = [];
+  if (opts.outlines !== true) scene.traverse(o => { if (o.isLineSegments && o.visible) { edges.push(o); o.visible = false; } });
+
+  // Studio backdrop: a white sweep + a neutral ground, so the output reads as a
+  // presentation render instead of a screenshot of the dark viewport. In dark
+  // theme the floor slabs are near-black, which would look like a heavy drop
+  // shadow on white paper, so those are swapped for the light slab colour too.
+  let oldBg = null, studioGround = null, oldGroundMat = null;
+  const slabs = [], studioSlab = new THREE.MeshLambertMaterial({ color: 0xded8cc, side: THREE.DoubleSide });
+  if (opts.preset !== 'viewport') {
+    oldBg = scene.background;
+    scene.background = new THREE.Color(0xffffff);
+    if (T3.ground) {
+      oldGroundMat = T3.ground.material;
+      studioGround = new THREE.MeshLambertMaterial({ color: 0xf3f1ec, side: THREE.DoubleSide });
+      T3.ground.material = studioGround;
+    }
+    scene.traverse(o => {
+      if (o.userData && o.userData.slab) { slabs.push({ m: o, mat: o.material }); o.material = studioSlab; }
+    });
+  }
+  const fit = T3.fit;
+  let url = '';
+  try {
+    T3.run = false;                                   // the animation loop must not overwrite a sample
+    ctl.update();
+    r.setPixelRatio(1);                               // a device ratio would multiply the target size
+    r.setSize(W, H, false);                           // false: the element keeps its CSS size
+    cam.aspect = w / h; cam.updateProjectionMatrix();
+
+    for (const s of saved) {                          // crisper shadows for this render only
+      s.l.shadow.mapSize.set(4096, 4096);
+      const sc = s.l.shadow.camera;
+      if (fit) {
+        const ext = Math.max((fit.sz || 400) * 0.75 + 150, 400);
+        sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext;
+        sc.updateProjectionMatrix();
+      }
+      if (s.l.shadow.map) { s.l.shadow.map.dispose(); s.l.shadow.map = null; }   // force a realloc
+    }
+
+    // The scene is static during a render, so the shadow maps only need to be
+    // built once — otherwise every pass re-rasterises 4096² (seconds on a
+    // software rasteriser).
+    const oldShadowAuto = r.shadowMap.autoUpdate;
+    r.shadowMap.autoUpdate = false;
+    r.shadowMap.needsUpdate = true;
+
+    // Accumulate on the GPU: each pass is drawn over the previous one with
+    // alpha 1/(i+1), which is exactly a running mean. readPixels()+a JS sum loop
+    // did the same thing but cost seconds per pass (and hundreds of MB for a
+    // 4K buffer), so this is both faster and far lighter.
+    const acc = document.createElement('canvas'); acc.width = W; acc.height = H;
+    const ctx = acc.getContext('2d');
+    const hud = $('#hud');
+    for (let i = 0; i < frames; i++) {
+      // ±½ px jitter in clip space; averaging the passes removes the stair-stepping
+      const jx = frames > 1 ? (halton(i + 1, 2) - 0.5) * 2 / W : 0;
+      const jy = frames > 1 ? (halton(i + 1, 3) - 0.5) * 2 / H : 0;
+      cam.projectionMatrix.elements[8] = jx;
+      cam.projectionMatrix.elements[9] = jy;
+      r.render(scene, cam);
+      ctx.globalAlpha = 1 / (i + 1);                 // running mean, no intermediate storage
+      ctx.drawImage(r.domElement, 0, 0);
+      if (hud && frames > 2) { hud.textContent = '🎬 ' + (i + 1) + '/' + frames + ' …'; await nextFrame(); }
+    }
+    ctx.globalAlpha = 1;
+    cam.projectionMatrix.elements[8] = 0;
+    cam.projectionMatrix.elements[9] = 0;
+    r.shadowMap.autoUpdate = oldShadowAuto;
+
+    // 2. downscale the supersampled buffer to the final image
+    if (W === outW && H === outH) {
+      url = acc.toDataURL('image/png');
+    } else {
+      const out = document.createElement('canvas'); out.width = outW; out.height = outH;
+      const octx = out.getContext('2d');
+      octx.imageSmoothingEnabled = true;
+      octx.imageSmoothingQuality = 'high';
+      octx.drawImage(acc, 0, 0, W, H, 0, 0, outW, outH);
+      sharpenCanvas(octx, outW, outH, bufK >= 2 ? 0.25 : 0.6);   // a supersampled downscale is already crisp
+      url = out.toDataURL('image/png');
+    }
+  } catch (e) {
+    url = '';
+  } finally {
+    if (r.shadowMap) { r.shadowMap.autoUpdate = true; r.shadowMap.needsUpdate = true; }
+    for (const e of edges) e.visible = true;
+    if (oldBg !== null) scene.background = oldBg;
+    for (const s of slabs) s.m.material = s.mat;
+    studioSlab.dispose();
+    if (T3.ground && oldGroundMat) { T3.ground.material = oldGroundMat; if (studioGround) studioGround.dispose(); }
+    cam.aspect = oldAspect; cam.updateProjectionMatrix();
+    for (const s of saved) {
+      s.l.shadow.mapSize.copy(s.size);
+      const sc = s.l.shadow.camera;
+      sc.left = s.left; sc.right = s.right; sc.top = s.top; sc.bottom = s.bottom;
+      sc.updateProjectionMatrix();
+      if (s.l.shadow.map) { s.l.shadow.map.dispose(); s.l.shadow.map = null; }
+    }
+    r.setPixelRatio(oldRatio);
+    resize3D();
+    T3.run = oldRun;
+    if (ui.view3d && T3.run) r.render(scene, cam);
+    updateTools();                                    // restores the HUD hint text
+  }
+  return url;
+}
+
+/** Mild unsharp mask: downscaling softens an architectural render, and the
+    edges of walls are exactly what the eye judges sharpness by. amount 0..1. */
+function sharpenCanvas(ctx, w, h, amount) {
+  const a = amount === undefined ? 0.55 : amount;
+  if (a <= 0 || w * h > 12e6) return;                 // never risk a long stall on huge images
+  const src = ctx.getImageData(0, 0, w, h);
+  const s = src.data, out = new Uint8ClampedArray(s);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const p = i + c;
+        // 3×3 box blur of the neighbourhood (the "unsharp" reference)
+        const blur = (
+          s[p - w * 4 - 4] + s[p - w * 4] + s[p - w * 4 + 4] +
+          s[p - 4] + s[p] + s[p + 4] +
+          s[p + w * 4 - 4] + s[p + w * 4] + s[p + w * 4 + 4]
+        ) / 9;
+        out[p] = s[p] + a * (s[p] - blur);
+      }
+    }
+  }
+  ctx.putImageData(new ImageData(out, w, h), 0, 0);
+}
+
+function export3DRender(quick) {
   if (!ui.view3d || !T3) return toast(L('Önce 3B görünüme geçin', 'Switch to the 3D view first'));
   if (ui.shot) return;                                    // guard against a double click
   ui.shot = true;
-  try {
-    const url = render3DDataUrl();
-    if (!url || url.length < 100) return toast(L('Render alınamadı', 'Could not capture the render'));
-    download(fname('png').replace(/\.png$/, '-3d-render.png'), dataUrlBlob(url));
-    toast(L('📸 3B render kaydedildi', '📸 3D render saved'));
-  } catch (e) {
-    toast(L('Render alınamadı: ', 'Could not capture the render: ') + (e && e.message || e));
-  } finally { ui.shot = false; }
+  const fast = () => render3DDataUrl();
+  return (async () => {
+    try {
+      // the real render: many jittered samples + a high-res shadow map
+      let url = quick ? fast() : await render3DHQ();
+      if (!url || url.length < 100) {
+        toast(L('Yüksek kalite desteklenmiyor — hızlı görüntü alınıyor', 'High quality unavailable — saving a plain capture'));
+        url = fast();
+      }
+      if (!url || url.length < 100) return toast(L('Render alınamadı', 'Could not capture the render'));
+      const suffix = quick ? '-3d-view.png' : '-3d-render.png';
+      download(fname('png').replace(/\.png$/, suffix), dataUrlBlob(url));
+      toast(quick
+        ? L('📸 Görünüm kaydedildi', '📸 View saved')
+        : L('🎬 Render kaydedildi (yüksek kalite)', '🎬 Render saved (high quality)'));
+    } catch (e) {
+      toast(L('Render alınamadı: ', 'Could not capture the render: ') + (e && e.message || e));
+    } finally { ui.shot = false; }
+  })();
 }
 
 /** The top-bar PNG button is context-aware, so say what it will do. */
 function syncExportTitles() {
   const b = $('#bPng');
-  if (!b) return;
-  b.title = ui.view3d
-    ? L('Mevcut 3B görünümü PNG olarak kaydet', 'Save the current 3D view as a PNG')
-    : L('2B planı PNG olarak kaydet', 'Save the 2D plan as a PNG');
+  if (b) {
+    b.title = ui.view3d
+      ? L('3B render al (yüksek kalite) — Shift: hızlı görünüm', 'Render the 3D view (high quality) — Shift: quick capture')
+      : L('2B planı PNG olarak kaydet', 'Save the 2D plan as a PNG');
+  }
+  const s = $('#b3dShot');
+  if (s) s.title = L('🎬 Render al (PNG) — Shift: hızlı görünüm', '🎬 Render (PNG) — Shift: quick capture');
 }
 
 /* ---------- 3B Görünüm ---------- */
@@ -3864,6 +4074,7 @@ function build3D(keepCam = false) {
       geo.rotateX(Math.PI / 2);
       const m = new THREE.Mesh(geo, mat(slabCol));
       m.position.y = elev; m.receiveShadow = true;
+      m.userData.slab = true;                         // the render may swap it for the light slab
       S.add(m);
     }
     f.rooms.forEach(r => {
@@ -3982,6 +4193,7 @@ function build3D(keepCam = false) {
   });
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xd8d2c5 : 0x11161e));
   ground.rotation.x = -Math.PI / 2; ground.position.y = -21; ground.receiveShadow = true; S.add(ground);
+  T3.ground = ground;                                 // the render swaps its material for a studio backdrop
   T3.fit = { cx, cz, sz, elev, x0: all.x0, x1: all.x1, z0: all.y0, z1: all.y1 };
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); }
   T3.mats = Object.values(matCache).concat(extraMats, [lineMat]); // sonraki build3D çağrısında dispose edilmek üzere
@@ -4089,7 +4301,7 @@ function applyLangUI() {
   if ($('#b3dFit')) $('#b3dFit').title = L('Sığdır', 'Fit');
   if ($('#b3dTop')) $('#b3dTop').title = L('Üstten görünüm', 'Top view');
   if ($('#b3dEye')) $('#b3dEye').title = L('Göz hizası (1.6 m)', 'Eye level (1.6 m)');
-  if ($('#b3dShot')) $('#b3dShot').title = L('📸 Render al (PNG)', '📸 Save render (PNG)');
+  if ($('#b3dShot')) $('#b3dShot').title = L('🎬 Render al (PNG) — Shift: hızlı görünüm', '🎬 Render (PNG) — Shift: quick capture');
   syncExportTitles();
   if ($('#s3dFloor')) $('#s3dFloor').dataset.opts = ''; // dil değişince seçenekleri yeniden yaz
   $('#lblAngle').textContent = (P && P.gridType === 'triangle') ? L('Açı 30°', 'Angle 30°') : L('Açı 15°', 'Angle 15°');
@@ -4114,14 +4326,14 @@ $('#bNew').onclick = templatesModal; $('#bProjects').onclick = projectsModal; $(
 $('#bJson').onclick = () => downloadJson(P);
 $('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpModal; $('#bAi').onclick = () => aiModal();
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
-$('#bPng').onclick = () => (ui.view3d ? export3DRender() : exportPng()); $('#bPrint').onclick = exportPrint;
+$('#bPng').onclick = e => (ui.view3d ? export3DRender(e && e.shiftKey) : exportPng()); $('#bPrint').onclick = exportPrint;
 $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { type: 'image/svg+xml' }));
 $('#b2d').onclick = () => show3D(false); $('#b3d').onclick = () => show3D(true);
 $('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && ui.view3d) build3D(true); };
 $('#b3dFit').onclick = () => set3DCam('fit');
 $('#b3dTop').onclick = () => set3DCam('top');
 $('#b3dEye').onclick = () => set3DCam('eye');
-$('#b3dShot').onclick = export3DRender;
+$('#b3dShot').onclick = e => export3DRender(e && e.shiftKey);
 $('#bLang').onclick = () => setLang(isEN() ? 'tr' : 'en');
 $('#bTheme').onclick = () => {
   const d = document.documentElement;
