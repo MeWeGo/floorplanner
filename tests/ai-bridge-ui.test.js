@@ -86,3 +86,13 @@ test('the bridge keeps the endpoints this UI depends on', () => {
   assert.match(bridge, /Access-Control-Allow-Private-Network/, 'the private-network header is gone');
   assert.match(bridge, /event: ' \+ name \+ '\\ndata: '/, 'SSE event framing changed');
 });
+
+test('?bridge=off disables every bridge entry point, and the browser smoke test uses it', () => {
+  const app = read('app.js');
+  assert.match(app, /const BRIDGE_OFF = /, 'no ?bridge=off switch');
+  assert.match(app, /async function brgFetch\([^)]*\) \{\s*if \(BRIDGE_OFF\) throw/, 'brgFetch ignores BRIDGE_OFF');
+  assert.match(app, /async function brgConnect\(\) \{\s*if \(BRIDGE_OFF\) return false;/, 'brgConnect ignores BRIDGE_OFF');
+  assert.match(app, /function brgStartProbe\(\) \{\s*if \(BRIDGE_OFF/, 'brgStartProbe ignores BRIDGE_OFF');
+  // the smoke test loads plans; without the switch it overwrote the user's live AI plan
+  assert.match(read('tests/browser-smoke.js'), /\?bridge=off`/, 'browser-smoke.js does not open the app with ?bridge=off');
+});
