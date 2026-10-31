@@ -198,6 +198,9 @@ Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|b
 - Major interval `ms`: `s≥100 → 5s`, `s≥25 → 4s`, else 100 cm. Minor grid hidden when `P.grid*view.z < 6`; major hidden when `view.z ≤ 0.12`.
 - `syncGridUI()` must be called whenever `P.grid` / `P.gridType` changes outside the footer controls (load, undo/redo) — it handles the "Özel…" custom-step input.
 
+### Wall corners (`wallJoints`, issue #14)
+Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)` groups coincident endpoints (≤ 1 cm), sorts the walls by outward angle and intersects neighbouring face lines to find each miter point; the convex hull of the butt corners plus the outward miter points is the filler polygon. Miters longer than 2.5 × max thickness are dropped (bevel). `jointsSvg()` fills it with `pal().wall` in 2D; `build3D()` extrudes it to the lowest solid wall height. T-junctions (an end on another wall's middle) need no filler — the through-wall covers the butt end. Guard: `tests/wall-joints.test.js` runs the real functions cut out of `app.js`.
+
 ### Room detection (`detectRoom`)
 Rasterises walls to an offscreen canvas (resolution ≥ 2 cm/px, max ≈ 1800 px), flood-fills from the click, returns `'open'` if the fill reaches the border (leak), otherwise traces the outer boundary and simplifies it (Douglas-Peucker, ε≈1.1·res). Doors/windows do **not** open rooms because the walls underneath are rasterised solid.
 
@@ -313,6 +316,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/mcp.test.js` | tool surface shrinking, a broken plan round-trip, `CATALOG`/`OPENINGS` drifting from `app.js` |
 | `tests/bridge.test.js` | plan store/revisioning, the request queue, SSE, **`FP_WAKE`** (a request reaches the agent, an unknown origin only queues), **snapshot save/restore** (AI pushes only, restore is a new rev, history survives a restart) and the **`Access-Control-Allow-Private-Network`** header the deployed page needs |
 | `tests/render3d.test.js` | the 3D render export: oversampling maths (2–3×, ≤4K/12 MP), the **synchronous** `render()` → `toDataURL()` contract for the quick path, the render-vs-screenshot guarantees (no CAD outlines, studio backdrop, single shadow build, jittered passes) and viewport restore |
+| `tests/wall-joints.test.js` | wall corners closing: miter/bevel maths of `wallJoints()` and that both 2D and 3D draw the fillers |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |
 | `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed) |

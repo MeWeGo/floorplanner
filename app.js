@@ -162,6 +162,52 @@ function cycleWallPos(w) {
   setWallDeg(w, w.angles[w.posIdx], false);
   return true;
 }
+// Duvar birleşimleri (issue #14): uçları çakışan duvarlar için köşe dolgusu poligonu.
+// Duvar gövdeleri birleşim noktasında düz (butt) biter; bu poligon dış köşeyi miter
+// noktasına kadar doldurur (çok dar açılarda pah kırar). 2B ve 3B aynı veriyi kullanır.
+function convexHull(pts) {
+  const p = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  if (p.length < 3) return p;
+  const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x), lo = [], up = [];
+  for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+function wallJoints(f, tol = 1) {
+  const ends = [];
+  for (const w of f.walls) {
+    const L = wLen(w); if (L < 0.5) continue;
+    const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L;
+    ends.push({ w, p: w.a, d: { x: ux, y: uy } }, { w, p: w.b, d: { x: -ux, y: -uy } }); // d: birleşimden duvarın içine
+  }
+  const used = new Set(), out = [];
+  for (let i = 0; i < ends.length; i++) {
+    if (used.has(i)) continue;
+    const grp = [ends[i]]; used.add(i);
+    for (let j = i + 1; j < ends.length; j++) if (!used.has(j) && dist(ends[i].p, ends[j].p) <= tol) { grp.push(ends[j]); used.add(j); }
+    if (grp.length < 2) continue;
+    const O = ends[i].p, maxT = Math.max(...grp.map(e => e.w.t));
+    grp.forEach(e => e.ang = Math.atan2(e.d.y, e.d.x));
+    grp.sort((a, b) => a.ang - b.ang);
+    const pts = [];
+    for (const e of grp) { const n = { x: -e.d.y, y: e.d.x }, h = e.w.t / 2; pts.push({ x: O.x + n.x * h, y: O.y + n.y * h }, { x: O.x - n.x * h, y: O.y - n.y * h }); }
+    for (let k = 0; k < grp.length; k++) {
+      const e1 = grp[k], e2 = grp[(k + 1) % grp.length]; if (e1 === e2) continue;
+      // e1'in +n kenarı ile e2'nin -n kenarının kesişimi = aralarındaki köşe (miter) noktası
+      const n1 = { x: -e1.d.y, y: e1.d.x }, n2 = { x: -e2.d.y, y: e2.d.x };
+      const p1 = { x: O.x + n1.x * e1.w.t / 2, y: O.y + n1.y * e1.w.t / 2 }, p2 = { x: O.x - n2.x * e2.w.t / 2, y: O.y - n2.y * e2.w.t / 2 };
+      const den = e1.d.x * e2.d.y - e1.d.y * e2.d.x; if (Math.abs(den) < 1e-6) continue; // aynı doğrultu
+      const s = ((p2.x - p1.x) * e2.d.y - (p2.y - p1.y) * e2.d.x) / den;
+      const M = { x: p1.x + e1.d.x * s, y: p1.y + e1.d.y * s };
+      if (dist(M, O) > maxT * 2.5) continue;          // çok dar açı: miter yerine pah
+      const s1 = (M.x - O.x) * e1.d.x + (M.y - O.y) * e1.d.y, s2 = (M.x - O.x) * e2.d.x + (M.y - O.y) * e2.d.y;
+      if (s1 < -0.01 || s2 < -0.01) pts.push(M);      // yalnızca duvar ucunun DIŞINA taşan köşeler
+    }
+    const poly = convexHull(pts);
+    if (poly.length >= 3 && polyArea(poly) > 0.5) out.push({ x: O.x, y: O.y, poly, walls: grp.map(e => e.w) });
+  }
+  return out;
+}
 function polyArea(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; s += p.x * q.y - q.x * p.y; } return Math.abs(s) / 2; }
 function polyCentroid(pts) {
   let a = 0, cx = 0, cy = 0;
@@ -524,15 +570,15 @@ function wallSvg(w, live) {
     // cam cephe: kenar çizgileri + cam dolgu + dikme işaretleri (~120 cm modül)
     const Lc = wLen(w) || 1, ux = (w.b.x - w.a.x) / Lc, uy = (w.b.y - w.a.y) / Lc, nx = -uy, ny = ux;
     const sw = Math.max(1.1, w.t * 0.12);
-    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
-    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.glass}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="square" pointer-events="none"/>`;
+    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
+    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.glass}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="butt" pointer-events="none"/>`;
     const nTick = Math.max(1, Math.round(Lc / 120));
     for (let i = 1; i < nTick; i++) {
       const px = w.a.x + ux * (Lc * i / nTick), py = w.a.y + uy * (Lc * i / nTick), hw2 = w.t / 2 - sw * 0.5;
       s += `<line x1="${px - nx * hw2}" y1="${py - ny * hw2}" x2="${px + nx * hw2}" y2="${py + ny * hw2}" stroke="${C.wall}" stroke-width="${sw}" pointer-events="none"/>`;
     }
   } else {
-    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
+    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
     if (w.color) s += wallPaintSvg(w);
   }
   if (hasPos) {
@@ -555,6 +601,11 @@ function wallPaintSvg(w) {
   let s = '';
   for (const sg of [-1, 1]) s += `<line x1="${w.a.x + nx * o * sg}" y1="${w.a.y + ny * o * sg}" x2="${w.b.x + nx * o * sg}" y2="${w.b.y + ny * o * sg}" stroke="${w.color}" stroke-width="${sw}" pointer-events="none"/>`;
   return s;
+}
+// Köşe birleşim dolguları (issue #14): duvar gövdeleriyle aynı renk, boşluk/çentik kalmaz
+function jointsSvg(f) {
+  const C = pal();
+  return wallJoints(f).map(j => `<polygon points="${j.poly.map(p => p.x + ',' + p.y).join(' ')}" fill="${C.wall}" pointer-events="none"/>`).join('');
 }
 function wallDimSvg(w) {
   const L = wLen(w); if (L < 30) return '';
@@ -705,7 +756,7 @@ function layerStrings(f, live) {
   return {
     rooms: f.rooms.map(r => roomSvg(r, live)[0]).join(''),
     roomLabels: f.rooms.map(r => roomSvg(r, live)[1]).join('') + groupVarsSvg(f, live),
-    walls: f.walls.map(w => wallSvg(w, live)).join('') + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
+    walls: f.walls.map(w => wallSvg(w, live)).join('') + jointsSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
     ops: f.ops.map(o => opSvg(o, live)).join(''),
     furn: f.furn.map(x => furnSvg(x, live)).join(''),
     dims: f.dims.map(d => dimSvg(d, live)).join(''),
@@ -4265,6 +4316,17 @@ function build3D(keepCam = false) {
         pin.position.set(pv.x, elev + H / 2, pv.y); pin.userData = { wallId: w.id }; S.add(pin);
       }
     });
+    // köşe birleşim dolgusu (issue #14): duvar kutuları birleşimde düz biter, dış köşe yarığını bu prizma kapatır
+    for (const j of wallJoints(f)) {
+      const solid = j.walls.filter(w => w.wt !== 'curtain'); if (!solid.length) continue;
+      const w0 = solid[0], H = Math.min(...solid.map(w => w.h)), hasPos = Array.isArray(w0.angles) && w0.angles.length > 0;
+      const jCol = w0.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
+      const geo = new THREE.ExtrudeGeometry(new THREE.Shape(j.poly.map(p => new THREE.Vector2(p.x, p.y))), { depth: H, bevelEnabled: false });
+      geo.rotateX(Math.PI / 2);
+      const m = new THREE.Mesh(geo, mat(jCol));
+      m.position.y = elev + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
+      S.add(m);
+    }
     f.furn.forEach(o => {
       const ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, elev, o.y); g.rotation.y = ry; g.userData = { furnId: o.id, elev }; S.add(g);
       furn3D(g, o, furnCtx);
