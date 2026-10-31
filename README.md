@@ -107,7 +107,7 @@ One click turns the plan into an interactive 3D model — walls with real door/w
 
 **Camera presets:** three small buttons next to the floor selector give **fit**, **top-down** and **eye level (1.6 m)** views. The **🎬** button beside them renders the current view to a high-resolution PNG (the top-bar **🖼 PNG** does the same while you are in 3D; hold **Shift** for a quick capture).
 
-**3D editing:** click furniture to select and highlight it (orange box), drag it across the floor (`Shift` = no grid snap; a single item magnets to the nearest wall on drop), and edit width / depth / height / rotation / color in the side panel — the 3D model refreshes live. Clicking a door opens/closes it; clicking a hinged wall (or a group with saved layouts) cycles its positions.
+**3D editing:** click furniture to select and highlight it (orange box), drag it across the floor (`Shift` = no grid snap; a single item magnets to the nearest wall on drop), and edit width / depth / height / rotation / color in the side panel — the 3D model refreshes live. Clicking a door opens/closes it; clicking a hinged wall (or a group with saved layouts) cycles its positions. The usual editing shortcuts keep working **without leaving 3D**: `Ctrl+Z` / `Ctrl+Y`, `Del`, and `Ctrl+A` / `C` / `V` / `D` / `G` / `S`.
 
 **Floor selector:** the menu at the top-left of the 3D view shows **🏢 all floors stacked**, or **only the selected floor** (e.g. just the 1st or 2nd floor) — the isolated floor is drawn at ground level for a clean, unobstructed look.
 
@@ -164,7 +164,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | Arrow keys | Nudge selection / background image 1 cm (`Shift` = 10 cm) |
 | `WASD` / `Q` / `E` *(in 3D)* | Walk around in 3D view (`Q`/`E`: down/up, `Shift`: faster) |
 | `Ctrl+C / V / D` | Copy / Paste / Duplicate |
-| `Ctrl+Z / Ctrl+Y` | Undo / Redo |
+| `Ctrl+Z / Ctrl+Y` | Undo / Redo (also works while the 3D view is open) |
 | `Ctrl+A` · `Ctrl+S` · `Del` | Select all · Save to browser · Delete |
 | `0` · `+` · `−` | Fit view · Zoom in · Zoom out |
 | Double-click | Rename room / edit text |

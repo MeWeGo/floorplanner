@@ -333,8 +333,79 @@ check('3D: a real render is produced, and PNG follows the active view', async pa
   return 'render ' + Math.round(info.sizes[0] / 1024) + ' KB · ' + info.names[0];
 });
 
-/* ---------- main ---------- */
-(async () => {
+/* Dispatch a REAL key event, so the test covers the same path a user hits
+   (window keydown handler + preventDefault), not a synthetic call to undo(). */
+const keyBase = ({ key, code, vk, ctrl, shift }) => {
+  let modifiers = 0;
+  if (ctrl) modifiers |= 2;
+  if (shift) modifiers |= 8;
+  return { modifiers, key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
+};
+async function keyDown(page, k) {
+  const base = keyBase(k);
+  await page.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyDown', text: k.ctrl ? undefined : k.key }, base));
+  await sleep(80);
+}
+async function keyUp(page, k) {
+  await page.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyUp' }, keyBase(k)));
+  await sleep(80);
+}
+async function pressKey(page, k) { await keyDown(page, k); await keyUp(page, k); }
+
+check('3D: Ctrl+Z / Ctrl+Y undo the plan without leaving the 3D view', async page => {
+  // start from the 2D plan and add a wall so there is something to undo
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    const f = F();
+    f.walls.push(mkWall({ x: 0, y: 1200 }, { x: 300, y: 1200 }));
+    commit(); refresh();
+    return true;
+  })()`);
+  const before = await page.evaluate(`(() => ({ walls: F().walls.length, hi, hist: hist.length }))()`);
+
+  await page.evaluate(`(() => { document.getElementById('b3d').click(); return true; })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!ui.view3d`);
+
+  await pressKey(page, { key: 'z', code: 'KeyZ', vk: 90, ctrl: true });
+  await sleep(400);                                       // schedBuild3D is debounced
+  const afterUndo = await page.evaluate(`(() => ({
+    walls: F().walls.length, hi, view3d: !!ui.view3d,
+    meshes: T3 && T3.scene ? T3.scene.children.length : 0,
+  }))()`);
+
+  await pressKey(page, { key: 'y', code: 'KeyY', vk: 89, ctrl: true });
+  await sleep(400);
+  const afterRedo = await page.evaluate(`(() => ({ walls: F().walls.length, hi }))()`);
+
+  // a plain "a" must still strafe (walk) instead of selecting everything:
+  // sample while the key is HELD DOWN, because keyup clears the walk set
+  await keyDown(page, { key: 'a', code: 'KeyA', vk: 65 });
+  const held = await page.evaluate(`(() => ({ walking: keys3D.has('a'), sel: sel.length }))()`);
+  await keyUp(page, { key: 'a', code: 'KeyA', vk: 65 });
+  const released = await page.evaluate(`keys3D.has('a')`);
+
+  await page.evaluate(`(() => { show3D(false); return true; })()`);
+
+  if (!in3d) return 'skipped: WebGL/Three.js unavailable';
+  if (afterUndo.walls !== before.walls - 1) {
+    throw new Error('Ctrl+Z did nothing in 3D: walls ' + before.walls + ' -> ' + afterUndo.walls);
+  }
+  if (afterUndo.hi !== before.hi - 1) throw new Error('history pointer did not move back');
+  if (!afterUndo.view3d) throw new Error('undo must not kick the user out of the 3D view');
+  if (afterUndo.meshes < 3) throw new Error('the 3D scene was not rebuilt after undo: ' + afterUndo.meshes + ' nodes');
+  if (afterRedo.walls !== before.walls) {
+    throw new Error('Ctrl+Y did not redo: walls ' + afterRedo.walls + ' (expected ' + before.walls + ')');
+  }
+  if (afterRedo.hi !== before.hi) throw new Error('redo did not return the history pointer');
+  if (!held.walking) throw new Error('plain "a" no longer walks in 3D — the shortcut layer is swallowing it');
+  if (released) throw new Error('keyup did not release the walk key');
+  if (held.sel !== 0) throw new Error('a plain "a" must not select all in 3D (that is Ctrl+A)');
+
+  return 'undo/redo work in 3D (' + before.walls + ' walls)';
+});
+
+/* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();
   if (!browserPath) {
     console.log('SKIP browser smoke test: no Chromium/Chrome/Edge found (set CHROME_BIN).');

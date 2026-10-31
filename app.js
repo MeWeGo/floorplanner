@@ -1101,7 +1101,7 @@ function buildTools() {
 function updateTools() {
   document.querySelectorAll('.tool').forEach(b => b.classList.toggle('on', b.dataset.tool === ui.btn));
   $('#hud').textContent = ui.view3d
-    ? L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Esc: 2D')
+    ? L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Ctrl+Z: Geri al • Del: Sil • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Ctrl+Z: Undo • Del: Delete • Esc: 2D')
     : ((isEN() ? HINTS_EN : HINTS)[tool] || '');
   $('#hud').style.display = '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
@@ -2306,6 +2306,26 @@ window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
   if (ui.view3d) {
     if (e.key === 'Escape') { show3D(false); return; }
+    // Editing shortcuts must keep working while the user is looking at the 3D
+    // model: undo/redo used to fall through to the early return below, so the
+    // most-pressed key in the app silently did nothing in 3D. restore() already
+    // schedules a rebuild, so the model follows the undo.
+    if (ctrl) {
+      if (k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+      if (k === 'y') { e.preventDefault(); redo(); return; }
+      if (k === 's') { e.preventDefault(); saveBrowser(); return; }
+      if (k === 'a') {
+        e.preventDefault(); const f = F(); sel = [];
+        for (const a in KINDS) f[a].forEach(o => sel.push(o.id));
+        refresh(); refreshSel3D(); return;
+      }
+      if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
+      if (k === 'c') { copySel(); return; }
+      if (k === 'v') { paste(false); return; }
+      if (k === 'd') { e.preventDefault(); paste(true); return; }
+      return;                                   // never feed Ctrl+… to the walk keys
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSel(); return; }
     if (['w', 'a', 's', 'd', 'q', 'e', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) { keys3D.add(k); e.preventDefault(); }
     return;
   }
@@ -2418,6 +2438,7 @@ function helpModal() {
     ['S (while placing)', 'Flip door swing direction'],
     ['Arrow keys', 'Nudge selection / background image by 1 cm (Shift: 10 cm)'],
     ['WASD / Q / E (3D)', 'Walk around in 3D view (Q/E: down/up, Shift: faster)'],
+    ['Ctrl+Z / Ctrl+Y (3D)', 'Undo / redo while staying in the 3D view (Del also works there; Ctrl+A / C / V / D / G / S too)'],
     ['3D: click / drag furniture', 'Select & highlight • drag to move on the floor (Shift: no grid snap) • resize via the side panel'],
     ['Wall type: Curtain Wall', 'Select a wall → Wall Type → 🪟 Curtain Wall: glass facade with aluminum frame in 2D & 3D'],
     ['3D: Floor selector', 'Menu at the top-left of the 3D view — show all floors stacked, or isolate one floor at ground level'],
@@ -2455,6 +2476,7 @@ function helpModal() {
     ['S (yerleştirirken)', 'Kapı açılış yönünü çevir'],
     ['Ok tuşları', 'Seçileni / arka plan görselini 1 cm kaydır (Shift: 10 cm)'],
     ['WASD / Q / E (3B)', '3B görünümde gezin (Q/E: alçal/yüksel, Shift: hızlı)'],
+    ['Ctrl+Z / Ctrl+Y (3B)', '3B görünümden çıkmadan geri al / yinele (Del de çalışır; Ctrl+A / C / V / D / G / S dahil)'],
     ['3B: mobilyaya tıkla / sürükle', 'Seç & vurgula • zeminde sürükle (Shift: ızgara yok) • boyutu sağ panelden değiştir'],
     ['Duvar tipi: Cam Cephe', 'Duvar seç → Duvar Tipi → 🪟 Cam Cephe: 2B ve 3B içinde alüminyum çerçeveli cam cephe'],
     ['3B: Kat seçici', '3B görünümün sol üstündeki menü — tüm katlar üst üste ya da tek kat yer seviyesinde'],

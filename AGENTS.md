@@ -226,6 +226,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 - Picking uses `findAnyFloor()` (ids are unique across floors) and respects **occluders**: only the closest mesh hit is considered — walls/slabs/room floors hide furniture behind them.
 - 3D group drags mirror 2D `doMove`: connected wall ends follow (`conn`), hinge pins translate (`pins`), room/sketch polygons update in the plan and are rebuilt into the scene on drop (`schedBuild3D`).
 - `h3[]` holds one `BoxHelper` per selected furniture item, so grouped selections highlight too.
+- **Keyboard while in 3D.** The `if (ui.view3d)` branch of the window `keydown` handler owns the keyboard in 3D: `Escape` leaves, `WASD`/arrows/`Q`/`E`/`Shift` feed `keys3D`, and a **`ctrl` layer runs first** for `Z`/`Y` (undo/redo), `S`, `A`, `G`, `C`, `V`, `D` — plus `Delete`/`Backspace`. Ordering matters twice over: the ctrl layer must come **before** the walk-key capture (otherwise `Ctrl+A` would push `a` into `keys3D` and strafe the camera) and before the branch's early `return` (that return is what made `Ctrl+Z` dead in 3D — the most-pressed key in the app silently doing nothing). `restore()` already calls `schedBuild3D()`, so undo rebuilds the model and keeps the user in 3D; use `refreshSel3D()` after anything that changes `sel` without rebuilding. Guards: `tests/shortcuts-3d.test.js` (handler shape + ordering) and a real `Input.dispatchKeyEvent` check in `browser-smoke.js` that fails with "Ctrl+Z did nothing in 3D".
 - `build3D()` disposes previous geometries/materials (`T3.mats`) before rebuilding; `affects3D(k, p)` gates which panel properties trigger `schedBuild3D()`.
 
 ### 3D (`build3D`, `furn3D`, `loop3D`)
@@ -312,8 +313,9 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/mcp.test.js` | tool surface shrinking, a broken plan round-trip, `CATALOG`/`OPENINGS` drifting from `app.js` |
 | `tests/bridge.test.js` | plan store/revisioning, the request queue, SSE, **`FP_WAKE`** (a request reaches the agent, an unknown origin only queues), **snapshot save/restore** (AI pushes only, restore is a new rev, history survives a restart) and the **`Access-Control-Allow-Private-Network`** header the deployed page needs |
 | `tests/render3d.test.js` | the 3D render export: oversampling maths (2–3×, ≤4K/12 MP), the **synchronous** `render()` → `toDataURL()` contract for the quick path, the render-vs-screenshot guarantees (no CAD outlines, studio backdrop, single shadow build, jittered passes) and viewport restore |
+| `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |
-| `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails) |
+| `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed) |
 
 `browser-smoke.js` skips itself (exit 0) when no Chromium is found; set `CHROME_BIN` to point at one. In CI it always runs.
 
