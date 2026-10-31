@@ -1298,7 +1298,7 @@ const TOOLS = [
   ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
 const HINTS = {
-  select: 'Seç: tıkla / kutu çiz • Shift: çoklu seçim • sürükle: taşı • Del: sil',
+  select: 'Seç: tıkla / kutu çiz • Shift: çoklu seçim • Ctrl+tık: alttaki nesne • sağ tık: buradaki nesneler & katman • sürükle: taşı • Del: sil',
   pan: 'Kaydır: sürükle • Tekerlek: yakınlaştır',
   wall: 'Duvar: tıkla ile başla, devam ettikçe zincir • rakam yaz + Enter: tam uzunluk • çift tık / Esc: bitir • Shift: yakalamayı kapat',
   rect: 'Dikdörtgen oda: köşeden köşeye sürükle (4 duvar + oda oluşturur)',
@@ -1314,7 +1314,7 @@ const HINTS = {
   calib: 'Ölçek: arka plan görselinde bilinen iki noktaya tıkla, gerçek mesafeyi gir',
 };
 const HINTS_EN = {
-  select: 'Select: click / drag box • Shift: multi-select • drag: move • Del: delete',
+  select: 'Select: click / drag box • Shift: multi-select • Ctrl+click: object underneath • right-click: objects here & layers • drag: move • Del: delete',
   pan: 'Pan: drag • Wheel: zoom in/out',
   wall: 'Wall: click to start & chain • type number + Enter: exact length (cm) • double-click / Esc: finish • Shift: disable snap',
   rect: 'Rect Room: drag corner to corner (creates 4 walls + room)',
@@ -1479,7 +1479,7 @@ function setCursor(e) {
   }
   $('#coords').textContent = `x: ${(raw.x / 100).toFixed(2)} m   y: ${(raw.y / 100).toFixed(2)} m`;
 }
-cv.addEventListener('contextmenu', e => { e.preventDefault(); if (tool === 'place' || tool === 'wall' || tool === 'poly' || tool === 'pen') { setTool('select'); } });
+cv.addEventListener('contextmenu', e => { e.preventDefault(); if (tool === 'select') { openCtxMenu(e); return; } if (tool === 'place' || tool === 'wall' || tool === 'poly' || tool === 'pen') { setTool('select'); } });
 cv.addEventListener('wheel', e => {
   e.preventDefault(); const r = cv.getBoundingClientRect();
   zoomAt(Math.exp(-e.deltaY * 0.0016), e.clientX - r.left, e.clientY - r.top);
@@ -1512,6 +1512,110 @@ function pickDataId(e) {
   }
   return roomHit || first;
 }
+/* ---------- Katmanlar: üst üste binen nesneler ----------
+   Aynı türdeki nesnelerin dizideki sırası çizim sırasıdır (sonraki = üstte).
+   2B bu sırayla çizer; 3B aynı sırayı stackLevels() ile küçük yükseklik
+   farklarına çevirir, böylece çakışan yüzeyler titremez (z-fighting) ve
+   3B'de de üstteki nesne üstte görünür. */
+const LAYER_ARR = { furn: 'furn', room: 'rooms', text: 'texts', sketch: 'sketches', dim: 'dims' };
+// İmlecin altındaki tüm nesneler, en üstteki önce (rozetler hariç)
+function idsAt(clientX, clientY) {
+  const out = [];
+  for (const el of document.elementsFromPoint(clientX, clientY)) {
+    const t = el.closest ? el.closest('[data-id]') : null;
+    if (!t || t.dataset.varBadge) continue;
+    const id = t.dataset.id;
+    if (!out.includes(id) && find(id)) out.push(id);
+  }
+  return out;
+}
+function objLabel(id) {
+  const fd = find(id); if (!fd) return id;
+  const o = fd.o, k = (isEN() ? KIND_EN : KIND_TR)[fd.kind] || fd.kind;
+  const nm = fd.kind === 'furn' ? (o.label || (BYID[o.type] ? itemName(BYID[o.type]) : o.name))
+    : fd.kind === 'room' ? o.name : fd.kind === 'text' ? o.text
+    : fd.kind === 'wall' ? fmtLen(wLen(o)) : fd.kind === 'op' ? o.type : '';
+  return nm ? `${k} · ${nm}` : k;
+}
+// Ctrl+tık: aynı noktadaki bir alttaki nesneye geç (en alttan sonra tekrar en üste)
+function cycleStackAt(e) {
+  const ids = idsAt(e.clientX, e.clientY); if (!ids.length) return null;
+  const cur = sel.length === 1 ? ids.indexOf(sel[0]) : -1, i = (cur + 1) % ids.length;
+  sel = [ids[i]];
+  if (ids.length > 1) toast(`${i + 1}/${ids.length}: ${objLabel(ids[i])}`);
+  return ids[i];
+}
+const bbOverlap = (a, b) => a && b && a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+// Seçili nesneleri kendi türlerinin dizisinde yeniden sıralar: 'front' | 'back' | 'up' | 'down'
+function reorderSel(dir) {
+  const f = F(), ids = new Set(sel); let changed = false;
+  for (const [kind, arr] of Object.entries(LAYER_ARR)) {
+    const list = f[arr] || []; if (!list.some(o => ids.has(o.id))) continue;
+    const before = list.map(o => o.id).join();
+    let out;
+    if (dir === 'front' || dir === 'back') {
+      const a = list.filter(o => ids.has(o.id)), b = list.filter(o => !ids.has(o.id));
+      out = dir === 'front' ? b.concat(a) : a.concat(b);
+    } else {
+      // bir adım: seçili nesneyi örttüğü/örtüldüğü sıradaki ilk çakışan nesnenin öbür yanına al
+      out = list.slice();
+      const order = dir === 'up' ? out.filter(o => ids.has(o.id)).reverse() : out.filter(o => ids.has(o.id));
+      for (const o of order) {
+        const i = out.indexOf(o), bb = bboxOf(kind, o);
+        let j = -1;
+        if (dir === 'up') { for (let k = i + 1; k < out.length; k++) if (!ids.has(out[k].id) && bbOverlap(bb, bboxOf(kind, out[k]))) { j = k; break; } }
+        else { for (let k = i - 1; k >= 0; k--) if (!ids.has(out[k].id) && bbOverlap(bb, bboxOf(kind, out[k]))) { j = k; break; } }
+        if (j < 0) continue;
+        out.splice(i, 1); out.splice(j, 0, o);
+      }
+    }
+    f[arr] = out;
+    if (out.map(o => o.id).join() !== before) changed = true;
+  }
+  if (!changed) { toast(L('Sıra değişmedi (çakışan nesne yok)', 'Order unchanged (nothing overlaps)')); return false; }
+  commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+  return true;
+}
+// 3B: çakışan nesneler için yığın seviyesi (0 = altında çakışan yok); dizi sırası korunur
+function stackLevels(list, kind) {
+  const bbs = list.map(o => bboxOf(kind, o)), lv = new Array(list.length).fill(0);
+  for (let i = 0; i < list.length; i++) for (let j = 0; j < i; j++) if (bbOverlap(bbs[i], bbs[j])) lv[i] = Math.max(lv[i], lv[j] + 1);
+  return lv;
+}
+// Sağ tık (Seç aracı): imlecin altındaki nesnelerin listesi + katman komutları
+function closeCtxMenu() { const m = document.getElementById('ctxMenu'); if (m) m.remove(); }
+function openCtxMenu(e) {
+  closeCtxMenu();
+  const ids = idsAt(e.clientX, e.clientY);
+  if (!ids.length && !sel.length) return;
+  const m = document.createElement('div'); m.id = 'ctxMenu'; m.className = 'ctxmenu';
+  let h = '';
+  if (ids.length) {
+    h += `<div class="cm-h">${L('Buradaki nesneler (üstten alta)', 'Objects here (top to bottom)')}</div>`;
+    h += ids.map(id => `<button data-cmsel="${id}" class="${sel.includes(id) ? 'on' : ''}">${esc(objLabel(id))}</button>`).join('');
+  }
+  const canLayer = (ids.length || sel.length) && (sel.length ? selObjs() : [find(ids[0])]).some(x => x && LAYER_ARR[x.kind]);
+  if (canLayer) {
+    h += `<div class="cm-sep"></div>`
+      + `<button data-cmlayer="front">⤒ ${L('En öne getir', 'Bring to front')} <kbd>Ctrl+Shift+]</kbd></button>`
+      + `<button data-cmlayer="up">↑ ${L('Bir öne', 'Bring forward')} <kbd>Ctrl+]</kbd></button>`
+      + `<button data-cmlayer="down">↓ ${L('Bir arkaya', 'Send backward')} <kbd>Ctrl+[</kbd></button>`
+      + `<button data-cmlayer="back">⤓ ${L('En arkaya gönder', 'Send to back')} <kbd>Ctrl+Shift+[</kbd></button>`;
+  }
+  m.innerHTML = h; document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.min(e.clientX, innerWidth - r.width - 6) + 'px';
+  m.style.top = Math.min(e.clientY, innerHeight - r.height - 6) + 'px';
+  m.addEventListener('pointerdown', ev => ev.stopPropagation());
+  m.addEventListener('click', ev => {
+    const s = ev.target.closest('[data-cmsel]');
+    if (s) { sel = [s.dataset.cmsel]; closeCtxMenu(); refresh(); return; }
+    const l = ev.target.closest('[data-cmlayer]');
+    if (l) { if (!sel.length && ids.length) sel = [ids[0]]; closeCtxMenu(); reorderSel(l.dataset.cmlayer); }
+  });
+}
+window.addEventListener('pointerdown', closeCtxMenu);
+window.addEventListener('blur', closeCtxMenu);
 cv.addEventListener('pointerdown', e => {
   cv.setPointerCapture(e.pointerId); setCursor(e);
   const raw = ui.raw, cur = ui.cur;
@@ -1522,6 +1626,9 @@ cv.addEventListener('pointerdown', e => {
     case 'select': {
       const h = e.target.closest('[data-h]');
       if (h) { startHandle(h.dataset.h, raw, e); return; }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && cycleStackAt(e)) { // Ctrl+tık: alttaki nesneyi seç
+        renderProps(); startMove(raw, e); if (ui.drag) ui.drag.clickedId = null; render(); return;
+      }
       const t = pickDataId(e);
       if (t) {
         const id = t.dataset.id;
@@ -2005,7 +2112,7 @@ function renderProps() {
   } else if (k === 'furn') {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
-    h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button><button class="btn sm" data-act="front">${L('⬆ Öne', '⬆ Bring front')}</button>`);
+    h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button>`);
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
     h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: getFloors() });
@@ -2031,6 +2138,7 @@ function renderProps() {
   } else if (k === 'bg') {
     h += `<p class="muted" style="margin:0 0 8px">${L('Görseli tuvalde sürükleyerek taşıyabilir, köşelerinden boyutlandırabilirsiniz (Shift: serbest oran).', 'Drag the image on the canvas to reposition, or drag its corners to resize (Shift: free aspect ratio).')}</p>` + bgFields(true);
   }
+  if (LAYER_ARR[k]) h += `<div class="row layer-row" title="${L('Çakışan nesnelerde çizim sırası (2B ve 3B)', 'Drawing order where objects overlap (2D and 3D)')}"><span class="muted">${L('Katman', 'Layer')}</span><button class="btn sm" data-act="layer" data-dir="front" title="${L('En öne getir', 'Bring to front')} (Ctrl+Shift+])">⤒</button><button class="btn sm" data-act="layer" data-dir="up" title="${L('Bir öne', 'Bring forward')} (Ctrl+])">↑</button><button class="btn sm" data-act="layer" data-dir="down" title="${L('Bir arkaya', 'Send backward')} (Ctrl+[)">↓</button><button class="btn sm" data-act="layer" data-dir="back" title="${L('En arkaya gönder', 'Send to back')} (Ctrl+Shift+[)">⤓</button></div>`;
   const gsAll = os.filter(x => GROUPABLE[x.kind]);
   if (gsAll.length >= 2) h += `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>`;
   if (gsAll.some(x => x.o.grp)) h += `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>`;
@@ -2133,6 +2241,7 @@ $('#props').addEventListener('click', e => {
   if (a === 'bgreset') { if (P.bg) { P.bg.x = 0; P.bg.y = 0; commit(); refresh(); } return; }
   if (a === 'bgremove') { P.bg = null; sel = sel.filter(x => x !== 'bg'); commit(); return refresh(); }
   if (a === 'calib') return setTool('calib');
+  if (a === 'layer') { reorderSel(b.dataset.dir); return; }
   if (a === 'corner') {
     const ws = os.filter(x => x.kind === 'wall');
     if (ws.length !== 2 || !joinCorner(ws[0].o, ws[1].o)) { toast(L('Paralel duvarlar köşe yapamaz', 'Parallel walls cannot form a corner')); return; }
@@ -2195,7 +2304,6 @@ $('#props').addEventListener('click', e => {
         return;
       }
     }
-    if (a === 'front' && kind === 'furn') { f.furn = f.furn.filter(x => x !== o); f.furn.push(o); }
     if (a === 'opflip' && kind === 'op') o.flip = o.flip ? 0 : 1;
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
     if (a === 'redetect' && kind === 'room') { const c = polyCentroid(o.pts); const r = detectRoom(pointInPoly(c, o.pts) ? c : o.pts[0]); if (Array.isArray(r)) o.pts = r; else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
@@ -2607,6 +2715,7 @@ window.addEventListener('keydown', e => {
   const tag = e.target.tagName, typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
   if (typing) { if (e.key === 'Escape') e.target.blur(); return; }
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
+  if (e.key === 'Escape' && document.getElementById('ctxMenu')) { closeCtxMenu(); return; }
   if (ui.view3d) {
     if (e.key === 'Escape') { show3D(false); return; }
     // Editing shortcuts must keep working while the user is looking at the 3D
@@ -2634,6 +2743,7 @@ window.addEventListener('keydown', e => {
   }
   if (e.key === ' ') { ui.space = true; e.preventDefault(); return; }
   if (ctrl) {
+    if (e.code === 'BracketRight' || e.code === 'BracketLeft') { e.preventDefault(); if (sel.length) reorderSel(e.code === 'BracketRight' ? (e.shiftKey ? 'front' : 'up') : (e.shiftKey ? 'back' : 'down')); return; }
     if (k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (k === 'y') { e.preventDefault(); redo(); }
     else if (k === 'c') copySel();
@@ -2734,6 +2844,9 @@ function helpModal() {
     ['B', 'Pen: freehand sketch on the plan (drag to draw, release to finish)'],
     ['E', 'Eraser (click object to delete)'],
     ['X', 'Trim (click the overhanging part of a crossing wall)'],
+    ['Ctrl+click', 'Select the object underneath (repeat to go deeper)'],
+    ['Right-click', 'List the objects under the cursor + layer order'],
+    ['Ctrl+] / Ctrl+[', 'Bring forward / send backward (+Shift: to front / to back)'],
     ['C', 'Calibrate background image scale'],
     ['G', 'Toggle grid & endpoint snap'],
     ['Shift', 'Hold to disable snap • multi-select in Select mode'],
@@ -2773,6 +2886,9 @@ function helpModal() {
     ['B', 'Kalem: plana serbest elle çizim (sürükle, bırak tamamlar)'],
     ['E', 'Sil'],
     ['X', 'Kırp (kesişen duvarın taşan ucuna tıkla)'],
+    ['Ctrl+tık', 'Alttaki nesneyi seç (tekrarla: daha alttaki)'],
+    ['Sağ tık', 'İmlecin altındaki nesneler + katman sırası'],
+    ['Ctrl+] / Ctrl+[', 'Bir öne / bir arkaya (+Shift: en öne / en arkaya)'],
     ['C', 'Arka plan ölçekle'],
     ['G', 'Yakalamayı aç/kapa'],
     ['Shift', 'Basılıyken yakalama kapalı • seçimde çoklu seçim'],
@@ -4439,7 +4555,8 @@ function build3D(keepCam = false) {
       if (!custom) m.userData.slab = true;            // the render may swap it for the light slab (user materials stay)
       S.add(m);
     }
-    f.rooms.forEach(r => {
+    const roomLv = stackLevels(f.rooms, 'room'), furnLv = stackLevels(f.furn, 'furn');
+    f.rooms.forEach((r, ri) => {
       if (!r.pts || r.pts.length < 3) return;
       const shp = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y)));
       const geo = new THREE.ShapeGeometry(shp);
@@ -4452,7 +4569,8 @@ function build3D(keepCam = false) {
       } else {
         m = new THREE.Mesh(geo, mat(r.color, lt ? undefined : 0.78));
       }
-      m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6; m.receiveShadow = true; S.add(m);
+      // çakışan odalar: 2B'deki sıraya göre kademeli yükseklik → titreme yok, üstteki üstte
+      m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6 + roomLv[ri] * 0.5; m.receiveShadow = true; S.add(m);
     });
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
@@ -4551,9 +4669,11 @@ function build3D(keepCam = false) {
       m.position.y = elev + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
       S.add(m);
     }
-    f.furn.forEach(o => {
+    f.furn.forEach((o, fi3) => {
       const ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, elev, o.y); g.rotation.y = ry; g.userData = { furnId: o.id, elev }; S.add(g);
-      furn3D(g, o, furnCtx);
+      // çakışan mobilya (ör. üst üste havuzlar = nehir): katman sırasına göre hafif yükseltilir, aynı yükseklikteki yüzeyler titremez
+      let ig = g; if (furnLv[fi3]) { ig = new THREE.Group(); ig.position.y = furnLv[fi3] * 0.5; g.add(ig); }
+      furn3D(ig, o, furnCtx);
     });
     (f.sketches || []).forEach(sk => {
       if (!sk.pts || sk.pts.length < 2) return;
