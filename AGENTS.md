@@ -191,6 +191,7 @@ Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|b
 - Order: wall-end / room-corner snap (14 px radius, only if `ui.snap` and no `Shift`) → angle snap when a `from` point exists and `ui.angle` → grid snap.
 - Angle step: **15°** (square/dots/none), **30°** for `gridType==='triangle'`. Length rounds to `P.grid` except when `gridType==='none'`.
 - `snapToGrid` is the **only** place that knows about grid geometry. Triangle lattice vertices: rows spaced `g·√3/2`, odd rows offset by `g/2`. Use it for any new placement/move feature instead of `rnd(v, P.grid)`.
+- **Object snap tracking (issue #16):** after end-snap, `snapPt` aligns with reference points from `trackRefs()` (wall ends, room corners, in-progress `ui.polyPts`; excluding `ignore` and `from`). With `from` + angle lock it intersects the angle ray with each reference's vertical/horizontal line and locks the length (overriding grid rounding); otherwise x and y lock independently (both = the crossing of two references). Tolerance `10 / view.z`. The result carries `guides: [{from, axis}]`; `drawPreview()` draws them dashed (only while drawing or dragging a handle). `doHandle` sets `ui.cur` for `wa/wb`, `v<i>` and `da/db` so drags show guides too. `ignore` may hold wall ids **and** point objects (a dragged room vertex skips itself). Guard: `tests/snap-tracking.test.js`.
 - `magnet(f)` snaps a furniture item to the nearest wall face and rotates it so its back (−Y) touches the wall.
 
 ### Grids (`defsSvg`, `gridSvg`)
@@ -321,6 +322,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/render3d.test.js` | the 3D render export: oversampling maths (2–3×, ≤4K/12 MP), the **synchronous** `render()` → `toDataURL()` contract for the quick path, the render-vs-screenshot guarantees (no CAD outlines, studio backdrop, single shadow build, jittered passes) and viewport restore |
 | `tests/wall-joints.test.js` | wall corners closing: miter/bevel maths of `wallJoints()` and that both 2D and 3D draw the fillers |
 | `tests/wall-trim.test.js` | trim tool / split at intersection / join corner geometry and opening re-basing |
+| `tests/snap-tracking.test.js` | object snap tracking: L→U closes exactly with/without angle lock, Shift disables it, guides reach the preview |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |
 | `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed) |

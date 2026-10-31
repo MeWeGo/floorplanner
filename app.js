@@ -863,31 +863,56 @@ function snapToGrid(p) {
   }
   return { x: rnd(p.x, g), y: rnd(p.y, g) };
 }
+// Nokta takibi (issue #16) için referans noktaları: duvar uçları, oda köşeleri, çizilmekte olan oda köşeleri
+function trackRefs(ignore, from) {
+  const f = F(), out = [], skip = q => (ignore && ignore.has(q)) || (from && dist(q, from) < 0.5);
+  for (const w of f.walls) { if (ignore && ignore.has(w.id)) continue; for (const q of [w.a, w.b]) if (!skip(q)) out.push(q); }
+  for (const rm of f.rooms) for (const q of rm.pts) if (!skip(q)) out.push(q);
+  if (ui.polyPts) for (const q of ui.polyPts) if (!skip(q)) out.push(q);
+  return out;
+}
 function snapPt(p, from, e, ignore) {
   if (!ui.snap || (e && e.shiftKey)) return { x: p.x, y: p.y, hit: null };
-  const r = 14 / view.z, f = F(); let best = null, bd = r;
+  const r = 14 / view.z, tol = 10 / view.z, f = F(); let best = null, bd = r;
+  // ignore: duvar kimlikleri (string) ve/veya atlanacak nokta nesneleri; duvar kimliği varsa oda köşeleri uç yakalamaya girmez (eski davranış)
+  const skipRooms = ignore && [...ignore].some(v => typeof v === 'string');
   for (const w of f.walls) {
     if (ignore && ignore.has(w.id)) continue;
     for (const q of [w.a, w.b]) { const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
   }
-  if (!ignore) for (const rm of f.rooms) for (const q of rm.pts) { const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
+  if (!skipRooms) for (const rm of f.rooms) for (const q of rm.pts) { if (ignore && ignore.has(q)) continue; const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
   if (best) return { x: best.x, y: best.y, hit: 'end' };
-  const g = P.grid, gt = P.gridType || 'square';
+  const g = P.grid, gt = P.gridType || 'square', refs = trackRefs(ignore, from);
   if (from && ui.angle) {
     const dx = p.x - from.x, dy = p.y - from.y, l = Math.hypot(dx, dy);
     if (l < 1) return { x: from.x, y: from.y, hit: null };
     const step = gt === 'triangle' ? Math.PI / 6 : Math.PI / 12;
-    const a = Math.round(Math.atan2(dy, dx) / step) * step;
-    const L = gt === 'none' ? l : Math.max(g, rnd(l, g));
-    let q = { x: from.x + Math.cos(a) * L, y: from.y + Math.sin(a) * L };
-    if (Math.abs(Math.cos(a)) < 1e-6) q.x = from.x; if (Math.abs(Math.sin(a)) < 1e-6) q.y = from.y;
-    q.x = Math.round(q.x * 10) / 10; q.y = Math.round(q.y * 10) / 10;
-    for (const w of f.walls) for (const o of [w.a, w.b]) {
-      if (Math.abs(o.x - q.x) < r / 3 && Math.abs(Math.cos(a)) < 0.01) q.x = o.x;
+    const a = Math.round(Math.atan2(dy, dx) / step) * step, ca = Math.cos(a), sa = Math.sin(a);
+    let L = gt === 'none' ? l : Math.max(g, rnd(l, g)), guides = [];
+    // açı ışını üzerinde bir referansın dikey/yatay hizasına denk gelen uzunluk varsa ona kilitlen
+    let bt = null, bdt = tol;
+    for (const o of refs) {
+      if (Math.abs(ca) > 0.01) { const t = (o.x - from.x) / ca; if (t > 1 && Math.abs(t - l) < bdt) { bdt = Math.abs(t - l); bt = { t, o, axis: 'x' }; } }
+      if (Math.abs(sa) > 0.01) { const t = (o.y - from.y) / sa; if (t > 1 && Math.abs(t - l) < bdt) { bdt = Math.abs(t - l); bt = { t, o, axis: 'y' }; } }
     }
-    return { ...q, hit: null };
+    if (bt) { L = bt.t; guides = [{ from: bt.o, axis: bt.axis }]; }
+    let q = { x: from.x + ca * L, y: from.y + sa * L };
+    if (Math.abs(ca) < 1e-6) q.x = from.x; if (Math.abs(sa) < 1e-6) q.y = from.y;
+    if (bt) q[bt.axis] = bt.o[bt.axis];
+    else { q.x = Math.round(q.x * 10) / 10; q.y = Math.round(q.y * 10) / 10; }
+    return { ...q, hit: null, guides };
   }
-  return { ...snapToGrid(p), hit: null };
+  // serbest / ızgara: x ve y ayrı ayrı en yakın referans hizasına kilitlenir (ikisi birden = iki köşenin kesişimi)
+  const q = snapToGrid(p), guides = [];
+  let bx = null, by = null, dxb = tol, dyb = tol;
+  for (const o of refs) {
+    const ddx = Math.abs(p.x - o.x), ddy = Math.abs(p.y - o.y);
+    if (ddx < dxb || (bx && ddx === dxb && Math.abs(p.y - o.y) < Math.abs(p.y - bx.y))) { dxb = ddx; bx = o; }
+    if (ddy < dyb || (by && ddy === dyb && Math.abs(p.x - o.x) < Math.abs(p.x - by.x))) { dyb = ddy; by = o; }
+  }
+  if (bx) { q.x = bx.x; guides.push({ from: bx, axis: 'x' }); }
+  if (by) { q.y = by.y; guides.push({ from: by, axis: 'y' }); }
+  return { ...q, hit: null, guides };
 }
 function wallNear(p, maxD = 40) {
   let best = null;
@@ -1277,6 +1302,14 @@ function drawPreview() {
       const p0 = wallPt(hit.w, pl.lo), p1 = wallPt(hit.w, pl.hi);
       s += `<line x1="${p0.x}" y1="${p0.y}" x2="${p1.x}" y2="${p1.y}" stroke="#ef4444" stroke-opacity=".55" stroke-width="${hit.w.t + 4 / z}" pointer-events="none"/>`;
       for (const q of [p0, p1]) s += `<circle cx="${q.x}" cy="${q.y}" r="${5 / z}" fill="#ef4444" pointer-events="none"/>`;
+    }
+  }
+  if (cur && cur.guides && cur.guides.length && (ui.drag || tool !== 'select')) {
+    // nokta takibi kılavuzları: referans köşeden imlece kesikli çizgi + halka
+    const gc = C.lt ? '#0891b2' : '#22d3ee';
+    for (const gd of cur.guides) {
+      s += `<line x1="${gd.from.x}" y1="${gd.from.y}" x2="${cur.x}" y2="${cur.y}" stroke="${gc}" stroke-width="${1.3 / z}" stroke-dasharray="${5 / z} ${4 / z}" pointer-events="none"/>`;
+      s += `<circle cx="${gd.from.x}" cy="${gd.from.y}" r="${5 / z}" fill="none" stroke="${gc}" stroke-width="${1.6 / z}" pointer-events="none"/>`;
     }
   }
   if (cur && cur.hit === 'end') s += `<circle cx="${cur.x}" cy="${cur.y}" r="${8 / z}" fill="none" stroke="#10b981" stroke-width="${2 / z}"/>`;
@@ -1712,7 +1745,7 @@ function doHandle(raw, e) {
   if (h === 'wa' || h === 'wb') {
     const ek = h === 'wa' ? 'a' : 'b', other = h === 'wa' ? o.b : o.a;
     const ign = new Set([o.id, ...d.conn.map(c => c.w.id)]);
-    const p = snapPt(raw, other, e, ign);
+    const p = snapPt(raw, other, e, ign); ui.cur = p;
     o[ek] = { x: p.x, y: p.y }; for (const c of d.conn) c.w[c.k] = { x: p.x, y: p.y };
     if (Array.isArray(o.angles) && o.angles.length) { const idx = clamp(o.posIdx ?? 0, 0, o.angles.length - 1); o.posIdx = idx; o.angles[idx] = wallDeg(o); }
   } else if (h === 'wrot') {
@@ -1722,7 +1755,7 @@ function doHandle(raw, e) {
     if (ui.snap && !sh) a = rnd(a, step);
     setWallDeg(o, a, true);
   } else if (h[0] === 'v') {
-    const i = +h.slice(1), p = snapPt(raw, null, e); o.pts[i] = { x: p.x, y: p.y };
+    const i = +h.slice(1), p = snapPt(raw, null, e, new Set([o.pts[i]])); o.pts[i] = { x: p.x, y: p.y }; ui.cur = p;
   } else if (h.startsWith('re')) {
     const i = +h.slice(2), n = d.orig.pts.length, j = (i + 1) % n;
     const p1 = d.orig.pts[i], p2 = d.orig.pts[j], L = dist(p1, p2) || 1;
@@ -1775,7 +1808,7 @@ function doHandle(raw, e) {
       } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
       else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
     }
-  } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; }
+  } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; ui.cur = p; }
   else if (h === 'doff') {
     const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, mx = (o.a.x + o.b.x) / 2, my = (o.a.y + o.b.y) / 2;
     o.off = rnd((raw.x - mx) * nx + (raw.y - my) * ny, ui.snap && !sh ? 5 : 1);

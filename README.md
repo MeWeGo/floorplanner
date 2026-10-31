@@ -72,6 +72,7 @@
 ### 🏢 Project Tools
 - **Multiple floors** — add, duplicate, rename, delete; the floor below is shown faintly for alignment.
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
+- Object snap tracking: while drawing walls / rooms / dimensions or dragging wall ends and room corners, the cursor aligns with existing corners horizontally and vertically and shows a dashed guide (Shift or Snap off disables it).
 - Layer visibility toggles, floor patterns (wood, tile, carpet, marble, concrete, stone), room colors.
 - Wall paint: pick a colour or a preset swatch for one or many selected walls (2D paint strips, full colour in 3D).
 - Floor slab material per floor (project panel): areas without a room — balconies, hallways, terraces — get a finish in 3D too.
