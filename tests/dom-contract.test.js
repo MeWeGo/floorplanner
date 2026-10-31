@@ -50,7 +50,7 @@ test('regression: runtime-created ids are not false positives', () => {
 });
 
 test('the AI and 3D toolbars are wired end to end', () => {
-  for (const id of ['bAi', 'bHelp', 'b3d', 'b2d', 'bPng', 'b3dFit', 'b3dTop', 'b3dEye', 'b3dShot']) {
+  for (const id of ['bAi', 'bHelp', 'b3d', 'b2d', 'bPng', 'b3dFit', 'b3dTop', 'b3dEye', 'b3dShot', 'ptabs']) {
     assert.ok(html.includes(`id="${id}"`), `index.html is missing #${id}`);
   }
   for (const fn of ['aiModal', 'helpModal', 'show3D', 'export3DRender', 'render3DDataUrl']) {

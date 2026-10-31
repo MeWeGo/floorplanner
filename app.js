@@ -90,8 +90,10 @@ const OPENINGS = [
   { id: 'wsmall', name: 'Küçük Pencere', en: 'Small Window', w: 60, h: 60, sill: 130, icon: '🪟' },
 ];
 const OPDEF = Object.fromEntries(OPENINGS.map(o => [o.id, o]));
-const FLOORS = { none: 'Düz renk', wood: 'Parke', tile: 'Fayans', carpet: 'Halı' };
-const FLOORS_EN = { none: 'Solid color', wood: 'Wood parquet', tile: 'Tile', carpet: 'Carpet' };
+const FLOORS = { none: 'Düz renk', wood: 'Parke', tile: 'Fayans', carpet: 'Halı', marble: 'Mermer', concrete: 'Beton şap', stone: 'Dış mekan taşı' };
+const FLOORS_EN = { none: 'Solid color', wood: 'Wood parquet', tile: 'Tile', carpet: 'Carpet', marble: 'Marble', concrete: 'Polished concrete', stone: 'Outdoor stone' };
+// Duvar boyası paleti (issue #12): [hex, TR, EN]
+const PAINTS = [['#ffffff', 'Beyaz', 'White'], ['#f5f1e8', 'Kırık beyaz', 'Off-white'], ['#d6d3d1', 'Açık gri', 'Light grey'], ['#e7d8bf', 'Bej', 'Beige'], ['#b7c4a8', 'Adaçayı', 'Sage'], ['#9fb7c9', 'Gök mavisi', 'Sky blue'], ['#2f4058', 'Gece mavisi', 'Midnight blue'], ['#c8826b', 'Kiremit', 'Terracotta']];
 const getFloors = () => (lang === 'en' ? FLOORS_EN : FLOORS);
 const ROOMCOL = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#e9d5ff', '#fed7aa', '#a5f3fc', '#fbcfe8'];
 
@@ -103,7 +105,7 @@ let tool = 'select', sel = [], placing = null;
 const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true };
 
-const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [] });
+const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null });
 const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
 const F = () => P.floors[fi];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', dims: 'dim', texts: 'text', sketches: 'sketch' };
@@ -159,6 +161,52 @@ function cycleWallPos(w) {
   w.posIdx = ((w.posIdx ?? 0) + 1) % w.angles.length;
   setWallDeg(w, w.angles[w.posIdx], false);
   return true;
+}
+// Duvar birleşimleri (issue #14): uçları çakışan duvarlar için köşe dolgusu poligonu.
+// Duvar gövdeleri birleşim noktasında düz (butt) biter; bu poligon dış köşeyi miter
+// noktasına kadar doldurur (çok dar açılarda pah kırar). 2B ve 3B aynı veriyi kullanır.
+function convexHull(pts) {
+  const p = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  if (p.length < 3) return p;
+  const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x), lo = [], up = [];
+  for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+function wallJoints(f, tol = 1) {
+  const ends = [];
+  for (const w of f.walls) {
+    const L = wLen(w); if (L < 0.5) continue;
+    const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L;
+    ends.push({ w, p: w.a, d: { x: ux, y: uy } }, { w, p: w.b, d: { x: -ux, y: -uy } }); // d: birleşimden duvarın içine
+  }
+  const used = new Set(), out = [];
+  for (let i = 0; i < ends.length; i++) {
+    if (used.has(i)) continue;
+    const grp = [ends[i]]; used.add(i);
+    for (let j = i + 1; j < ends.length; j++) if (!used.has(j) && dist(ends[i].p, ends[j].p) <= tol) { grp.push(ends[j]); used.add(j); }
+    if (grp.length < 2) continue;
+    const O = ends[i].p, maxT = Math.max(...grp.map(e => e.w.t));
+    grp.forEach(e => e.ang = Math.atan2(e.d.y, e.d.x));
+    grp.sort((a, b) => a.ang - b.ang);
+    const pts = [];
+    for (const e of grp) { const n = { x: -e.d.y, y: e.d.x }, h = e.w.t / 2; pts.push({ x: O.x + n.x * h, y: O.y + n.y * h }, { x: O.x - n.x * h, y: O.y - n.y * h }); }
+    for (let k = 0; k < grp.length; k++) {
+      const e1 = grp[k], e2 = grp[(k + 1) % grp.length]; if (e1 === e2) continue;
+      // e1'in +n kenarı ile e2'nin -n kenarının kesişimi = aralarındaki köşe (miter) noktası
+      const n1 = { x: -e1.d.y, y: e1.d.x }, n2 = { x: -e2.d.y, y: e2.d.x };
+      const p1 = { x: O.x + n1.x * e1.w.t / 2, y: O.y + n1.y * e1.w.t / 2 }, p2 = { x: O.x - n2.x * e2.w.t / 2, y: O.y - n2.y * e2.w.t / 2 };
+      const den = e1.d.x * e2.d.y - e1.d.y * e2.d.x; if (Math.abs(den) < 1e-6) continue; // aynı doğrultu
+      const s = ((p2.x - p1.x) * e2.d.y - (p2.y - p1.y) * e2.d.x) / den;
+      const M = { x: p1.x + e1.d.x * s, y: p1.y + e1.d.y * s };
+      if (dist(M, O) > maxT * 2.5) continue;          // çok dar açı: miter yerine pah
+      const s1 = (M.x - O.x) * e1.d.x + (M.y - O.y) * e1.d.y, s2 = (M.x - O.x) * e2.d.x + (M.y - O.y) * e2.d.y;
+      if (s1 < -0.01 || s2 < -0.01) pts.push(M);      // yalnızca duvar ucunun DIŞINA taşan köşeler
+    }
+    const poly = convexHull(pts);
+    if (poly.length >= 3 && polyArea(poly) > 0.5) out.push({ x: O.x, y: O.y, poly, walls: grp.map(e => e.w) });
+  }
+  return out;
 }
 function polyArea(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; s += p.x * q.y - q.x * p.y; } return Math.abs(s) / 2; }
 function polyCentroid(pts) {
@@ -317,7 +365,7 @@ function commit() {
 function autosave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
-    try { await dbPut('state', JSON.parse(JSON.stringify(P)), 'auto'); }
+    try { await dbPut('state', JSON.parse(JSON.stringify(P)), 'auto'); await dbPut('state', tabsState(), 'tabs'); }
     catch (e) {
       try { localStorage.setItem('fp_auto', JSON.stringify(P)); }
       catch (e2) { toast(L('Otomatik kayıt başarısız', 'Autosave failed')); }
@@ -349,18 +397,104 @@ function restore(s) {
 function undo() { if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
 function redo() { if (hi < hist.length - 1) { hi++; restore(hist[hi]); autosave(); updateUndo(); } }
 function updateUndo() { $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = hi >= hist.length - 1; }
-function loadProject(obj, msg) {
-  P = obj; if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
+function normalizeProject(P) {
+  if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
   if (P.bg) P.bg.id = 'bg';
-  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid'; });
+  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid'; });
+  return P;
+}
+function loadProject(obj, msg) {
+  P = normalizeProject(obj);
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
   $('#pname').value = P.name; syncGridUI();
-  setTool('select'); fit(); refresh(); updateUndo(); autosave();
+  setTool('select'); fit(); syncTab(); refresh(); updateUndo(); autosave();
   if (msg) toast(msg);
 }
+/* ---------- Proje sekmeleri (issue #17) ----------
+   Açık projeler sekmelerde durur; her sekme kendi P / geri-al geçmişi / kat / görünüm
+   / seçimini taşır. Etkin sekmenin durumu her zamanki gibi global değişkenlerdedir;
+   geçişte stashTab() globalleri sekmeye yazar, sekmeden geri yükler. Pano (ui.clip)
+   globaldir, bu yüzden projeler arası kopyala-yapıştır kendiliğinden çalışır. */
+let tabs = [], tabIdx = 0;
+const tabSnapshot = () => ({ P, hist, hi, fi, view: { ...view }, sel: sel.slice() });
+function syncTab() {
+  if (!tabs[tabIdx]) tabs[tabIdx] = { id: uid() };
+  Object.assign(tabs[tabIdx], tabSnapshot());
+  renderTabs();
+}
+function isPristine(p) {
+  return !p || (!p.bg && (p.floors || []).every(f => ['walls', 'furn', 'rooms', 'dims', 'texts', 'sketches'].every(k => !(f[k] || []).length)));
+}
+// Bir proje açılmadan önce çağrılır: mevcut sekmede iş varsa yanına yeni boş sekme açar
+function newTabSlot() {
+  if (!P || isPristine(P)) return;
+  syncTab(); tabs.splice(tabIdx + 1, 0, { id: uid() }); tabIdx++;
+}
+function activateTab(i) {
+  const t = tabs[i]; if (!t || !t.P) return;
+  tabIdx = i; P = normalizeProject(t.P);
+  hist = t.hist && t.hist.length ? t.hist : [JSON.stringify(P)]; hi = clamp(t.hi ?? hist.length - 1, 0, hist.length - 1);
+  fi = clamp(t.fi || 0, 0, P.floors.length - 1);
+  ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null; placing = null;
+  sel = (t.sel || []).filter(id => find(id));
+  $('#pname').value = P.name; syncGridUI();
+  if (t.view) Object.assign(view, t.view); else fit();
+  if (tool === 'place') setTool('select');
+  refresh(); updateUndo(); renderTabs(); autosave();
+  if (ui.view3d && T3) schedBuild3D();
+}
+function switchTab(i) {
+  if (i === tabIdx || !tabs[i]) return;
+  syncTab(); activateTab(i);
+}
+async function savedCopyMatches(p) {
+  try { const it = await dbGet('projects', p.name); return !!it && JSON.stringify(it.project) === JSON.stringify(p); } catch (e) { return false; }
+}
+async function closeTab(i) {
+  if (!tabs[i]) return;
+  if (i === tabIdx) syncTab();
+  const p = tabs[i].P;
+  if (!isPristine(p) && !(await savedCopyMatches(p))
+    && !confirm(L(`“${p.name}” kaydedilmemiş. Sekme kapatılırsa değişiklikler kaybolur. Kapatılsın mı?`, `“${p.name}” is not saved. Closing the tab discards its changes. Close it?`))) return;
+  if (tabs.length === 1) { tabs = []; tabIdx = 0; loadProject(newProject()); return; }
+  tabs.splice(i, 1);
+  if (i === tabIdx) activateTab(Math.min(i, tabs.length - 1));
+  else { if (i < tabIdx) tabIdx--; renderTabs(); autosave(); }
+}
+// IndexedDB 'state'/'tabs': yalnızca projeler kalıcıdır (geçmiş değil); etkin proje 'auto' anahtarında
+function tabsState() {
+  return { active: tabIdx, tabs: tabs.length > 1 ? tabs.map((t, i) => ({ id: t.id, P: JSON.parse(JSON.stringify(i === tabIdx ? P : t.P)) })) : [] };
+}
+function restoreTabs(st) {
+  if (!st || !Array.isArray(st.tabs) || st.tabs.length < 2) return;
+  const act = clamp(st.active | 0, 0, st.tabs.length - 1), live = tabSnapshot();
+  tabs = st.tabs.filter(t => t && t.P && t.P.floors).map(t => ({ id: t.id || uid(), P: normalizeProject(t.P), hist: [JSON.stringify(t.P)], hi: 0, fi: 0, view: null, sel: [] }));
+  if (!tabs.length) { tabs = [{ id: uid(), ...live }]; tabIdx = 0; renderTabs(); return; }
+  tabIdx = Math.min(act, tabs.length - 1);
+  Object.assign(tabs[tabIdx], live);   // etkin sekmenin otoritesi 'auto' (ve AI köprüsü) kaydıdır
+  renderTabs();
+}
+function renderTabs() {
+  const el = $('#ptabs'); if (!el) return;
+  el.innerHTML = tabs.map((t, i) => {
+    const nm = (i === tabIdx ? P && P.name : t.P && t.P.name) || L('Yeni Proje', 'New Project');
+    return `<div class="ptab${i === tabIdx ? ' on' : ''}" data-tab="${i}" title="${esc(nm)} — ${L('çift tık: yeniden adlandır', 'double-click: rename')}"><span class="ptn">📐 ${esc(nm)}</span><button class="ptx" data-tabclose="${i}" title="${L('Projeyi kapat', 'Close project')}">×</button></div>`;
+  }).join('') + `<button class="ptab-add" data-tabnew title="${L('Yeni proje sekmesi', 'New project tab')}">＋</button>`;
+}
+$('#ptabs').addEventListener('click', e => {
+  const c = e.target.closest('[data-tabclose]'); if (c) { e.stopPropagation(); closeTab(+c.dataset.tabclose); return; }
+  if (e.target.closest('[data-tabnew]')) { templatesModal(); return; }
+  const t = e.target.closest('[data-tab]'); if (t) switchTab(+t.dataset.tab);
+});
+$('#ptabs').addEventListener('dblclick', e => {
+  const t = e.target.closest('[data-tab]'); if (!t || e.target.closest('[data-tabclose]')) return;
+  if (+t.dataset.tab !== tabIdx) switchTab(+t.dataset.tab);
+  const nm = prompt(L('Proje adı:', 'Project name:'), P.name);
+  if (nm && nm.trim()) { P.name = nm.trim(); $('#pname').value = P.name; commit(); renderTabs(); }
+});
 let toastT;
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600); }
 
@@ -397,13 +531,13 @@ function pal(forceLight = ui.exporting) {
     gMin: forceLight ? '#cbd5e1' : '#dcd6ca', gMaj: forceLight ? '#94a3b8' : '#b8b0a0', dotMaj: '#64748b',
     text: '#151921', sub: '#475569', halo: paper, accent: '#1d4ed8',
     dim: '#0f766e', glass: '#e0f2fe', swing: '#8696ab',
-    roomOp: 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280'
+    roomOp: 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280', marble: '#64748b', concrete: '#57534e', stone: '#78716c'
   } : {
     lt: false, bg: '#0b0f14', wall: '#d5dee8', stroke: '#94a3b8', furnStroke: '#161e29',
     gMin: '#161f2c', gMaj: '#243244', dotMaj: '#475569',
     text: '#e6edf5', sub: '#b8c5d6', halo: '#0b0f14', accent: '#d99b26',
     dim: '#2dd4bf', glass: '#0369a1', swing: '#64748b',
-    roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af'
+    roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af', marble: '#cbd5e1', concrete: '#a8a29e', stone: '#a8a29e'
   };
 }
 function defsSvg() {
@@ -414,6 +548,9 @@ function defsSvg() {
   <pattern id="p-wood" width="120" height="24" patternUnits="userSpaceOnUse"><path d="M0 0H120M0 12H120M40 0V12M90 12V24" stroke="${C.wood}" stroke-opacity=".3" fill="none" stroke-width="1"/></pattern>
   <pattern id="p-tile" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M0 0H60V60" stroke="${C.tile}" stroke-opacity=".32" fill="none" stroke-width="1"/></pattern>
   <pattern id="p-carpet" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r="1.1" fill="${C.carpet}" fill-opacity=".38"/><circle cx="7.5" cy="7.5" r="1.1" fill="${C.carpet}" fill-opacity=".38"/></pattern>
+  <pattern id="p-marble" width="120" height="120" patternUnits="userSpaceOnUse"><path d="M0 0H120V120" stroke="${C.marble}" stroke-opacity=".3" fill="none" stroke-width="1"/><path d="M8 30C30 22 38 52 64 44S96 70 116 62M20 96C40 84 58 104 84 92" stroke="${C.marble}" stroke-opacity=".28" fill="none" stroke-width="1.2"/></pattern>
+  <pattern id="p-concrete" width="40" height="40" patternUnits="userSpaceOnUse"><circle cx="6" cy="9" r="1" fill="${C.concrete}" fill-opacity=".35"/><circle cx="27" cy="5" r=".8" fill="${C.concrete}" fill-opacity=".3"/><circle cx="18" cy="24" r="1.1" fill="${C.concrete}" fill-opacity=".3"/><circle cx="34" cy="31" r=".9" fill="${C.concrete}" fill-opacity=".35"/><circle cx="9" cy="35" r=".7" fill="${C.concrete}" fill-opacity=".3"/></pattern>
+  <pattern id="p-stone" width="80" height="80" patternUnits="userSpaceOnUse"><path d="M0 0H80M0 40H80M0 0V40M50 0V40M25 40V80M70 40V80" stroke="${C.stone}" stroke-opacity=".4" fill="none" stroke-width="2"/></pattern>
   <pattern id="g-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><path d="M${s} 0V${s}H0" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
   <pattern id="g-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><path d="M${ms} 0V${ms}H0" fill="none" stroke="${C.gMaj}" stroke-width="${swMaj}" stroke-opacity=".85"/></pattern>
   <pattern id="g-tri-minor" width="${s}" height="${h2}" patternUnits="userSpaceOnUse"><path d="M0 0H${s}M0 ${h}H${s}M0 0L${s / 2} ${h}L0 ${h2}M${s / 2} 0L${s} ${h}L${s / 2} ${h2}M${s / 2} 0L0 ${h}L${s / 2} ${h2}M${s} 0L${s / 2} ${h}L${s} ${h2}" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
@@ -519,15 +656,16 @@ function wallSvg(w, live) {
     // cam cephe: kenar çizgileri + cam dolgu + dikme işaretleri (~120 cm modül)
     const Lc = wLen(w) || 1, ux = (w.b.x - w.a.x) / Lc, uy = (w.b.y - w.a.y) / Lc, nx = -uy, ny = ux;
     const sw = Math.max(1.1, w.t * 0.12);
-    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
-    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.glass}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="square" pointer-events="none"/>`;
+    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
+    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.glass}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="butt" pointer-events="none"/>`;
     const nTick = Math.max(1, Math.round(Lc / 120));
     for (let i = 1; i < nTick; i++) {
       const px = w.a.x + ux * (Lc * i / nTick), py = w.a.y + uy * (Lc * i / nTick), hw2 = w.t / 2 - sw * 0.5;
       s += `<line x1="${px - nx * hw2}" y1="${py - ny * hw2}" x2="${px + nx * hw2}" y2="${py + ny * hw2}" stroke="${C.wall}" stroke-width="${sw}" pointer-events="none"/>`;
     }
   } else {
-    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
+    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
+    if (w.color) s += wallPaintSvg(w);
   }
   if (hasPos) {
     const pv = w[wallPivot(w)], curIdx = clamp(w.posIdx ?? 0, 0, w.angles.length - 1);
@@ -540,6 +678,20 @@ function wallSvg(w, live) {
   }
   if (live) s += `<line data-id="${w.id}" x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="transparent" stroke-width="${Math.max(w.t, 12 / view.z)}" pointer-events="stroke" style="cursor:pointer"/>`;
   return s;
+}
+// Duvar boyası 2B: koyu duvar dolgusu korunur, iki yüzeyde ince boya şeridi (dışa aktarımda da okunur)
+function wallPaintSvg(w) {
+  const L = wLen(w); if (L < 1) return '';
+  const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, nx = -uy, ny = ux;
+  const sw = clamp(w.t * 0.22, 1.5, 5), o = w.t / 2 - sw / 2;
+  let s = '';
+  for (const sg of [-1, 1]) s += `<line x1="${w.a.x + nx * o * sg}" y1="${w.a.y + ny * o * sg}" x2="${w.b.x + nx * o * sg}" y2="${w.b.y + ny * o * sg}" stroke="${w.color}" stroke-width="${sw}" pointer-events="none"/>`;
+  return s;
+}
+// Köşe birleşim dolguları (issue #14): duvar gövdeleriyle aynı renk, boşluk/çentik kalmaz
+function jointsSvg(f) {
+  const C = pal();
+  return wallJoints(f).map(j => `<polygon points="${j.poly.map(p => p.x + ',' + p.y).join(' ')}" fill="${C.wall}" pointer-events="none"/>`).join('');
 }
 function wallDimSvg(w) {
   const L = wLen(w); if (L < 30) return '';
@@ -690,7 +842,7 @@ function layerStrings(f, live) {
   return {
     rooms: f.rooms.map(r => roomSvg(r, live)[0]).join(''),
     roomLabels: f.rooms.map(r => roomSvg(r, live)[1]).join('') + groupVarsSvg(f, live),
-    walls: f.walls.map(w => wallSvg(w, live)).join('') + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
+    walls: f.walls.map(w => wallSvg(w, live)).join('') + jointsSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
     ops: f.ops.map(o => opSvg(o, live)).join(''),
     furn: f.furn.map(x => furnSvg(x, live)).join(''),
     dims: f.dims.map(d => dimSvg(d, live)).join(''),
@@ -797,31 +949,56 @@ function snapToGrid(p) {
   }
   return { x: rnd(p.x, g), y: rnd(p.y, g) };
 }
+// Nokta takibi (issue #16) için referans noktaları: duvar uçları, oda köşeleri, çizilmekte olan oda köşeleri
+function trackRefs(ignore, from) {
+  const f = F(), out = [], skip = q => (ignore && ignore.has(q)) || (from && dist(q, from) < 0.5);
+  for (const w of f.walls) { if (ignore && ignore.has(w.id)) continue; for (const q of [w.a, w.b]) if (!skip(q)) out.push(q); }
+  for (const rm of f.rooms) for (const q of rm.pts) if (!skip(q)) out.push(q);
+  if (ui.polyPts) for (const q of ui.polyPts) if (!skip(q)) out.push(q);
+  return out;
+}
 function snapPt(p, from, e, ignore) {
   if (!ui.snap || (e && e.shiftKey)) return { x: p.x, y: p.y, hit: null };
-  const r = 14 / view.z, f = F(); let best = null, bd = r;
+  const r = 14 / view.z, tol = 10 / view.z, f = F(); let best = null, bd = r;
+  // ignore: duvar kimlikleri (string) ve/veya atlanacak nokta nesneleri; duvar kimliği varsa oda köşeleri uç yakalamaya girmez (eski davranış)
+  const skipRooms = ignore && [...ignore].some(v => typeof v === 'string');
   for (const w of f.walls) {
     if (ignore && ignore.has(w.id)) continue;
     for (const q of [w.a, w.b]) { const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
   }
-  if (!ignore) for (const rm of f.rooms) for (const q of rm.pts) { const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
+  if (!skipRooms) for (const rm of f.rooms) for (const q of rm.pts) { if (ignore && ignore.has(q)) continue; const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
   if (best) return { x: best.x, y: best.y, hit: 'end' };
-  const g = P.grid, gt = P.gridType || 'square';
+  const g = P.grid, gt = P.gridType || 'square', refs = trackRefs(ignore, from);
   if (from && ui.angle) {
     const dx = p.x - from.x, dy = p.y - from.y, l = Math.hypot(dx, dy);
     if (l < 1) return { x: from.x, y: from.y, hit: null };
     const step = gt === 'triangle' ? Math.PI / 6 : Math.PI / 12;
-    const a = Math.round(Math.atan2(dy, dx) / step) * step;
-    const L = gt === 'none' ? l : Math.max(g, rnd(l, g));
-    let q = { x: from.x + Math.cos(a) * L, y: from.y + Math.sin(a) * L };
-    if (Math.abs(Math.cos(a)) < 1e-6) q.x = from.x; if (Math.abs(Math.sin(a)) < 1e-6) q.y = from.y;
-    q.x = Math.round(q.x * 10) / 10; q.y = Math.round(q.y * 10) / 10;
-    for (const w of f.walls) for (const o of [w.a, w.b]) {
-      if (Math.abs(o.x - q.x) < r / 3 && Math.abs(Math.cos(a)) < 0.01) q.x = o.x;
+    const a = Math.round(Math.atan2(dy, dx) / step) * step, ca = Math.cos(a), sa = Math.sin(a);
+    let L = gt === 'none' ? l : Math.max(g, rnd(l, g)), guides = [];
+    // açı ışını üzerinde bir referansın dikey/yatay hizasına denk gelen uzunluk varsa ona kilitlen
+    let bt = null, bdt = tol;
+    for (const o of refs) {
+      if (Math.abs(ca) > 0.01) { const t = (o.x - from.x) / ca; if (t > 1 && Math.abs(t - l) < bdt) { bdt = Math.abs(t - l); bt = { t, o, axis: 'x' }; } }
+      if (Math.abs(sa) > 0.01) { const t = (o.y - from.y) / sa; if (t > 1 && Math.abs(t - l) < bdt) { bdt = Math.abs(t - l); bt = { t, o, axis: 'y' }; } }
     }
-    return { ...q, hit: null };
+    if (bt) { L = bt.t; guides = [{ from: bt.o, axis: bt.axis }]; }
+    let q = { x: from.x + ca * L, y: from.y + sa * L };
+    if (Math.abs(ca) < 1e-6) q.x = from.x; if (Math.abs(sa) < 1e-6) q.y = from.y;
+    if (bt) q[bt.axis] = bt.o[bt.axis];
+    else { q.x = Math.round(q.x * 10) / 10; q.y = Math.round(q.y * 10) / 10; }
+    return { ...q, hit: null, guides };
   }
-  return { ...snapToGrid(p), hit: null };
+  // serbest / ızgara: x ve y ayrı ayrı en yakın referans hizasına kilitlenir (ikisi birden = iki köşenin kesişimi)
+  const q = snapToGrid(p), guides = [];
+  let bx = null, by = null, dxb = tol, dyb = tol;
+  for (const o of refs) {
+    const ddx = Math.abs(p.x - o.x), ddy = Math.abs(p.y - o.y);
+    if (ddx < dxb || (bx && ddx === dxb && Math.abs(p.y - o.y) < Math.abs(p.y - bx.y))) { dxb = ddx; bx = o; }
+    if (ddy < dyb || (by && ddy === dyb && Math.abs(p.x - o.x) < Math.abs(p.x - by.x))) { dyb = ddy; by = o; }
+  }
+  if (bx) { q.x = bx.x; guides.push({ from: bx, axis: 'x' }); }
+  if (by) { q.y = by.y; guides.push({ from: by, axis: 'y' }); }
+  return { ...q, hit: null, guides };
 }
 function wallNear(p, maxD = 40) {
   let best = null;
@@ -871,6 +1048,78 @@ function deleteIds(ids) {
   sel = sel.filter(id => !s.has(id));
 }
 function deleteSel() { if (!sel.length) return; deleteIds(sel); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+
+/* ---------- Duvar kırpma / bölme (issue #15) ---------- */
+// İki doğru parçasının kesişimi: t (p1→p2), u (p3→p4) parametreleriyle; paralelse null
+function segIntersect(p1, p2, p3, p4, eps = 1e-6) {
+  const d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
+  if (Math.abs(d) < 1e-9) return null;
+  const t = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
+  const u = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
+  if (t < -eps || t > 1 + eps || u < -eps || u > 1 + eps) return null;
+  return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y), t, u };
+}
+// Duvarın diğer duvar eksenleriyle kesiştiği noktalar: a ucundan uzaklık (cm), uçlar hariç, sıralı
+function wallCuts(w, f = F()) {
+  const L = wLen(w), out = [];
+  for (const o of f.walls) {
+    if (o === w) continue;
+    const x = segIntersect(w.a, w.b, o.a, o.b); if (!x) continue;
+    const s = x.t * L; if (s > 1 && s < L - 1 && !out.some(v => Math.abs(v - s) < 1)) out.push(s);
+  }
+  return out.sort((p, q) => p - q);
+}
+const wallPt = (w, s) => { const L = wLen(w) || 1; return { x: w.a.x + (w.b.x - w.a.x) * s / L, y: w.a.y + (w.b.y - w.a.y) * s / L }; };
+// Duvarı a ucundan s cm'de ikiye böler; s'nin ötesindeki açıklıklar yeni parçaya geçer
+function splitWallAt(w, s, f = F()) {
+  const m = wallPt(w, s), nw = mkWall(m, w.b);
+  for (const k of ['t', 'h', 'wt', 'color']) if (w[k] != null) nw[k] = w[k];
+  w.b = m; f.walls.push(nw);
+  f.ops.forEach(op => { if (op.wall === w.id && op.d > s) { op.wall = nw.id; op.d -= s; } });
+  return nw;
+}
+// Tıklanan noktanın iki yanındaki en yakın kesişimler arasındaki parça (kırpılacak kısım)
+function trimPlan(w, c, f = F()) {
+  const L = wLen(w), sc = segProj(c, w.a, w.b).t * L, cuts = wallCuts(w, f);
+  if (!cuts.length) return null;
+  let lo = null, hi = null;
+  for (const s of cuts) { if (s < sc) lo = s; else if (hi == null) hi = s; }
+  return { lo: lo ?? 0, hi: hi ?? L, L };
+}
+function trimWall(w, c, f = F()) {
+  const pl = trimPlan(w, c, f); if (!pl) return false;
+  const { lo, hi, L } = pl, drop = [];
+  const onW = () => f.ops.filter(op => op.wall === w.id);
+  if (lo <= 0) {            // a tarafı kırpılır
+    onW().forEach(op => { if (op.d < hi) drop.push(op.id); else op.d -= hi; });
+    w.a = wallPt(w, hi);
+  } else if (hi >= L) {     // b tarafı kırpılır
+    onW().forEach(op => { if (op.d > lo) drop.push(op.id); });
+    w.b = wallPt(w, lo);
+  } else {                  // iki kesişim arası: orta parça çıkar, duvar ikiye ayrılır
+    splitWallAt(w, hi, f);
+    onW().forEach(op => { if (op.d > lo) drop.push(op.id); });
+    w.b = wallPt(w, lo);
+  }
+  if (drop.length) deleteIds(drop);
+  return true;
+}
+// İki duvarı eksenlerinin kesişiminde L köşe olarak birleştirir: her duvarın kesişime yakın ucu oraya taşınır (kırpar ya da uzatır)
+function joinCorner(w1, w2, f = F()) {
+  const d = (w1.b.x - w1.a.x) * (w2.b.y - w2.a.y) - (w1.b.y - w1.a.y) * (w2.b.x - w2.a.x);
+  if (Math.abs(d) < 1e-9) return false;
+  const t = ((w2.a.x - w1.a.x) * (w2.b.y - w2.a.y) - (w2.a.y - w1.a.y) * (w2.b.x - w2.a.x)) / d;
+  const X = { x: w1.a.x + t * (w1.b.x - w1.a.x), y: w1.a.y + t * (w1.b.y - w1.a.y) };
+  for (const w of [w1, w2]) {
+    const L = wLen(w) || 1, ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, sX = (X.x - w.a.x) * ux + (X.y - w.a.y) * uy;
+    const ops = f.ops.filter(op => op.wall === w.id), drop = [];
+    if (dist(w.a, X) <= dist(w.b, X)) { w.a = { x: X.x, y: X.y }; ops.forEach(op => { op.d -= sX; }); }
+    else w.b = { x: X.x, y: X.y };
+    const nL = wLen(w); ops.forEach(op => { if (op.d - op.w / 2 < -1 || op.d + op.w / 2 > nL + 1) drop.push(op.id); });
+    if (drop.length) deleteIds(drop);
+  }
+  return true;
+}
 
 /* ---------- Oda algılama (raster flood-fill) ---------- */
 function detectRoom(p) {
@@ -1046,7 +1295,7 @@ const TOOLS = [
   ['select', '↖', 'Seç', 'V', 'Select'], ['pan', '✋', 'Kaydır', 'H', 'Pan'], null,
   ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
   ['door', '🚪', 'Kapı', 'D', 'Door'], ['window', '🪟', 'Pencere', 'N', 'Window'], ['furn', '🛋️', 'Mobilya', 'F', 'Furniture'], null,
-  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
+  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
 const HINTS = {
   select: 'Seç: tıkla / kutu çiz • Shift: çoklu seçim • sürükle: taşı • Del: sil',
@@ -1061,6 +1310,7 @@ const HINTS = {
   dim: 'Ölçü: iki noktaya tıkla',
   text: 'Metin eklemek için tıkla',
   eraser: 'Silmek istediğin nesneye tıkla',
+  trim: 'Kırp: kesişen duvarın taşan ucuna tıkla → kesişime kadar kırpılır (iki kesişim arasındaki parça da çıkarılabilir) • kırmızı = silinecek kısım',
   calib: 'Ölçek: arka plan görselinde bilinen iki noktaya tıkla, gerçek mesafeyi gir',
 };
 const HINTS_EN = {
@@ -1076,6 +1326,7 @@ const HINTS_EN = {
   dim: 'Dimension: click two points',
   text: 'Click to place a text label',
   eraser: 'Click any object to delete it',
+  trim: 'Trim: click the overhanging part of a crossing wall → it is cut back to the intersection (a piece between two crossings can be removed too) • red = part to remove',
   calib: 'Calibrate: click two points with a known distance on the background image, then enter real distance',
 };
 function buildShapeBar() {
@@ -1131,6 +1382,22 @@ function startPlace(type, def) {
 function drawPreview() {
   const C = pal(), ac = C.accent, g = $('#gPv'), z = view.z, cur = ui.cur; let s = '';
   const lbl = (x, y, t) => `<text x="${x}" y="${y}" font-size="${13 / z}" font-weight="700" fill="${C.text}" stroke="${C.halo}" stroke-width="${3.5 / z}" paint-order="stroke" text-anchor="middle" pointer-events="none">${t}</text>`;
+  if (tool === 'trim' && ui.raw) {
+    const hit = wallNear(ui.raw, Math.max(10 / z, 4)), pl = hit && trimPlan(hit.w, ui.raw);
+    if (pl) {
+      const p0 = wallPt(hit.w, pl.lo), p1 = wallPt(hit.w, pl.hi);
+      s += `<line x1="${p0.x}" y1="${p0.y}" x2="${p1.x}" y2="${p1.y}" stroke="#ef4444" stroke-opacity=".55" stroke-width="${hit.w.t + 4 / z}" pointer-events="none"/>`;
+      for (const q of [p0, p1]) s += `<circle cx="${q.x}" cy="${q.y}" r="${5 / z}" fill="#ef4444" pointer-events="none"/>`;
+    }
+  }
+  if (cur && cur.guides && cur.guides.length && (ui.drag || tool !== 'select')) {
+    // nokta takibi kılavuzları: referans köşeden imlece kesikli çizgi + halka
+    const gc = C.lt ? '#0891b2' : '#22d3ee';
+    for (const gd of cur.guides) {
+      s += `<line x1="${gd.from.x}" y1="${gd.from.y}" x2="${cur.x}" y2="${cur.y}" stroke="${gc}" stroke-width="${1.3 / z}" stroke-dasharray="${5 / z} ${4 / z}" pointer-events="none"/>`;
+      s += `<circle cx="${gd.from.x}" cy="${gd.from.y}" r="${5 / z}" fill="none" stroke="${gc}" stroke-width="${1.6 / z}" pointer-events="none"/>`;
+    }
+  }
   if (cur && cur.hit === 'end') s += `<circle cx="${cur.x}" cy="${cur.y}" r="${8 / z}" fill="none" stroke="#10b981" stroke-width="${2 / z}"/>`;
   if (tool === 'wall' && cur) {
     if (ui.draw) {
@@ -1308,6 +1575,13 @@ cv.addEventListener('pointerdown', e => {
       render(); return;
     }
     case 'text': { const sp = ui.snap ? snapToGrid(raw) : raw; const t = { id: uid(), x: sp.x, y: sp.y, text: L('Metin', 'Text'), size: 24, color: '#1e293b', rot: 0 }; f.texts.push(t); sel = [t.id]; commit(); setTool('select'); refresh(); return; }
+    case 'trim': {
+      const hit = wallNear(raw, Math.max(10 / view.z, 4));
+      if (!hit) return;
+      if (trimWall(hit.w, raw)) { sel = sel.filter(id => find(id)); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+      else toast(L('Bu duvarı kesen başka duvar yok', 'No other wall crosses this one'));
+      return;
+    }
     case 'eraser': {
       const t = pickDataId(e);
       if (t) {
@@ -1557,7 +1831,7 @@ function doHandle(raw, e) {
   if (h === 'wa' || h === 'wb') {
     const ek = h === 'wa' ? 'a' : 'b', other = h === 'wa' ? o.b : o.a;
     const ign = new Set([o.id, ...d.conn.map(c => c.w.id)]);
-    const p = snapPt(raw, other, e, ign);
+    const p = snapPt(raw, other, e, ign); ui.cur = p;
     o[ek] = { x: p.x, y: p.y }; for (const c of d.conn) c.w[c.k] = { x: p.x, y: p.y };
     if (Array.isArray(o.angles) && o.angles.length) { const idx = clamp(o.posIdx ?? 0, 0, o.angles.length - 1); o.posIdx = idx; o.angles[idx] = wallDeg(o); }
   } else if (h === 'wrot') {
@@ -1567,7 +1841,7 @@ function doHandle(raw, e) {
     if (ui.snap && !sh) a = rnd(a, step);
     setWallDeg(o, a, true);
   } else if (h[0] === 'v') {
-    const i = +h.slice(1), p = snapPt(raw, null, e); o.pts[i] = { x: p.x, y: p.y };
+    const i = +h.slice(1), p = snapPt(raw, null, e, new Set([o.pts[i]])); o.pts[i] = { x: p.x, y: p.y }; ui.cur = p;
   } else if (h.startsWith('re')) {
     const i = +h.slice(2), n = d.orig.pts.length, j = (i + 1) % n;
     const p1 = d.orig.pts[i], p2 = d.orig.pts[j], L = dist(p1, p2) || 1;
@@ -1620,7 +1894,7 @@ function doHandle(raw, e) {
       } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
       else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
     }
-  } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; }
+  } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; ui.cur = p; }
   else if (h === 'doff') {
     const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, mx = (o.a.x + o.b.x) / 2, my = (o.a.y + o.b.y) / 2;
     o.off = rnd((raw.x - mx) * nx + (raw.y - my) * ny, ui.snap && !sh ? 5 : 1);
@@ -1683,6 +1957,8 @@ function renderProps() {
     if (n === 1) h += fld(L('Uzunluk (cm)', 'Length (cm)'), 'wall', 'len', wLen(o), { step: 1, min: 1 });
     h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 });
     h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall') } });
+    h += fld(L('🎨 Duvar boyası', '🎨 Wall paint'), 'wall', 'color', o.color || '#f5f1e8', { type: 'color' });
+    h += `<div class="row swatches">${PAINTS.map(([c, tr, en]) => `<button class="btn sm swatch${o.color === c ? ' on' : ''}" data-act="paint" data-c="${c}" title="${L(tr, en)}" style="background:${c}"></button>`).join('')}<button class="btn sm" data-act="paint" data-c="" title="${L('Varsayılan renk', 'Default colour')}">${L('↺ Varsayılan', '↺ Default')}</button></div>`;
     if (n === 1) {
       h += fld(L('Açı (°)', 'Angle (°)'), 'wall', 'deg', wallDeg(o), { step: 5, min: 0, max: 360 });
       h += fld(L('Sabit Nokta (Menteşe)', 'Fixed Point (Pivot)'), 'wall', 'pivot', wallPivot(o), {
@@ -1715,7 +1991,10 @@ function renderProps() {
         <div class="row"><button class="btn sm primary" data-act="wallposInit">📐 ${L('3 Konumlu Açılır Duvar Yap', 'Enable 3 Angle Positions')}</button></div>`;
       }
     }
-    h += acts(`<button class="btn sm" data-act="split">${L('✂ Ortadan böl', '✂ Split in half')}</button>`);
+    const xc = n === 1 ? wallCuts(o).length : 0;
+    h += acts(`<button class="btn sm" data-act="split">${L('✂ Ortadan böl', '✂ Split in half')}</button>`
+      + (xc ? `<button class="btn sm" data-act="splitx" title="${L('Duvarı başka duvarlarla kesiştiği noktalardan böl', 'Split the wall where other walls cross it')}">${L('✂ Kesişimden böl', '✂ Split at intersection')} (${xc})</button>` : '')
+      + (n === 2 ? `<button class="btn sm" data-act="corner" title="${L('İki duvarı kesişimlerinde temiz bir L köşe yap (taşanı kırpar, kısayı uzatır)', 'Make a clean L corner where the two walls meet (trims overhangs, extends short walls)')}">${L('⌐ Köşe birleştir', '⌐ Join corner')}</button>` : ''));
   } else if (k === 'op') {
     h += fld(L('Tür', 'Type'), 'op', 'type', o.type, { sel: isEN() ? { door: 'Door', double: 'Double door', slide: 'Sliding', arch: 'Archway', window: 'Window' } : { door: 'Kapı', double: 'Çift kapı', slide: 'Sürgülü', arch: 'Açıklık', window: 'Pencere' } });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'op', 'w', o.w, { min: 20, max: 500 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'op', 'h', o.h, { min: 20, max: 400 }) + fld(L('Denizlik (cm)', 'Sill height (cm)'), 'op', 'sill', o.sill, { min: 0, max: 300 });
@@ -1765,6 +2044,11 @@ function projectPanel() {
   h += `<h4>${L('Arka plan görseli', 'Background image')}</h4>`;
   if (P.bg) h += bgFields(false);
   else h += `<p class="muted" style="margin:0 0 6px">${L('Kroki / mevcut plan görselini altlık olarak ekleyip üzerinden çizebilirsin.', 'Import a blueprint or floor plan image as an underlay to trace over.')}</p><div class="row"><button class="btn sm" data-act="bgadd">${L('🖼 Görsel ekle', '🖼 Add image')}</button></div>`;
+  h += `<h4>${L('Kat döşemesi', 'Floor slab')} – ${esc(f.name)}</h4>`;
+  h += fld(L('Malzeme', 'Material'), 'floor', 'slabFloor', f.slabFloor || 'none', { sel: getFloors() })
+    + fld(L('Döşeme rengi', 'Slab colour'), 'floor', 'slabColor', f.slabColor || '#cbd5e1', { type: 'color' });
+  if (f.slabColor) h += `<div class="row"><button class="btn sm" data-act="slabreset">${L('↺ Varsayılan renk', '↺ Default colour')}</button></div>`;
+  h += `<p class="muted" style="margin:0 0 6px">${L('3B görünümde odası olmayan alanlar (balkon, antre, teras) da bu malzemeyle kaplanır.', 'In 3D, areas without a room (balcony, hallway, terrace) are finished with this material too.')}</p>`;
   const rooms = f.rooms; let tot = 0;
   h += `<h4>${L('Odalar', 'Rooms')} – ${esc(f.name)}</h4>`;
   if (!rooms.length) h += `<p class="muted" style="margin:0">${L('Henüz oda yok. “Oda algıla” aracı ile kapalı alanlara tıkla.', 'No rooms yet. Click inside enclosed areas with the “Auto Room” tool.')}</p>`;
@@ -1780,7 +2064,8 @@ function affects3D(k, p) {
   // yalnızca 3B sahneyi gerçekten etkileyen özellikler yeniden insin
   if (k === 'wall' || k === 'op') return true;
   if (k === 'furn') return p !== 'label';
-  if (k === 'room') return p === 'color';
+  if (k === 'room') return p === 'color' || p === 'floor';
+  if (k === 'floor') return true;
   if (k === 'sketch') return p === 'w' || p === 'color';
   return false; // dim/text/bg/layer 3B'yi etkilemez
 }
@@ -1788,6 +2073,7 @@ function applyProp(t, final) {
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
   if (k === 'layer') { layersVis[p] = v; render(); return; }
+  if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
   if (k === 'bg' && P.bg) { P.bg[p] = v; if (p === 'lock' && v) sel = sel.filter(x => x !== 'bg'); render(); if (final) { commit(); if (p === 'lock') renderProps(); } return; }
   if (k === 'wallpos') {
@@ -1832,7 +2118,7 @@ function applyProp(t, final) {
     if (k === 'furn' && p === 'rot') os.forEach(x => moveFurn3D(x.o));
     else if (affects3D(k, p)) schedBuild3D();
   }
-  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p)) renderProps(); }
+  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p) || (k === 'wall' && p === 'color')) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -1847,6 +2133,23 @@ $('#props').addEventListener('click', e => {
   if (a === 'bgreset') { if (P.bg) { P.bg.x = 0; P.bg.y = 0; commit(); refresh(); } return; }
   if (a === 'bgremove') { P.bg = null; sel = sel.filter(x => x !== 'bg'); commit(); return refresh(); }
   if (a === 'calib') return setTool('calib');
+  if (a === 'corner') {
+    const ws = os.filter(x => x.kind === 'wall');
+    if (ws.length !== 2 || !joinCorner(ws[0].o, ws[1].o)) { toast(L('Paralel duvarlar köşe yapamaz', 'Parallel walls cannot form a corner')); return; }
+    commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
+  if (a === 'splitx') {
+    const w = os.find(x => x.kind === 'wall')?.o; if (!w) return;
+    const cuts = wallCuts(w); let cur = w, base = 0;
+    for (const c of cuts) { const nw = splitWallAt(cur, c - base); base = c; cur = nw; }
+    commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
+  if (a === 'slabreset') { f.slabColor = null; commit(); if (ui.view3d && T3) schedBuild3D(); return refresh(); }
+  if (a === 'paint') {
+    const ws = os.filter(x => x.kind === 'wall'); if (!ws.length) return;
+    for (const { o } of ws) { if (b.dataset.c) o.color = b.dataset.c; else delete o.color; }
+    commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
   if (a === 'group') return groupSel();
   if (a === 'ungroup') return ungroupSel();
   if (a === 'varInit' || a === 'varSave' || a === 'varNew' || a === 'varDel' || a === 'varGo' || a === 'varNext') return varAction(a, b.dataset.idx != null ? +b.dataset.idx : null);
@@ -1897,7 +2200,7 @@ $('#props').addEventListener('click', e => {
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
     if (a === 'redetect' && kind === 'room') { const c = polyCentroid(o.pts); const r = detectRoom(pointInPoly(c, o.pts) ? c : o.pts[0]); if (Array.isArray(r)) o.pts = r; else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
     if (a === 'split' && kind === 'wall') {
-      const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; const L = wLen(o), old = o.b;
+      const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; if (o.color) nw.color = o.color; const L = wLen(o), old = o.b;
       o.b = m; f.walls.push(nw);
       f.ops.forEach(op => { if (op.wall === o.id && op.d > L / 2) { op.wall = nw.id; op.d -= L / 2; } });
     }
@@ -2376,7 +2679,7 @@ window.addEventListener('keydown', e => {
     selObjs().forEach(({ kind, o }) => { if (kind === 'wall' || kind === 'dim') { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (kind === 'room' || kind === 'sketch') o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
     commit(); render(); if (sel.includes('bg')) renderProps(); if (ui.view3d && T3) schedBuild3D(); return;
   }
-  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', c: 'calib', b: 'pen' };
+  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen' };
   if (map[k]) { setTool(map[k]); return; }
   if (k === 'g') { $('#cSnap').click(); return; }
   if (k === '0') fit(); else if (k === '+' || k === '=') zoomBtn(1.25); else if (k === '-') zoomBtn(0.8);
@@ -2430,6 +2733,7 @@ function helpModal() {
     ['T', 'Add Text label'],
     ['B', 'Pen: freehand sketch on the plan (drag to draw, release to finish)'],
     ['E', 'Eraser (click object to delete)'],
+    ['X', 'Trim (click the overhanging part of a crossing wall)'],
     ['C', 'Calibrate background image scale'],
     ['G', 'Toggle grid & endpoint snap'],
     ['Shift', 'Hold to disable snap • multi-select in Select mode'],
@@ -2468,6 +2772,7 @@ function helpModal() {
     ['T', 'Metin'],
     ['B', 'Kalem: plana serbest elle çizim (sürükle, bırak tamamlar)'],
     ['E', 'Sil'],
+    ['X', 'Kırp (kesişen duvarın taşan ucuna tıkla)'],
     ['C', 'Arka plan ölçekle'],
     ['G', 'Yakalamayı aç/kapa'],
     ['Shift', 'Basılıyken yakalama kapalı • seçimde çoklu seçim'],
@@ -3125,7 +3430,7 @@ async function projectsModal() {
   $('#mOpenF').onclick = () => $('#fileOpen').click();
   $('#modal').querySelectorAll('[data-open]').forEach(b => b.onclick = () => {
     const it = list[+b.dataset.open];
-    if (it) { loadProject(JSON.parse(JSON.stringify(it.project)), isEN() ? `Opened “${it.name}”` : `“${it.name}” açıldı`); closeModal(); }
+    if (it) { newTabSlot(); loadProject(JSON.parse(JSON.stringify(it.project)), isEN() ? `Opened “${it.name}”` : `“${it.name}” açıldı`); closeModal(); }
   });
   $('#modal').querySelectorAll('[data-dl]').forEach(b => b.onclick = () => {
     const it = list[+b.dataset.dl];
@@ -3199,7 +3504,7 @@ function templatesModal() {
   openModal(`<h2>${L('Yeni proje – şablon seç', 'New project – choose a template')} <button class="btn sm" data-close>✕</button></h2><div class="cards">${TEMPLATES.map((t, i) => `<div class="card" data-tpl="${i}">${i ? thumbSvg(i) : `<svg viewBox="0 0 10 5"><text x="5" y="3" text-anchor="middle" font-size="1.5" fill="currentColor">＋</text></svg>`}<b>${isEN() ? t.en : t.name}</b><span class="muted">${isEN() ? t.descEn : t.desc}</span></div>`).join('')}</div>`, 'templates');
   $('#modal').querySelectorAll('[data-tpl]').forEach(c => c.onclick = () => {
     const i = +c.dataset.tpl, t = TEMPLATES[i]; const np = newProject(); np.name = i ? (isEN() ? t.en : t.name).replace(/ \(.*/, '') : L('Yeni Proje', 'New Project');
-    P = np; fi = 0; t.build(); loadProject(P); closeModal();
+    newTabSlot(); P = np; fi = 0; t.build(); loadProject(P); closeModal();
   });
 }
 
@@ -3750,7 +4055,7 @@ function mixHex(a, b, t) {
 function floorTexture(kind, color, lt, C) {
   const key = kind + '|' + color + '|' + (lt ? 'l' : 'd');
   if (C.floorTex[key]) return C.floorTex[key];
-  const accent = kind === 'wood' ? '#b08968' : kind === 'tile' ? '#94a3b8' : '#9ca3af';
+  const accent = { wood: '#b08968', tile: '#94a3b8', marble: '#e7e5e4', concrete: '#a8a29e', stone: '#a8a29e' }[kind] || '#9ca3af';
   const px = 256, cv = document.createElement('canvas'); cv.width = cv.height = px;
   const g = cv.getContext('2d');
   // oda rengi korunur ama malzeme tonuna doğru harmanlanır (pastel renkler bembeyaz olmasın)
@@ -3771,12 +4076,38 @@ function floorTexture(kind, color, lt, C) {
   } else if (kind === 'carpet') {
     g.fillStyle = line;
     for (let y = 8; y < px; y += 16) for (let x = 8; x < px; x += 16) { g.beginPath(); g.arc(x + ((y / 16) % 2 ? 8 : 0), y, 2.4, 0, 6.2832); g.fill(); }
+  } else if (kind === 'marble') {
+    // damarlı mermer: deterministik (Math.random yok) ki her build aynı görünsün
+    g.strokeStyle = line; g.globalAlpha = 0.45;
+    for (let i = 0; i < 5; i++) {
+      g.lineWidth = 0.8 + (i % 3) * 0.6; g.beginPath();
+      let x = 0, y = (i * 53 + 20) % px; g.moveTo(x, y);
+      while (x < px) { x += 18; y += Math.sin(x * 0.045 + i * 1.7) * 9 + (i % 2 ? 3 : -2); g.lineTo(x, y); }
+      g.stroke();
+    }
+    g.globalAlpha = 1; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(0, px / 2); g.lineTo(px, px / 2); g.moveTo(px / 2, 0); g.lineTo(px / 2, px); g.stroke();
+  } else if (kind === 'concrete') {
+    // ince taneli şap: sabit tohumlu küçük benekler
+    let sd = 7;
+    const rnd01 = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 900; i++) { g.fillStyle = rnd01() > 0.5 ? line : shade(base, lt ? 0.12 : -0.12); g.globalAlpha = 0.25 + rnd01() * 0.3; g.fillRect(rnd01() * px, rnd01() * px, 1.5, 1.5); }
+    g.globalAlpha = 1;
+  } else if (kind === 'stone') {
+    // dış mekan taşı: şaşırtmalı farklı ölçülü karolar
+    g.strokeStyle = line; g.lineWidth = 4;
+    const rows = [[0, 0.62], [0.3, 0.8], [0.15, 0.55, 0.85], [0.45]];
+    rows.forEach((xs, i) => {
+      const y = i * px / 4; g.beginPath(); g.moveTo(0, y); g.lineTo(px, y);
+      for (const x of xs) { g.moveTo(x * px, y); g.lineTo(x * px, y + px / 4); }
+      g.stroke();
+    });
   }
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.encoding = THREE.sRGBEncoding;
   t.anisotropy = 4;
-  const rep = kind === 'wood' ? 160 : kind === 'tile' ? 120 : 80; // cm cinsinden karo boyu
+  const rep = { wood: 160, tile: 120, marble: 240, concrete: 200, stone: 200 }[kind] || 80; // cm cinsinden karo boyu
   t.repeat.set(1 / rep, 1 / rep);
   C.floorTex[key] = t; C.texs.push(t);
   return t;
@@ -4090,13 +4421,22 @@ function build3D(keepCam = false) {
     if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return; // kat seçici: yalnızca seçili kat çizilir
     // zemin plakası: duvarların dış konturunu izleyen poligon — açılı planlarda AABB gibi taşmaz
     const slabCol = lt ? 0xded8cc : (fidx === 0 ? 0x171e29 : 0x232b38);
+    // kat döşemesi malzemesi (issue #12): kullanıcı seçtiyse üst yüze doku/renk, yan yüzler düz
+    const sKind = f.slabFloor && f.slabFloor !== 'none' ? f.slabFloor : null, custom = !!(sKind || f.slabColor);
+    let slabMat = mat(slabCol);
+    if (custom) {
+      const sc = f.slabColor || '#cbd5e1';
+      let top = mat(sc);
+      if (sKind && det) { top = new THREE.MeshLambertMaterial({ map: floorTexture(sKind, sc, lt, { floorTex, texs }), side: THREE.DoubleSide }); extraMats.push(top); }
+      slabMat = [top, mat(shade(sc, -0.25))];          // ExtrudeGeometry: grup 0 = kapaklar, grup 1 = yanlar
+    }
     for (const pts of slabPolys(f)) {
       const shp = new THREE.Shape(pts.map(p => new THREE.Vector2(p.x, p.y)));
       const geo = new THREE.ExtrudeGeometry(shp, { depth: 20, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
-      const m = new THREE.Mesh(geo, mat(slabCol));
+      const m = new THREE.Mesh(geo, slabMat);
       m.position.y = elev; m.receiveShadow = true;
-      m.userData.slab = true;                         // the render may swap it for the light slab
+      if (!custom) m.userData.slab = true;            // the render may swap it for the light slab (user materials stay)
       S.add(m);
     }
     f.rooms.forEach(r => {
@@ -4117,7 +4457,7 @@ function build3D(keepCam = false) {
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
       const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
-      const wCol = hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0);
+      const wCol = w.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
       const curt = w.wt === 'curtain', rail = 5, frameCol = lt ? 0x8fa3b8 : 0x7c8a9c;
       if (curt) { box(g, L, rail, w.t, frameCol, 0, rail / 2, 0); box(g, L, rail, w.t, frameCol, 0, H - rail / 2, 0); } // alt & üst kuşak
       const seg = (s, e, y0, y1) => {
@@ -4200,6 +4540,17 @@ function build3D(keepCam = false) {
         pin.position.set(pv.x, elev + H / 2, pv.y); pin.userData = { wallId: w.id }; S.add(pin);
       }
     });
+    // köşe birleşim dolgusu (issue #14): duvar kutuları birleşimde düz biter, dış köşe yarığını bu prizma kapatır
+    for (const j of wallJoints(f)) {
+      const solid = j.walls.filter(w => w.wt !== 'curtain'); if (!solid.length) continue;
+      const w0 = solid[0], H = Math.min(...solid.map(w => w.h)), hasPos = Array.isArray(w0.angles) && w0.angles.length > 0;
+      const jCol = w0.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
+      const geo = new THREE.ExtrudeGeometry(new THREE.Shape(j.poly.map(p => new THREE.Vector2(p.x, p.y))), { depth: H, bevelEnabled: false });
+      geo.rotateX(Math.PI / 2);
+      const m = new THREE.Mesh(geo, mat(jCol));
+      m.position.y = elev + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
+      S.add(m);
+    }
     f.furn.forEach(o => {
       const ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, elev, o.y); g.rotation.y = ry; g.userData = { furnId: o.id, elev }; S.add(g);
       furn3D(g, o, furnCtx);
@@ -4278,6 +4629,7 @@ function applyLangUI() {
   $('#logoTxt').textContent = L('📐 Kat Planı', '📐 Floor Plan');
   $('#pname').title = L('Proje adı', 'Project name');
   $('#bNew').textContent = L('📄 Yeni', '📄 New');
+  if (P) renderTabs();
   $('#bProjects').textContent = L('📁 Projelerim', '📁 My Projects');
   $('#bSave').textContent = L('💾 Kaydet', '💾 Save');
   $('#bSave').title = L('Tarayıcıya kaydet (Ctrl+S)', 'Save to browser (Ctrl+S)');
@@ -4364,7 +4716,7 @@ $('#bTheme').onclick = () => {
   render();
   if (ui.view3d && T3) build3D();
 };
-$('#pname').addEventListener('input', e => { P.name = e.target.value; autosave(); });
+$('#pname').addEventListener('input', e => { P.name = e.target.value; renderTabs(); autosave(); });
 $('#pname').addEventListener('change', commit);
 $('#cSnap').onchange = e => { ui.snap = e.target.checked; };
 $('#cConn').onchange = e => { ui.connWalls = e.target.checked; };
@@ -4398,7 +4750,7 @@ $('#sGridType').onchange = e => {
 };
 $('#fileOpen').onchange = e => {
   const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-  r.onload = () => { try { const o = JSON.parse(r.result); if (!o.floors) throw new Error(L('geçersiz dosya', 'invalid file')); loadProject(o, L('Dosya açıldı', 'File opened')); closeModal(); } catch (er) { toast(L('Dosya açılamadı: ', 'Could not open file: ') + er.message); } };
+  r.onload = () => { try { const o = JSON.parse(r.result); if (!o.floors) throw new Error(L('geçersiz dosya', 'invalid file')); newTabSlot(); loadProject(o, L('Dosya açıldı', 'File opened')); closeModal(); } catch (er) { toast(L('Dosya açılamadı: ', 'Could not open file: ') + er.message); } };
   r.readAsText(file); e.target.value = '';
 };
 $('#fileBg').onchange = e => {
@@ -4408,7 +4760,7 @@ $('#fileBg').onchange = e => {
 };
 $('#tools').addEventListener('click', e => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); });
 new ResizeObserver(() => { if (P && !ui.view3d) render(); if (T3 && ui.view3d) resize3D(); }).observe($('#stage'));
-window.addEventListener('beforeunload', () => { if (P) dbPut('state', P, 'auto').catch(() => {}); });
+window.addEventListener('beforeunload', () => { if (P) { dbPut('state', P, 'auto').catch(() => {}); dbPut('state', tabsState(), 'tabs').catch(() => {}); } });
 if (localStorage.getItem('fp_theme') === 'light') document.documentElement.dataset.theme = 'light';
 
 applyLangUI();
@@ -4419,6 +4771,7 @@ applyLangUI();
   if (!saved) { try { saved = JSON.parse(localStorage.getItem('fp_auto') || 'null'); } catch (e) { } }
   if (saved && saved.floors) { loadProject(saved); translateDefaultNames(); refresh(); }
   else { P = newProject(); loadProject(P); templatesModal(); }
+  try { restoreTabs(await dbGet('state', 'tabs')); } catch (e) { }
   setTimeout(fit, 50);
   aiBridgeBoot();          // connect to a running local bridge, if any
 })();

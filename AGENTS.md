@@ -66,11 +66,11 @@ P = {
 }
 
 Floor = {
-  "id": "…", "name": "Zemin Kat",
-  "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain", pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
+  "id": "…", "name": "Zemin Kat", "slabFloor": "none", "slabColor": null,   // 3D slab finish (same kinds as room floors)
+  "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain", color?:"#hex" (paint; absent = theme default), pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
   "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1, open?:0|90 } ],   // doors & windows
   "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label } ],
-  "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet", pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
+  "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone", pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
   "dims":   [ { id, a:{x,y}, b:{x,y}, off } ],
   "texts":  [ { id, x, y, text, size, color, rot } ],
   "sketches": [ { id, pts:[{x,y},…], w, color } ]   // pen tool: freehand strokes (already simplified)
@@ -112,9 +112,10 @@ Key semantics:
 | `tool`, `sel[]`, `placing` | Active tool, selected ids, item currently being placed |
 | `ui` | Transient UI state: `snap, angle, dims, cur, raw, draw, typed, drag, space, cat, q, view3d, v3dFloor, dimStart, polyPts, calib, clip, ghost, exporting, btn, lastE, pen, shot` |
 | `layersVis` | Layer visibility (`bg, rooms, walls, furn, dims, sketch`) — view-only, not persisted |
+| `tabs[]`, `tabIdx` | Open project tabs (issue #17): `{ id, P, hist, hi, fi, view, sel }` per tab; the **active** tab's live state is the globals above |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
-`tool` values: `select pan wall rect room poly place dim text pen eraser calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
+`tool` values: `select pan wall rect room poly place dim text pen eraser trim calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
 
 ---
 
@@ -166,7 +167,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
+`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -175,7 +176,7 @@ Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|b
 ## 7. Theming (Dark / Light)
 
 - Chrome (panels, buttons) uses CSS variables in `style.css`: dark in `:root`, light in `[data-theme=light]`. `--stage-bg` / `--cv-bg` colour the stage, canvas, 3D container and thumbnails.
-- Plan graphics use **`pal()`** in `app.js`, which returns a palette (`wall, stroke, gMin, gMaj, text, sub, halo, dim, glass, swing, roomOp, furnOp, wood, tile, carpet, …`).
+- Plan graphics use **`pal()`** in `app.js`, which returns a palette (`wall, stroke, gMin, gMaj, text, sub, halo, dim, glass, swing, roomOp, furnOp, wood, tile, carpet, marble, concrete, stone, …`).
   - `pal()` honours `ui.exporting`: when true it **always returns the light palette** so PNG/SVG/PDF are print-ready.
   - Door/window cut-outs are filled with `pal().bg` so they "erase" the wall; keep that in sync with `--cv-bg`.
 - The theme button (`bTheme`) toggles `data-theme`, persists to `localStorage['fp_theme']`, calls `render()` and rebuilds 3D if open.
@@ -191,12 +192,25 @@ Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|b
 - Order: wall-end / room-corner snap (14 px radius, only if `ui.snap` and no `Shift`) → angle snap when a `from` point exists and `ui.angle` → grid snap.
 - Angle step: **15°** (square/dots/none), **30°** for `gridType==='triangle'`. Length rounds to `P.grid` except when `gridType==='none'`.
 - `snapToGrid` is the **only** place that knows about grid geometry. Triangle lattice vertices: rows spaced `g·√3/2`, odd rows offset by `g/2`. Use it for any new placement/move feature instead of `rnd(v, P.grid)`.
+- **Object snap tracking (issue #16):** after end-snap, `snapPt` aligns with reference points from `trackRefs()` (wall ends, room corners, in-progress `ui.polyPts`; excluding `ignore` and `from`). With `from` + angle lock it intersects the angle ray with each reference's vertical/horizontal line and locks the length (overriding grid rounding); otherwise x and y lock independently (both = the crossing of two references). Tolerance `10 / view.z`. The result carries `guides: [{from, axis}]`; `drawPreview()` draws them dashed (only while drawing or dragging a handle). `doHandle` sets `ui.cur` for `wa/wb`, `v<i>` and `da/db` so drags show guides too. `ignore` may hold wall ids **and** point objects (a dragged room vertex skips itself). Guard: `tests/snap-tracking.test.js`.
 - `magnet(f)` snaps a furniture item to the nearest wall face and rotates it so its back (−Y) touches the wall.
 
 ### Grids (`defsSvg`, `gridSvg`)
 - Patterns `g-minor/g-major`, `g-tri-*`, `g-dots-*` are rebuilt on every render (stroke widths depend on `view.z` to stay hairline).
 - Major interval `ms`: `s≥100 → 5s`, `s≥25 → 4s`, else 100 cm. Minor grid hidden when `P.grid*view.z < 6`; major hidden when `view.z ≤ 0.12`.
 - `syncGridUI()` must be called whenever `P.grid` / `P.gridType` changes outside the footer controls (load, undo/redo) — it handles the "Özel…" custom-step input.
+
+### Wall corners (`wallJoints`, issue #14)
+Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)` groups coincident endpoints (≤ 1 cm), sorts the walls by outward angle and intersects neighbouring face lines to find each miter point; the convex hull of the butt corners plus the outward miter points is the filler polygon. Miters longer than 2.5 × max thickness are dropped (bevel). `jointsSvg()` fills it with `pal().wall` in 2D; `build3D()` extrudes it to the lowest solid wall height. T-junctions (an end on another wall's middle) need no filler — the through-wall covers the butt end. Guard: `tests/wall-joints.test.js` runs the real functions cut out of `app.js`.
+
+### Trim / split / corner (issue #15)
+`trim` tool (`X`): `wallCuts(w)` lists where other wall centrelines cross `w` (cm from `a`, ends excluded); `trimPlan(w, click)` picks the nearest crossing on each side of the click and `trimWall()` removes that piece — an end overhang moves the end, a piece between two crossings splits the wall (`splitWallAt`). Openings on the kept part are re-based, those on the removed part are deleted via `deleteIds`. The hover preview paints the doomed piece red. Wall panel: **✂ Split at intersection** (`splitx`, one wall) and **⌐ Join corner** (`corner`, exactly two walls → `joinCorner()` moves each wall's nearer end to the line intersection, trimming or extending). Guard: `tests/wall-trim.test.js`.
+
+### Project tabs (issue #17)
+- `#ptabs` (below the header) lists `tabs[]`; click switches, double-click renames, `×` closes, `＋` opens the template picker. `switchTab()` = `syncTab()` (globals → current tab) + `activateTab()` (tab → globals, then `refresh()`, `updateUndo()`, `autosave()`, 3D rebuild if open). Each tab keeps its own `hist`/`hi`, floor, view and selection; `ui.clip` is global, so copy/paste works across projects.
+- **Opening never destroys work:** the template picker, *My Projects* and *Open file* call `newTabSlot()` before `loadProject()` — if the current plan is not pristine (`isPristine()`), a new tab is inserted next to it. `loadProject()` ends with `syncTab()`. The AI bridge still loads into the **active** tab, and only the active tab is pushed to it.
+- Persistence: `autosave()` also writes `tabsState()` to IndexedDB `state`/`'tabs'` (project JSON only, not history; empty list with a single tab). Boot loads `'auto'` as before, then `restoreTabs()`; the active tab's content comes from `'auto'`.
+- `closeTab()` asks to confirm unless the plan is pristine or identical to its saved copy in the `projects` store; closing the last tab opens a blank project. `normalizeProject()` is the back-compat default filler shared by `loadProject()` and tab restore.
 
 ### Room detection (`detectRoom`)
 Rasterises walls to an offscreen canvas (resolution ≥ 2 cm/px, max ≈ 1800 px), flood-fills from the click, returns `'open'` if the fill reaches the border (leak), otherwise traces the outer boundary and simplifies it (Douglas-Peucker, ε≈1.1·res). Doors/windows do **not** open rooms because the walls underneath are rasterised solid.
@@ -234,7 +248,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 - Walls are split into boxes around each opening (below-sill, above-head). Every opening gets jambs + head (and a sill board for windows); windows add a translucent pane plus a mullion when wide; doors/double doors get a frame, an inset panel and a handle while keeping the existing `open`/`side`/`flip` rotation; sliding doors get two offset panels + a top track. Solid walls also get **skirting** (both faces, skipping door gaps) and a thin **top cap** — `wt: 'curtain'` walls are skipped.
 - Furniture detail is **parametric on the catalog id** in `furn3D(g, o, ctx)`: `sofa3/sofa2/armchair`, `chair`, `ochair`, `coffee|table*|desk|meet|vanity`, `tableR`, `bed*|bunk|crib`, `wardrobe`, `dresser|night|shelf|bookcase`, `fridge|dish|wm`, `stove`, `sinkK|counter*|island`, `basin*`, `wc|bidet`, `tub|shower`, `plant|tree`, `tv`, `rug`, `car`, `pool`, `column|colSq`, `fireplace`, `printer`, `stairs`. Everything else (custom `poly` library shapes included) falls back to the old `k`-based box/cylinder/extrude. All proportions derive from `o.w/d/h` and shades from `o.color` (`shade()`), so 2D resize/rotate/swap never breaks it. **No new data fields.**
 - `box/cyl/sph` share one unit `BoxGeometry` / `CylinderGeometry` / `SphereGeometry` and scale the mesh — do not allocate geometry per part. `EdgesGeometry` rides along with the unit box and is only added to silhouettes (the `edges` flag). Keep `furn3D` at ≤ ~12 meshes per item (~20 for stairs).
-- Room floors use `r.floor` (`wood|tile|carpet`) to build small cached `CanvasTexture`s tinted with `r.color` (`floorTexture()`, one texture per kind + colour + theme); `none` keeps the flat fill.
+- Room floors use `r.floor` (`wood|tile|carpet|marble|concrete|stone`) to build small cached `CanvasTexture`s tinted with `r.color` (`floorTexture()`, one texture per kind + colour + theme); `none` keeps the flat fill. The same textures finish the **floor slab** when `Floor.slabFloor` / `Floor.slabColor` are set (project panel → *Floor slab*); such slabs keep their material in the studio render (`userData.slab` is only set on default slabs). Painted walls (`w.color`) drive `wCol` in 3D, so skirting and top cap follow via `shade()`; in 2D `wallPaintSvg()` draws thin paint strips on both faces over the dark poché.
 - Lighting: hemisphere + a shadow-casting directional light fitted to `contentBounds` (1024/2048 shadow map) + a low fill light. The renderer uses `PCFSoftShadowMap`, `outputEncoding = sRGBEncoding` and `ACESFilmicToneMapping` at ~1.05 exposure; ground, slabs and floors receive, large walls/furniture cast.
 - Detail level: `build3D()` estimates the object count and drops part edges / frames / floor textures above ~3000 objects (`det` flag) instead of exposing a user setting.
 - Camera presets: `set3DCam('fit'|'top'|'eye')` backs the three small buttons next to `#s3dFloor` (`#b3dFit/#b3dTop/#b3dEye` in `.ctl3dCam`); `T3.fit` caches `{cx, cz, sz, elev}` during `build3D`. The markup must stay in sync — `applyLangUI()` uses `$()` guards but the bootstrap binds the three ids directly.
@@ -313,6 +327,9 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/mcp.test.js` | tool surface shrinking, a broken plan round-trip, `CATALOG`/`OPENINGS` drifting from `app.js` |
 | `tests/bridge.test.js` | plan store/revisioning, the request queue, SSE, **`FP_WAKE`** (a request reaches the agent, an unknown origin only queues), **snapshot save/restore** (AI pushes only, restore is a new rev, history survives a restart) and the **`Access-Control-Allow-Private-Network`** header the deployed page needs |
 | `tests/render3d.test.js` | the 3D render export: oversampling maths (2–3×, ≤4K/12 MP), the **synchronous** `render()` → `toDataURL()` contract for the quick path, the render-vs-screenshot guarantees (no CAD outlines, studio backdrop, single shadow build, jittered passes) and viewport restore |
+| `tests/wall-joints.test.js` | wall corners closing: miter/bevel maths of `wallJoints()` and that both 2D and 3D draw the fillers |
+| `tests/wall-trim.test.js` | trim tool / split at intersection / join corner geometry and opening re-basing |
+| `tests/snap-tracking.test.js` | object snap tracking: L→U closes exactly with/without angle lock, Shift disables it, guides reach the preview |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |
 | `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed) |

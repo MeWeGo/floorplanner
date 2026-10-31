@@ -254,6 +254,77 @@ check('3D view builds, or degrades cleanly without WebGL', async page => {
   return 'built ' + info.meshes + ' scene nodes';
 });
 
+check('wall paint and slab / room materials render in 2D and 3D (issue #12)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F();
+    addRectWalls(0, 0, 400, 300);
+    const rm = autoRoomAt({ x: 200, y: 150 }, true);
+    sel = [f.walls[0].id]; renderProps();
+    const btn = document.querySelector('#props [data-act="paint"][data-c="#b7c4a8"]');
+    if (!btn) return { err: 'no paint swatch in the wall panel' };
+    btn.click();
+    f.slabFloor = 'marble'; f.slabColor = '#e7e5e4';
+    if (rm) rm.floor = 'stone';
+    sel = []; refresh();
+    const painted = document.querySelectorAll('#gWalls line[stroke="#b7c4a8"]').length;
+    document.getElementById('b3d').click();
+    const r = { painted, color: f.walls[0].color, view3d: !!ui.view3d };
+    if (ui.view3d) {
+      let wallHit = false, slabTex = false;
+      T3.scene.traverse(o => {
+        if (o.isMesh && !Array.isArray(o.material) && o.material.color && o.material.color.getHexString() === 'b7c4a8') wallHit = true;
+        if (o.isMesh && Array.isArray(o.material) && o.material[0].map) slabTex = true;
+      });
+      r.wallHit = wallHit; r.slabTex = slabTex;
+      show3D(false);
+    }
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  if (info.color !== '#b7c4a8') throw new Error('swatch did not paint the wall: ' + info.color);
+  if (info.painted < 2) throw new Error('painted wall shows no paint strips in 2D');
+  if (info.view3d && !info.wallHit) throw new Error('wall paint did not reach the 3D wall material');
+  if (info.view3d && !info.slabTex) throw new Error('slab material has no texture in 3D');
+  return info.view3d ? 'paint + marble slab in 2D and 3D' : 'paint in 2D (3D unavailable)';
+});
+
+check('project tabs keep separate plans and undo, and paste across (issue #17)', async page => {
+  const info = await page.evaluate(`(async () => {
+    tabs = []; tabIdx = 0; loadProject(Object.assign(newProject(), { name: 'Tab A' }));
+    addRectWalls(0, 0, 400, 300); commit();
+    const histA = hi;
+    sel = [F().walls[0].id]; copySel();
+    templatesModal();
+    const card = document.querySelector('[data-tpl="2"]'); if (!card) return { err: 'no template card' };
+    card.click();                                   // opens in a NEW tab: tab A has walls
+    const r = { n1: tabs.length, idx1: tabIdx, bName: P.name, bWalls: F().walls.length };
+    const before = F().walls.length; paste(false);  // cross-project paste
+    r.pasted = F().walls.length - before;
+    r.bar = document.querySelectorAll('#ptabs .ptab').length;
+    document.querySelector('#ptabs [data-tab="0"]').click();
+    r.aName = P.name; r.aWalls = F().walls.length; r.aHi = hi === histA;
+    undo(); r.aAfterUndo = F().walls.length;
+    document.querySelector('#ptabs [data-tab="1"]').click();
+    r.bStill = F().walls.length;
+    r.state = tabsState().tabs.length;
+    window.confirm = () => true;
+    await closeTab(1);
+    r.n2 = tabs.length; r.after = P.name;
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  if (info.n1 !== 2 || info.idx1 !== 1) throw new Error('template did not open in a new tab: ' + JSON.stringify(info));
+  if (info.bar !== 2) throw new Error('tab bar shows ' + info.bar + ' tabs');
+  if (info.pasted !== 1) throw new Error('cross-tab paste added ' + info.pasted + ' walls');
+  if (info.aName !== 'Tab A' || info.aWalls !== 4 || !info.aHi) throw new Error('tab A not restored: ' + JSON.stringify(info));
+  if (info.aAfterUndo !== 0) throw new Error('tab A lost its own undo history');
+  if (info.bStill !== info.bWalls + 1) throw new Error('undo in tab A leaked into tab B');
+  if (info.state !== 2) throw new Error('open tabs are not persisted');
+  if (info.n2 !== 1 || info.after !== 'Tab A') throw new Error('closing a tab went wrong: ' + JSON.stringify(info));
+  return '2 tabs, separate undo, cross-tab paste, close';
+});
+
 check('3D: a real render is produced, and PNG follows the active view', async page => {
   const info = await page.evaluate(`(async () => {
     document.getElementById('b3d').click();
