@@ -365,7 +365,7 @@ function commit() {
 function autosave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
-    try { await dbPut('state', JSON.parse(JSON.stringify(P)), 'auto'); }
+    try { await dbPut('state', JSON.parse(JSON.stringify(P)), 'auto'); await dbPut('state', tabsState(), 'tabs'); }
     catch (e) {
       try { localStorage.setItem('fp_auto', JSON.stringify(P)); }
       catch (e2) { toast(L('Otomatik kayıt başarısız', 'Autosave failed')); }
@@ -397,18 +397,104 @@ function restore(s) {
 function undo() { if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
 function redo() { if (hi < hist.length - 1) { hi++; restore(hist[hi]); autosave(); updateUndo(); } }
 function updateUndo() { $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = hi >= hist.length - 1; }
-function loadProject(obj, msg) {
-  P = obj; if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
+function normalizeProject(P) {
+  if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
   if (P.bg) P.bg.id = 'bg';
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid'; });
+  return P;
+}
+function loadProject(obj, msg) {
+  P = normalizeProject(obj);
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
   $('#pname').value = P.name; syncGridUI();
-  setTool('select'); fit(); refresh(); updateUndo(); autosave();
+  setTool('select'); fit(); syncTab(); refresh(); updateUndo(); autosave();
   if (msg) toast(msg);
 }
+/* ---------- Proje sekmeleri (issue #17) ----------
+   Açık projeler sekmelerde durur; her sekme kendi P / geri-al geçmişi / kat / görünüm
+   / seçimini taşır. Etkin sekmenin durumu her zamanki gibi global değişkenlerdedir;
+   geçişte stashTab() globalleri sekmeye yazar, sekmeden geri yükler. Pano (ui.clip)
+   globaldir, bu yüzden projeler arası kopyala-yapıştır kendiliğinden çalışır. */
+let tabs = [], tabIdx = 0;
+const tabSnapshot = () => ({ P, hist, hi, fi, view: { ...view }, sel: sel.slice() });
+function syncTab() {
+  if (!tabs[tabIdx]) tabs[tabIdx] = { id: uid() };
+  Object.assign(tabs[tabIdx], tabSnapshot());
+  renderTabs();
+}
+function isPristine(p) {
+  return !p || (!p.bg && (p.floors || []).every(f => ['walls', 'furn', 'rooms', 'dims', 'texts', 'sketches'].every(k => !(f[k] || []).length)));
+}
+// Bir proje açılmadan önce çağrılır: mevcut sekmede iş varsa yanına yeni boş sekme açar
+function newTabSlot() {
+  if (!P || isPristine(P)) return;
+  syncTab(); tabs.splice(tabIdx + 1, 0, { id: uid() }); tabIdx++;
+}
+function activateTab(i) {
+  const t = tabs[i]; if (!t || !t.P) return;
+  tabIdx = i; P = normalizeProject(t.P);
+  hist = t.hist && t.hist.length ? t.hist : [JSON.stringify(P)]; hi = clamp(t.hi ?? hist.length - 1, 0, hist.length - 1);
+  fi = clamp(t.fi || 0, 0, P.floors.length - 1);
+  ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null; placing = null;
+  sel = (t.sel || []).filter(id => find(id));
+  $('#pname').value = P.name; syncGridUI();
+  if (t.view) Object.assign(view, t.view); else fit();
+  if (tool === 'place') setTool('select');
+  refresh(); updateUndo(); renderTabs(); autosave();
+  if (ui.view3d && T3) schedBuild3D();
+}
+function switchTab(i) {
+  if (i === tabIdx || !tabs[i]) return;
+  syncTab(); activateTab(i);
+}
+async function savedCopyMatches(p) {
+  try { const it = await dbGet('projects', p.name); return !!it && JSON.stringify(it.project) === JSON.stringify(p); } catch (e) { return false; }
+}
+async function closeTab(i) {
+  if (!tabs[i]) return;
+  if (i === tabIdx) syncTab();
+  const p = tabs[i].P;
+  if (!isPristine(p) && !(await savedCopyMatches(p))
+    && !confirm(L(`“${p.name}” kaydedilmemiş. Sekme kapatılırsa değişiklikler kaybolur. Kapatılsın mı?`, `“${p.name}” is not saved. Closing the tab discards its changes. Close it?`))) return;
+  if (tabs.length === 1) { tabs = []; tabIdx = 0; loadProject(newProject()); return; }
+  tabs.splice(i, 1);
+  if (i === tabIdx) activateTab(Math.min(i, tabs.length - 1));
+  else { if (i < tabIdx) tabIdx--; renderTabs(); autosave(); }
+}
+// IndexedDB 'state'/'tabs': yalnızca projeler kalıcıdır (geçmiş değil); etkin proje 'auto' anahtarında
+function tabsState() {
+  return { active: tabIdx, tabs: tabs.length > 1 ? tabs.map((t, i) => ({ id: t.id, P: JSON.parse(JSON.stringify(i === tabIdx ? P : t.P)) })) : [] };
+}
+function restoreTabs(st) {
+  if (!st || !Array.isArray(st.tabs) || st.tabs.length < 2) return;
+  const act = clamp(st.active | 0, 0, st.tabs.length - 1), live = tabSnapshot();
+  tabs = st.tabs.filter(t => t && t.P && t.P.floors).map(t => ({ id: t.id || uid(), P: normalizeProject(t.P), hist: [JSON.stringify(t.P)], hi: 0, fi: 0, view: null, sel: [] }));
+  if (!tabs.length) { tabs = [{ id: uid(), ...live }]; tabIdx = 0; renderTabs(); return; }
+  tabIdx = Math.min(act, tabs.length - 1);
+  Object.assign(tabs[tabIdx], live);   // etkin sekmenin otoritesi 'auto' (ve AI köprüsü) kaydıdır
+  renderTabs();
+}
+function renderTabs() {
+  const el = $('#ptabs'); if (!el) return;
+  el.innerHTML = tabs.map((t, i) => {
+    const nm = (i === tabIdx ? P && P.name : t.P && t.P.name) || L('Yeni Proje', 'New Project');
+    return `<div class="ptab${i === tabIdx ? ' on' : ''}" data-tab="${i}" title="${esc(nm)} — ${L('çift tık: yeniden adlandır', 'double-click: rename')}"><span class="ptn">📐 ${esc(nm)}</span><button class="ptx" data-tabclose="${i}" title="${L('Projeyi kapat', 'Close project')}">×</button></div>`;
+  }).join('') + `<button class="ptab-add" data-tabnew title="${L('Yeni proje sekmesi', 'New project tab')}">＋</button>`;
+}
+$('#ptabs').addEventListener('click', e => {
+  const c = e.target.closest('[data-tabclose]'); if (c) { e.stopPropagation(); closeTab(+c.dataset.tabclose); return; }
+  if (e.target.closest('[data-tabnew]')) { templatesModal(); return; }
+  const t = e.target.closest('[data-tab]'); if (t) switchTab(+t.dataset.tab);
+});
+$('#ptabs').addEventListener('dblclick', e => {
+  const t = e.target.closest('[data-tab]'); if (!t || e.target.closest('[data-tabclose]')) return;
+  if (+t.dataset.tab !== tabIdx) switchTab(+t.dataset.tab);
+  const nm = prompt(L('Proje adı:', 'Project name:'), P.name);
+  if (nm && nm.trim()) { P.name = nm.trim(); $('#pname').value = P.name; commit(); renderTabs(); }
+});
 let toastT;
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600); }
 
@@ -3344,7 +3430,7 @@ async function projectsModal() {
   $('#mOpenF').onclick = () => $('#fileOpen').click();
   $('#modal').querySelectorAll('[data-open]').forEach(b => b.onclick = () => {
     const it = list[+b.dataset.open];
-    if (it) { loadProject(JSON.parse(JSON.stringify(it.project)), isEN() ? `Opened “${it.name}”` : `“${it.name}” açıldı`); closeModal(); }
+    if (it) { newTabSlot(); loadProject(JSON.parse(JSON.stringify(it.project)), isEN() ? `Opened “${it.name}”` : `“${it.name}” açıldı`); closeModal(); }
   });
   $('#modal').querySelectorAll('[data-dl]').forEach(b => b.onclick = () => {
     const it = list[+b.dataset.dl];
@@ -3418,7 +3504,7 @@ function templatesModal() {
   openModal(`<h2>${L('Yeni proje – şablon seç', 'New project – choose a template')} <button class="btn sm" data-close>✕</button></h2><div class="cards">${TEMPLATES.map((t, i) => `<div class="card" data-tpl="${i}">${i ? thumbSvg(i) : `<svg viewBox="0 0 10 5"><text x="5" y="3" text-anchor="middle" font-size="1.5" fill="currentColor">＋</text></svg>`}<b>${isEN() ? t.en : t.name}</b><span class="muted">${isEN() ? t.descEn : t.desc}</span></div>`).join('')}</div>`, 'templates');
   $('#modal').querySelectorAll('[data-tpl]').forEach(c => c.onclick = () => {
     const i = +c.dataset.tpl, t = TEMPLATES[i]; const np = newProject(); np.name = i ? (isEN() ? t.en : t.name).replace(/ \(.*/, '') : L('Yeni Proje', 'New Project');
-    P = np; fi = 0; t.build(); loadProject(P); closeModal();
+    newTabSlot(); P = np; fi = 0; t.build(); loadProject(P); closeModal();
   });
 }
 
@@ -4543,6 +4629,7 @@ function applyLangUI() {
   $('#logoTxt').textContent = L('📐 Kat Planı', '📐 Floor Plan');
   $('#pname').title = L('Proje adı', 'Project name');
   $('#bNew').textContent = L('📄 Yeni', '📄 New');
+  if (P) renderTabs();
   $('#bProjects').textContent = L('📁 Projelerim', '📁 My Projects');
   $('#bSave').textContent = L('💾 Kaydet', '💾 Save');
   $('#bSave').title = L('Tarayıcıya kaydet (Ctrl+S)', 'Save to browser (Ctrl+S)');
@@ -4629,7 +4716,7 @@ $('#bTheme').onclick = () => {
   render();
   if (ui.view3d && T3) build3D();
 };
-$('#pname').addEventListener('input', e => { P.name = e.target.value; autosave(); });
+$('#pname').addEventListener('input', e => { P.name = e.target.value; renderTabs(); autosave(); });
 $('#pname').addEventListener('change', commit);
 $('#cSnap').onchange = e => { ui.snap = e.target.checked; };
 $('#cConn').onchange = e => { ui.connWalls = e.target.checked; };
@@ -4663,7 +4750,7 @@ $('#sGridType').onchange = e => {
 };
 $('#fileOpen').onchange = e => {
   const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-  r.onload = () => { try { const o = JSON.parse(r.result); if (!o.floors) throw new Error(L('geçersiz dosya', 'invalid file')); loadProject(o, L('Dosya açıldı', 'File opened')); closeModal(); } catch (er) { toast(L('Dosya açılamadı: ', 'Could not open file: ') + er.message); } };
+  r.onload = () => { try { const o = JSON.parse(r.result); if (!o.floors) throw new Error(L('geçersiz dosya', 'invalid file')); newTabSlot(); loadProject(o, L('Dosya açıldı', 'File opened')); closeModal(); } catch (er) { toast(L('Dosya açılamadı: ', 'Could not open file: ') + er.message); } };
   r.readAsText(file); e.target.value = '';
 };
 $('#fileBg').onchange = e => {
@@ -4673,7 +4760,7 @@ $('#fileBg').onchange = e => {
 };
 $('#tools').addEventListener('click', e => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); });
 new ResizeObserver(() => { if (P && !ui.view3d) render(); if (T3 && ui.view3d) resize3D(); }).observe($('#stage'));
-window.addEventListener('beforeunload', () => { if (P) dbPut('state', P, 'auto').catch(() => {}); });
+window.addEventListener('beforeunload', () => { if (P) { dbPut('state', P, 'auto').catch(() => {}); dbPut('state', tabsState(), 'tabs').catch(() => {}); } });
 if (localStorage.getItem('fp_theme') === 'light') document.documentElement.dataset.theme = 'light';
 
 applyLangUI();
@@ -4684,6 +4771,7 @@ applyLangUI();
   if (!saved) { try { saved = JSON.parse(localStorage.getItem('fp_auto') || 'null'); } catch (e) { } }
   if (saved && saved.floors) { loadProject(saved); translateDefaultNames(); refresh(); }
   else { P = newProject(); loadProject(P); templatesModal(); }
+  try { restoreTabs(await dbGet('state', 'tabs')); } catch (e) { }
   setTimeout(fit, 50);
   aiBridgeBoot();          // connect to a running local bridge, if any
 })();

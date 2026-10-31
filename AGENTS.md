@@ -112,6 +112,7 @@ Key semantics:
 | `tool`, `sel[]`, `placing` | Active tool, selected ids, item currently being placed |
 | `ui` | Transient UI state: `snap, angle, dims, cur, raw, draw, typed, drag, space, cat, q, view3d, v3dFloor, dimStart, polyPts, calib, clip, ghost, exporting, btn, lastE, pen, shot` |
 | `layersVis` | Layer visibility (`bg, rooms, walls, furn, dims, sketch`) — view-only, not persisted |
+| `tabs[]`, `tabIdx` | Open project tabs (issue #17): `{ id, P, hist, hi, fi, view, sel }` per tab; the **active** tab's live state is the globals above |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
 `tool` values: `select pan wall rect room poly place dim text pen eraser trim calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
@@ -166,7 +167,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
+`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -204,6 +205,12 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 
 ### Trim / split / corner (issue #15)
 `trim` tool (`X`): `wallCuts(w)` lists where other wall centrelines cross `w` (cm from `a`, ends excluded); `trimPlan(w, click)` picks the nearest crossing on each side of the click and `trimWall()` removes that piece — an end overhang moves the end, a piece between two crossings splits the wall (`splitWallAt`). Openings on the kept part are re-based, those on the removed part are deleted via `deleteIds`. The hover preview paints the doomed piece red. Wall panel: **✂ Split at intersection** (`splitx`, one wall) and **⌐ Join corner** (`corner`, exactly two walls → `joinCorner()` moves each wall's nearer end to the line intersection, trimming or extending). Guard: `tests/wall-trim.test.js`.
+
+### Project tabs (issue #17)
+- `#ptabs` (below the header) lists `tabs[]`; click switches, double-click renames, `×` closes, `＋` opens the template picker. `switchTab()` = `syncTab()` (globals → current tab) + `activateTab()` (tab → globals, then `refresh()`, `updateUndo()`, `autosave()`, 3D rebuild if open). Each tab keeps its own `hist`/`hi`, floor, view and selection; `ui.clip` is global, so copy/paste works across projects.
+- **Opening never destroys work:** the template picker, *My Projects* and *Open file* call `newTabSlot()` before `loadProject()` — if the current plan is not pristine (`isPristine()`), a new tab is inserted next to it. `loadProject()` ends with `syncTab()`. The AI bridge still loads into the **active** tab, and only the active tab is pushed to it.
+- Persistence: `autosave()` also writes `tabsState()` to IndexedDB `state`/`'tabs'` (project JSON only, not history; empty list with a single tab). Boot loads `'auto'` as before, then `restoreTabs()`; the active tab's content comes from `'auto'`.
+- `closeTab()` asks to confirm unless the plan is pristine or identical to its saved copy in the `projects` store; closing the last tab opens a blank project. `normalizeProject()` is the back-compat default filler shared by `loadProject()` and tab restore.
 
 ### Room detection (`detectRoom`)
 Rasterises walls to an offscreen canvas (resolution ≥ 2 cm/px, max ≈ 1800 px), flood-fills from the click, returns `'open'` if the fill reaches the border (leak), otherwise traces the outer boundary and simplifies it (Douglas-Peucker, ε≈1.1·res). Doors/windows do **not** open rooms because the walls underneath are rasterised solid.

@@ -289,6 +289,42 @@ check('wall paint and slab / room materials render in 2D and 3D (issue #12)', as
   return info.view3d ? 'paint + marble slab in 2D and 3D' : 'paint in 2D (3D unavailable)';
 });
 
+check('project tabs keep separate plans and undo, and paste across (issue #17)', async page => {
+  const info = await page.evaluate(`(async () => {
+    tabs = []; tabIdx = 0; loadProject(Object.assign(newProject(), { name: 'Tab A' }));
+    addRectWalls(0, 0, 400, 300); commit();
+    const histA = hi;
+    sel = [F().walls[0].id]; copySel();
+    templatesModal();
+    const card = document.querySelector('[data-tpl="2"]'); if (!card) return { err: 'no template card' };
+    card.click();                                   // opens in a NEW tab: tab A has walls
+    const r = { n1: tabs.length, idx1: tabIdx, bName: P.name, bWalls: F().walls.length };
+    const before = F().walls.length; paste(false);  // cross-project paste
+    r.pasted = F().walls.length - before;
+    r.bar = document.querySelectorAll('#ptabs .ptab').length;
+    document.querySelector('#ptabs [data-tab="0"]').click();
+    r.aName = P.name; r.aWalls = F().walls.length; r.aHi = hi === histA;
+    undo(); r.aAfterUndo = F().walls.length;
+    document.querySelector('#ptabs [data-tab="1"]').click();
+    r.bStill = F().walls.length;
+    r.state = tabsState().tabs.length;
+    window.confirm = () => true;
+    await closeTab(1);
+    r.n2 = tabs.length; r.after = P.name;
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  if (info.n1 !== 2 || info.idx1 !== 1) throw new Error('template did not open in a new tab: ' + JSON.stringify(info));
+  if (info.bar !== 2) throw new Error('tab bar shows ' + info.bar + ' tabs');
+  if (info.pasted !== 1) throw new Error('cross-tab paste added ' + info.pasted + ' walls');
+  if (info.aName !== 'Tab A' || info.aWalls !== 4 || !info.aHi) throw new Error('tab A not restored: ' + JSON.stringify(info));
+  if (info.aAfterUndo !== 0) throw new Error('tab A lost its own undo history');
+  if (info.bStill !== info.bWalls + 1) throw new Error('undo in tab A leaked into tab B');
+  if (info.state !== 2) throw new Error('open tabs are not persisted');
+  if (info.n2 !== 1 || info.after !== 'Tab A') throw new Error('closing a tab went wrong: ' + JSON.stringify(info));
+  return '2 tabs, separate undo, cross-tab paste, close';
+});
+
 check('3D: a real render is produced, and PNG follows the active view', async page => {
   const info = await page.evaluate(`(async () => {
     document.getElementById('b3d').click();
