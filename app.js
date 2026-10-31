@@ -2998,6 +2998,8 @@ function aiModal() {
      - floating AI pill + request queue (get_user_requests)
    ------------------------------------------------------------------------- */
 const BRIDGE_BASE = 'http://127.0.0.1:8787';
+// ?bridge=off: bu sekme köprüye hiç bağlanmaz (test tarayıcısı canlı AI planını ezmesin; kullanıcı için de bir kaçış yolu)
+const BRIDGE_OFF = (() => { try { return new URLSearchParams(location.search).get('bridge') === 'off'; } catch (e) { return false; } })();
 const BRIDGE_SEEN = 'fp_bridge_rev';
 const bridgeTab = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let brgRev = 0, brgConnected = false, brgHydrated = false, brgApplying = false;
@@ -3009,6 +3011,7 @@ let brgWake = false;             // bridge can start an agent turn by itself (FP
 function brgUrl(p) { return BRIDGE_BASE + p; }
 
 async function brgFetch(p, opt, ms) {
+  if (BRIDGE_OFF) throw new Error('bridge disabled (?bridge=off)');
   const ctl = typeof AbortController === 'function' ? new AbortController() : null;
   const t = ctl ? setTimeout(() => ctl.abort(), ms || 2500) : null;
   try {
@@ -3093,6 +3096,7 @@ async function brgSync() {
 
 /* --- connection lifecycle --- */
 async function brgConnect() {
+  if (BRIDGE_OFF) return false;
   if (brgEs) return true;
   try {
     const res = await brgFetch('/health');
@@ -3132,6 +3136,7 @@ function brgDisconnect() {
 /* keep looking for the bridge while the app stays open: it can be started,
    restarted or stopped at any time, and a dropped SSE stream must not be final */
 function brgStartProbe() {
+  if (BRIDGE_OFF) return;
   if (brgProbeTimer || brgEs) return;
   brgProbeTimer = setInterval(async () => {
     if (brgEs) { brgStopProbe(); return; }

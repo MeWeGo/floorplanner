@@ -135,6 +135,17 @@ check('the page boots with no uncaught errors', async (page, state) => {
   state.booted = s;
 });
 
+check('the test tab stays off any running AI bridge (?bridge=off)', async page => {
+  const info = await page.evaluate(`(() => ({
+    off: typeof BRIDGE_OFF !== 'undefined' && BRIDGE_OFF,
+    connected: !!brgConnected, es: !!brgEs, probing: !!brgProbeTimer,
+    hits: performance.getEntriesByType('resource').map(r => r.name).filter(n => n.includes(':8787')),
+  }))()`);
+  if (!info.off) throw new Error('smoke page was not opened with ?bridge=off');
+  if (info.connected || info.es || info.probing) throw new Error('bridge client is active despite ?bridge=off: ' + JSON.stringify(info));
+  if (info.hits.length) throw new Error('page contacted the bridge: ' + info.hits.join(', '));
+});
+
 check('every starter template loads and draws walls', async page => {
   const report = await page.evaluate(`(() => {
     const out = [];
@@ -527,7 +538,9 @@ check('3D: Ctrl+Z / Ctrl+Y undo the plan without leaving the 3D view', async pag
 
   const server = await serve();
   const port = server.address().port;
-  const url = `http://127.0.0.1:${port}/`;
+  // ?bridge=off: never reach a real mcp/bridge.js on 127.0.0.1:8787 — the checks load
+  // test plans, and a connected tab would push them over the user's live AI plan
+  const url = `http://127.0.0.1:${port}/?bridge=off`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-smoke-'));
   const debugPort = 9300 + Math.floor(Math.random() * 300);
 
