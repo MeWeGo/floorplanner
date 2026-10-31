@@ -158,6 +158,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | `T` | Text |
 | `B` | Pen – freehand sketch (drag to draw, release to finish) |
 | `E` | Eraser |
+| `X` | Trim — cut a crossing wall back to the intersection |
 | `C` | Calibrate background scale |
 | `G` | Toggle snapping |
 | `Shift` | Hold to bypass snapping · multi-select |

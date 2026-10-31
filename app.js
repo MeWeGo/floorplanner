@@ -938,6 +938,78 @@ function deleteIds(ids) {
 }
 function deleteSel() { if (!sel.length) return; deleteIds(sel); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
 
+/* ---------- Duvar kırpma / bölme (issue #15) ---------- */
+// İki doğru parçasının kesişimi: t (p1→p2), u (p3→p4) parametreleriyle; paralelse null
+function segIntersect(p1, p2, p3, p4, eps = 1e-6) {
+  const d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
+  if (Math.abs(d) < 1e-9) return null;
+  const t = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
+  const u = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
+  if (t < -eps || t > 1 + eps || u < -eps || u > 1 + eps) return null;
+  return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y), t, u };
+}
+// Duvarın diğer duvar eksenleriyle kesiştiği noktalar: a ucundan uzaklık (cm), uçlar hariç, sıralı
+function wallCuts(w, f = F()) {
+  const L = wLen(w), out = [];
+  for (const o of f.walls) {
+    if (o === w) continue;
+    const x = segIntersect(w.a, w.b, o.a, o.b); if (!x) continue;
+    const s = x.t * L; if (s > 1 && s < L - 1 && !out.some(v => Math.abs(v - s) < 1)) out.push(s);
+  }
+  return out.sort((p, q) => p - q);
+}
+const wallPt = (w, s) => { const L = wLen(w) || 1; return { x: w.a.x + (w.b.x - w.a.x) * s / L, y: w.a.y + (w.b.y - w.a.y) * s / L }; };
+// Duvarı a ucundan s cm'de ikiye böler; s'nin ötesindeki açıklıklar yeni parçaya geçer
+function splitWallAt(w, s, f = F()) {
+  const m = wallPt(w, s), nw = mkWall(m, w.b);
+  for (const k of ['t', 'h', 'wt', 'color']) if (w[k] != null) nw[k] = w[k];
+  w.b = m; f.walls.push(nw);
+  f.ops.forEach(op => { if (op.wall === w.id && op.d > s) { op.wall = nw.id; op.d -= s; } });
+  return nw;
+}
+// Tıklanan noktanın iki yanındaki en yakın kesişimler arasındaki parça (kırpılacak kısım)
+function trimPlan(w, c, f = F()) {
+  const L = wLen(w), sc = segProj(c, w.a, w.b).t * L, cuts = wallCuts(w, f);
+  if (!cuts.length) return null;
+  let lo = null, hi = null;
+  for (const s of cuts) { if (s < sc) lo = s; else if (hi == null) hi = s; }
+  return { lo: lo ?? 0, hi: hi ?? L, L };
+}
+function trimWall(w, c, f = F()) {
+  const pl = trimPlan(w, c, f); if (!pl) return false;
+  const { lo, hi, L } = pl, drop = [];
+  const onW = () => f.ops.filter(op => op.wall === w.id);
+  if (lo <= 0) {            // a tarafı kırpılır
+    onW().forEach(op => { if (op.d < hi) drop.push(op.id); else op.d -= hi; });
+    w.a = wallPt(w, hi);
+  } else if (hi >= L) {     // b tarafı kırpılır
+    onW().forEach(op => { if (op.d > lo) drop.push(op.id); });
+    w.b = wallPt(w, lo);
+  } else {                  // iki kesişim arası: orta parça çıkar, duvar ikiye ayrılır
+    splitWallAt(w, hi, f);
+    onW().forEach(op => { if (op.d > lo) drop.push(op.id); });
+    w.b = wallPt(w, lo);
+  }
+  if (drop.length) deleteIds(drop);
+  return true;
+}
+// İki duvarı eksenlerinin kesişiminde L köşe olarak birleştirir: her duvarın kesişime yakın ucu oraya taşınır (kırpar ya da uzatır)
+function joinCorner(w1, w2, f = F()) {
+  const d = (w1.b.x - w1.a.x) * (w2.b.y - w2.a.y) - (w1.b.y - w1.a.y) * (w2.b.x - w2.a.x);
+  if (Math.abs(d) < 1e-9) return false;
+  const t = ((w2.a.x - w1.a.x) * (w2.b.y - w2.a.y) - (w2.a.y - w1.a.y) * (w2.b.x - w2.a.x)) / d;
+  const X = { x: w1.a.x + t * (w1.b.x - w1.a.x), y: w1.a.y + t * (w1.b.y - w1.a.y) };
+  for (const w of [w1, w2]) {
+    const L = wLen(w) || 1, ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, sX = (X.x - w.a.x) * ux + (X.y - w.a.y) * uy;
+    const ops = f.ops.filter(op => op.wall === w.id), drop = [];
+    if (dist(w.a, X) <= dist(w.b, X)) { w.a = { x: X.x, y: X.y }; ops.forEach(op => { op.d -= sX; }); }
+    else w.b = { x: X.x, y: X.y };
+    const nL = wLen(w); ops.forEach(op => { if (op.d - op.w / 2 < -1 || op.d + op.w / 2 > nL + 1) drop.push(op.id); });
+    if (drop.length) deleteIds(drop);
+  }
+  return true;
+}
+
 /* ---------- Oda algılama (raster flood-fill) ---------- */
 function detectRoom(p) {
   const f = F(); if (!f.walls.length) return null;
@@ -1112,7 +1184,7 @@ const TOOLS = [
   ['select', '↖', 'Seç', 'V', 'Select'], ['pan', '✋', 'Kaydır', 'H', 'Pan'], null,
   ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
   ['door', '🚪', 'Kapı', 'D', 'Door'], ['window', '🪟', 'Pencere', 'N', 'Window'], ['furn', '🛋️', 'Mobilya', 'F', 'Furniture'], null,
-  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
+  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
 const HINTS = {
   select: 'Seç: tıkla / kutu çiz • Shift: çoklu seçim • sürükle: taşı • Del: sil',
@@ -1127,6 +1199,7 @@ const HINTS = {
   dim: 'Ölçü: iki noktaya tıkla',
   text: 'Metin eklemek için tıkla',
   eraser: 'Silmek istediğin nesneye tıkla',
+  trim: 'Kırp: kesişen duvarın taşan ucuna tıkla → kesişime kadar kırpılır (iki kesişim arasındaki parça da çıkarılabilir) • kırmızı = silinecek kısım',
   calib: 'Ölçek: arka plan görselinde bilinen iki noktaya tıkla, gerçek mesafeyi gir',
 };
 const HINTS_EN = {
@@ -1142,6 +1215,7 @@ const HINTS_EN = {
   dim: 'Dimension: click two points',
   text: 'Click to place a text label',
   eraser: 'Click any object to delete it',
+  trim: 'Trim: click the overhanging part of a crossing wall → it is cut back to the intersection (a piece between two crossings can be removed too) • red = part to remove',
   calib: 'Calibrate: click two points with a known distance on the background image, then enter real distance',
 };
 function buildShapeBar() {
@@ -1197,6 +1271,14 @@ function startPlace(type, def) {
 function drawPreview() {
   const C = pal(), ac = C.accent, g = $('#gPv'), z = view.z, cur = ui.cur; let s = '';
   const lbl = (x, y, t) => `<text x="${x}" y="${y}" font-size="${13 / z}" font-weight="700" fill="${C.text}" stroke="${C.halo}" stroke-width="${3.5 / z}" paint-order="stroke" text-anchor="middle" pointer-events="none">${t}</text>`;
+  if (tool === 'trim' && ui.raw) {
+    const hit = wallNear(ui.raw, Math.max(10 / z, 4)), pl = hit && trimPlan(hit.w, ui.raw);
+    if (pl) {
+      const p0 = wallPt(hit.w, pl.lo), p1 = wallPt(hit.w, pl.hi);
+      s += `<line x1="${p0.x}" y1="${p0.y}" x2="${p1.x}" y2="${p1.y}" stroke="#ef4444" stroke-opacity=".55" stroke-width="${hit.w.t + 4 / z}" pointer-events="none"/>`;
+      for (const q of [p0, p1]) s += `<circle cx="${q.x}" cy="${q.y}" r="${5 / z}" fill="#ef4444" pointer-events="none"/>`;
+    }
+  }
   if (cur && cur.hit === 'end') s += `<circle cx="${cur.x}" cy="${cur.y}" r="${8 / z}" fill="none" stroke="#10b981" stroke-width="${2 / z}"/>`;
   if (tool === 'wall' && cur) {
     if (ui.draw) {
@@ -1374,6 +1456,13 @@ cv.addEventListener('pointerdown', e => {
       render(); return;
     }
     case 'text': { const sp = ui.snap ? snapToGrid(raw) : raw; const t = { id: uid(), x: sp.x, y: sp.y, text: L('Metin', 'Text'), size: 24, color: '#1e293b', rot: 0 }; f.texts.push(t); sel = [t.id]; commit(); setTool('select'); refresh(); return; }
+    case 'trim': {
+      const hit = wallNear(raw, Math.max(10 / view.z, 4));
+      if (!hit) return;
+      if (trimWall(hit.w, raw)) { sel = sel.filter(id => find(id)); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+      else toast(L('Bu duvarı kesen başka duvar yok', 'No other wall crosses this one'));
+      return;
+    }
     case 'eraser': {
       const t = pickDataId(e);
       if (t) {
@@ -1783,7 +1872,10 @@ function renderProps() {
         <div class="row"><button class="btn sm primary" data-act="wallposInit">📐 ${L('3 Konumlu Açılır Duvar Yap', 'Enable 3 Angle Positions')}</button></div>`;
       }
     }
-    h += acts(`<button class="btn sm" data-act="split">${L('✂ Ortadan böl', '✂ Split in half')}</button>`);
+    const xc = n === 1 ? wallCuts(o).length : 0;
+    h += acts(`<button class="btn sm" data-act="split">${L('✂ Ortadan böl', '✂ Split in half')}</button>`
+      + (xc ? `<button class="btn sm" data-act="splitx" title="${L('Duvarı başka duvarlarla kesiştiği noktalardan böl', 'Split the wall where other walls cross it')}">${L('✂ Kesişimden böl', '✂ Split at intersection')} (${xc})</button>` : '')
+      + (n === 2 ? `<button class="btn sm" data-act="corner" title="${L('İki duvarı kesişimlerinde temiz bir L köşe yap (taşanı kırpar, kısayı uzatır)', 'Make a clean L corner where the two walls meet (trims overhangs, extends short walls)')}">${L('⌐ Köşe birleştir', '⌐ Join corner')}</button>` : ''));
   } else if (k === 'op') {
     h += fld(L('Tür', 'Type'), 'op', 'type', o.type, { sel: isEN() ? { door: 'Door', double: 'Double door', slide: 'Sliding', arch: 'Archway', window: 'Window' } : { door: 'Kapı', double: 'Çift kapı', slide: 'Sürgülü', arch: 'Açıklık', window: 'Pencere' } });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'op', 'w', o.w, { min: 20, max: 500 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'op', 'h', o.h, { min: 20, max: 400 }) + fld(L('Denizlik (cm)', 'Sill height (cm)'), 'op', 'sill', o.sill, { min: 0, max: 300 });
@@ -1922,6 +2014,17 @@ $('#props').addEventListener('click', e => {
   if (a === 'bgreset') { if (P.bg) { P.bg.x = 0; P.bg.y = 0; commit(); refresh(); } return; }
   if (a === 'bgremove') { P.bg = null; sel = sel.filter(x => x !== 'bg'); commit(); return refresh(); }
   if (a === 'calib') return setTool('calib');
+  if (a === 'corner') {
+    const ws = os.filter(x => x.kind === 'wall');
+    if (ws.length !== 2 || !joinCorner(ws[0].o, ws[1].o)) { toast(L('Paralel duvarlar köşe yapamaz', 'Parallel walls cannot form a corner')); return; }
+    commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
+  if (a === 'splitx') {
+    const w = os.find(x => x.kind === 'wall')?.o; if (!w) return;
+    const cuts = wallCuts(w); let cur = w, base = 0;
+    for (const c of cuts) { const nw = splitWallAt(cur, c - base); base = c; cur = nw; }
+    commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
   if (a === 'slabreset') { f.slabColor = null; commit(); if (ui.view3d && T3) schedBuild3D(); return refresh(); }
   if (a === 'paint') {
     const ws = os.filter(x => x.kind === 'wall'); if (!ws.length) return;
@@ -2457,7 +2560,7 @@ window.addEventListener('keydown', e => {
     selObjs().forEach(({ kind, o }) => { if (kind === 'wall' || kind === 'dim') { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (kind === 'room' || kind === 'sketch') o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
     commit(); render(); if (sel.includes('bg')) renderProps(); if (ui.view3d && T3) schedBuild3D(); return;
   }
-  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', c: 'calib', b: 'pen' };
+  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen' };
   if (map[k]) { setTool(map[k]); return; }
   if (k === 'g') { $('#cSnap').click(); return; }
   if (k === '0') fit(); else if (k === '+' || k === '=') zoomBtn(1.25); else if (k === '-') zoomBtn(0.8);
@@ -2511,6 +2614,7 @@ function helpModal() {
     ['T', 'Add Text label'],
     ['B', 'Pen: freehand sketch on the plan (drag to draw, release to finish)'],
     ['E', 'Eraser (click object to delete)'],
+    ['X', 'Trim (click the overhanging part of a crossing wall)'],
     ['C', 'Calibrate background image scale'],
     ['G', 'Toggle grid & endpoint snap'],
     ['Shift', 'Hold to disable snap • multi-select in Select mode'],
@@ -2549,6 +2653,7 @@ function helpModal() {
     ['T', 'Metin'],
     ['B', 'Kalem: plana serbest elle çizim (sürükle, bırak tamamlar)'],
     ['E', 'Sil'],
+    ['X', 'Kırp (kesişen duvarın taşan ucuna tıkla)'],
     ['C', 'Arka plan ölçekle'],
     ['G', 'Yakalamayı aç/kapa'],
     ['Shift', 'Basılıyken yakalama kapalı • seçimde çoklu seçim'],
