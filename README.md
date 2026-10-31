@@ -72,7 +72,9 @@
 ### 🏢 Project Tools
 - **Multiple floors** — add, duplicate, rename, delete; the floor below is shown faintly for alignment.
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
-- Layer visibility toggles, floor patterns (wood, tile, carpet), room colors.
+- Layer visibility toggles, floor patterns (wood, tile, carpet, marble, concrete, stone), room colors.
+- Wall paint: pick a colour or a preset swatch for one or many selected walls (2D paint strips, full colour in 3D).
+- Floor slab material per floor (project panel): areas without a room — balconies, hallways, terraces — get a finish in 3D too.
 - Unlimited **undo / redo**, copy / paste / duplicate, box & multi-select with a **box-select scope** (All / Walls / Furniture) in the footer.
 - Starter templates: Blank · Studio 1+0 · 2+1 Apartment · Office.
 
@@ -103,7 +105,7 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 ### 🧊 3D View & WASD Walk
 One click turns the plan into an interactive 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors. Orbit/zoom with the mouse, or walk around with **`WASD` / Arrow keys** (`Q`/`E` for down/up, `Shift` for faster travel).
 
-**Detail comes from the plan, not from extra settings:** furniture is modelled per catalogue item (sofa cushions, table legs, wardrobe doors and handles, fridge panels, WC bowl and tank, basin and faucet, plant foliage, TV screen, car wheels, stairs with a handrail …) purely from its type, size and colour, so existing plans and saved JSON improve with no migration. Openings get frames, sills and handles, solid walls get skirting boards and a top cap, `wood`/`tile`/`carpet` room floors become tiled textures tinted with the room colour, and a soft-shadowed sun lights the scene.
+**Detail comes from the plan, not from extra settings:** furniture is modelled per catalogue item (sofa cushions, table legs, wardrobe doors and handles, fridge panels, WC bowl and tank, basin and faucet, plant foliage, TV screen, car wheels, stairs with a handrail …) purely from its type, size and colour, so existing plans and saved JSON improve with no migration. Openings get frames, sills and handles, solid walls get skirting boards and a top cap, `wood`/`tile`/`carpet`/`marble`/`concrete`/`stone` room floors and floor slabs become tiled textures tinted with the room colour, and a soft-shadowed sun lights the scene.
 
 **Camera presets:** three small buttons next to the floor selector give **fit**, **top-down** and **eye level (1.6 m)** views. The **🎬** button beside them renders the current view to a high-resolution PNG (the top-bar **🖼 PNG** does the same while you are in 3D; hold **Shift** for a quick capture).
 

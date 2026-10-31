@@ -90,8 +90,10 @@ const OPENINGS = [
   { id: 'wsmall', name: 'Küçük Pencere', en: 'Small Window', w: 60, h: 60, sill: 130, icon: '🪟' },
 ];
 const OPDEF = Object.fromEntries(OPENINGS.map(o => [o.id, o]));
-const FLOORS = { none: 'Düz renk', wood: 'Parke', tile: 'Fayans', carpet: 'Halı' };
-const FLOORS_EN = { none: 'Solid color', wood: 'Wood parquet', tile: 'Tile', carpet: 'Carpet' };
+const FLOORS = { none: 'Düz renk', wood: 'Parke', tile: 'Fayans', carpet: 'Halı', marble: 'Mermer', concrete: 'Beton şap', stone: 'Dış mekan taşı' };
+const FLOORS_EN = { none: 'Solid color', wood: 'Wood parquet', tile: 'Tile', carpet: 'Carpet', marble: 'Marble', concrete: 'Polished concrete', stone: 'Outdoor stone' };
+// Duvar boyası paleti (issue #12): [hex, TR, EN]
+const PAINTS = [['#ffffff', 'Beyaz', 'White'], ['#f5f1e8', 'Kırık beyaz', 'Off-white'], ['#d6d3d1', 'Açık gri', 'Light grey'], ['#e7d8bf', 'Bej', 'Beige'], ['#b7c4a8', 'Adaçayı', 'Sage'], ['#9fb7c9', 'Gök mavisi', 'Sky blue'], ['#2f4058', 'Gece mavisi', 'Midnight blue'], ['#c8826b', 'Kiremit', 'Terracotta']];
 const getFloors = () => (lang === 'en' ? FLOORS_EN : FLOORS);
 const ROOMCOL = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#e9d5ff', '#fed7aa', '#a5f3fc', '#fbcfe8'];
 
@@ -103,7 +105,7 @@ let tool = 'select', sel = [], placing = null;
 const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true };
 
-const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [] });
+const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null });
 const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
 const F = () => P.floors[fi];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', dims: 'dim', texts: 'text', sketches: 'sketch' };
@@ -354,7 +356,7 @@ function loadProject(obj, msg) {
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
   if (P.bg) P.bg.id = 'bg';
-  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid'; });
+  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid'; });
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
   $('#pname').value = P.name; syncGridUI();
@@ -397,13 +399,13 @@ function pal(forceLight = ui.exporting) {
     gMin: forceLight ? '#cbd5e1' : '#dcd6ca', gMaj: forceLight ? '#94a3b8' : '#b8b0a0', dotMaj: '#64748b',
     text: '#151921', sub: '#475569', halo: paper, accent: '#1d4ed8',
     dim: '#0f766e', glass: '#e0f2fe', swing: '#8696ab',
-    roomOp: 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280'
+    roomOp: 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280', marble: '#64748b', concrete: '#57534e', stone: '#78716c'
   } : {
     lt: false, bg: '#0b0f14', wall: '#d5dee8', stroke: '#94a3b8', furnStroke: '#161e29',
     gMin: '#161f2c', gMaj: '#243244', dotMaj: '#475569',
     text: '#e6edf5', sub: '#b8c5d6', halo: '#0b0f14', accent: '#d99b26',
     dim: '#2dd4bf', glass: '#0369a1', swing: '#64748b',
-    roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af'
+    roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af', marble: '#cbd5e1', concrete: '#a8a29e', stone: '#a8a29e'
   };
 }
 function defsSvg() {
@@ -414,6 +416,9 @@ function defsSvg() {
   <pattern id="p-wood" width="120" height="24" patternUnits="userSpaceOnUse"><path d="M0 0H120M0 12H120M40 0V12M90 12V24" stroke="${C.wood}" stroke-opacity=".3" fill="none" stroke-width="1"/></pattern>
   <pattern id="p-tile" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M0 0H60V60" stroke="${C.tile}" stroke-opacity=".32" fill="none" stroke-width="1"/></pattern>
   <pattern id="p-carpet" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r="1.1" fill="${C.carpet}" fill-opacity=".38"/><circle cx="7.5" cy="7.5" r="1.1" fill="${C.carpet}" fill-opacity=".38"/></pattern>
+  <pattern id="p-marble" width="120" height="120" patternUnits="userSpaceOnUse"><path d="M0 0H120V120" stroke="${C.marble}" stroke-opacity=".3" fill="none" stroke-width="1"/><path d="M8 30C30 22 38 52 64 44S96 70 116 62M20 96C40 84 58 104 84 92" stroke="${C.marble}" stroke-opacity=".28" fill="none" stroke-width="1.2"/></pattern>
+  <pattern id="p-concrete" width="40" height="40" patternUnits="userSpaceOnUse"><circle cx="6" cy="9" r="1" fill="${C.concrete}" fill-opacity=".35"/><circle cx="27" cy="5" r=".8" fill="${C.concrete}" fill-opacity=".3"/><circle cx="18" cy="24" r="1.1" fill="${C.concrete}" fill-opacity=".3"/><circle cx="34" cy="31" r=".9" fill="${C.concrete}" fill-opacity=".35"/><circle cx="9" cy="35" r=".7" fill="${C.concrete}" fill-opacity=".3"/></pattern>
+  <pattern id="p-stone" width="80" height="80" patternUnits="userSpaceOnUse"><path d="M0 0H80M0 40H80M0 0V40M50 0V40M25 40V80M70 40V80" stroke="${C.stone}" stroke-opacity=".4" fill="none" stroke-width="2"/></pattern>
   <pattern id="g-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><path d="M${s} 0V${s}H0" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
   <pattern id="g-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><path d="M${ms} 0V${ms}H0" fill="none" stroke="${C.gMaj}" stroke-width="${swMaj}" stroke-opacity=".85"/></pattern>
   <pattern id="g-tri-minor" width="${s}" height="${h2}" patternUnits="userSpaceOnUse"><path d="M0 0H${s}M0 ${h}H${s}M0 0L${s / 2} ${h}L0 ${h2}M${s / 2} 0L${s} ${h}L${s / 2} ${h2}M${s / 2} 0L0 ${h}L${s / 2} ${h2}M${s} 0L${s / 2} ${h}L${s} ${h2}" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
@@ -528,6 +533,7 @@ function wallSvg(w, live) {
     }
   } else {
     s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="square" pointer-events="none"/>`;
+    if (w.color) s += wallPaintSvg(w);
   }
   if (hasPos) {
     const pv = w[wallPivot(w)], curIdx = clamp(w.posIdx ?? 0, 0, w.angles.length - 1);
@@ -539,6 +545,15 @@ function wallSvg(w, live) {
     }
   }
   if (live) s += `<line data-id="${w.id}" x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="transparent" stroke-width="${Math.max(w.t, 12 / view.z)}" pointer-events="stroke" style="cursor:pointer"/>`;
+  return s;
+}
+// Duvar boyası 2B: koyu duvar dolgusu korunur, iki yüzeyde ince boya şeridi (dışa aktarımda da okunur)
+function wallPaintSvg(w) {
+  const L = wLen(w); if (L < 1) return '';
+  const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, nx = -uy, ny = ux;
+  const sw = clamp(w.t * 0.22, 1.5, 5), o = w.t / 2 - sw / 2;
+  let s = '';
+  for (const sg of [-1, 1]) s += `<line x1="${w.a.x + nx * o * sg}" y1="${w.a.y + ny * o * sg}" x2="${w.b.x + nx * o * sg}" y2="${w.b.y + ny * o * sg}" stroke="${w.color}" stroke-width="${sw}" pointer-events="none"/>`;
   return s;
 }
 function wallDimSvg(w) {
@@ -1683,6 +1698,8 @@ function renderProps() {
     if (n === 1) h += fld(L('Uzunluk (cm)', 'Length (cm)'), 'wall', 'len', wLen(o), { step: 1, min: 1 });
     h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 });
     h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall') } });
+    h += fld(L('🎨 Duvar boyası', '🎨 Wall paint'), 'wall', 'color', o.color || '#f5f1e8', { type: 'color' });
+    h += `<div class="row swatches">${PAINTS.map(([c, tr, en]) => `<button class="btn sm swatch${o.color === c ? ' on' : ''}" data-act="paint" data-c="${c}" title="${L(tr, en)}" style="background:${c}"></button>`).join('')}<button class="btn sm" data-act="paint" data-c="" title="${L('Varsayılan renk', 'Default colour')}">${L('↺ Varsayılan', '↺ Default')}</button></div>`;
     if (n === 1) {
       h += fld(L('Açı (°)', 'Angle (°)'), 'wall', 'deg', wallDeg(o), { step: 5, min: 0, max: 360 });
       h += fld(L('Sabit Nokta (Menteşe)', 'Fixed Point (Pivot)'), 'wall', 'pivot', wallPivot(o), {
@@ -1765,6 +1782,11 @@ function projectPanel() {
   h += `<h4>${L('Arka plan görseli', 'Background image')}</h4>`;
   if (P.bg) h += bgFields(false);
   else h += `<p class="muted" style="margin:0 0 6px">${L('Kroki / mevcut plan görselini altlık olarak ekleyip üzerinden çizebilirsin.', 'Import a blueprint or floor plan image as an underlay to trace over.')}</p><div class="row"><button class="btn sm" data-act="bgadd">${L('🖼 Görsel ekle', '🖼 Add image')}</button></div>`;
+  h += `<h4>${L('Kat döşemesi', 'Floor slab')} – ${esc(f.name)}</h4>`;
+  h += fld(L('Malzeme', 'Material'), 'floor', 'slabFloor', f.slabFloor || 'none', { sel: getFloors() })
+    + fld(L('Döşeme rengi', 'Slab colour'), 'floor', 'slabColor', f.slabColor || '#cbd5e1', { type: 'color' });
+  if (f.slabColor) h += `<div class="row"><button class="btn sm" data-act="slabreset">${L('↺ Varsayılan renk', '↺ Default colour')}</button></div>`;
+  h += `<p class="muted" style="margin:0 0 6px">${L('3B görünümde odası olmayan alanlar (balkon, antre, teras) da bu malzemeyle kaplanır.', 'In 3D, areas without a room (balcony, hallway, terrace) are finished with this material too.')}</p>`;
   const rooms = f.rooms; let tot = 0;
   h += `<h4>${L('Odalar', 'Rooms')} – ${esc(f.name)}</h4>`;
   if (!rooms.length) h += `<p class="muted" style="margin:0">${L('Henüz oda yok. “Oda algıla” aracı ile kapalı alanlara tıkla.', 'No rooms yet. Click inside enclosed areas with the “Auto Room” tool.')}</p>`;
@@ -1780,7 +1802,8 @@ function affects3D(k, p) {
   // yalnızca 3B sahneyi gerçekten etkileyen özellikler yeniden insin
   if (k === 'wall' || k === 'op') return true;
   if (k === 'furn') return p !== 'label';
-  if (k === 'room') return p === 'color';
+  if (k === 'room') return p === 'color' || p === 'floor';
+  if (k === 'floor') return true;
   if (k === 'sketch') return p === 'w' || p === 'color';
   return false; // dim/text/bg/layer 3B'yi etkilemez
 }
@@ -1788,6 +1811,7 @@ function applyProp(t, final) {
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
   if (k === 'layer') { layersVis[p] = v; render(); return; }
+  if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
   if (k === 'bg' && P.bg) { P.bg[p] = v; if (p === 'lock' && v) sel = sel.filter(x => x !== 'bg'); render(); if (final) { commit(); if (p === 'lock') renderProps(); } return; }
   if (k === 'wallpos') {
@@ -1832,7 +1856,7 @@ function applyProp(t, final) {
     if (k === 'furn' && p === 'rot') os.forEach(x => moveFurn3D(x.o));
     else if (affects3D(k, p)) schedBuild3D();
   }
-  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p)) renderProps(); }
+  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p) || (k === 'wall' && p === 'color')) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -1847,6 +1871,12 @@ $('#props').addEventListener('click', e => {
   if (a === 'bgreset') { if (P.bg) { P.bg.x = 0; P.bg.y = 0; commit(); refresh(); } return; }
   if (a === 'bgremove') { P.bg = null; sel = sel.filter(x => x !== 'bg'); commit(); return refresh(); }
   if (a === 'calib') return setTool('calib');
+  if (a === 'slabreset') { f.slabColor = null; commit(); if (ui.view3d && T3) schedBuild3D(); return refresh(); }
+  if (a === 'paint') {
+    const ws = os.filter(x => x.kind === 'wall'); if (!ws.length) return;
+    for (const { o } of ws) { if (b.dataset.c) o.color = b.dataset.c; else delete o.color; }
+    commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
   if (a === 'group') return groupSel();
   if (a === 'ungroup') return ungroupSel();
   if (a === 'varInit' || a === 'varSave' || a === 'varNew' || a === 'varDel' || a === 'varGo' || a === 'varNext') return varAction(a, b.dataset.idx != null ? +b.dataset.idx : null);
@@ -1897,7 +1927,7 @@ $('#props').addEventListener('click', e => {
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
     if (a === 'redetect' && kind === 'room') { const c = polyCentroid(o.pts); const r = detectRoom(pointInPoly(c, o.pts) ? c : o.pts[0]); if (Array.isArray(r)) o.pts = r; else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
     if (a === 'split' && kind === 'wall') {
-      const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; const L = wLen(o), old = o.b;
+      const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; if (o.color) nw.color = o.color; const L = wLen(o), old = o.b;
       o.b = m; f.walls.push(nw);
       f.ops.forEach(op => { if (op.wall === o.id && op.d > L / 2) { op.wall = nw.id; op.d -= L / 2; } });
     }
@@ -3750,7 +3780,7 @@ function mixHex(a, b, t) {
 function floorTexture(kind, color, lt, C) {
   const key = kind + '|' + color + '|' + (lt ? 'l' : 'd');
   if (C.floorTex[key]) return C.floorTex[key];
-  const accent = kind === 'wood' ? '#b08968' : kind === 'tile' ? '#94a3b8' : '#9ca3af';
+  const accent = { wood: '#b08968', tile: '#94a3b8', marble: '#e7e5e4', concrete: '#a8a29e', stone: '#a8a29e' }[kind] || '#9ca3af';
   const px = 256, cv = document.createElement('canvas'); cv.width = cv.height = px;
   const g = cv.getContext('2d');
   // oda rengi korunur ama malzeme tonuna doğru harmanlanır (pastel renkler bembeyaz olmasın)
@@ -3771,12 +3801,38 @@ function floorTexture(kind, color, lt, C) {
   } else if (kind === 'carpet') {
     g.fillStyle = line;
     for (let y = 8; y < px; y += 16) for (let x = 8; x < px; x += 16) { g.beginPath(); g.arc(x + ((y / 16) % 2 ? 8 : 0), y, 2.4, 0, 6.2832); g.fill(); }
+  } else if (kind === 'marble') {
+    // damarlı mermer: deterministik (Math.random yok) ki her build aynı görünsün
+    g.strokeStyle = line; g.globalAlpha = 0.45;
+    for (let i = 0; i < 5; i++) {
+      g.lineWidth = 0.8 + (i % 3) * 0.6; g.beginPath();
+      let x = 0, y = (i * 53 + 20) % px; g.moveTo(x, y);
+      while (x < px) { x += 18; y += Math.sin(x * 0.045 + i * 1.7) * 9 + (i % 2 ? 3 : -2); g.lineTo(x, y); }
+      g.stroke();
+    }
+    g.globalAlpha = 1; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(0, px / 2); g.lineTo(px, px / 2); g.moveTo(px / 2, 0); g.lineTo(px / 2, px); g.stroke();
+  } else if (kind === 'concrete') {
+    // ince taneli şap: sabit tohumlu küçük benekler
+    let sd = 7;
+    const rnd01 = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 900; i++) { g.fillStyle = rnd01() > 0.5 ? line : shade(base, lt ? 0.12 : -0.12); g.globalAlpha = 0.25 + rnd01() * 0.3; g.fillRect(rnd01() * px, rnd01() * px, 1.5, 1.5); }
+    g.globalAlpha = 1;
+  } else if (kind === 'stone') {
+    // dış mekan taşı: şaşırtmalı farklı ölçülü karolar
+    g.strokeStyle = line; g.lineWidth = 4;
+    const rows = [[0, 0.62], [0.3, 0.8], [0.15, 0.55, 0.85], [0.45]];
+    rows.forEach((xs, i) => {
+      const y = i * px / 4; g.beginPath(); g.moveTo(0, y); g.lineTo(px, y);
+      for (const x of xs) { g.moveTo(x * px, y); g.lineTo(x * px, y + px / 4); }
+      g.stroke();
+    });
   }
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.encoding = THREE.sRGBEncoding;
   t.anisotropy = 4;
-  const rep = kind === 'wood' ? 160 : kind === 'tile' ? 120 : 80; // cm cinsinden karo boyu
+  const rep = { wood: 160, tile: 120, marble: 240, concrete: 200, stone: 200 }[kind] || 80; // cm cinsinden karo boyu
   t.repeat.set(1 / rep, 1 / rep);
   C.floorTex[key] = t; C.texs.push(t);
   return t;
@@ -4090,13 +4146,22 @@ function build3D(keepCam = false) {
     if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return; // kat seçici: yalnızca seçili kat çizilir
     // zemin plakası: duvarların dış konturunu izleyen poligon — açılı planlarda AABB gibi taşmaz
     const slabCol = lt ? 0xded8cc : (fidx === 0 ? 0x171e29 : 0x232b38);
+    // kat döşemesi malzemesi (issue #12): kullanıcı seçtiyse üst yüze doku/renk, yan yüzler düz
+    const sKind = f.slabFloor && f.slabFloor !== 'none' ? f.slabFloor : null, custom = !!(sKind || f.slabColor);
+    let slabMat = mat(slabCol);
+    if (custom) {
+      const sc = f.slabColor || '#cbd5e1';
+      let top = mat(sc);
+      if (sKind && det) { top = new THREE.MeshLambertMaterial({ map: floorTexture(sKind, sc, lt, { floorTex, texs }), side: THREE.DoubleSide }); extraMats.push(top); }
+      slabMat = [top, mat(shade(sc, -0.25))];          // ExtrudeGeometry: grup 0 = kapaklar, grup 1 = yanlar
+    }
     for (const pts of slabPolys(f)) {
       const shp = new THREE.Shape(pts.map(p => new THREE.Vector2(p.x, p.y)));
       const geo = new THREE.ExtrudeGeometry(shp, { depth: 20, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
-      const m = new THREE.Mesh(geo, mat(slabCol));
+      const m = new THREE.Mesh(geo, slabMat);
       m.position.y = elev; m.receiveShadow = true;
-      m.userData.slab = true;                         // the render may swap it for the light slab
+      if (!custom) m.userData.slab = true;            // the render may swap it for the light slab (user materials stay)
       S.add(m);
     }
     f.rooms.forEach(r => {
@@ -4117,7 +4182,7 @@ function build3D(keepCam = false) {
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
       const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
-      const wCol = hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0);
+      const wCol = w.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
       const curt = w.wt === 'curtain', rail = 5, frameCol = lt ? 0x8fa3b8 : 0x7c8a9c;
       if (curt) { box(g, L, rail, w.t, frameCol, 0, rail / 2, 0); box(g, L, rail, w.t, frameCol, 0, H - rail / 2, 0); } // alt & üst kuşak
       const seg = (s, e, y0, y1) => {

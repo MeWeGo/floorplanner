@@ -12,7 +12,7 @@
 
    Conventions (mirrors app.js — keep in sync!):
    - All units are CENTIMETRES; the Y axis points DOWN (screen convention).
-   - Wall { id, a:{x,y}, b:{x,y}, t, h, wt:'solid'|'curtain' }.
+   - Wall { id, a:{x,y}, b:{x,y}, t, h, wt:'solid'|'curtain', color?:'#hex' }.
    - Openings are parametric on a wall: d = distance from the wall's "a" end
      to the opening CENTRE (cm). Deleting a wall deletes its openings.
    - Furniture comes from the catalogue (see CATALOG below).
@@ -98,7 +98,7 @@ const OPENINGS = [
 ];
 const OPDEF = Object.fromEntries(OPENINGS.map(o => [o.id, o]));
 const ROOMCOL = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#e9d5ff', '#fed7aa', '#a5f3fc', '#fbcfe8'];
-const FLOORPATS = ['none', 'wood', 'tile', 'carpet'];
+const FLOORPATS = ['none', 'wood', 'tile', 'carpet', 'marble', 'concrete', 'stone'];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', dims: 'dim', texts: 'text', sketches: 'sketch' };
 
 /* ---------- Small helpers (mirror app.js) ---------- */
@@ -129,7 +129,7 @@ function parsePts(v, min, name) {
 /* ---------- Project state ---------- */
 let P = null; // working project (same schema the app saves/loads)
 
-function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [] }; }
+function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null }; }
 function newProject(a) {
   a = a || {};
   return {
@@ -194,6 +194,7 @@ function mkWall(f, a) {
     h: num(a.h, P.wallH, 'h'),
     wt: a.wt === 'curtain' ? 'curtain' : 'solid',
   };
+  if (a.color) w.color = String(a.color);
   if (wLen(w) <= 0) throw new Error('Wall length must be > 0');
   f.walls.push(w);
   return w;
@@ -495,6 +496,7 @@ tool('add_wall',
     t: { type: 'number', description: 'Thickness in cm. Default: project wallT.' },
     h: { type: 'number', description: 'Height in cm. Default: project wallH.' },
     wt: { type: 'string', enum: ['solid', 'curtain'], description: 'Wall type: "solid" (default) or "curtain" (glass facade).' },
+    color: { type: 'string', description: 'Optional wall paint colour (#hex). Omit for the default wall colour.' },
     floorIndex: floorArg,
   },
   ['x1', 'y1', 'x2', 'y2'],
@@ -577,7 +579,7 @@ tool('add_room',
     pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: '3+ corners in order (clockwise or counter-clockwise).' },
     name: { type: 'string', description: 'Room name, e.g. "Salon" / "Living room".' },
     color: { type: 'string', description: '#hex fill color. Default: next palette color.' },
-    floorPattern: { type: 'string', enum: FLOORPATS, description: 'none | wood | tile | carpet. Default none.' },
+    floorPattern: { type: 'string', enum: FLOORPATS, description: FLOORPATS.join(' | ') + '. Default none.' },
     floorIndex: floorArg,
   },
   ['pts'],

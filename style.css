@@ -786,6 +786,18 @@ main {
   margin: 8px 0;
 }
 
+/* Duvar boyası paleti (issue #12) */
+.swatches .swatch {
+  width: 25px;
+  padding: 0;
+  border: 1px solid var(--line);
+}
+
+.swatches .swatch.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .stat {
   display: flex;
   justify-content: space-between;
