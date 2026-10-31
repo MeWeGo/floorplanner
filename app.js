@@ -100,7 +100,7 @@ let P, fi = 0;
 let hist = [], hi = -1;
 const view = { x: 0, y: 0, z: 0.5 };
 let tool = 'select', sel = [], placing = null;
-const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' } };
+const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true };
 
 const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [] });
@@ -2421,6 +2421,7 @@ function helpModal() {
     ['3D: click / drag furniture', 'Select & highlight • drag to move on the floor (Shift: no grid snap) • resize via the side panel'],
     ['Wall type: Curtain Wall', 'Select a wall → Wall Type → 🪟 Curtain Wall: glass facade with aluminum frame in 2D & 3D'],
     ['3D: Floor selector', 'Menu at the top-left of the 3D view — show all floors stacked, or isolate one floor at ground level'],
+    ['3D: 📸 render', 'Save the current 3D camera view as a high-resolution PNG (the top-bar 🖼 PNG button does the same while in 3D)'],
     ['Ctrl+C/V/D', 'Copy / Paste / Duplicate'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'],
     ['Ctrl+A', 'Select all on current floor'],
@@ -2457,6 +2458,7 @@ function helpModal() {
     ['3B: mobilyaya tıkla / sürükle', 'Seç & vurgula • zeminde sürükle (Shift: ızgara yok) • boyutu sağ panelden değiştir'],
     ['Duvar tipi: Cam Cephe', 'Duvar seç → Duvar Tipi → 🪟 Cam Cephe: 2B ve 3B içinde alüminyum çerçeveli cam cephe'],
     ['3B: Kat seçici', '3B görünümün sol üstündeki menü — tüm katlar üst üste ya da tek kat yer seviyesinde'],
+    ['3B: 📸 render', 'Mevcut 3B kamera görünümünü yüksek çözünürlüklü PNG olarak kaydet (3B açıkken üstteki 🖼 PNG de aynısını yapar)'],
     ['Ctrl+C/V/D', 'Kopyala / Yapıştır / Çoğalt'],
     ['Ctrl+Z / Ctrl+Y', 'Geri al / Yinele'],
     ['Ctrl+A', 'Tümünü seç'],
@@ -3208,6 +3210,75 @@ function exportPrint() {
   win.document.close();
 }
 
+/* ---------- 3B render (PNG) ----------
+   The 3D view is a live WebGL canvas, so the only honest "export" is a capture
+   of the current camera. The renderer is created without preserveDrawingBuffer,
+   which means the drawing buffer is discarded once the task yields — therefore
+   render() and toDataURL() must stay in ONE synchronous block. Do not make this
+   async, and never split the two lines. */
+
+/** How much to oversample a w×h viewport: 2×–3×, capped by side and by pixels.
+    Never downscales below 1× — a viewport is never shrunk just to hit a cap. */
+function shot3DScale(w, h, maxSide = 3840, maxPixels = 12e6) {
+  const side = Math.max(1, w, h);
+  const ideal = Math.max(2, Math.min(3, maxSide / side));
+  return Math.max(1, Math.min(ideal, maxSide / side, Math.sqrt(maxPixels / (w * h))));
+}
+
+function dataUrlBlob(url) {
+  const parts = String(url).split(','), head = parts[0] || '', b64 = parts[1] || '';
+  const mime = (head.match(/data:([^;]+)/) || [])[1] || 'image/png';
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+/** PNG data URL of the current camera, oversampled. '' when 3D is not running. */
+function render3DDataUrl(scale) {
+  if (!ui.view3d || !T3 || !T3.r) return '';
+  const { r, scene, cam, ctl } = T3, el = $('#v3d');
+  const w = Math.max(1, el.clientWidth), h = Math.max(1, el.clientHeight);
+  const k = scale || shot3DScale(w, h);
+  const oldRatio = r.getPixelRatio();
+  let url = '';
+  try {
+    ctl.update();
+    r.setPixelRatio(1);                                  // the ratio would multiply the target size
+    r.setSize(Math.round(w * k), Math.round(h * k), false); // false: the canvas stays visually the same
+    cam.aspect = w / h; cam.updateProjectionMatrix();
+    r.render(scene, cam);
+    url = r.domElement.toDataURL('image/png');            // same task — the buffer is not preserved
+  } finally {
+    r.setPixelRatio(oldRatio);
+    resize3D();                                           // back to the on-screen size + aspect
+    if (ui.view3d && T3.run) r.render(scene, cam);
+  }
+  return url;
+}
+
+function export3DRender() {
+  if (!ui.view3d || !T3) return toast(L('Önce 3B görünüme geçin', 'Switch to the 3D view first'));
+  if (ui.shot) return;                                    // guard against a double click
+  ui.shot = true;
+  try {
+    const url = render3DDataUrl();
+    if (!url || url.length < 100) return toast(L('Render alınamadı', 'Could not capture the render'));
+    download(fname('png').replace(/\.png$/, '-3d-render.png'), dataUrlBlob(url));
+    toast(L('📸 3B render kaydedildi', '📸 3D render saved'));
+  } catch (e) {
+    toast(L('Render alınamadı: ', 'Could not capture the render: ') + (e && e.message || e));
+  } finally { ui.shot = false; }
+}
+
+/** The top-bar PNG button is context-aware, so say what it will do. */
+function syncExportTitles() {
+  const b = $('#bPng');
+  if (!b) return;
+  b.title = ui.view3d
+    ? L('Mevcut 3B görünümü PNG olarak kaydet', 'Save the current 3D view as a PNG')
+    : L('2B planı PNG olarak kaydet', 'Save the 2D plan as a PNG');
+}
+
 /* ---------- 3B Görünüm ---------- */
 let T3 = null;
 function sync3DFloors() {
@@ -3222,7 +3293,7 @@ function sync3DFloors() {
 function show3D(on) {
   if (on && (!window.THREE || !THREE.OrbitControls)) { toast(L('3B için internet bağlantısı gerekli (Three.js yüklenemedi)', 'Internet connection required for 3D (Three.js failed to load)')); return; }
   ui.view3d = on; keys3D.clear(); $('#v3d').style.display = on ? 'block' : 'none'; $('#b2d').classList.toggle('on', !on); $('#b3d').classList.toggle('on', on);
-  $('#zoomctl').style.display = on ? 'none' : ''; updateTools();
+  $('#zoomctl').style.display = on ? 'none' : ''; updateTools(); syncExportTitles();
   if (on) { init3D(); build3D(); T3.run = true; loop3D(); } else if (T3) T3.run = false;
 }
 function init3D() {
@@ -4018,6 +4089,8 @@ function applyLangUI() {
   if ($('#b3dFit')) $('#b3dFit').title = L('Sığdır', 'Fit');
   if ($('#b3dTop')) $('#b3dTop').title = L('Üstten görünüm', 'Top view');
   if ($('#b3dEye')) $('#b3dEye').title = L('Göz hizası (1.6 m)', 'Eye level (1.6 m)');
+  if ($('#b3dShot')) $('#b3dShot').title = L('📸 Render al (PNG)', '📸 Save render (PNG)');
+  syncExportTitles();
   if ($('#s3dFloor')) $('#s3dFloor').dataset.opts = ''; // dil değişince seçenekleri yeniden yaz
   $('#lblAngle').textContent = (P && P.gridType === 'triangle') ? L('Açı 30°', 'Angle 30°') : L('Açı 15°', 'Angle 15°');
   if (!P && ($('#pname').value === 'Yeni Proje' || $('#pname').value === 'New Project')) $('#pname').value = L('Yeni Proje', 'New Project');
@@ -4041,13 +4114,14 @@ $('#bNew').onclick = templatesModal; $('#bProjects').onclick = projectsModal; $(
 $('#bJson').onclick = () => downloadJson(P);
 $('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpModal; $('#bAi').onclick = () => aiModal();
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
-$('#bPng').onclick = exportPng; $('#bPrint').onclick = exportPrint;
+$('#bPng').onclick = () => (ui.view3d ? export3DRender() : exportPng()); $('#bPrint').onclick = exportPrint;
 $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { type: 'image/svg+xml' }));
 $('#b2d').onclick = () => show3D(false); $('#b3d').onclick = () => show3D(true);
 $('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && ui.view3d) build3D(true); };
 $('#b3dFit').onclick = () => set3DCam('fit');
 $('#b3dTop').onclick = () => set3DCam('top');
 $('#b3dEye').onclick = () => set3DCam('eye');
+$('#b3dShot').onclick = export3DRender;
 $('#bLang').onclick = () => setLang(isEN() ? 'tr' : 'en');
 $('#bTheme').onclick = () => {
   const d = document.documentElement;

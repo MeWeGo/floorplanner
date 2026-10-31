@@ -253,6 +253,68 @@ check('3D view builds, or degrades cleanly without WebGL', async page => {
   return 'built ' + info.meshes + ' scene nodes';
 });
 
+check('3D: the camera view can be captured, and PNG follows the active view', async page => {
+  const info = await page.evaluate(`(() => {
+    document.getElementById('b3d').click();
+    const toast = document.getElementById('toast');
+    if (!(typeof ui !== 'undefined' && ui.view3d && typeof T3 !== 'undefined' && T3)) {
+      return { view3d: false, toast: toast ? toast.textContent : '' };
+    }
+    const el = document.getElementById('v3d');
+    const before = { w: T3.r.domElement.width, h: T3.r.domElement.height, ratio: T3.r.getPixelRatio() };
+    const scale = 1.5;
+    const url = render3DDataUrl(scale);
+    const after = { w: T3.r.domElement.width, h: T3.r.domElement.height, ratio: T3.r.getPixelRatio() };
+    const shot = document.getElementById('b3dShot');
+    const camBtns = [...document.querySelectorAll('#c3dCam button')].map(b => b.id);
+
+    // capture the download instead of writing a file, then hit both entry points
+    const saved = [];
+    const realDownload = window.download;
+    window.download = (name, blob) => saved.push({ name, size: blob && blob.size || 0, type: blob && blob.type });
+    let pngHandler = '';
+    document.getElementById('bPng').click();
+    const in3d = saved.length ? saved[saved.length - 1].name : '(no download)';
+    show3D(false);
+    window.exportPng = () => { pngHandler = '2d'; };
+    document.getElementById('bPng').click();
+    window.download = realDownload;
+
+    return {
+      view3d: true, urlHead: String(url).slice(0, 22), urlLen: url.length,
+      before, after, shotBtn: !!shot, shotTitle: shot ? shot.title : '', camBtns,
+      in3d, size: saved.length ? saved[0].size : 0, type: saved.length ? saved[0].type : '',
+      pngHandler, tooltip2d: document.getElementById('bPng').title,
+    };
+  })()`);
+
+  if (!info.view3d) return 'skipped: WebGL/Three.js unavailable (' + (info.toast || '').slice(0, 60) + ')';
+
+  // a blank capture is the classic failure: the WebGL buffer was already gone
+  if (info.urlHead !== 'data:image/png;base64,') throw new Error('capture is not a PNG data URL: ' + info.urlHead);
+  if (info.urlLen < 5000) throw new Error('capture looks blank (' + info.urlLen + ' chars) — the drawing buffer was lost');
+
+  // the viewport must come back exactly as it was
+  if (info.after.w !== info.before.w || info.after.h !== info.before.h) {
+    throw new Error('viewport not restored: ' + JSON.stringify({ before: info.before, after: info.after }));
+  }
+  if (Math.abs(info.after.ratio - info.before.ratio) > 1e-9) throw new Error('pixel ratio not restored: ' + info.after.ratio);
+
+  if (!info.shotBtn) throw new Error('#b3dShot is missing from the camera overlay');
+  for (const id of ['b3dFit', 'b3dTop', 'b3dEye', 'b3dShot']) {
+    if (!info.camBtns.includes(id)) throw new Error('#' + id + ' is not in the camera bar: ' + info.camBtns.join(','));
+  }
+  if (!/-3d-render\.png$/.test(info.in3d)) throw new Error('3D PNG filename is wrong: ' + info.in3d);
+  if (info.size < 3000) throw new Error('downloaded render is suspiciously small: ' + info.size + ' bytes');
+  if (!/^image/.test(info.type || '')) throw new Error('render blob has no image type: ' + info.type);
+  if (!info.shotTitle) throw new Error('the 📸 button has no tooltip');
+  if (info.pngHandler !== '2d') throw new Error('leaving 3D must restore the 2D PNG export');
+  if (!info.tooltip2d) throw new Error('the PNG tooltip does not follow the view');
+
+  await page.evaluate(`(() => { show3D(false); return true; })()`);
+  return 'captured ' + Math.round(info.size / 1024) + ' KB · ' + info.in3d;
+});
+
 /* ---------- main ---------- */
 (async () => {
   const browserPath = findBrowser();

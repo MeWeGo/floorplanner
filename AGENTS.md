@@ -110,7 +110,7 @@ Key semantics:
 | `hist[]`, `hi` | Undo stack of `JSON.stringify(P)` snapshots (max 150) and pointer |
 | `view {x,y,z}` | Pan (px) and zoom (px per cm). World→screen: `s = w*z + view` |
 | `tool`, `sel[]`, `placing` | Active tool, selected ids, item currently being placed |
-| `ui` | Transient UI state: `snap, angle, dims, cur, raw, draw, typed, drag, space, cat, q, view3d, v3dFloor, dimStart, polyPts, calib, clip, ghost, exporting, btn, lastE, pen` |
+| `ui` | Transient UI state: `snap, angle, dims, cur, raw, draw, typed, drag, space, cat, q, view3d, v3dFloor, dimStart, polyPts, calib, clip, ghost, exporting, btn, lastE, pen, shot` |
 | `layersVis` | Layer visibility (`bg, rooms, walls, furn, dims, sketch`) — view-only, not persisted |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
@@ -166,7 +166,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
+`pname, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -237,6 +237,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 - Lighting: hemisphere + a shadow-casting directional light fitted to `contentBounds` (1024/2048 shadow map) + a low fill light. The renderer uses `PCFSoftShadowMap`, `outputEncoding = sRGBEncoding` and `ACESFilmicToneMapping` at ~1.05 exposure; ground, slabs and floors receive, large walls/furniture cast.
 - Detail level: `build3D()` estimates the object count and drops part edges / frames / floor textures above ~3000 objects (`det` flag) instead of exposing a user setting.
 - Camera presets: `set3DCam('fit'|'top'|'eye')` backs the three small buttons next to `#s3dFloor` (`#b3dFit/#b3dTop/#b3dEye` in `.ctl3dCam`); `T3.fit` caches `{cx, cz, sz, elev}` during `build3D`. The markup must stay in sync — `applyLangUI()` uses `$()` guards but the bootstrap binds the three ids directly.
+- **3D render export (issue #13).** `#b3dShot` (📸, fourth button in `.ctl3dCam`) and the top-bar `#bPng` both save the current camera view as `<project>-3d-render.png`; `#bPng` is context-aware (`ui.view3d ? export3DRender() : exportPng()`) and `syncExportTitles()` keeps its tooltip honest (called from `show3D` + `applyLangUI`). The renderer is created **without** `preserveDrawingBuffer`, so the drawing buffer dies when the task yields: `render3DDataUrl()` must stay **synchronous** and keep `r.render(scene, cam)` immediately before `r.domElement.toDataURL('image/png')` — splitting them (await/`toBlob`/`setTimeout`) yields a blank PNG. Oversampling is `shot3DScale(w, h)`: 2–3×, capped at 3840 px longest side and 12 MP, never below 1×. The capture temporarily sets `setPixelRatio(1)` (the ratio would multiply the output size) and `setSize(w·k, h·k, false)` (so the CSS size does not change), then a `finally` restores the ratio via `r.setPixelRatio` + `resize3D()`. `ui.shot` is the re-entrancy guard. **SVG and PDF stay 2D-only on purpose** (they carry a title block and scale bar). Tests: `tests/render3d.test.js` (scale maths + the synchronous-capture contract) and a real capture check in `browser-smoke.js` that asserts the PNG is > 5 KB (a blank buffer fails CI).
 - Floors stack with pitch `P.wallH + 20`. Floor slabs follow the outer contour of walls and enclosed spaces (via `slabPolys` and `ExtrudeGeometry`) rather than axis-aligned bounding boxes, eliminating overhang on angled walls. Built once on entering 3D (and on theme change) — it does **not** live-update; leave 3D (`Esc` or `2B`) to edit.
 - Camera travel: `keys3D` tracks held keys (`W/A/S/D`, Arrow keys, `Q/E`, `Shift`) and `loop3D()` translates both `T3.cam.position` and `T3.ctl.target` along the horizontal XZ camera forward/right vectors (or Y for `Q/E`).
 - Floor visibility: the `#s3dFloor` select (`.ctl3d`, top-left of the 3D overlay) + `sync3DFloors()`; `ui.v3dFloor` is `'all'` or a floor id. `build3D()` skips hidden floors, so an isolated floor is drawn at ground level (elevation counter only accumulates over shown floors).
@@ -305,8 +306,9 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/dom-contract.test.js` | **`$('#id')` lookups with no element** — the `#b3dFit` class of crash that once shipped to main; also duplicate ids |
 | `tests/mcp.test.js` | tool surface shrinking, a broken plan round-trip, `CATALOG`/`OPENINGS` drifting from `app.js` |
 | `tests/bridge.test.js` | plan store/revisioning, the request queue, SSE, **`FP_WAKE`** (a request reaches the agent, an unknown origin only queues), **snapshot save/restore** (AI pushes only, restore is a new rev, history survives a restart) and the **`Access-Control-Allow-Private-Network`** header the deployed page needs |
+| `tests/render3d.test.js` | the 3D render export: oversampling maths (2–3×, ≤4K/12 MP), the **synchronous** `render()` → `toDataURL()` contract, viewport restore, and that `#bPng` follows the active view |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |
-| `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build |
+| `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails) |
 
 `browser-smoke.js` skips itself (exit 0) when no Chromium is found; set `CHROME_BIN` to point at one. In CI it always runs.
 
@@ -314,7 +316,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 
 1. **Both themes:** toggle 🌓 and confirm walls, openings, rooms, furniture, labels, grid and 3D are legible.
 2. **Grid modes:** square / triangle / dots / off; presets `1 m`, `3 m`, `5 m` and **Özel…**.
-3. **Exports:** PNG/SVG/PDF come out on white paper in dark mode.
+3. **Exports:** PNG/SVG/PDF come out on white paper in dark mode; the **3D render** (`📸` or `🖼 PNG` while in 3D) matches the visible camera in both themes and is sharp, not upscaled.
 4. **Old data:** open a JSON saved before your change.
 5. **AI flow:** `node mcp/bridge.js`, then confirm the floating `AI` pill appears and a `push_to_browser` lands in the tab.
 
