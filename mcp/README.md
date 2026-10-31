@@ -42,7 +42,27 @@ Once connected, the app shows a small floating **`AI`** pill (bottom-left, above
 
 Clicking the pill opens a panel with the bridge status (plan name, revision, connected tabs, last update time) and the pending request list. Its **"How do I connect?"** section is written for non-technical users: it shows a **copy-ready prompt** ("Set up live editing for my floor planner…"), a copy button, and a one-line note that the agent starts the bridge and says which address to open. The raw `node mcp/bridge.js` command stays as a small "prefer to run it yourself" footnote. The same prompt is available in the app's **❓ Help → 🤖 Edit with AI** section, which is part of `app.js` and therefore also works when the app is opened from `file://`.
 
-The **Ask AI** input queues an instruction — for example *"add a 12 m² bathroom with a shower and a toilet"* — through `POST /__requests`. It is **not** delivered to the model by itself; the agent reads it when you ask it to ("check the app / any new requests?") via `get_user_requests`, does the work, then calls `ack_user_requests`. Acknowledging clears the row live in the panel (SSE `requests-changed`).
+The **Ask AI** input queues an instruction — for example *"add a 12 m² bathroom with a shower and a toilet"* — through `POST /__requests`. By default it is **not** delivered to the model by itself; the agent reads it when you ask it to ("check the app / any new requests?") via `get_user_requests`, does the work, then calls `ack_user_requests`. Acknowledging clears the row live in the panel (SSE `requests-changed`).
+
+#### Wake the agent (optional)
+
+A web page cannot start a model on its own. If you want the AI pill to be **self-service**, start the bridge with wake enabled:
+
+```sh
+FP_WAKE=1 node mcp/bridge.js          # macOS / Linux
+$env:FP_WAKE='1'; node mcp/bridge.js  # Windows PowerShell
+```
+
+Now `POST /__requests` also prompts the agent's own session, so typing a request in the pill starts a turn and the plan is edited without you repeating it in chat. How it finds the agent:
+
+| Env | Meaning |
+| :-- | :-- |
+| `FP_WAKE_SESSION` | Pin the OpenCode session id to prompt. Default: the newest session whose `location.directory` is this repo, re-checked on every wake. |
+| `FP_WAKE_ORIGINS` | Extra browser origins allowed to wake (comma list). Defaults already include `https://mewego.github.io` and the bridge's own origin. |
+| `FP_WAKE_CMD` | Use another agent command instead of OpenCode; the request text is written to its **stdin** and it runs detached in the repo. |
+| `FP_OPENCODE_CLI` | Explicit path to `opencode-cli` / `opencode` if it is not found automatically. |
+
+Wake is deliberately gated twice: `FP_WAKE=1` must be set **and** the request must come from an allow-listed origin, so a random website that reaches `127.0.0.1:8787` can only queue a note, never start a turn. `/health` reports `wake`, `wakeAgent` and `wakeSession` so you can confirm it resolved. If the agent is busy, the prompt is queued behind the current turn (`delivery: "queue"`).
 
 The panel is bilingual (`tr`/`en` via the app's `L()`) and follows the dark/light theme.
 
@@ -75,7 +95,7 @@ load_project                         │
 
 ### Flow
 
-The agent runs `node mcp/bridge.js` and the app tab connects automatically; after that, the user types requests in the app's **AI** panel (or in chat) and the agent edits the live plan. The prompt in the AI modal / Help tells the agent exactly what to do.
+The agent runs `node mcp/bridge.js` and the app tab connects automatically; after that, the user types requests in the app's **AI** panel (or in chat) and the agent edits the live plan. Start it with `FP_WAKE=1` (see above) and those requests also wake the agent, so the user does not have to repeat them in chat. The prompt in the AI modal / Help tells the agent exactly what to do.
 
 ## Tools exposed
 

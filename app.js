@@ -2393,8 +2393,8 @@ function copyText(text) {
 }
 function aiSetupPrompt() {
   return isEN()
-    ? 'Set up live editing for my floor planner so you can change my plan directly:\n1. In the project folder, run "node mcp/bridge.js" in the background and keep it running — do not close it.\n2. Tell me when it is running; my floor planner page (https://mewego.github.io/floorplanner/ or the local copy) connects to it automatically.\n3. Then call pull_from_browser to read my current plan. Apply every change with push_to_browser — it appears in my open tab and is saved automatically. Read anything I type in the app panel with get_user_requests (ack them with ack_user_requests).'
-    : 'Kat planımı doğrudan düzenleyebilmen için canlı köprüyü kur:\n1. Proje klasöründe "node mcp/bridge.js" komutunu arka planda çalıştır ve açık bırak — kapatma.\n2. Çalıştığını bana söyle; kat planı sayfam (https://mewego.github.io/floorplanner/ veya yerel kopya) ona kendiliğinden bağlanır.\n3. Sonra pull_from_browser ile güncel planımı oku. Her değişikliği push_to_browser ile uygula — açık sekmemde görünür ve otomatik kaydedilir. Uygulama panelinde yazdıklarımı get_user_requests ile oku (işleyince ack_user_requests ile kapat).';
+    ? 'Set up live editing for my floor planner so you can change my plan directly:\n1. In the project folder, run the bridge in the background and keep it running — do not close it. If you are OpenCode, start it with wake enabled so requests I type in the app start a turn for you: "FP_WAKE=1 node mcp/bridge.js" (Windows PowerShell: "$env:FP_WAKE=\'1\'; node mcp/bridge.js"). Any other agent runs plain "node mcp/bridge.js" — then I will ask you to check the queue.\n2. Tell me when it is running; my floor planner page (https://mewego.github.io/floorplanner/ or the local copy) connects to it automatically.\n3. Then call pull_from_browser to read my current plan. Apply every change with push_to_browser — it appears in my open tab and is saved automatically. Read anything I type in the app panel with get_user_requests (ack them with ack_user_requests).'
+    : 'Kat planımı doğrudan düzenleyebilmen için canlı köprüyü kur:\n1. Proje klasöründe köprüyü arka planda çalıştır ve açık bırak — kapatma. OpenCode kullanıyorsan uyandırma açık başlat, böylece uygulamaya yazdığım istekler senin için bir tur başlatır: "FP_WAKE=1 node mcp/bridge.js" (Windows PowerShell: "$env:FP_WAKE=\'1\'; node mcp/bridge.js"). Başka bir ajan kullanıyorsan "node mcp/bridge.js" yeterli — o zaman kuyruğu kontrol etmeni ben söylerim.\n2. Çalıştığını bana söyle; kat planı sayfam (https://mewego.github.io/floorplanner/ veya yerel kopya) ona kendiliğinden bağlanır.\n3. Sonra pull_from_browser ile güncel planımı oku. Her değişikliği push_to_browser ile uygula — açık sekmemde görünür ve otomatik kaydedilir. Uygulama panelinde yazdıklarımı get_user_requests ile oku (işleyince ack_user_requests ile kapat).';
 }
 function helpModal() {
   const rows = isEN() ? [
@@ -2516,8 +2516,8 @@ function aiModal() {
     'Paste the prompt into your AI agent; it starts the bridge and this page connects automatically. After that, type requests in the AI panel (bottom-left) or just tell the agent in chat — changes appear in this plan immediately and are saved automatically.'
   )}</p>
   <p class="muted" style="margin:0 0 8px">${L(
-    'İstekler bir kuyruğa girer; AI düğmesinde turuncu sayaç görürseniz ajanınıza “uygulamadaki istekleri kontrol et” deyin — kuyruğu o okur ve sayfayı canlı düzenler.',
-    'Requests go into a queue. If the AI pill shows an orange counter, tell your agent “check the app requests” — that is when it reads the queue and edits this page live.'
+    'İstekler bir kuyruğa girer. Köprü FP_WAKE=1 ile başlatıldıysa ajanınız kendiliğinden uyanır; AI düğmesindeki turuncu sayaç kalıcıysa ajanınıza “uygulamadaki istekleri kontrol et” deyin.',
+    'Requests go into a queue. If the bridge was started with FP_WAKE=1 your agent is woken automatically; if the orange counter stays, tell your agent “check the app requests”.'
   )}</p>
   <p class="muted" style="margin:0">${L(
     'Canlı bağlantı Node.js ve proje klasörünü gerektirir (ajan tarafında). Planınız bu sekmede kalır; köprü yalnızca JSON alışverişi yapar.',
@@ -2559,6 +2559,7 @@ let brgRev = 0, brgConnected = false, brgHydrated = false, brgApplying = false;
 let brgPushTimer = null, brgProbeTimer = null, brgEs = null;
 let brgPending = 0;              // queued requests the agent has not picked up yet
 let brgAckAt = 0;                // when the queue last went from >0 to 0 (agent picked it up)
+let brgWake = false;             // bridge can start an agent turn by itself (FP_WAKE=1)
 
 function brgUrl(p) { return BRIDGE_BASE + p; }
 
@@ -2804,11 +2805,7 @@ function aiBridgePaint() {
   pill.style.border = '1px solid ' + c.bd;
   pill.style.color = c.fg;
   pill.querySelector('[data-ai-dot]').style.background = brgConnected ? c.ok : c.off;
-  pill.title = brgConnected
-    ? (brgPending
-      ? L('AI köprüsü bağlı — ' + brgPending + ' istek ajanınızı bekliyor', 'AI bridge connected — ' + brgPending + ' request(s) waiting for your agent')
-      : L('AI köprüsü bağlı — tıklayarak istek gönderin', 'AI bridge connected — click to send a request'))
-    : L('AI köprüsü kapalı', 'AI bridge offline');
+  pill.title = aiPendingTitle();
   const badge = pill.querySelector('[data-ai-pending]');
   if (badge) {
     badge.style.background = aiIsLight() ? '#d97706' : '#fbbf24';
@@ -2847,8 +2844,17 @@ async function brgRefreshPending() {
     const res = await brgFetch('/__requests', null, 2500);
     if (!res.ok) return;
     const j = await res.json();
+    brgWake = !!j.wake;
     brgSetPending((j.requests || []).length);
   } catch (e) { /* bridge offline — keep the last known count */ }
+}
+
+function aiPendingTitle() {
+  if (!brgConnected) return L('AI köprüsü kapalı', 'AI bridge offline');
+  if (!brgPending) return L('AI köprüsü bağlı — tıklayarak istek gönderin', 'AI bridge connected — click to send a request');
+  return brgWake
+    ? L('AI köprüsü bağlı — ' + brgPending + ' istek, ajan uyandırılıyor', 'AI bridge connected — waking your agent for ' + brgPending + ' request(s)')
+    : L('AI köprüsü bağlı — ' + brgPending + ' istek ajanınızı bekliyor', 'AI bridge connected — ' + brgPending + ' request(s) waiting for your agent');
 }
 
 function brgSetPending(n) {
@@ -2861,11 +2867,7 @@ function brgSetPending(n) {
     badge.textContent = brgPending ? String(brgPending) : '';
     badge.style.display = brgPending ? '' : 'none';
   }
-  if (pill && brgConnected) {
-    pill.title = brgPending
-      ? L('AI köprüsü bağlı — ' + brgPending + ' istek ajanınızı bekliyor', 'AI bridge connected — ' + brgPending + ' request(s) waiting for your agent')
-      : L('AI köprüsü bağlı — tıklayarak istek gönderin', 'AI bridge connected — click to send a request');
-  }
+  if (pill && brgConnected) pill.title = aiPendingTitle();
   aiSyncSendState();
   if (brgPanelOpen()) aiRefreshRequests();
 }
@@ -2878,10 +2880,12 @@ function aiSyncSendState() {
   if (!brgConnected) {
     st.textContent = L('Köprü kapalı — ajanınız mcp/bridge.js çalıştırsın', 'Bridge offline — have your agent start mcp/bridge.js');
   } else if (brgPending) {
-    st.textContent = L(
-      '⏳ ' + brgPending + ' istek ajanınızı bekliyor — sohbette "uygulamadaki istekleri kontrol et" deyin',
-      '⏳ ' + brgPending + ' request(s) waiting — tell your agent "check the app requests"'
-    );
+    st.textContent = brgWake
+      ? L('⏳ ' + brgPending + ' istek — ajanınız uyandırılıyor…', '⏳ ' + brgPending + ' request(s) — waking your agent…')
+      : L(
+        '⏳ ' + brgPending + ' istek ajanınızı bekliyor — sohbette "uygulamadaki istekleri kontrol et" deyin',
+        '⏳ ' + brgPending + ' request(s) waiting — tell your agent "check the app requests"'
+      );
   } else if (brgAckAt && Date.now() - brgAckAt < 8000) {
     st.textContent = L('✓ Ajanınız isteği aldı — planda göreceksiniz', '✓ Your agent picked it up — watch the plan');
   } else {

@@ -58,6 +58,12 @@ test('a dropped bridge connection resumes probing instead of dying', () => {
   assert.match(sliceFn('brgProbe'), /brgStartProbe\(\)/, 'brgProbe() drops the retry when the first attempt fails');
 });
 
+test('the panel changes its wording when the bridge can wake the agent', () => {
+  assert.match(sliceFn('brgRefreshPending'), /brgWake\s*=/, 'brgRefreshPending() ignores the wake flag returned by the bridge');
+  assert.match(sliceFn('aiSyncSendState'), /brgWake/, 'aiSyncSendState() never shows the waking state');
+  assert.match(sliceFn('aiPendingTitle'), /brgWake/, 'the pill tooltip never mentions waking');
+});
+
 test('the bridge keeps the endpoints this UI depends on', () => {
   const bridge = read('mcp/bridge.js');
   assert.match(bridge, /p === '\/__requests'/, 'GET/POST /__requests is gone');
