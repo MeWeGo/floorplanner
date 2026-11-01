@@ -6,6 +6,8 @@
 
 **No install · No build · No backend · No account**
 
+**🤖 Or just describe it:** tell an AI agent (Claude Desktop, Claude Code, OpenCode, Cursor — any MCP client) *"add a 12 m² bathroom with a shower"* and watch it edit the plan live in your open browser tab. See [Design with AI](#-design-with-ai).
+
 [**🚀 Live Demo**](https://mewego.github.io/floorplanner/) · [**📦 Repository**](https://github.com/MeWeGo/floorplanner) · [**🐞 Issues**](https://github.com/MeWeGo/floorplanner/issues)
 
 ![Vanilla JS](https://img.shields.io/badge/Vanilla-JavaScript-f7df1e?logo=javascript&logoColor=black)
@@ -29,6 +31,29 @@
 | **Original prototype** | [`legacy-index.html`](legacy-index.html) |
 
 > **Bilingual UI (English & Turkish):** Automatically detects your browser language (`en` / `tr`) on first visit, and lets you switch anytime with the **🌐 EN / TR** button in the top bar.
+
+---
+
+## 🤖 Design with AI
+
+Describe what you want — *"add a 12 m² bathroom with a shower"* — and an AI agent edits the plan **live, in the tab you already have open**. It works with any MCP client (Claude Desktop, Claude Code, OpenCode, Cursor, …) through the optional MCP server (`mcp/server.js`, 23 tools). The app itself never needs Node; Node ≥ 16 is only for this optional MCP/bridge tooling, which is zero-dependency.
+
+### How it works
+1. Open **🤖 AI** in the top bar (or **❓ Help**).
+2. Press **📋 Copy agent prompt** and paste it into your agent (OpenCode / Claude Desktop / Claude Code / Cursor).
+3. The agent starts `node mcp/bridge.js`, and **the page you already have open connects to it automatically** — the deployed GitHub Pages tab, a `file://` copy, or a local server. Nothing is injected and you never open a second URL.
+
+In Chrome/Edge the first connection may ask once for **local network** permission (allow it — only a local server can answer).
+
+### What you can do
+- **Live edits:** AI changes appear instantly in your tab and autosave to its IndexedDB, so a refresh keeps them. The agent can also read your own edits back.
+- **Ask AI box:** while connected, a floating **AI** pill shows the live plan revision. Click it for bridge details and an **Ask AI** box — type *"add a 12 m² bathroom with a shower"* and the agent picks it up with `get_user_requests` (then marks it done with `ack_user_requests`). Requests are queued: the pill shows an amber counter and the panel keeps a **⏳ waiting for your agent** note until they are picked up.
+- **Wake the agent (optional):** a page cannot start a model by itself, so either tell your agent *"check the app requests"* — or start the bridge with **`FP_WAKE=1`** and a request will wake your agent's session automatically (see [`mcp/README.md`](mcp/README.md#wake-the-agent-optional)).
+- **Go back:** the bridge writes a JSON snapshot around **every AI edit** (the plan before and after) into `.fp-history/`. If an agent deletes more than you wanted, the **AI** panel lists the last saves with a ↩ restore button (one click, no agent needed), or just tell your agent *"go back"* — it calls `list_snapshots` / `restore_snapshot`. Restoring is a normal new revision, so it is itself undoable, and the history survives a bridge restart.
+- **Opt out of syncing:** open the app with `?bridge=off` to use it without connecting to a bridge.
+
+### Tools
+Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_project` · `add_wall` / `add_rect_walls` · `add_opening` · `add_furniture` · `add_room` · `add_text` · `update_object` / `delete_objects` · `add_floor` · `summarize` / `list_catalog` · `browser_status` / `push_to_browser` / `pull_from_browser` / `get_user_requests` / `ack_user_requests` · `list_snapshots` / `restore_snapshot`. Client configuration (Claude Desktop, OpenCode, Cursor / VS Code) and the full workflow are in [`mcp/README.md`](mcp/README.md).
 
 ---
 
@@ -93,18 +118,6 @@
 - Exports always render on **white paper** regardless of the editor theme.
 - **3D render:** while the 3D view is open, the **🖼 PNG** button renders the scene (and the **🎬** button in the 3D overlay does the same from inside the view). This is a real render, not a screenshot: the camera outlines are removed, the backdrop becomes a studio white, shadows are rebuilt at high resolution and several supersampled passes are averaged, so edges come out smooth instead of jagged. Files are named `<project>-3d-render.png`. **Shift-click** either button for a quick capture of exactly what is on screen (`-3d-view.png`). SVG and PDF always describe the **2D plan**.
 
-### 🤖 AI Integration
-
-Let an AI agent edit the plan for you. It uses the optional MCP server (`mcp/server.js`, 21 tools, Node ≥ 16): your agent starts `node mcp/bridge.js`, and **the page you already have open connects to it automatically** — the deployed GitHub Pages tab, a `file://` copy, or a local one. AI edits then appear instantly in that tab and autosave to its IndexedDB, so a refresh keeps them; the agent can pull your own edits back. Nothing is injected and you never open a second URL. In Chrome/Edge the first connection may ask once for **local network** permission (allow it — only a local server can answer).
-
-**Getting started:** open **🤖 AI** in the top bar (or **❓ Help**) and press **📋 Copy agent prompt**, then paste it into OpenCode / Claude Desktop / Cursor. The agent sets everything up; after that you just type what you want.
-
-**Frontend indicator:** while connected, a floating **AI** pill shows the live plan revision. Click it for bridge details and an **Ask AI** box — type *"add a 12 m² bathroom with a shower"* and the agent picks it up with `get_user_requests` (then marks it done with `ack_user_requests`). Sent requests are queued, so the pill shows an amber counter and the panel keeps a **⏳ waiting for your agent** note until they are picked up. A page cannot start a model by itself, so either tell your agent *"check the app requests"* — or start the bridge with **`FP_WAKE=1`** and a request will wake your agent's session automatically (see [`mcp/README.md`](mcp/README.md#wake-the-agent-optional)).
-
-Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_project` · `add_wall` / `add_rect_walls` · `add_opening` · `add_furniture` · `add_room` · `add_text` · `update_object` / `delete_objects` · `add_floor` · `summarize` / `list_catalog` · `browser_status` / `push_to_browser` / `pull_from_browser` / `get_user_requests` / `ack_user_requests` · `list_snapshots` / `restore_snapshot`. Client configuration and the full workflow are in [`mcp/README.md`](mcp/README.md).
-
-**Saved versions — "go back":** the bridge writes a JSON snapshot around **every AI edit** (the plan before and after) into `.fp-history/`. If an agent deletes more than you wanted, the **AI** panel lists the last saves with a ↩ restore button (one click, no agent needed), or just tell your agent *"go back"* — it calls `list_snapshots` / `restore_snapshot`. Restoring is a normal new revision, so it is itself undoable, and the history survives a bridge restart.
-
 ### 🧊 3D View & WASD Walk
 One click turns the plan into an interactive 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors. Orbit/zoom with the mouse, or walk around with **`WASD` / Arrow keys** (`Q`/`E` for down/up, `Shift` for faster travel).
 
@@ -142,6 +155,7 @@ python -m http.server 8080      # then open http://localhost:8080
 2. Press **`D`** / **`N`** and click near a wall to place doors / windows.
 3. Press **`F`**, choose furniture from the left panel and click to place it.
 4. Click **3B** to see it in 3D, **💾 Kaydet** to save, **🖼 PNG** to export.
+5. Or skip the drawing: open **🤖 AI**, copy the agent prompt into your AI agent and just describe the plan — see [Design with AI](#-design-with-ai).
 
 ---
 
@@ -186,8 +200,9 @@ python -m http.server 8080      # then open http://localhost:8080
 floorplanner/
 ├── index.html          # App shell: header, tool rail, library, canvas, panels, footer
 ├── style.css           # Theme variables (dark default, [data-theme=light]) and layout
-├── app.js              # All application logic (~1 500 lines, no dependencies)
+├── app.js              # All application logic (~4 900 lines, no dependencies)
 ├── mcp/server.js       # Optional MCP server for AI agents (zero-dependency, Node ≥ 16)
+├── mcp/bridge.js       # Optional local bridge: live plan sync + request queue (zero-dependency, Node ≥ 16)
 ├── mcp/README.md       # MCP setup: Claude Desktop / OpenCode / Cursor + tool list
 ├── opencode.jsonc      # Registers the MCP server for OpenCode
 ├── legacy-index.html   # Original single-file prototype (kept for reference)
