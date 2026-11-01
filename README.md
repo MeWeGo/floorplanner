@@ -36,7 +36,7 @@
 
 ## 🤖 Design with AI
 
-Describe what you want — *"add a 12 m² bathroom with a shower"* — and an AI agent edits the plan **live, in the tab you already have open**. It works with any MCP client (Claude Desktop, Claude Code, OpenCode, Cursor, …) through the optional MCP server (`mcp/server.js`, 23 tools). The app itself never needs Node; Node ≥ 16 is only for this optional MCP/bridge tooling, which is zero-dependency.
+Describe what you want — *"add a 12 m² bathroom with a shower"* — and an AI agent edits the plan **live, in the tab you already have open**. It works with any MCP client (Claude Desktop, Claude Code, OpenCode, Cursor, …) through the optional MCP server (`mcp/server.js`, 25 tools). The app itself never needs Node; Node ≥ 16 is only for this optional MCP/bridge tooling, which is zero-dependency.
 
 ### How it works
 1. Open **🤖 AI** in the top bar (or **❓ Help**).
@@ -53,7 +53,7 @@ In Chrome/Edge the first connection may ask once for **local network** permissio
 - **Opt out of syncing:** open the app with `?bridge=off` to use it without connecting to a bridge.
 
 ### Tools
-Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_project` · `add_wall` / `add_rect_walls` · `add_opening` · `add_furniture` · `add_room` · `add_text` · `update_object` / `delete_objects` · `add_floor` · `summarize` / `list_catalog` · `browser_status` / `push_to_browser` / `pull_from_browser` / `get_user_requests` / `ack_user_requests` · `list_snapshots` / `restore_snapshot`. Client configuration (Claude Desktop, OpenCode, Cursor / VS Code) and the full workflow are in [`mcp/README.md`](mcp/README.md).
+Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_project` · `add_wall` / `add_rect_walls` · `add_opening` · `add_furniture` · `add_room` · `add_slab` / `add_void` · `add_text` · `update_object` / `delete_objects` · `add_floor` · `summarize` / `list_catalog` · `browser_status` / `push_to_browser` / `pull_from_browser` / `get_user_requests` / `ack_user_requests` · `list_snapshots` / `restore_snapshot`. Client configuration (Claude Desktop, OpenCode, Cursor / VS Code) and the full workflow are in [`mcp/README.md`](mcp/README.md).
 
 ---
 
@@ -103,6 +103,8 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 - Layer visibility toggles, floor patterns (wood, tile, carpet, marble, concrete, stone), room colors.
 - Wall paint: pick a colour or a preset swatch for one or many selected walls (2D paint strips, full colour in 3D).
 - Floor slab material per floor (project panel): areas without a room — balconies, hallways, terraces — get a finish in 3D too.
+- **Slab tool** (`K`): draw a balcony, terrace, porch or deck with no walls around it (click corners or drag a rectangle). In 3D it is a solid slab with its own thickness, finish and level offset, and furniture on it sits on top.
+- **Void tool** (`Y`): cut a stairwell, shaft or atrium through the floor. 2D draws the architectural dashed outline with an X; in 3D it is a real hole in that floor's slab, so stairs from the floor below rise through it.
 - Unlimited **undo / redo**, copy / paste / duplicate, box & multi-select with a **box-select scope** (All / Walls / Furniture) in the footer.
 - Starter templates: Blank · Studio 1+0 · 2+1 Apartment · Office.
 
@@ -168,6 +170,8 @@ python -m http.server 8080      # then open http://localhost:8080
 | `R` | Room from rectangle |
 | `O` | Detect room from a closed area |
 | `P` | Polygon room |
+| `K` | Slab — balcony / terrace floor without walls (click corners or drag) |
+| `Y` | Void — stairwell / shaft / atrium hole in the floor slab |
 | `S` | Shape tool (triangle / quad / N-gon / circle / free) |
 | `D` / `N` | Door / Window |
 | `F` | Furniture library |

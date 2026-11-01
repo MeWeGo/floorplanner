@@ -99,7 +99,7 @@ const OPENINGS = [
 const OPDEF = Object.fromEntries(OPENINGS.map(o => [o.id, o]));
 const ROOMCOL = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#e9d5ff', '#fed7aa', '#a5f3fc', '#fbcfe8'];
 const FLOORPATS = ['none', 'wood', 'tile', 'carpet', 'marble', 'concrete', 'stone'];
-const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', dims: 'dim', texts: 'text', sketches: 'sketch' };
+const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', dims: 'dim', texts: 'text', sketches: 'sketch' };
 
 /* ---------- Small helpers (mirror app.js) ---------- */
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -129,7 +129,7 @@ function parsePts(v, min, name) {
 /* ---------- Project state ---------- */
 let P = null; // working project (same schema the app saves/loads)
 
-function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null }; }
+function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null }; }
 function newProject(a) {
   a = a || {};
   return {
@@ -162,6 +162,8 @@ function normalizeProject(obj) {
     f.groups = Array.isArray(f.groups) ? f.groups : [];
     for (const o of f.ops) if (o.open == null) o.open = 0;
     for (const w of f.walls) if (!w.wt) w.wt = 'solid';
+    for (const sl of f.slabs) { if (!(sl.t > 0)) sl.t = 20; sl.floor = sl.floor || 'concrete'; sl.off = +sl.off || 0; }
+    for (const v of f.voids) if (!VOID_TYPES.includes(v.type)) v.type = 'stair';
   });
   return obj;
 }
@@ -241,6 +243,28 @@ function mkRoom(f, a) {
   f.rooms.push(r);
   return r;
 }
+// mirrors mkSlab / mkVoid in app.js (issues #22 / #23)
+const VOID_TYPES = ['stair', 'shaft', 'atrium'];
+function mkSlab(f, a) {
+  const pts = parsePts(a.pts, 3, 'pts');
+  const s = {
+    id: uid(),
+    name: a.name || ('Slab ' + (f.slabs.length + 1)),
+    floor: FLOORPATS.includes(a.floorPattern) ? a.floorPattern : 'concrete',
+    color: a.color || null,
+    t: Math.min(100, Math.max(5, +a.thickness || 20)),
+    off: Math.min(200, Math.max(-200, +a.offset || 0)),
+    pts,
+  };
+  f.slabs.push(s);
+  return s;
+}
+function mkVoid(f, a) {
+  const pts = parsePts(a.pts, 3, 'pts');
+  const v = { id: uid(), name: a.name || '', type: VOID_TYPES.includes(a.type) ? a.type : 'stair', pts };
+  f.voids.push(v);
+  return v;
+}
 
 /* ---------- Text output helpers ---------- */
 function summarize() {
@@ -249,13 +273,17 @@ function summarize() {
   out.push('Project "' + p.name + '" — schema v' + p.v + ', grid ' + p.grid + ' cm (' + p.gridType + '), default wall ' + p.wallT + ' cm × ' + p.wallH + ' cm high, ' + p.floors.length + ' floor(s)');
   p.floors.forEach((f, i) => {
     out.push('');
-    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts');
+    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts');
     for (const w of f.walls)
       out.push('  wall ' + w.id + ': (' + w.a.x + ',' + w.a.y + ') → (' + w.b.x + ',' + w.b.y + ')  length ' + Math.round(wLen(w)) + ' cm, t=' + w.t + ', h=' + w.h + (w.wt !== 'solid' ? ', ' + w.wt : ''));
     for (const o of f.ops)
       out.push('  ' + o.type + ' ' + o.id + ': w=' + o.w + ' h=' + o.h + ' sill=' + o.sill + ', centre ' + Math.round(o.d) + ' cm from wall ' + o.wall + ' end A' + (o.open ? ' [open]' : ''));
     for (const r of f.rooms)
       out.push('  room ' + r.id + ': "' + r.name + '" ' + fmtArea(polyArea(r.pts)) + ', pattern=' + r.floor + ', ' + r.pts.length + ' corners');
+    for (const sl of f.slabs || [])
+      out.push('  slab ' + sl.id + ': "' + sl.name + '" ' + fmtArea(polyArea(sl.pts)) + ', t=' + sl.t + ' cm, offset=' + sl.off + ' cm, finish=' + sl.floor);
+    for (const v of f.voids || [])
+      out.push('  void ' + v.id + ': ' + v.type + (v.name ? ' "' + v.name + '"' : '') + ' ' + fmtArea(polyArea(v.pts)));
     for (const t of f.furn)
       out.push('  furn ' + t.id + ': ' + t.name + ' ' + t.w + '×' + t.d + ' cm at (' + t.x + ',' + t.y + ') rot=' + t.rot + '°');
     for (const t of f.texts)
@@ -588,6 +616,37 @@ tool('add_room',
     return 'Added room ' + r.id + ' "' + r.name + '" — area ' + fmtArea(polyArea(r.pts)) + ', perimeter ' + fmtLen(polyPerim(r.pts)) + '.';
   });
 
+tool('add_slab',
+  'Add a free-standing floor slab (balcony, terrace, porch, deck) — no surrounding walls needed. In 3D it is a solid slab of the given thickness at floor level (+ offset); furniture on it sits on its top.',
+  {
+    pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: '3+ corners in order (cm, Y down).' },
+    name: { type: 'string', description: 'e.g. "Balkon" / "Terrace".' },
+    floorPattern: { type: 'string', enum: FLOORPATS, description: 'Top finish: ' + FLOORPATS.join(' | ') + '. Default concrete.' },
+    color: { type: 'string', description: '#hex tint. Default: neutral concrete.' },
+    thickness: { type: 'number', description: 'cm, 5..100. Default 20.' },
+    offset: { type: 'number', description: 'Level offset in cm (negative = lower than the floor, e.g. -3 for a balcony). Default 0.' },
+    floorIndex: floorArg,
+  },
+  ['pts'],
+  a => {
+    const s = mkSlab(floorOf(a), a);
+    return 'Added slab ' + s.id + ' "' + s.name + '" — area ' + fmtArea(polyArea(s.pts)) + ', ' + s.t + ' cm thick.';
+  });
+
+tool('add_void',
+  'Cut a floor void (stairwell, elevator/MEP shaft, atrium) through this floor slab. Draw it on the UPPER floor above the stairs: in 3D it becomes a real hole in that floor (the ceiling of the floor below). 2D shows a dashed outline with an X.',
+  {
+    pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: '3+ corners in order (cm, Y down).' },
+    type: { type: 'string', enum: VOID_TYPES, description: 'stair | shaft | atrium. Default stair.' },
+    name: { type: 'string', description: 'Optional label; default is the type name.' },
+    floorIndex: floorArg,
+  },
+  ['pts'],
+  a => {
+    const v = mkVoid(floorOf(a), a);
+    return 'Added ' + v.type + ' void ' + v.id + ' — area ' + fmtArea(polyArea(v.pts)) + '.';
+  });
+
 tool('add_text',
   'Add a text label at (x, y).',
   {
@@ -622,13 +681,13 @@ tool('update_object',
     if (!props) throw new Error('props must be an object');
     if ('id' in props) delete props.id;
     // convenience: rooms store the pattern under "floor" (app schema)
-    if (found.kind === 'room' && 'floorPattern' in props) { props.floor = props.floorPattern; delete props.floorPattern; }
+    if ((found.kind === 'room' || found.kind === 'slab') && 'floorPattern' in props) { props.floor = props.floorPattern; delete props.floorPattern; }
     Object.assign(found.o, props);
     // sanity checks after merge
     if (found.kind === 'op' && found.o.wall && !f.walls.some(w => w.id === found.o.wall))
       throw new Error('props.wall "' + found.o.wall + '" does not exist on this floor');
     if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!found.o.wt) found.o.wt = 'solid'; }
-    if (found.kind === 'room') parsePts(found.o.pts, 3, 'pts');
+    if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
     return 'Updated ' + found.kind + ' ' + found.o.id + ':\n' + JSON.stringify(found.o, null, 2);
   });
 
@@ -647,7 +706,7 @@ tool('delete_objects',
     f.walls = f.walls.filter(w => !s.has(w.id));
     const wl = new Set(f.walls.map(w => w.id));
     f.ops = f.ops.filter(o => !s.has(o.id) && wl.has(o.wall));
-    for (const k of ['furn', 'rooms', 'dims', 'texts', 'sketches']) f[k] = f[k].filter(o => !s.has(o.id));
+    for (const k of ['furn', 'rooms', 'slabs', 'voids', 'dims', 'texts', 'sketches']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
     const cascaded = opsBefore - f.ops.length;
     return 'Deleted ' + a.ids.length + ' object(s)' + (cascaded ? ' and ' + cascaded + ' opening(s) on deleted walls' : '') + '.';
   });

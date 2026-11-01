@@ -112,6 +112,8 @@ The agent runs `node mcp/bridge.js` and the app tab connects automatically; afte
 | `add_opening` | Door/window on a wall (parametric `d` from wall end A) |
 | `add_furniture` | Catalogue item at x,y with rotation |
 | `add_room` | Room polygon (name, color, wood/tile/carpet pattern) |
+| `add_slab` | Free slab without walls — balcony / terrace / deck (thickness, finish, level offset) |
+| `add_void` | Stairwell / shaft / atrium hole in a floor's slab (draw it on the upper floor) |
 | `add_text` | Text label |
 | `update_object` | Change any property of an object by id |
 | `delete_objects` | Delete by id (wall deletion cascades to its openings) |
