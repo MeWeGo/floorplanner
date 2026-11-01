@@ -422,6 +422,39 @@ check('slab tool draws a wall-less balcony, void tool cuts the slab in 3D (issue
   return info.balcony !== undefined ? 'slab + void drawn, 3D slab 20 cm, hole cut, sofa on balcony' : 'slab + void drawn (3D unavailable)';
 });
 
+check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
+  const info = await page.evaluate(`(() => {
+    const p = newProject(), g = p.floors[0], u = newFloor('1');
+    p.floors.push(u); loadProject(p);
+    fi = 0; addRectWalls(0, 0, 800, 600); F().walls.push(mkWall({ x: 430, y: 0 }, { x: 430, y: 600 })); F().furn.push(mkFurn(BYID.column, 300, 300));
+    fi = 1; addRectWalls(0, 0, 800, 600); F().rooms.push({ id: uid(), name: 'R', color: '#fde68a', floor: 'none', pts: [{ x: 0, y: 0 }, { x: 800, y: 0 }, { x: 800, y: 600 }, { x: 0, y: 600 }] });
+    commit(); view.z = 0.5; view.x = 100; view.y = 50; sel = []; refresh();
+    const r = cv.getBoundingClientRect();
+    const at = (q, type, extra = {}) => { const s = w2s(q); cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0, ...extra })); };
+    const hit = q => { at(q, 'pointermove'); return ui.cur && [ui.cur.x, ui.cur.y, ui.cur.hit].join(','); };
+    const out = { layer: !!document.querySelector('#gBg [data-underlay]'), panel: !!document.querySelector('#props [data-k="ul"][data-p="floor"]') };
+    setTool('wall');
+    out.mid = hit({ x: 406, y: 5 }); out.under = hit({ x: 427, y: 596 }); out.center = hit({ x: 394, y: 306 });
+    out.glyph = document.querySelector('#gPv').textContent;
+    startPlace('furn', BYID.tableR); at({ x: 392, y: 308 }, 'pointermove'); at({ x: 392, y: 308 }, 'pointerdown'); at({ x: 392, y: 308 }, 'pointerup');
+    const t = F().furn.at(-1); out.table = t && t.type === 'tableR' ? t.x + ',' + t.y : '';
+    setTool('select'); sel = []; refresh();
+    const cb = document.querySelector('#props [data-k="layer"][data-p="underlay"]'); cb.checked = false; cb.dispatchEvent(new Event('change', { bubbles: true }));
+    out.off = document.querySelector('#gBg').innerHTML;
+    setTool('wall'); out.offSnap = hit({ x: 427, y: 596 });
+    layersVis.underlay = true; setTool('select'); refresh();
+    return out;
+  })()`);
+  if (!info.layer || !info.panel) throw new Error('the underlay layer or its panel controls are missing: ' + JSON.stringify(info));
+  if (info.mid !== '400,0,mid') throw new Error('no midpoint snap on the wall: ' + info.mid);
+  if (info.under !== '430,600,under') throw new Error('no snap to the floor-below wall end: ' + info.under);
+  if (info.center !== '400,300,center') throw new Error('no room-centre snap: ' + info.center);
+  if (!/Center|Merkez/.test(info.glyph)) throw new Error('the centre glyph is not drawn: ' + info.glyph);
+  if (info.table !== '400,300') throw new Error('furniture did not lock to the room centre: ' + info.table);
+  if (info.off !== '' || /under/.test(info.offSnap)) throw new Error('turning the underlay off left lines or snapping behind: ' + JSON.stringify(info));
+  return 'mid / centre / underlay snaps, centred table, underlay toggles off cleanly';
+});
+
 check('3D: a real render is produced, and PNG follows the active view', async page => {
   const info = await page.evaluate(`(async () => {
     document.getElementById('b3d').click();
