@@ -374,6 +374,54 @@ check('overlapping objects: Ctrl+click cycles, right-click lists, layers reorder
   return 'pick under, list, reorder' + (info.lift ? ', 3D lift ' + info.lift.join('/') : '');
 });
 
+check('slab tool draws a wall-less balcony, void tool cuts the slab in 3D (issues #22, #23)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    addRectWalls(0, 0, 600, 400); commit(); view.z = 0.5; view.x = 100; view.y = 50; render();
+    const r = cv.getBoundingClientRect();
+    const at = (p, type, extra = {}) => { const s = w2s(p); cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0, ...extra })); };
+    const out = {};
+    // slab: drag a rectangle outside the walls
+    setTool('slab');
+    at({ x: 0, y: 400 }, 'pointerdown'); at({ x: 600, y: 550 }, 'pointermove'); at({ x: 600, y: 550 }, 'pointerup');
+    out.slabs = F().slabs.length; out.slabSel = F().slabs[0] && sel[0] === F().slabs[0].id;
+    // void: click corners, close on the first point
+    setTool('void');
+    for (const p of [{ x: 20, y: 20 }, { x: 200, y: 20 }, { x: 200, y: 160 }, { x: 20, y: 160 }, { x: 20, y: 20 }]) { at(p, 'pointerdown'); at(p, 'pointerup'); }
+    out.voids = F().voids.length; out.voidPts = F().voids[0] ? F().voids[0].pts.length : 0;
+    out.panel = document.querySelector('#props select[data-k="void"][data-p="type"]') ? 'void' : '';
+    setTool('select'); sel = []; refresh();
+    out.svgSlab = document.querySelectorAll('#gRooms [data-low="2"]').length;
+    out.svgX = document.querySelectorAll('#gRooms g[clip-path] line').length;
+    F().furn.push(mkFurn(BYID.sofa3, 300, 470)); F().slabs[0].off = -5; commit();
+    document.getElementById('b3d').click();
+    if (ui.view3d) {
+      let plain = 0, holed = 0, balcony = null;
+      T3.scene.traverse(o => {
+        if (!o.isMesh || !o.geometry || o.geometry.type !== 'ExtrudeGeometry') return;
+        const sh = o.geometry.parameters.shapes, s0 = Array.isArray(sh) ? sh[0] : sh;
+        if (Math.abs(o.position.y + 4.8) < 0.01) balcony = o.geometry.parameters.options.depth;
+        else if (s0 && s0.holes.length) holed++; else plain++;
+      });
+      const g = T3.scene.children.find(c => c.userData && c.userData.furnId === F().furn[0].id);
+      Object.assign(out, { holed, balcony, sofaY: g && g.position.y });
+      show3D(false);
+    }
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (info.slabs !== 1 || !info.slabSel) throw new Error('dragging with the slab tool did not create a selected slab: ' + JSON.stringify(info));
+  if (info.voids !== 1 || info.voidPts !== 4) throw new Error('clicking corners with the void tool did not close a 4-corner void: ' + JSON.stringify(info));
+  if (info.panel !== 'void') throw new Error('the void panel has no type selector');
+  if (info.svgSlab !== 1 || info.svgX !== 2) throw new Error('2D slab / void X not drawn: ' + JSON.stringify(info));
+  if (info.balcony !== undefined) {
+    if (info.balcony !== 20) throw new Error('the balcony is not a 20 cm slab at its offset: ' + JSON.stringify(info));
+    if (info.holed < 1) throw new Error('the void did not cut a hole in the floor slab');
+    if (info.sofaY !== -5) throw new Error('furniture does not sit on the lowered balcony: ' + info.sofaY);
+  }
+  return info.balcony !== undefined ? 'slab + void drawn, 3D slab 20 cm, hole cut, sofa on balcony' : 'slab + void drawn (3D unavailable)';
+});
+
 check('3D: a real render is produced, and PNG follows the active view', async page => {
   const info = await page.evaluate(`(async () => {
     document.getElementById('b3d').click();

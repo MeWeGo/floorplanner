@@ -71,6 +71,8 @@ Floor = {
   "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1, open?:0|90 } ],   // doors & windows
   "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label } ],
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone", pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
+  "slabs":  [ { id, name, floor:"concrete|…", color:null|"#hex", t:20, off:0, pts:[{x,y},…] } ],   // free slabs: balconies / terraces (issue #22)
+  "voids":  [ { id, name, type:"stair|shaft|atrium", pts:[{x,y},…] } ],                     // holes in this floor's slab (issue #23)
   "dims":   [ { id, a:{x,y}, b:{x,y}, off } ],
   "texts":  [ { id, x, y, text, size, color, rot } ],
   "sketches": [ { id, pts:[{x,y},…], w, color } ]   // pen tool: freehand strokes (already simplified)
@@ -115,7 +117,7 @@ Key semantics:
 | `tabs[]`, `tabIdx` | Open project tabs (issue #17): `{ id, P, hist, hi, fi, view, sel }` per tab; the **active** tab's live state is the globals above |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
-`tool` values: `select pan wall rect room poly place dim text pen eraser trim calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
+`tool` values: `select pan wall rect room poly slab void place dim text pen eraser trim calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
 
 ---
 
@@ -206,6 +208,13 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 ### Trim / split / corner (issue #15)
 `trim` tool (`X`): `wallCuts(w)` lists where other wall centrelines cross `w` (cm from `a`, ends excluded); `trimPlan(w, click)` picks the nearest crossing on each side of the click and `trimWall()` removes that piece — an end overhang moves the end, a piece between two crossings splits the wall (`splitWallAt`). Openings on the kept part are re-based, those on the removed part are deleted via `deleteIds`. The hover preview paints the doomed piece red. Wall panel: **✂ Split at intersection** (`splitx`, one wall) and **⌐ Join corner** (`corner`, exactly two walls → `joinCorner()` moves each wall's nearer end to the line intersection, trimming or extending). Guard: `tests/wall-trim.test.js`.
 
+### Free slabs & floor voids (issues #22, #23)
+- `slab` (`K`) and `void` (`Y`) are polygon tools like `poly` (`POLY_TOOLS`): the first press starts a `prect` drag — dragging makes a rectangle, a plain click starts click-the-corners (Enter / first point / double-click finishes). `addPolyObj(tool, pts)` creates the room, `mkSlab` or `mkVoid`.
+- Both are ordinary kinds in `KINDS` (`slabs → slab`, `voids → void`), so find/select/delete/copy/undo work unchanged. Point-list kinds are listed in `PTS_KINDS` (move, rotate, bbox, paste) and closed polygons in `POLY_KINDS` (vertex/edge handles, X/Y/W/D fields). **Add new pts-based kinds to these sets, not to scattered `kind === 'room'` checks.**
+- 2D (`layerStrings` rooms layer): slabs under rooms, voids over them. Their hit shapes carry `data-low` (void 1, slab 2) so `pickDataId()` only picks them when nothing else is under the cursor — a large balcony must not steal clicks from furniture or room labels.
+- 3D: free slabs are extruded `t` cm down from `elev + off + 0.2` (+0.1 per overlap level) so their top never z-fights the automatic slab; furniture whose centre is on a slab is raised/lowered by that slab's `off`. `voidHoles(voids, pts)` returns the voids that lie inside a polygon (edge-touching counts — stairwells snap to room corners) pulled 0.5 cm inward, and `build3D` adds them as `Shape.holes` to the automatic slab, the free slabs and the room floors of **that floor**. A void on floor N is the hole in floor N's slab, i.e. the ceiling of floor N-1. Voids that straddle a polygon edge are skipped (no CSG).
+- A floor with no walls gets no automatic slab from slabs/voids alone (`slabPolys` ignores them). Guard: `tests/slabs-voids.test.js` + a smoke check.
+
 ### Project tabs (issue #17)
 - `#ptabs` (below the header) lists `tabs[]`; click switches, double-click renames, `×` closes, `＋` opens the template picker. `switchTab()` = `syncTab()` (globals → current tab) + `activateTab()` (tab → globals, then `refresh()`, `updateUndo()`, `autosave()`, 3D rebuild if open). Each tab keeps its own `hist`/`hi`, floor, view and selection; `ui.clip` is global, so copy/paste works across projects.
 - **Opening never destroys work:** the template picker, *My Projects* and *Open file* call `newTabSlot()` before `loadProject()` — if the current plan is not pristine (`isPristine()`), a new tab is inserted next to it. `loadProject()` ends with `syncTab()`. The AI bridge still loads into the **active** tab, and only the active tab is pushed to it.
@@ -272,7 +281,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 `exportSvg()` → `{svg,w,h}`; PNG rasterises that SVG via `Image` + canvas; PDF opens a print window (`window.open` + `print()`). Includes a title block (project, floor, date, total room area) and a 2 m scale bar. Background image is included only if its layer is visible.
 
 ### MCP server (`mcp/server.js`)
-- **Optional tooling, not part of the app.** A zero-dependency Node (≥ 16) MCP server over stdio — JSON-RPC 2.0 is implemented by hand, so there is no `npm install` and no build. It lets AI agents (Claude Desktop, OpenCode, Cursor, …) author plans as JSON: `new_project`, `add_wall` / `add_rect_walls`, `add_opening`, `add_furniture`, `add_room`, `add_text`, `update_object`, `delete_objects`, `add_floor`, `summarize`, `list_catalog`, `load_project` / `save_project` / `get_project` / `set_project`.
+- **Optional tooling, not part of the app.** A zero-dependency Node (≥ 16) MCP server over stdio — JSON-RPC 2.0 is implemented by hand, so there is no `npm install` and no build. It lets AI agents (Claude Desktop, OpenCode, Cursor, …) author plans as JSON: `new_project`, `add_wall` / `add_rect_walls`, `add_opening`, `add_furniture`, `add_room`, `add_slab`, `add_void`, `add_text`, `update_object`, `delete_objects`, `add_floor`, `summarize`, `list_catalog`, `load_project` / `save_project` / `get_project` / `set_project`.
 - **Live browser bridge (`mcp/bridge.js`).** IndexedDB is per-origin and a Node process cannot write it, so a tiny local server keeps the plan for the agent. **The client lives in `app.js`** (section *AI köprüsü istemcisi*), so the app connects to `http://127.0.0.1:8787` from **any origin** — the GitHub Pages build, a `file://` copy, or the bridge's own page. Nothing is injected and no script is loaded from the bridge. Pushed plans (`push_to_browser` → `PUT /__plan.json` → SSE `event: plan`) are applied through the app's own `loadProject()`, so autosave persists them to this origin's IndexedDB (refresh keeps them); local edits are pushed back on every `autosave()` (debounced, guarded by `brgApplying`). `brgProbe()` tries once on boot and then every 10 s while the tab is open, so a page that was already open connects as soon as the agent starts the bridge.
 - **`?bridge=off`.** Opening the app with this query (`BRIDGE_OFF`) disables the bridge client entirely — `brgFetch` throws, `brgConnect` returns false, `brgStartProbe` never polls. `tests/browser-smoke.js` always opens the app this way: it loads test plans, and a tab connected to a running bridge would push them over the user's live AI plan (it did, before this switch). Users can use it too, e.g. to look at a plan without syncing it.
 - **Which plan wins on first contact.** `brgInitialSync()` compares the bridge revision with `localStorage[fp_bridge_rev]`: a returning browser adopts the agent's plan only when `rev > seen`; a **brand-new** browser (no `seen`) adopts it only if the local plan is pristine (no walls), otherwise its own plan wins and is pushed. After that, sync is revision-ordered, so a reload never re-pushes or oscillates.
@@ -336,6 +345,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/wall-joints.test.js` | wall corners closing: miter/bevel maths of `wallJoints()` and that both 2D and 3D draw the fillers |
 | `tests/wall-trim.test.js` | trim tool / split at intersection / join corner geometry and opening re-basing |
 | `tests/snap-tracking.test.js` | object snap tracking: L→U closes exactly with/without angle lock, Shift disables it, guides reach the preview |
+| `tests/slabs-voids.test.js` | free slabs / floor voids: which voids become holes (edge-touching stairwells too), data-model defaults, tools, 2D X notation, 3D extrusion + holes, MCP mirror |
 | `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |

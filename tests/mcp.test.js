@@ -52,7 +52,7 @@ test('MCP: initialize, tool surface and plan round-trip', async t => {
   const names = list.result.tools.map(x => x.name);
   for (const required of [
     'new_project', 'add_wall', 'add_rect_walls', 'add_opening', 'add_furniture',
-    'add_room', 'add_text', 'update_object', 'delete_objects', 'add_floor',
+    'add_room', 'add_slab', 'add_void', 'add_text', 'update_object', 'delete_objects', 'add_floor',
     'summarize', 'list_catalog', 'save_project', 'load_project', 'get_project', 'set_project',
     'browser_status', 'push_to_browser', 'pull_from_browser',
     'get_user_requests', 'ack_user_requests', 'list_snapshots', 'restore_snapshot',
@@ -73,6 +73,14 @@ test('MCP: initialize, tool surface and plan round-trip', async t => {
   assert.match(summary, /CI Plan/);
   assert.match(summary, /4 walls/);
   assert.match(summary, /Living/);
+
+  // issues #22 / #23: a wall-less balcony slab and a stairwell void round-trip through the model
+  await c.call('tools/call', { name: 'add_slab', arguments: { name: 'Balcony', pts: [{ x: 0, y: 400 }, { x: 500, y: 400 }, { x: 500, y: 550 }, { x: 0, y: 550 }], offset: -3 } });
+  await c.call('tools/call', { name: 'add_void', arguments: { type: 'shaft', pts: [{ x: 20, y: 20 }, { x: 120, y: 20 }, { x: 120, y: 120 }, { x: 20, y: 120 }] } });
+  const s2 = text(await c.call('tools/call', { name: 'summarize', arguments: {} }));
+  assert.match(s2, /1 slabs, 1 voids/);
+  assert.match(s2, /slab [a-z0-9]{7}: "Balcony" .*t=20 cm, offset=-3 cm/);
+  assert.match(s2, /void [a-z0-9]{7}: shaft/);
 
   const proj = JSON.parse(text(await c.call('tools/call', { name: 'get_project', arguments: {} })));
   assert.strictEqual(proj.name, 'CI Plan');
