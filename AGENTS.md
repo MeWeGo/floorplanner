@@ -113,7 +113,8 @@ Key semantics:
 | `view {x,y,z}` | Pan (px) and zoom (px per cm). World→screen: `s = w*z + view` |
 | `tool`, `sel[]`, `placing` | Active tool, selected ids, item currently being placed |
 | `ui` | Transient UI state: `snap, angle, dims, cur, raw, draw, typed, drag, space, cat, q, view3d, v3dFloor, dimStart, polyPts, calib, clip, ghost, exporting, btn, lastE, pen, shot` |
-| `layersVis` | Layer visibility (`bg, rooms, walls, furn, dims, sketch`) — view-only, not persisted |
+| `layersVis` | Layer visibility (`bg, rooms, walls, furn, dims, sketch, underlay`) — view-only, not persisted |
+| `underlay` | Floor underlay view settings `{ floor: 'prev' or a floor id, op }` (issue #26) — view-only, not persisted |
 | `tabs[]`, `tabIdx` | Open project tabs (issue #17): `{ id, P, hist, hi, fi, view, sel }` per tab; the **active** tab's live state is the globals above |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
@@ -195,6 +196,8 @@ Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|b
 - Angle step: **15°** (square/dots/none), **30°** for `gridType==='triangle'`. Length rounds to `P.grid` except when `gridType==='none'`.
 - `snapToGrid` is the **only** place that knows about grid geometry. Triangle lattice vertices: rows spaced `g·√3/2`, odd rows offset by `g/2`. Use it for any new placement/move feature instead of `rnd(v, P.grid)`.
 - **Object snap tracking (issue #16):** after end-snap, `snapPt` aligns with reference points from `trackRefs()` (wall ends, room corners, in-progress `ui.polyPts`; excluding `ignore` and `from`). With `from` + angle lock it intersects the angle ray with each reference's vertical/horizontal line and locks the length (overriding grid rounding); otherwise x and y lock independently (both = the crossing of two references). Tolerance `10 / view.z`. The result carries `guides: [{from, axis}]`; `drawPreview()` draws them dashed (only while drawing or dragging a handle). `doHandle` sets `ui.cur` for `wa/wb`, `v<i>` and `da/db` so drags show guides too. `ignore` may hold wall ids **and** point objects (a dragged room vertex skips itself). Guard: `tests/snap-tracking.test.js`.
+- **Midpoint / centre / underlay snap (issues #25, #26):** when no wall end or corner is within the 14 px radius, `snapPt` takes the nearest of `underlayPts()` (`hit: 'under'`), `snapMids(f, ignore)` (wall + dim midpoints, `'mid'`) and `snapCenters(f, ignore)` (room / slab / void centroids + group bbox centres, `'center'`). `ignore` keeps a dragged wall / dim / room vertex / group member from snapping to its own moving midpoint or centre (dim handles pass `new Set([o.a, o.b])`). `drawPreview()` draws the glyph with `snapGlyph()` (▲ / ⨁ / ◇ + a bilingual label) and, while a drawing or place tool is active, a faint ⨁ at the centre of the room under the cursor. Furniture locks to `nearCenter()` (18 px) in `updateGhost()` and in a single-item `doMove` instead of `magnet()`. Guard: `tests/snap-mid-underlay.test.js` + a smoke check.
+- **Floor underlay (issue #26):** `underlayFloor()` = the floor picked in **Project ▸ Layers** (`underlay.floor`), else the floor below; `null` when `layersVis.underlay` is off, there is one floor, or the ground floor has nothing below. A floor picked as its own reference falls back to the floor below. `underlaySvg()` draws it into `#gBg` at `underlay.op` (10–50 %) with `pointer-events="none"`: wall joints + walls, slab outlines (dashed), voids, and stairs / columns (`isStructFurn`). Never exported. `underlayPts()` feeds both `snapPt` and `trackRefs`.
 - `magnet(f)` snaps a furniture item to the nearest wall face and rotates it so its back (−Y) touches the wall.
 
 ### Grids (`defsSvg`, `gridSvg`)
@@ -345,6 +348,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/wall-joints.test.js` | wall corners closing: miter/bevel maths of `wallJoints()` and that both 2D and 3D draw the fillers |
 | `tests/wall-trim.test.js` | trim tool / split at intersection / join corner geometry and opening re-basing |
 | `tests/snap-tracking.test.js` | object snap tracking: L→U closes exactly with/without angle lock, Shift disables it, guides reach the preview |
+| `tests/snap-mid-underlay.test.js` | midpoint / centre / group-centre snap, ends still winning, no self-snap while dragging, underlay reference-floor choice and snap, panel + glyph wiring |
 | `tests/slabs-voids.test.js` | free slabs / floor voids: which voids become holes (edge-touching stairwells too), data-model defaults, tools, 2D X notation, 3D extrusion + holes, MCP mirror |
 | `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |

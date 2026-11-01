@@ -8,7 +8,7 @@ const assert = require('node:assert');
 const { read } = require('./helpers/repo');
 
 const src = read('app.js');
-const start = src.indexOf('function trackRefs(');
+const start = src.indexOf('function underlayFloor('); // + underlay / mid / centre helpers (#25, #26)
 const end = src.indexOf('function wallNear(');
 assert.ok(start > 0 && end > start, 'trackRefs/snapPt not found in app.js');
 
@@ -16,7 +16,7 @@ function env(walls, opts = {}) {
   return new Function('walls', 'opts', `
     const ui = { snap: true, angle: opts.angle !== false, polyPts: null };
     const view = { z: 1 }, P = { grid: 10, gridType: 'square' };
-    const F = () => ({ walls, rooms: [] });
+    const F = () => ({ walls, rooms: [] }), layersVis = { underlay: false }, underlay = { floor: 'prev' }, KINDS = {};
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), rnd = (v, s) => Math.round(v / s) * s;
     const snapToGrid = p => ({ x: rnd(p.x, P.grid), y: rnd(p.y, P.grid) });
     ${src.slice(start, end)}

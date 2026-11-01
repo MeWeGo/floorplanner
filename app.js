@@ -103,7 +103,9 @@ let hist = [], hi = -1;
 const view = { x: 0, y: 0, z: 0.5 };
 let tool = 'select', sel = [], placing = null;
 const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
-const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true };
+const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true, underlay: true };
+// Kat izdüşümü (issue #26): hangi kat altlık olarak gösterilir ('prev' = bir alt kat) ve opaklığı — görünüm ayarı, projeye kaydedilmez
+const underlay = { floor: 'prev', op: 0.2 };
 
 const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null });
 const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
@@ -967,7 +969,7 @@ function render() {
   const f = F();
   $('#defs').innerHTML = defsSvg();
   applyView();
-  $('#gBg').innerHTML = (layersVis.bg ? bgSvg() : '') + (fi > 0 ? `<g opacity=".18" pointer-events="none">${P.floors[fi - 1].walls.map(w => wallSvg(w, false)).join('')}</g>` : '');
+  $('#gBg').innerHTML = (layersVis.bg ? bgSvg() : '') + underlaySvg();
   $('#gGrid').innerHTML = gridSvg();
   const L = layerStrings(f, true);
   $('#gRooms').innerHTML = layersVis.rooms ? L.rooms : '';
@@ -998,12 +1000,71 @@ function snapToGrid(p) {
   }
   return { x: rnd(p.x, g), y: rnd(p.y, g) };
 }
+// Kat izdüşümü (issue #26): seçilen referans kat (varsayılan bir alt kat); kapalıysa / tek katta null
+function underlayFloor() {
+  if (!layersVis.underlay || !P || P.floors.length < 2) return null;
+  const f = underlay.floor !== 'prev' && P.floors.find(x => x.id === underlay.floor);
+  if (f && f !== F()) return f; // kendisi seçiliyse (başka katta seçilmiş) bir alt kata dön
+  return fi > 0 ? P.floors[fi - 1] : null;
+}
+const isStructFurn = o => o.k === 'stairs' || o.type === 'column' || o.type === 'colSq';
+// İzdüşüm: duvarlar (köşe dolgularıyla), döşeme/balkon sınırları, boşluklar, kolon ve merdivenler — silik, tıklanmaz
+function underlaySvg() {
+  const uf = underlayFloor(); if (!uf) return '';
+  const C = pal(), sw = Math.max(1.5, 1.5 / view.z);
+  let s = (uf.slabs || []).filter(o => o.pts && o.pts.length > 2).map(o => `<polygon points="${o.pts.map(p => p.x + ',' + p.y).join(' ')}" fill="none" stroke="${C.text}" stroke-width="${sw * 1.5}" stroke-dasharray="${8 / view.z} ${4 / view.z}"/>`).join('');
+  s += jointsSvg(uf) + uf.walls.map(w => wallSvg(w, false)).join('');
+  s += (uf.voids || []).map(v => voidSvg(v, false)).join('');
+  s += uf.furn.filter(isStructFurn).map(o => furnSvg(o, false)).join('');
+  return `<g opacity="${underlay.op}" pointer-events="none" data-underlay="${uf.id}">${s}</g>`;
+}
+// İzdüşüm yakalama noktaları: duvar uçları, döşeme/boşluk köşeleri, kolon/merdiven merkez ve köşeleri
+function underlayPts() {
+  const uf = underlayFloor(), out = []; if (!uf) return out;
+  for (const w of uf.walls) out.push(w.a, w.b);
+  for (const arr of ['slabs', 'voids']) for (const o of uf[arr] || []) out.push(...o.pts);
+  for (const o of uf.furn) if (isStructFurn(o)) out.push({ x: o.x, y: o.y }, ...furnCorners(o));
+  return out;
+}
+// Orta nokta yakalama (issue #25): duvar ve ölçü çizgisi orta noktaları; sürüklenen (ignore) nesneninki atlanır
+function snapMids(f, ignore) {
+  const out = [];
+  for (const arr of ['walls', 'dims']) for (const o of f[arr] || []) {
+    if (ignore && (ignore.has(o.id) || ignore.has(o.a) || ignore.has(o.b))) continue;
+    out.push({ x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 });
+  }
+  return out;
+}
+// Merkez yakalama (issue #25): oda/döşeme/boşluk ağırlık merkezi + grupların ortak kutu merkezi
+function snapCenters(f, ignore) {
+  const out = [], bbs = new Map();
+  for (const arr of ['rooms', 'slabs', 'voids']) for (const o of f[arr] || []) {
+    if (!o.pts || o.pts.length < 3 || (ignore && o.pts.some(q => ignore.has(q)))) continue;
+    const c = polyCentroid(o.pts); out.push({ x: c.x, y: c.y });
+  }
+  for (const k in KINDS) for (const o of f[k] || []) {
+    if (!o.grp) continue;
+    if (ignore && ignore.has(o.id)) { bbs.set(o.grp, null); continue; } // sürüklenen üyenin grubu kayar — atla
+    const b = bboxOf(KINDS[k], o), g = bbs.get(o.grp);
+    if (!b || g === null) continue;
+    bbs.set(o.grp, g ? { x0: Math.min(g.x0, b.x0), y0: Math.min(g.y0, b.y0), x1: Math.max(g.x1, b.x1), y1: Math.max(g.y1, b.y1) } : { ...b });
+  }
+  for (const b of bbs.values()) if (b) out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 });
+  return out;
+}
+// p'ye r içindeki en yakın merkez (mobilya yerleştirme / taşıma için)
+function nearCenter(p, r) {
+  let best = null, bd = r;
+  for (const q of snapCenters(F())) { const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
+  return best;
+}
 // Nokta takibi (issue #16) için referans noktaları: duvar uçları, oda köşeleri, çizilmekte olan oda köşeleri
 function trackRefs(ignore, from) {
   const f = F(), out = [], skip = q => (ignore && ignore.has(q)) || (from && dist(q, from) < 0.5);
   for (const w of f.walls) { if (ignore && ignore.has(w.id)) continue; for (const q of [w.a, w.b]) if (!skip(q)) out.push(q); }
   for (const arr of ['rooms', 'slabs', 'voids']) for (const rm of f[arr] || []) for (const q of rm.pts) if (!skip(q)) out.push(q);
   if (ui.polyPts) for (const q of ui.polyPts) if (!skip(q)) out.push(q);
+  for (const q of underlayPts()) if (!skip(q)) out.push(q);
   return out;
 }
 function snapPt(p, from, e, ignore) {
@@ -1017,6 +1078,11 @@ function snapPt(p, from, e, ignore) {
   }
   if (!skipRooms) for (const arr of ['rooms', 'slabs', 'voids']) for (const rm of f[arr] || []) for (const q of rm.pts) { if (ignore && ignore.has(q)) continue; const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
   if (best) return { x: best.x, y: best.y, hit: 'end' };
+  // alt kat izdüşümü (#26), orta nokta ve merkez (#25): uç noktadan sonra, aynı yarıçapta en yakını
+  let hit = null;
+  for (const [kind, list] of [['under', underlayPts()], ['mid', snapMids(f, ignore)], ['center', snapCenters(f, ignore)]])
+    for (const q of list) { const d = dist(p, q); if (d < bd) { bd = d; best = q; hit = kind; } }
+  if (best) return { x: best.x, y: best.y, hit };
   const g = P.grid, gt = P.gridType || 'square', refs = trackRefs(ignore, from);
   if (from && ui.angle) {
     const dx = p.x - from.x, dy = p.y - from.y, l = Math.hypot(dx, dy);
@@ -1441,6 +1507,24 @@ function startPlace(type, def) {
 }
 
 /* ---------- Önizleme ---------- */
+// Yakalama işaretleri: ▲ orta nokta, ⨁ merkez, ◇ alt kat izdüşümü (#25, #26)
+const SNAP_HINT_TOOLS = new Set(['wall', 'rect', 'poly', 'slab', 'void', 'dim', 'place']);
+function snapGlyph(q, C, z, label, op = 1) {
+  const { x, y } = q, sw = 1.6 / z, pe = 'pointer-events="none"';
+  let s = '', col, txt;
+  if (q.hit === 'mid') {
+    col = C.lt ? '#0891b2' : '#22d3ee'; txt = L('Orta nokta', 'Midpoint');
+    s = `<polygon points="${x},${y - 7 / z} ${x - 6 / z},${y + 4.5 / z} ${x + 6 / z},${y + 4.5 / z}" fill="${col}" fill-opacity=".35" stroke="${col}" stroke-width="${sw}" ${pe}/>`;
+  } else if (q.hit === 'center') {
+    col = '#10b981'; txt = L('Merkez', 'Center');
+    s = `<g stroke="${col}" stroke-width="${sw}" fill="none" ${pe}><circle cx="${x}" cy="${y}" r="${6 / z}"/><line x1="${x - 10 / z}" y1="${y}" x2="${x + 10 / z}" y2="${y}"/><line x1="${x}" y1="${y - 10 / z}" x2="${x}" y2="${y + 10 / z}"/></g>`;
+  } else if (q.hit === 'under') {
+    col = C.lt ? '#9333ea' : '#c084fc'; txt = L('Alt kat', 'Underlay');
+    s = `<rect x="${x - 6 / z}" y="${y - 6 / z}" width="${12 / z}" height="${12 / z}" transform="rotate(45 ${x} ${y})" fill="none" stroke="${col}" stroke-width="${sw}" ${pe}/>`;
+  } else return '';
+  if (label) s += `<text x="${x + 10 / z}" y="${y - 10 / z}" font-size="${11 / z}" font-weight="600" fill="${col}" stroke="${C.halo}" stroke-width="${3 / z}" paint-order="stroke" ${pe}>${txt}</text>`;
+  return op < 1 ? `<g opacity="${op}">${s}</g>` : s;
+}
 function drawPreview() {
   const C = pal(), ac = C.accent, g = $('#gPv'), z = view.z, cur = ui.cur; let s = '';
   const lbl = (x, y, t) => `<text x="${x}" y="${y}" font-size="${13 / z}" font-weight="700" fill="${C.text}" stroke="${C.halo}" stroke-width="${3.5 / z}" paint-order="stroke" text-anchor="middle" pointer-events="none">${t}</text>`;
@@ -1461,6 +1545,12 @@ function drawPreview() {
     }
   }
   if (cur && cur.hit === 'end') s += `<circle cx="${cur.x}" cy="${cur.y}" r="${8 / z}" fill="none" stroke="#10b981" stroke-width="${2 / z}"/>`;
+  if (cur && cur.hit && cur.hit !== 'end') s += snapGlyph(cur, C, z, true);
+  else if (ui.snap && !ui.shift && ui.raw && SNAP_HINT_TOOLS.has(tool)) {
+    // çizim/yerleştirme sırasında imlecin altındaki odanın merkezini silik göster (#25)
+    const rm = F().rooms.find(r => r.pts.length > 2 && pointInPoly(ui.raw, r.pts));
+    if (rm) s += snapGlyph({ ...polyCentroid(rm.pts), hit: 'center' }, C, z, false, .45);
+  }
   if (tool === 'wall' && cur) {
     if (ui.draw) {
       const a = ui.draw.start;
@@ -1517,7 +1607,9 @@ function updateGhost() {
     const f = mkFurn(placing.def, 0, 0, placing.rot);
     const g = ui.snap && !ui.shift, sp = g ? snapToGrid(p) : p;
     f.x = sp.x; f.y = sp.y;
-    if (!ui.shift) magnet(f);
+    const c = g && nearCenter(p, 18 / view.z); // oda / grup merkezine kilitlen (#25), yoksa duvara yapış
+    if (c) { f.x = c.x; f.y = c.y; ui.cur = { x: c.x, y: c.y, hit: 'center' }; }
+    else if (!ui.shift) magnet(f);
     ui.ghost = f;
   } else {
     const n = wallNear(p, 45); if (!n) return;
@@ -1991,7 +2083,12 @@ function doMove(raw, e) {
     else if (PTS_KINDS.has(kind)) o.pts = g.pts.map(p => ({ x: p.x + dx, y: p.y + dy }));
     else if (kind === 'furn') {
       o.x = g.x + dx; o.y = g.y + dy;
-      if (sel.length === 1) { o.rot = g.rot; const r0 = o.rot; magnet(o); if (e.shiftKey) { o.x = g.x + dx; o.y = g.y + dy; o.rot = g.rot; } }
+      if (sel.length === 1) {
+        o.rot = g.rot; ui.cur = null;
+        const c = ui.snap && !e.shiftKey && nearCenter({ x: g.x + raw.x - d.start.x, y: g.y + raw.y - d.start.y }, 18 / view.z);
+        if (c) { o.x = c.x; o.y = c.y; ui.cur = { x: c.x, y: c.y, hit: 'center' }; } // oda / grup merkezi (#25)
+        else { magnet(o); if (e.shiftKey) { o.x = g.x + dx; o.y = g.y + dy; o.rot = g.rot; } }
+      }
     }
     else if (kind === 'text' || kind === 'bg') { o.x = g.x + dx; o.y = g.y + dy; }
     else if (kind === 'op') {
@@ -2092,7 +2189,7 @@ function doHandle(raw, e) {
       } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
       else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
     }
-  } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; ui.cur = p; }
+  } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e, new Set([o.a, o.b])); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; ui.cur = p; }
   else if (h === 'doff') {
     const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, mx = (o.a.x + o.b.x) / 2, my = (o.a.y + o.b.y) / 2;
     o.off = rnd((raw.x - mx) * nx + (raw.y - my) * ny, ui.snap && !sh ? 5 : 1);
@@ -2262,6 +2359,16 @@ function projectPanel() {
   const f = F(); let h = `<h3>⚙️ ${L('Proje', 'Project')}</h3>`;
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
   h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['dims', L('Ölçüler', 'Dimensions')], ['sketch', L('Serbest çizimler', 'Freehand sketches')]].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
+  if (P.floors.length > 1) {
+    // Kat izdüşümü (issue #26): aç/kapa, referans kat, opaklık
+    const opts = [['prev', L('Bir alt kat', 'Floor below')], ...P.floors.filter(x => x !== f).map(x => [x.id, x.name])];
+    h += `<label class="f"><span>${L('Kat izdüşümü', 'Floor underlay')}</span><input type="checkbox" data-k="layer" data-p="underlay" ${layersVis.underlay ? 'checked' : ''}></label>`;
+    if (layersVis.underlay) {
+      h += `<label class="f"><span>${L('Referans kat', 'Reference floor')}</span><select data-k="ul" data-p="floor">${opts.map(([v, n]) => `<option value="${esc(v)}" ${underlay.floor === v ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>`;
+      h += `<label class="f"><span>${L('İzdüşüm opaklığı', 'Underlay opacity')} %</span><input type="range" min="10" max="50" step="1" data-k="ul" data-p="op" value="${Math.round(underlay.op * 100)}"></label>`;
+      if (!underlayFloor()) h += `<p class="muted" style="margin:0 0 6px">${L('Zemin katın altında kat yok — başka bir referans kat seç.', 'There is no floor below the ground floor — pick another reference floor.')}</p>`;
+    }
+  }
   h += `<h4>${L('Arka plan görseli', 'Background image')}</h4>`;
   if (P.bg) h += bgFields(false);
   else h += `<p class="muted" style="margin:0 0 6px">${L('Kroki / mevcut plan görselini altlık olarak ekleyip üzerinden çizebilirsin.', 'Import a blueprint or floor plan image as an underlay to trace over.')}</p><div class="row"><button class="btn sm" data-act="bgadd">${L('🖼 Görsel ekle', '🖼 Add image')}</button></div>`;
@@ -2293,7 +2400,8 @@ function affects3D(k, p) {
 function applyProp(t, final) {
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
-  if (k === 'layer') { layersVis[p] = v; render(); return; }
+  if (k === 'layer') { layersVis[p] = v; render(); if (p === 'underlay') renderProps(); return; }
+  if (k === 'ul') { if (p === 'op') underlay.op = clamp(v / 100, 0.1, 0.5); else { underlay.floor = v; renderProps(); } render(); return; }
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
   if (k === 'bg' && P.bg) { P.bg[p] = v; if (p === 'lock' && v) sel = sel.filter(x => x !== 'bg'); render(); if (final) { commit(); if (p === 'lock') renderProps(); } return; }

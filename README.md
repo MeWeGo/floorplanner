@@ -77,7 +77,8 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 | ∅ **Off (free draw)** | No grid, no step rounding |
 
 - **Step presets:** 5 cm · 10 cm · 25 cm · 50 cm · **1 m · 3 m · 5 m** · **Custom…** (any value, 1–10 000 cm).
-- Snap to wall ends and room corners. Toggle snapping with `G`, or hold `Shift` for a temporary override.
+- Snap to wall ends and room corners, **wall / dimension midpoints** (▲) and **room, slab and group centres** (⨁). Furniture you place or drag locks to a room centre, so a lamp, rug or table lands dead centre. Toggle snapping with `G`, or hold `Shift` for a temporary override.
+- **Floor underlay:** on an upper floor the floor below shows faintly — walls, columns, stairs, slab / balcony edges and voids — and walls you draw snap to its corners (◇) so load-bearing walls line up. **Project ▸ Layers** turns it off, picks another reference floor (e.g. the ground floor from floor 2, or the floor above) and sets its opacity.
 
 ### 🚪 Objects
 - **7 door / window types** (single, double, sliding, opening, window, wide window, small window) that snap onto walls with hinge-side and swing-direction controls.
