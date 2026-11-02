@@ -133,11 +133,13 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 - **3D render:** while the 3D view is open, the **🖼 PNG** button renders the scene (and the **🎬** button in the 3D overlay does the same from inside the view). This is a real render, not a screenshot: the camera outlines are removed, the backdrop becomes a studio white, shadows are rebuilt at high resolution and several supersampled passes are averaged, so edges come out smooth instead of jagged. Files are named `<project>-3d-render.png`. **Shift-click** either button for a quick capture of exactly what is on screen (`-3d-view.png`). SVG and PDF always describe the **2D plan**.
 
 ### 🧊 3D View & WASD Walk
-One click turns the plan into an interactive 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors. Orbit/zoom with the mouse, or walk around with **`WASD` / Arrow keys** (`Q`/`E` for down/up, `Shift` for faster travel).
+One click turns the plan into an interactive 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors. Orbit/zoom with the mouse, or fly around with **`WASD` / Arrow keys** (`Q`/`E` for down/up, `Shift` for faster travel).
+
+**Walk mode (👁):** click the **👁** eye button to explore at eye level (165 cm). Walk with **`WASD` / Arrow keys** and hold **`Shift`** to run (movement is time-based); drag the mouse to look around in yaw and pitch (`Q`/`E` height keys are disabled). Collision detection stops you at walls and closed doors while sliding along them; open doors and arches are passable. Click any door to open or close it (or `Alt`+click to select). Press **`Esc`** to return to the saved orbit camera.
 
 **Detail comes from the plan, not from extra settings:** furniture is modelled per catalogue item (sofa cushions, table legs, wardrobe doors and handles, fridge panels, WC bowl and tank, basin and faucet, plant foliage, TV screen, car wheels, stairs with a handrail …) purely from its type, size and colour, so existing plans and saved JSON improve with no migration. Openings get frames, sills and handles, solid walls get skirting boards and a top cap, `wood`/`tile`/`carpet`/`marble`/`concrete`/`stone` plus outdoor `grass`/`water`/`gravel`/`deck`/`asphalt` (or custom textures) room floors and floor slabs become tiled textures tinted with the room colour (water draws as a translucent shiny surface), and a soft-shadowed sun lights the scene.
 
-**Camera presets:** three small buttons next to the floor selector give **fit**, **top-down** and **eye level (1.6 m)** views. The **🎬** button beside them renders the current view to a high-resolution PNG (the top-bar **🖼 PNG** does the same while you are in 3D; hold **Shift** for a quick capture).
+**Camera presets:** three small buttons next to the floor selector give **fit**, **top-down** and **walk mode (👁 eye level, 1.65 m)** views. The **🎬** button beside them renders the current view to a high-resolution PNG (the top-bar **🖼 PNG** does the same while you are in 3D; hold **Shift** for a quick capture).
 
 **Picks up where you left off:** switching from 2D to 3D aims the camera at whatever is in the middle of your 2D canvas — or frames the object you have selected — and the distance follows your 2D zoom, so a close-up in 2D opens as a close-up in 3D instead of a distant view of the whole building. The orbit you leave behind is restored next time you press **3B**, unless you panned somewhere else in 2D in between; **Fit** always returns to the whole building.
 
@@ -207,7 +209,8 @@ python -m http.server 8080      # then open http://localhost:8080
 | `[` / `]` | Rotate selection −15° / +15° (multi-selections rotate as one rigid layout) |
 | `R` / `S` *(while placing)* | Rotate furniture / flip door hinge · flip swing side |
 | Arrow keys | Nudge selection / background image 1 cm (`Shift` = 10 cm) |
-| `WASD` / `Q` / `E` *(in 3D)* | Walk around in 3D view (`Q`/`E`: down/up, `Shift`: faster) |
+| `WASD` / `Q` / `E` *(in 3D orbit)* | Fly / move camera in 3D orbit (`Q`/`E`: down/up, `Shift`: faster) |
+| `👁` *(in 3D)* | **Walk mode** — walk at eye level: `WASD` / Arrow keys walk, `Shift` runs, drag to look around, collision blocks walls/closed doors, open doors pass, click door to open/close, `Esc` returns to orbit |
 | `Ctrl+C / V / D` | Copy / Paste / Duplicate |
 | `Ctrl+Z / Ctrl+Y` | Undo / Redo (also works while the 3D view is open) |
 | `Ctrl+A` · `Ctrl+S` · `Del` | Select all · Save to browser · Delete |

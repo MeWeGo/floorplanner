@@ -985,7 +985,7 @@ const keyBase = ({ key, code, vk, ctrl, shift }) => {
 };
 async function keyDown(page, k) {
   const base = keyBase(k);
-  await page.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyDown', text: k.ctrl ? undefined : k.key }, base));
+  await page.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyDown', text: k.ctrl || k.key.length > 1 ? undefined : k.key }, base)); // no text for Escape / arrows
   await sleep(80);
 }
 async function keyUp(page, k) {
@@ -1045,6 +1045,60 @@ check('3D: Ctrl+Z / Ctrl+Y undo the plan without leaving the 3D view', async pag
   if (held.sel !== 0) throw new Error('a plain "a" must not select all in 3D (that is Ctrl+A)');
 
   return 'undo/redo work in 3D (' + before.walls + ' walls)';
+});
+
+check('3D walk mode: W stops at a wall, passes an open door, Esc restores the orbit camera (issue #46)', async page => {
+  // two rooms split by a partition at x = 400 with a closed door in the middle
+  const setup = await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject());
+    const f = F();
+    addRectWalls(0, 0, 800, 400);
+    const part = mkWall({ x: 400, y: 0 }, { x: 400, y: 400 }); f.walls.push(part);
+    const door = mkOp(OPDEF.door || OPENINGS.find(o => o.id === 'door'), part, 200); door.open = 0; f.ops.push(door);
+    commit(); refresh();
+    document.getElementById('b3d').click();
+    return { door: door.id };
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+
+  const entered = await page.evaluate(`(() => {
+    const orbit = T3.cam.position.clone();
+    document.getElementById('b3dEye').click();
+    const w = T3.walk; if (!w) return { err: 'eye button did not enter walk mode' };
+    w.x = 200; w.y = 200; w.yaw = 0; w.pitch = 0; applyWalkCam();           // face the partition
+    return { orbit: [orbit.x, orbit.y, orbit.z], on: document.getElementById('b3dEye').classList.contains('on'),
+      hint: !!document.getElementById('walkHint') && document.getElementById('walkHint').style.display !== 'none' };
+  })()`);
+  if (entered.err) throw new Error(entered.err);
+  if (!entered.on || !entered.hint) throw new Error('walk mode is not shown on the eye button / hint');
+
+  const W = { key: 'w', code: 'KeyW', vk: 87 }, Q = { key: 'q', code: 'KeyQ', vk: 81 };
+  const y0 = await page.evaluate(`T3.cam.position.y`);
+  await keyDown(page, W); await keyDown(page, Q);
+  await sleep(2500);                                       // 140 cm/s would end ~x = 550 without the wall
+  await keyUp(page, Q); await keyUp(page, W);
+  const blocked = await page.evaluate(`(() => ({ x: T3.walk.x, camX: T3.cam.position.x, y: T3.cam.position.y }))()`);
+  if (blocked.x < 260) throw new Error('W did not walk forward: x = ' + blocked.x.toFixed(0));
+  if (blocked.camX > 400 - 10) throw new Error('walked into / through a closed door: camera x = ' + blocked.camX.toFixed(0));
+  if (Math.abs(blocked.y - y0) > 0.5) throw new Error('Q changed the eye height in walk mode');
+
+  await page.evaluate(`(() => { const o = F().ops.find(o => o.id === '${setup.door}'); toggleDoor3D(o); T3.walk.y = 200; T3.walk.yaw = 0; return true; })()`);
+  await keyDown(page, W); await sleep(2500); await keyUp(page, W);
+  const passed = await page.evaluate(`T3.walk.x`);
+  if (passed < 430) throw new Error('could not walk through the open door: x = ' + passed.toFixed(0));
+
+  await pressKey(page, { key: 'Escape', code: 'Escape', vk: 27 });
+  const after = await page.evaluate(`(() => ({ walk: !!T3.walk, view3d: !!ui.view3d, p: [T3.cam.position.x, T3.cam.position.y, T3.cam.position.z] }))()`);
+  await page.evaluate(`show3D(false)`);
+  if (after.walk) throw new Error('Esc did not leave walk mode');
+  if (!after.view3d) throw new Error('Esc in walk mode must return to the orbit camera, not to 2D');
+  if (Math.hypot(after.p[0] - entered.orbit[0], after.p[1] - entered.orbit[1], after.p[2] - entered.orbit[2]) > 1) {
+    throw new Error('Esc did not restore the orbit camera');
+  }
+  return 'blocked at x=' + blocked.camX.toFixed(0) + ', through the open door to x=' + passed.toFixed(0);
 });
 
 /* ---------- main ---------- */(async () => {
