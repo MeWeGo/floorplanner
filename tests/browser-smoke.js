@@ -559,6 +559,29 @@ check('render studio: every style renders and restores the scene (issue #34)', a
   return '4 styles rendered, JPEG honoured, light + materials restored';
 });
 
+check('print opens the plot dialog: paper, true scale, overflow warning, window area (issue #35)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); addRectWalls(0, 0, 1200, 800); commit(); view.z = 0.4; view.x = 80; view.y = 60; sel = []; refresh();
+    Object.assign(ui.plot, { paper: 'a4', orient: 'landscape', scale: '100', area: 'all', center: true, margin: 10, win: null });
+    document.getElementById('bPrint').click();
+    const out = { modal: ui.modal, preview: !!document.querySelector('#modal svg') };
+    const sh = plotSheetSvg(); out.k = sh.t.k; out.mm = /width="297mm" height="210mm"/.test(sh.svg); out.fits = !sh.t.overflow;
+    const s = document.querySelector('#modal [data-plot="scale"]'); s.value = '50'; s.dispatchEvent(new Event('change', { bubbles: true }));
+    out.warn = /does not fit|sığmıyor/.test(document.getElementById('modal').textContent);
+    document.querySelector('#modal [data-plot-act="win"]').click(); out.tool = tool;
+    const r = cv.getBoundingClientRect(), at = (q, t) => { const p = w2s(q); cv.dispatchEvent(new PointerEvent(t, { clientX: r.left + p.x, clientY: r.top + p.y, bubbles: true, pointerId: 1, button: 0 })); };
+    at({ x: 0, y: 0 }, 'pointerdown'); at({ x: 600, y: 400 }, 'pointermove'); at({ x: 600, y: 400 }, 'pointerup');
+    out.win = ui.plot.area === 'window' && ui.plot.win && ui.plot.win.x1 === 600; out.back = ui.modal;
+    closeModal(); Object.assign(ui.plot, { scale: '100', area: 'all', win: null });
+    return out;
+  })()`);
+  if (info.modal !== 'plot' || !info.preview) throw new Error('#bPrint did not open the plot dialog: ' + JSON.stringify(info));
+  if (info.k !== 0.1 || !info.mm || !info.fits) throw new Error('1:100 on A4 is not 0.1 mm/cm on a 297×210 mm sheet: ' + JSON.stringify(info));
+  if (!info.warn) throw new Error('no overflow warning at 1:50 on A4');
+  if (info.tool !== 'plotwin' || !info.win || info.back !== 'plot') throw new Error('window picking broken: ' + JSON.stringify(info));
+  return 'dialog, 1:100 = 0.1 mm/cm on A4, overflow warning, window picked';
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');

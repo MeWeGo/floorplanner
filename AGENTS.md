@@ -308,6 +308,8 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 - If CDN scripts fail, `show3D` shows a toast and stays in 2D.
 
 ### Export
+**Plot dialog (issue #35).** `#bPrint` → `exportPrint()` → `openPlotDialog()` (`ui.modal === 'plot'`, settings in `ui.plot`). `plotSheetSvg()` builds a sheet sized in **millimetres** (`width="297mm"`, viewBox in mm) from the same `layerStrings` as `exportSvg` under one transform: `calcPlotTransform(paper, scale, bounds, margin, center)` → `k` = mm per cm (`10 / N` for 1:N, or fit), plan size, origin and `overflow`. The plan is clipped to plan-rect ∩ printable area (`#plotclip`), with a frame, a title strip (project, floor, date, scale, paper) and a scale bar of `plotBarCm(k)` (≥ 25 mm). Areas: `all` (content + 60 cm), `view` (visible canvas) or `window` (`ui.plot.win`, picked with the transient `plotwin` tool: a `plotbox` drag that reopens the dialog). `plotPrint()` writes `@page { size: A3 landscape; margin: 0 }` and the mm-sized SVG, so the browser prints at true scale. Guard: `tests/plot-dialog.test.js` + a smoke check.
+
 `exportSvg()` → `{svg,w,h}`; PNG rasterises that SVG via `Image` + canvas; PDF opens a print window (`window.open` + `print()`). Includes a title block (project, floor, date, total room area) and a 2 m scale bar. Background image is included only if its layer is visible.
 
 ### MCP server (`mcp/server.js`)
@@ -383,6 +385,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/drawing-layers.test.js` | custom drawing layers on the real functions: old projects stay unchanged, stamping rules, hidden / non-printing filter, lock / hide picking, and the 2D / 3D / export / selection wiring |
 | `tests/stairs.test.js` | parametric stairs on the real functions: legacy defaults, riser count / landings / final height for all four types, treads inside the footprint, Blondel rule, railing sides, 2D / 3D / panel wiring |
 | `tests/render-studio.test.js` | render studio: sun direction maths, the four styles and output sizes, material / ink / light swaps restored in `finally`, JPEG encoding, the 🎨 button and studio controls |
+| `tests/plot-dialog.test.js` | plot dialog: ISO paper sizes / orientation, mm-per-cm for 1:50 / 1:100 / 1:200 / fit, centring and overflow, scale-bar choice, the print → dialog → window-pick wiring |
 | `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |

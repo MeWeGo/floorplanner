@@ -122,7 +122,8 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 | `localStorage` | Theme & language preferences only (legacy data is auto-migrated to IndexedDB) |
 
 ### 📤 Export
-- **PNG**, **SVG**, and **PDF / Print** (A4 landscape) with title block and scale bar.
+- **PNG** and **SVG** with title block and scale bar.
+- **🖨 PDF / Print** opens a **plot setup** dialog: paper **A4–A0**, landscape / portrait, a true architectural **scale** (1:50, 1:100, 1:200, 1:500 — 1:100 prints 1 m as 10 mm) or *fit to paper*, the area to print (**whole plan**, **current view** or a **window** you drag on the canvas), centring and margins. The preview warns when the plan does not fit; print it (or save as PDF from the print dialog) or download the sheet as SVG.
 - Exports always render on **white paper** regardless of the editor theme.
 - **3D render:** while the 3D view is open, the **🖼 PNG** button renders the scene (and the **🎬** button in the 3D overlay does the same from inside the view). This is a real render, not a screenshot: the camera outlines are removed, the backdrop becomes a studio white, shadows are rebuilt at high resolution and several supersampled passes are averaged, so edges come out smooth instead of jagged. Files are named `<project>-3d-render.png`. **Shift-click** either button for a quick capture of exactly what is on screen (`-3d-view.png`). SVG and PDF always describe the **2D plan**.
 

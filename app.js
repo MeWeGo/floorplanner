@@ -1681,6 +1681,7 @@ const HINTS = {
   text: 'Metin eklemek için tıkla',
   eraser: 'Silmek istediğin nesneye tıkla',
   trim: 'Kırp: kesişen duvarın taşan ucuna tıkla → kesişime kadar kırpılır (iki kesişim arasındaki parça da çıkarılabilir) • kırmızı = silinecek kısım',
+  plotwin: 'Çıktı penceresi: yazdırılacak alanı köşeden köşeye sürükle • Esc: iptal',
   section: 'Kesit: kesit çizgisinin iki ucuna tıkla • ok bakış yönünü gösterir • panelden yönü çevir, 3B kesit aç veya 2B kesit çizimini göster',
   mirror: 'Aynala: önce nesneleri seç, sonra ayna ekseninin iki noktasına tıkla • orijinali silmek isteyip istemediğin sorulur • Shift+H / Shift+V: yatay / dikey aynala',
   calib: 'Ölçek: arka plan görselinde bilinen iki noktaya tıkla, gerçek mesafeyi gir',
@@ -1701,6 +1702,7 @@ const HINTS_EN = {
   text: 'Click to place a text label',
   eraser: 'Click any object to delete it',
   trim: 'Trim: click the overhanging part of a crossing wall → it is cut back to the intersection (a piece between two crossings can be removed too) • red = part to remove',
+  plotwin: 'Plot window: drag the area to print corner to corner • Esc: cancel',
   section: 'Section: click both ends of the cut line • the arrows show the viewing direction • the panel flips it, cuts the 3D view or opens the 2D section drawing',
   mirror: 'Mirror: select objects first, then click two points of the mirror axis • you are asked whether to erase the originals • Shift+H / Shift+V: flip horizontal / vertical',
   calib: 'Calibrate: click two points with a known distance on the background image, then enter real distance',
@@ -1819,6 +1821,10 @@ function drawPreview() {
     const x0 = Math.min(d.start.x, cur.x), y0 = Math.min(d.start.y, cur.y), w = Math.abs(cur.x - d.start.x), h = Math.abs(cur.y - d.start.y);
     s += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="${ac}" fill-opacity=".12" stroke="${ac}" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${3 / z}"/>`;
     if (w > 10 && h > 10) s += lbl(x0 + w / 2, y0 - 10 / z, `${fmtLen(w)} × ${fmtLen(h)} = ${fmtArea(w * h)}`);
+  }
+  if (d && d.type === 'plotbox') {
+    const x0 = Math.min(d.start.x, d.cur.x), y0 = Math.min(d.start.y, d.cur.y), w = Math.abs(d.cur.x - d.start.x), h = Math.abs(d.cur.y - d.start.y);
+    s += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="${ac}" fill-opacity=".06" stroke="${ac}" stroke-width="${2 / z}" stroke-dasharray="${10 / z} ${5 / z}"/>` + lbl(x0 + w / 2, y0 - 10 / z, L('Çıktı alanı', 'Plot area') + ` ${fmtLen(w)} × ${fmtLen(h)}`);
   }
   if (d && d.type === 'box') {
     s += `<rect x="${Math.min(d.start.x, d.cur.x)}" y="${Math.min(d.start.y, d.cur.y)}" width="${Math.abs(d.cur.x - d.start.x)}" height="${Math.abs(d.cur.y - d.start.y)}" fill="${ac}" fill-opacity=".1" stroke="${ac}" stroke-width="${1.5 / z}" stroke-dasharray="${5 / z}"/>`;
@@ -2150,6 +2156,7 @@ cv.addEventListener('pointerdown', e => {
       (f.sections = f.sections || []).push(sc); sel = [sc.id]; ui.secStart = null; commit(); setTool('select'); refresh();
       return;
     }
+    case 'plotwin': ui.drag = { type: 'plotbox', start: { x: raw.x, y: raw.y }, cur: { x: raw.x, y: raw.y } }; return;
     case 'mirror': {
       const os = selObjs().filter(x => XFORM_KINDS.has(x.kind));
       if (!os.length) { setTool('select'); toast(L('Aynalamak için önce nesneleri seç', 'Select the objects to mirror first')); return; }
@@ -2267,6 +2274,7 @@ cv.addEventListener('pointermove', e => {
   if (d) {
     if (d.type === 'pan') { view.x = d.vx + e.clientX - d.sx; view.y = d.vy + e.clientY - d.sy; render(); return; }
     if (d.type === 'box') { d.cur = ui.raw; d.moved = true; drawPreview(); return; }
+    if (d.type === 'plotbox') { d.cur = ui.raw; drawPreview(); return; }
     if (d.type === 'shape') { d.cur = ui.cur || ui.raw; drawPreview(); return; }
     if (d.type === 'move') { doMove(ui.raw, e); return; }
     if (d.type === 'handle') { doHandle(ui.raw, e); return; }
@@ -2277,6 +2285,11 @@ cv.addEventListener('pointerup', e => {
   if ((tool === 'pen' || tool === 'shape') && ui.pen) { tool === 'shape' ? finishShapeFree() : finishPen(); return; }
   const d = ui.drag; if (!d) return; ui.drag = null; setCursor(e);
   if (d.type === 'pan') { updateTools(); return; }
+  if (d.type === 'plotbox') {
+    const x0 = Math.min(d.start.x, d.cur.x), x1 = Math.max(d.start.x, d.cur.x), y0 = Math.min(d.start.y, d.cur.y), y1 = Math.max(d.start.y, d.cur.y);
+    if (x1 - x0 < 20 || y1 - y0 < 20) { toast(L('Alan çok küçük — tekrar sürükle', 'Area too small — drag again')); return; }
+    ui.plot.win = { x0, y0, x1, y1 }; ui.plot.area = 'window'; setTool('select'); openPlotDialog(); return;
+  }
   if (d.type === 'box') {
     if (d.moved && dist(d.start, d.cur) > 4 / view.z) {
       const x0 = Math.min(d.start.x, d.cur.x), x1 = Math.max(d.start.x, d.cur.x), y0 = Math.min(d.start.y, d.cur.y), y1 = Math.max(d.start.y, d.cur.y);
@@ -4409,12 +4422,90 @@ function exportPng() {
   img.onerror = () => toast(L('PNG oluşturulamadı', 'Failed to generate PNG'));
   img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
-function exportPrint() {
-  const { svg } = exportSvg(), win = window.open('', '_blank');
+// Yazdır düğmesi doğrudan yazdırmaz: önce çıktı ayarları (#35)
+function exportPrint() { openPlotDialog(); }
+/* ---------- Çıktı / plot iletişim kutusu (issue #35) ----------
+   Kağıt (A4–A0, yatay/dikey), mimari ölçek (1:50 / 1:100 / 1:200 / 1:500 / sığdır), çıktı alanı (tüm plan /
+   ekran / pencere), ortalama ve kenar boşluğu. Pafta milimetre cinsinden bir SVG'dir; 1:100'de 100 cm = 10 mm. */
+const PAPERS = { a4: [297, 210], a3: [420, 297], a2: [594, 420], a1: [841, 594], a0: [1189, 841] };
+const PLOT_TITLE_MM = 16;
+ui.plot = { paper: 'a4', orient: 'landscape', scale: '100', area: 'all', center: true, margin: 10, win: null };
+const paperMm = p => { const [a, b] = PAPERS[p.paper] || PAPERS.a4; return p.orient === 'portrait' ? { w: b, h: a } : { w: a, h: b }; };
+// plan sınırları (cm) → kağıt (mm): k = mm / cm; taşma varsa overflow
+function calcPlotTransform(paper, scale, b, margin, center, titleH = PLOT_TITLE_MM) {
+  const areaW = paper.w - 2 * margin, areaH = paper.h - 2 * margin - titleH;
+  const bw = Math.max(1, b.x1 - b.x0), bh = Math.max(1, b.y1 - b.y0);
+  const k = scale === 'fit' ? Math.min(areaW / bw, areaH / bh) : 10 / +scale;
+  const pw = bw * k, ph = bh * k;
+  return { k, pw, ph, areaW, areaH, ox: margin + (center ? (areaW - pw) / 2 : 0), oy: margin + (center ? (areaH - ph) / 2 : 0), overflow: pw > areaW + 0.5 || ph > areaH + 0.5 };
+}
+function plotBounds(area) {
+  if (area === 'window' && ui.plot.win) return ui.plot.win;
+  if (area === 'view') { const r = cv.getBoundingClientRect(); return { x0: -view.x / view.z, y0: -view.y / view.z, x1: (r.width - view.x) / view.z, y1: (r.height - view.y) / view.z }; }
+  const b = contentBounds(F()) || { x0: 0, y0: 0, x1: 1000, y1: 700 }, pad = 60;
+  return { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad };
+}
+// ölçek çubuğu: kağıtta en az 25 mm tutan ilk yuvarlak uzunluk
+const plotBarCm = k => [50, 100, 200, 500, 1000, 2000, 5000, 10000].find(c => c * k >= 25) || 10000;
+function plotSheetSvg(p = ui.plot) {
+  const f = F(), paper = paperMm(p), m = clamp(+p.margin || 0, 0, 40), b = plotBounds(p.area), t = calcPlotTransform(paper, p.scale, b, m, p.center);
+  const z0 = view.z; view.z = 0.5; ui.exporting = true;
+  let LS, defs;
+  try { LS = layerStrings(f, false); defs = defsSvg(); } finally { view.z = z0; ui.exporting = false; }
+  const plan = `<g clip-path="url(#plotclip)"><g transform="translate(${t.ox} ${t.oy}) scale(${t.k}) translate(${-b.x0} ${-b.y0})">${P.bg && layersVis.bg ? bgSvg(false) : ''}${LS.rooms}${LS.walls}${LS.ops}${LS.furn}${LS.roomLabels}${LS.dims}${LS.texts}${LS.sketches}</g></g>`;
+  // yalnızca seçilen alan basılır: plan dikdörtgeni ∩ yazdırılabilir alan
+  const cx0 = Math.max(m, t.ox), cy0 = Math.max(m, t.oy), cx1 = Math.min(m + t.areaW, t.ox + t.pw), cy1 = Math.min(m + t.areaH, t.oy + t.ph);
+  const ty = paper.h - m - PLOT_TITLE_MM, scl = p.scale === 'fit' ? '1:' + Math.round(10 / t.k) + ' (' + L('sığdır', 'fit') + ')' : '1:' + p.scale;
+  const bar = plotBarCm(t.k), bw = bar * t.k, bx = paper.w - m - 6 - bw, date = new Date().toLocaleDateString(isEN() ? 'en-US' : 'tr-TR');
+  const frame = `<rect x="${m}" y="${m}" width="${paper.w - 2 * m}" height="${paper.h - 2 * m}" fill="none" stroke="#334155" stroke-width="0.5"/><path d="M${m} ${ty}H${paper.w - m}" stroke="#334155" stroke-width="0.35"/>`;
+  const title = `<g font-family="Segoe UI,sans-serif" fill="#0f172a"><text x="${m + 4}" y="${ty + 7}" font-size="4.6" font-weight="700">${esc(P.name)} – ${esc(f.name)}</text><text x="${m + 4}" y="${ty + 12.5}" font-size="3" fill="#475569">${date}  •  ${L('Ölçek', 'Scale')} ${scl}  •  ${(p.paper || 'a4').toUpperCase()} ${p.orient === 'portrait' ? L('dikey', 'portrait') : L('yatay', 'landscape')}</text>`
+    + `<path d="M${bx} ${ty + 10}H${bx + bw}M${bx} ${ty + 8.5}V${ty + 11.5}M${bx + bw / 2} ${ty + 8.5}V${ty + 11.5}M${bx + bw} ${ty + 8.5}V${ty + 11.5}" stroke="#0f172a" stroke-width="0.4" fill="none"/><text x="${bx}" y="${ty + 6.5}" font-size="2.8">0</text><text x="${bx + bw}" y="${ty + 6.5}" font-size="2.8" text-anchor="end">${fmtLen(bar)}</text></g>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${paper.w}mm" height="${paper.h}mm" viewBox="0 0 ${paper.w} ${paper.h}"><defs>${defs}<clipPath id="plotclip"><rect x="${cx0}" y="${cy0}" width="${Math.max(0, cx1 - cx0)}" height="${Math.max(0, cy1 - cy0)}"/></clipPath></defs><rect width="${paper.w}" height="${paper.h}" fill="#fff"/>${plan}${frame}${title}</svg>`;
+  return { svg, t, paper, b };
+}
+function plotDialogHtml() {
+  const p = ui.plot, sh = plotSheetSvg(p), t = sh.t, sel = (k, opts) => `<select data-plot="${k}">${opts.map(([v, n]) => `<option value="${v}" ${String(p[k]) === v ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
+  const lab = (t2, c) => `<label style="display:flex;flex-direction:column;gap:2px;font-size:12px">${t2}${c}</label>`;
+  return `<h2>🖨 ${L('Çıktı ayarları', 'Plot setup')} <button class="btn sm" data-close>✕</button></h2>
+    <div class="row plotctl" style="flex-wrap:wrap;gap:10px;margin-bottom:8px;align-items:flex-end">
+      ${lab(L('Kağıt', 'Paper'), sel('paper', Object.keys(PAPERS).map(k => [k, k.toUpperCase() + ' (' + PAPERS[k].join('×') + ' mm)'])))}
+      ${lab(L('Yön', 'Orientation'), sel('orient', [['landscape', L('Yatay', 'Landscape')], ['portrait', L('Dikey', 'Portrait')]]))}
+      ${lab(L('Ölçek', 'Scale'), sel('scale', [['50', '1:50'], ['100', '1:100'], ['200', '1:200'], ['500', '1:500'], ['fit', L('Kağıda sığdır', 'Fit to paper')]]))}
+      ${lab(L('Alan', 'Area'), sel('area', [['all', L('Tüm plan', 'Whole plan')], ['view', L('Ekrandaki görünüm', 'Current view')], ['window', L('Pencere (seçilen alan)', 'Window (picked area)')]]))}
+      ${lab(L('Kenar boşluğu (mm)', 'Margin (mm)'), `<input type="number" min="0" max="40" step="1" data-plot="margin" value="${p.margin}" style="width:70px">`)}
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px"><input type="checkbox" data-plot="center" ${p.center ? 'checked' : ''}> ${L('Kağıda ortala', 'Center on paper')}</label>
+      <button class="btn sm" data-plot-act="win">▭ ${L('Pencere seç…', 'Pick window…')}</button>
+    </div>
+    <div style="background:#94a3b8;border-radius:8px;padding:12px;display:flex;justify-content:center"><div style="box-shadow:0 4px 18px rgba(0,0,0,.35);width:${p.orient === 'portrait' ? 42 : 100}%;max-height:56vh">${sh.svg.replace(/width="[\d.]+mm" height="[\d.]+mm"/, 'style="width:100%;height:auto;display:block"')}</div></div>
+    <p style="margin:8px 0 0;font-size:12px;${t.overflow ? 'color:var(--danger);font-weight:700' : 'color:var(--muted, #64748b)'}">${t.overflow
+      ? '⚠ ' + L(`Plan bu ölçekte kağıda sığmıyor (${Math.round(t.pw)}×${Math.round(t.ph)} mm, alan ${Math.round(t.areaW)}×${Math.round(t.areaH)} mm) — kenarlar kesilecek. Daha büyük kağıt, küçük ölçek ya da "Kağıda sığdır" seç.`, `The plan does not fit at this scale (${Math.round(t.pw)}×${Math.round(t.ph)} mm on a ${Math.round(t.areaW)}×${Math.round(t.areaH)} mm area) — it will be clipped. Pick a larger paper, a smaller scale or "Fit to paper".`)
+      : L(`Plan kağıtta ${Math.round(t.pw)}×${Math.round(t.ph)} mm.`, `The plan measures ${Math.round(t.pw)}×${Math.round(t.ph)} mm on paper.`)}</p>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm primary" data-plot-act="print">🖨 ${L('Yazdır / PDF', 'Print / PDF')}</button><button class="btn sm" data-plot-act="svg">⬇ SVG</button></div>`;
+}
+function openPlotDialog() { openModal(plotDialogHtml(), 'plot'); }
+function plotPrint() {
+  const p = ui.plot, { svg, paper } = plotSheetSvg(p), win = window.open('', '_blank');
   if (!win) return toast(L('Açılır pencere engellendi', 'Pop-up window blocked'));
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(P.name)}</title><style>@page{size:A4 landscape;margin:10mm}body{margin:0}svg{width:100%;height:auto;max-height:190mm}</style></head><body>${svg}<script>setTimeout(()=>print(),400)<\/script></body></html>`);
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(P.name)}</title><style>@page{size:${p.paper.toUpperCase()} ${p.orient};margin:0}html,body{margin:0}svg{display:block;width:${paper.w}mm;height:${paper.h}mm}</style></head><body>${svg}<script>setTimeout(()=>print(),400)<\/script></body></html>`);
   win.document.close();
 }
+$('#modal').addEventListener('change', e => {
+  if (ui.modal !== 'plot') return;
+  const t = e.target.closest('[data-plot]'); if (!t) return;
+  const k = t.dataset.plot; ui.plot[k] = t.type === 'checkbox' ? t.checked : t.value;
+  if (k === 'area' && t.value === 'window' && !ui.plot.win) { startPlotWindow(); return; }
+  openPlotDialog();
+});
+$('#modal').addEventListener('click', e => {
+  if (ui.modal !== 'plot') return;
+  const a = e.target.closest('[data-plot-act]'); if (!a) return;
+  if (a.dataset.plotAct === 'win') startPlotWindow();
+  else if (a.dataset.plotAct === 'print') plotPrint();
+  else download(fname('svg').replace(/\.svg$/, '-' + ui.plot.paper + '.svg'), new Blob([plotSheetSvg().svg], { type: 'image/svg+xml' }));
+});
+// pencere seçimi: iletişim kutusu kapanır, tuvalde bir dikdörtgen sürüklenir, sonra geri açılır
+function startPlotWindow() { closeModal(); if (ui.view3d) show3D(false); setTool('plotwin'); toast(L('Çıktı alanını tuvalde sürükleyerek seç', 'Drag the plot area on the canvas')); }
+
 
 /* ---------- 3B render (PNG) ----------
    The 3D view is a live WebGL canvas, so the only honest "export" is a capture
