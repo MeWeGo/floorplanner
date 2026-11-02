@@ -4505,7 +4505,9 @@ async function render3DHQ(opts) {
   const w = Math.max(1, el.clientWidth), h = Math.max(1, el.clientHeight);
 
   // 1. final image size (what the user gets) and the buffer we render into
-  const outK = opts.scale || shot3DScale(w, h, 2600, 6e6);
+  // render stüdyosu (#34): sabit uzun kenar (1080p / 2K / 4K) ya da ekranın 2–3 katı
+  const outK = opts.longSide ? opts.longSide / Math.max(w, h) : (opts.scale || shot3DScale(w, h, 2600, 6e6));
+  const style = RENDER_STYLES[opts.style] ? opts.style : 'realistic', inkStyle = style === 'technical' || style === 'sketch';
   const outW = Math.max(2, Math.round(w * outK)), outH = Math.max(2, Math.round(h * outK));
   const bufK = Math.max(1, Math.min(opts.supersample || 2, 4096 / Math.max(outW, outH)));
   const W = Math.max(2, Math.round(outW * bufK)), H = Math.max(2, Math.round(outH * bufK));
@@ -4525,7 +4527,7 @@ async function render3DHQ(opts) {
   // CAD, not as a rendered image. A render shows shaded surfaces only, so the
   // edge helpers (LineSegments) are hidden for the passes and restored after.
   const edges = [];
-  if (opts.outlines !== true) scene.traverse(o => { if (o.isLineSegments && o.visible) { edges.push(o); o.visible = false; } });
+  if (opts.outlines !== true && !inkStyle) scene.traverse(o => { if (o.isLineSegments && o.visible) { edges.push(o); o.visible = false; } });
 
   // Studio backdrop: a white sweep + a neutral ground, so the output reads as a
   // presentation render instead of a screenshot of the dark viewport. In dark
@@ -4545,7 +4547,28 @@ async function render3DHQ(opts) {
       if (o.userData && o.userData.slab) { slabs.push({ m: o, mat: o.material }); o.material = studioSlab; }
     });
   }
-  const fit = T3.fit;
+  // stil (#34): kil / teknik / eskiz tüm yüzeyleri tek mat malzemeye çevirir; teknik ve eskiz kenarları mürekkep rengine
+  const swapped = [], styleMats = [];
+  if (style !== 'realistic') {
+    const solid = new THREE.MeshLambertMaterial({ color: style === 'clay' ? 0xefe9df : 0xfbfbfb, side: THREE.DoubleSide });
+    const glassM = new THREE.MeshLambertMaterial({ color: 0xdbe7ef, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+    styleMats.push(solid, glassM);
+    scene.traverse(o => {
+      if (!o.isMesh || o === T3.ground) return;
+      const m0 = Array.isArray(o.material) ? o.material[0] : o.material;
+      swapped.push({ m: o, mat: o.material }); o.material = m0 && m0.transparent ? glassM : solid;
+    });
+    if (inkStyle) { const ink = new THREE.LineBasicMaterial({ color: 0x1f2937 }); styleMats.push(ink); scene.traverse(o => { if (o.isLineSegments) { swapped.push({ m: o, mat: o.material }); o.material = ink; } }); }
+  }
+  // güneş (#34): ana ışığı azimut / yüksekliğe taşı (alçak güneşte sıcak renk)
+  const sunSaved = [];
+  if (opts.sun) for (const l of lights) {
+    const tg = l.target.position, d0 = l.position.distanceTo(tg) || 1000, v = sunVector(opts.sun.az, opts.sun.alt);
+    sunSaved.push({ l, pos: l.position.clone(), col: l.color.clone() });
+    l.position.set(tg.x + v.x * d0, tg.y + v.y * d0, tg.z + v.z * d0);
+    if (opts.sun.alt < 20) l.color.setHex(0xffc58a);
+  }
+  const fit = T3.fit, mime = opts.format === 'jpeg' ? 'image/jpeg' : 'image/png';
   let url = '';
   try {
     T3.run = false;                                   // the animation loop must not overwrite a sample
@@ -4596,23 +4619,27 @@ async function render3DHQ(opts) {
     r.shadowMap.autoUpdate = oldShadowAuto;
 
     // 2. downscale the supersampled buffer to the final image
-    if (W === outW && H === outH) {
-      url = acc.toDataURL('image/png');
-    } else {
+    let fin = acc;
+    if (W !== outW || H !== outH) {
       const out = document.createElement('canvas'); out.width = outW; out.height = outH;
       const octx = out.getContext('2d');
       octx.imageSmoothingEnabled = true;
       octx.imageSmoothingQuality = 'high';
       octx.drawImage(acc, 0, 0, W, H, 0, 0, outW, outH);
       sharpenCanvas(octx, outW, outH, bufK >= 2 ? 0.25 : 0.6);   // a supersampled downscale is already crisp
-      url = out.toDataURL('image/png');
+      fin = out;
     }
+    if (style === 'sketch') sketchFilter(fin);         // kurşun kalem son işlemi (#34)
+    url = fin.toDataURL(mime, 0.92);
   } catch (e) {
     url = '';
   } finally {
     if (r.shadowMap) { r.shadowMap.autoUpdate = true; r.shadowMap.needsUpdate = true; }
     for (const e of edges) e.visible = true;
     if (oldBg !== null) scene.background = oldBg;
+    for (let i = swapped.length - 1; i >= 0; i--) swapped[i].m.material = swapped[i].mat;
+    for (const m of styleMats) m.dispose();
+    for (const s of sunSaved) { s.l.position.copy(s.pos); s.l.color.copy(s.col); }
     for (const s of slabs) s.m.material = s.mat;
     studioSlab.dispose();
     if (T3.ground && oldGroundMat) { T3.ground.material = oldGroundMat; if (studioGround) studioGround.dispose(); }
@@ -4658,7 +4685,7 @@ function sharpenCanvas(ctx, w, h, amount) {
   ctx.putImageData(new ImageData(out, w, h), 0, 0);
 }
 
-function export3DRender(quick) {
+function export3DRender(quick, opts) {
   if (!ui.view3d || !T3) return toast(L('Önce 3B görünüme geçin', 'Switch to the 3D view first'));
   if (ui.shot) return;                                    // guard against a double click
   ui.shot = true;
@@ -4666,13 +4693,15 @@ function export3DRender(quick) {
   return (async () => {
     try {
       // the real render: many jittered samples + a high-res shadow map
-      let url = quick ? fast() : await render3DHQ();
+      let url = quick ? fast() : await render3DHQ(opts);
       if (!url || url.length < 100) {
         toast(L('Yüksek kalite desteklenmiyor — hızlı görüntü alınıyor', 'High quality unavailable — saving a plain capture'));
         url = fast();
       }
       if (!url || url.length < 100) return toast(L('Render alınamadı', 'Could not capture the render'));
-      const suffix = quick ? '-3d-view.png' : '-3d-render.png';
+      const jpg = !quick && opts && opts.format === 'jpeg' && /^data:image\/jpeg/.test(url);
+      const styled = opts && opts.style && opts.style !== 'realistic';
+      const suffix = quick ? '-3d-view.png' : !styled && !jpg ? '-3d-render.png' : (styled ? '-3d-' + opts.style : '-3d-render') + (jpg ? '.jpg' : '.png');
       download(fname('png').replace(/\.png$/, suffix), dataUrlBlob(url));
       toast(quick
         ? L('📸 Görünüm kaydedildi', '📸 View saved')
@@ -4683,6 +4712,63 @@ function export3DRender(quick) {
   })();
 }
 
+/* ---------- Render stüdyosu (issue #34) ----------
+   render3DHQ() üzerine stil, güneş ve çözünürlük seçenekleri: gerçekçi (mevcut stüdyo), teknik (beyaz yüzey +
+   siyah kenar), eskiz (teknik + kurşun kalem son işlem), kil (tek renk mat malzeme). Hepsi tarayıcıda, ek kütüphane yok. */
+const RENDER_STYLES = { realistic: ['🌅 Gerçekçi', '🌅 Realistic'], technical: ['📐 Gölgeli teknik', '📐 Shaded technical'], sketch: ['✏️ Kurşun kalem eskiz', '✏️ Pencil sketch'], clay: ['🏺 Beyaz kil', '🏺 White clay'] };
+const SUN_PRESETS = { morning: [['Sabah', 'Morning'], 100, 20], noon: [['Öğle', 'Noon'], 180, 68], golden: [['Altın saat', 'Golden hour'], 255, 12] };
+const RENDER_RES = { view: ['Ekran ×2–3', 'Viewport ×2–3', 0], hd: ['1080p (1920 px)', '1080p (1920 px)', 1920], qhd: ['2K (2560 px)', '2K (2560 px)', 2560], uhd: ['4K (3840 px)', '4K (3840 px)', 3840] };
+ui.studio = { style: 'realistic', az: 215, alt: 42, res: 'view', format: 'png' };
+// güneş yönü (az: kuzeyden saat yönünde, plan kuzeyi = −y = 3B −z; alt: ufuktan yükseklik)
+function sunVector(az, alt) {
+  const a = az * Math.PI / 180, e = clamp(alt, 1, 89) * Math.PI / 180;
+  return { x: Math.sin(a) * Math.cos(e), y: Math.sin(e), z: -Math.cos(a) * Math.cos(e) };
+}
+// kurşun kalem son işlemi: gri ton + kontrast + kağıt dokusu + hafif tarama
+function sketchFilter(cnv) {
+  const w = cnv.width, h = cnv.height, t = document.createElement('canvas'); t.width = w; t.height = h;
+  const c = t.getContext('2d'); c.filter = 'grayscale(1) contrast(1.35) brightness(1.06)'; c.drawImage(cnv, 0, 0); c.filter = 'none';
+  c.globalAlpha = 0.05; c.strokeStyle = '#000'; c.lineWidth = Math.max(1, w / 1600);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 900; i++) { const x = rnd() * w, y = rnd() * h, l = (8 + rnd() * 24) * w / 1600; c.beginPath(); c.moveTo(x, y); c.lineTo(x + l, y - l * 0.6); c.stroke(); }
+  c.globalAlpha = 1;
+  const g = cnv.getContext('2d'); g.clearRect(0, 0, w, h); g.drawImage(t, 0, 0);
+}
+function studioHtml(preview) {
+  const st = ui.studio, opt = (m, v) => Object.entries(m).map(([k, x]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${L(x[0], x[1])}</option>`).join('');
+  return `<h2>🎨 ${L('Render stüdyosu', 'Render studio')} <button class="btn sm" data-close>✕</button></h2>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 10px">${Object.entries(RENDER_STYLES).map(([k, v]) => `<button class="btn sm${k === st.style ? ' primary' : ''}" data-rs-style="${k}">${L(...v)}</button>`).join('')}</div>
+    <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center;margin-bottom:8px">
+      <span>☀ ${L('Güneş yönü', 'Sun azimuth')}</span><input type="range" min="0" max="360" step="5" value="${st.az}" data-rs="az"><b>${st.az}°</b>
+      <span>⛰ ${L('Güneş yüksekliği', 'Sun altitude')}</span><input type="range" min="10" max="85" step="1" value="${st.alt}" data-rs="alt"><b>${st.alt}°</b>
+    </div>
+    <div class="row" style="gap:6px;margin-bottom:8px">${Object.entries(SUN_PRESETS).map(([k, v]) => `<button class="btn sm" data-rs-sun="${k}">${L(...v[0])}</button>`).join('')}</div>
+    <div class="row" style="gap:10px;margin-bottom:10px;flex-wrap:wrap"><label>${L('Çözünürlük', 'Resolution')} <select data-rs="res">${opt(RENDER_RES, st.res)}</select></label><label>${L('Biçim', 'Format')} <select data-rs="format"><option value="png" ${st.format === 'png' ? 'selected' : ''}>PNG</option><option value="jpeg" ${st.format === 'jpeg' ? 'selected' : ''}>JPEG</option></select></label></div>
+    <div class="rs-prev" style="background:#fff;border-radius:8px;min-height:120px;display:flex;align-items:center;justify-content:center;overflow:hidden">${preview ? `<img src="${preview}" style="max-width:100%;max-height:40vh;display:block">` : `<span class="muted" style="color:#64748b">${L('Önizleme için 👁 Önizle', 'Press 👁 Preview to see it')}</span>`}</div>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm" data-rs-go="preview">👁 ${L('Önizle', 'Preview')}</button><button class="btn sm primary" data-rs-go="render">🎬 ${L('Render al ve indir', 'Render & download')}</button></div>`;
+}
+const studioOpts = () => ({ style: ui.studio.style, sun: { az: ui.studio.az, alt: ui.studio.alt }, longSide: RENDER_RES[ui.studio.res][2] || 0, format: ui.studio.format });
+function openRenderStudio(preview) {
+  if (!ui.view3d) show3D(true);
+  if (!ui.view3d) return;
+  openModal(studioHtml(preview), 'studio');
+}
+$('#modal').addEventListener('input', e => {
+  if (ui.modal !== 'studio') return;
+  const t = e.target.closest('[data-rs]'); if (!t) return;
+  const k = t.dataset.rs; ui.studio[k] = k === 'az' || k === 'alt' ? +t.value : t.value;
+  if (t.nextElementSibling && (k === 'az' || k === 'alt')) t.nextElementSibling.textContent = t.value + '°';
+});
+$('#modal').addEventListener('click', async e => {
+  if (ui.modal !== 'studio') return;
+  const s = e.target.closest('[data-rs-style]'); if (s) { ui.studio.style = s.dataset.rsStyle; openRenderStudio(); return; }
+  const p = e.target.closest('[data-rs-sun]'); if (p) { const v = SUN_PRESETS[p.dataset.rsSun]; ui.studio.az = v[1]; ui.studio.alt = v[2]; openRenderStudio(); return; }
+  const g = e.target.closest('[data-rs-go]'); if (!g || ui.shot) return;
+  if (g.dataset.rsGo === 'render') { closeModal(); export3DRender(false, studioOpts()); return; }
+  ui.shot = true; g.disabled = true;
+  try { const url = await render3DHQ({ ...studioOpts(), longSide: 720, supersample: 1, frames: 1, format: 'jpeg' }); if (ui.modal === 'studio') openRenderStudio(url || null); }
+  finally { ui.shot = false; }
+});
 /** The top-bar PNG button is context-aware, so say what it will do. */
 function syncExportTitles() {
   const b = $('#bPng');
@@ -5628,6 +5714,7 @@ function applyLangUI() {
   if ($('#b3dTop')) $('#b3dTop').title = L('Üstten görünüm', 'Top view');
   if ($('#b3dEye')) $('#b3dEye').title = L('Göz hizası (1.6 m)', 'Eye level (1.6 m)');
   if ($('#lblLayer')) $('#lblLayer').textContent = L('Katman', 'Layer');
+  if ($('#b3dStudio')) $('#b3dStudio').title = L('🎨 Render stüdyosu: stil, güneş, çözünürlük', '🎨 Render studio: style, sun, resolution');
   for (const [id, k, tr, en] of [['b3dN', 'north', 'K', 'N'], ['b3dE', 'east', 'D', 'E'], ['b3dS', 'south', 'G', 'S'], ['b3dW', 'west', 'B', 'W']]) if ($('#' + id)) { $('#' + id).textContent = L(tr, en); $('#' + id).title = L(...ELEV_NAMES[k]); }
   if ($('#b3dShot')) $('#b3dShot').title = L('🎬 Render al (PNG) — Shift: hızlı görünüm', '🎬 Render (PNG) — Shift: quick capture');
   syncExportTitles();
@@ -5664,6 +5751,7 @@ $('#b3dEye').onclick = () => set3DCam('eye');
 $('#sLayer').onchange = e => { if (layerById(e.target.value)) { P.activeLayer = e.target.value; commit(); refresh(); } };
 for (const [id, k] of [['b3dN', 'north'], ['b3dE', 'east'], ['b3dS', 'south'], ['b3dW', 'west']]) $('#' + id).onclick = () => set3DCam(k);
 $('#b3dShot').onclick = e => export3DRender(e && e.shiftKey);
+$('#b3dStudio').onclick = () => openRenderStudio();
 $('#bLang').onclick = () => setLang(isEN() ? 'tr' : 'en');
 $('#bTheme').onclick = () => {
   const d = document.documentElement;

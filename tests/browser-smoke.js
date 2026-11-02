@@ -532,6 +532,33 @@ check('parametric stairs: 2D and 3D draw the same treads for every type (issue #
   return info.types.map(t => t.t + ' ' + t.n).join(', ') + (info.built ? ' · 3D built' : '');
 });
 
+check('render studio: every style renders and restores the scene (issue #34)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); F().ops.push(mkOp(OPDEF.window, F().walls[0], 300)); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { skipped: true };
+    document.getElementById('b3dStudio').click();
+    const out = { modal: ui.modal, styles: document.querySelectorAll('#modal [data-rs-style]').length, sizes: {} };
+    closeModal();
+    const dl = shadowLights(T3.scene)[0], pos0 = dl.position.clone();
+    for (const st of ['realistic', 'technical', 'sketch', 'clay']) {
+      const url = await render3DHQ({ style: st, sun: { az: 255, alt: 12 }, longSide: 480, supersample: 1, frames: 1, format: st === 'clay' ? 'jpeg' : 'png' });
+      out.sizes[st] = url ? url.slice(0, 15) + ':' + url.length : '';
+    }
+    out.lightBack = dl.position.distanceTo(pos0) < 0.01 && dl.color.getHex() !== 0xffc58a;
+    let left = 0; T3.scene.traverse(o => { if (o.isMesh && o.material && o.material.color && o.material.color.getHex() === 0xefe9df) left++; });
+    out.matsBack = left === 0;
+    show3D(false);
+    return out;
+  })()`);
+  if (info.skipped) return '3D unavailable';
+  if (info.modal !== 'studio' || info.styles !== 4) throw new Error('the render studio did not open with 4 styles: ' + JSON.stringify(info));
+  for (const [k, v] of Object.entries(info.sizes)) if (!v || +v.split(':')[1] < 1000) throw new Error('style ' + k + ' rendered nothing: ' + v);
+  if (!/^data:image\/jpeg/.test(info.sizes.clay)) throw new Error('JPEG format ignored: ' + info.sizes.clay);
+  if (!info.lightBack || !info.matsBack) throw new Error('the studio left the scene modified: ' + JSON.stringify(info));
+  return '4 styles rendered, JPEG honoured, light + materials restored';
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');
