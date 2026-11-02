@@ -100,6 +100,7 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
 - Object snap tracking: while drawing walls / rooms / dimensions or dragging wall ends and room corners, the cursor aligns with existing corners horizontally and vertically and shows a dashed guide (Shift or Snap off disables it).
 - Project tabs: keep several projects open, switch with one click (each keeps its own undo history and view), copy/paste between them, ＋ for a new tab, double-click to rename, × to close (asks if unsaved). Opening a template, saved project or file never replaces work in progress — it opens a new tab.
+- **Mirror & scale:** flip any selection horizontally / vertically (`Shift+H` / `Shift+V`), mirror it about a two-point axis (`I`, as a copy or a move) or scale it by a factor (`1.5`, `150%`), a target width (`=450`) or a reference length (`300:450`). Doors keep swinging into the room, sofas keep their backs to the wall, text stays readable and wall thickness is kept unless you ask. Panel buttons and the right-click menu offer the same commands.
 - Layering: overlapping objects can be picked with Ctrl+click or the right-click list, and reordered (front / forward / backward / back). 3D follows the 2D order, so overlapping rooms or items (e.g. a river made of pools) no longer flicker.
 - Layer visibility toggles, floor patterns (wood, tile, carpet, marble, concrete, stone), room colors.
 - Wall paint: pick a colour or a preset swatch for one or many selected walls (2D paint strips, full colour in 3D).
@@ -181,6 +182,8 @@ python -m http.server 8080      # then open http://localhost:8080
 | `B` | Pen – freehand sketch (drag to draw, release to finish) |
 | `E` | Eraser |
 | `X` | Trim — cut a crossing wall back to the intersection |
+| `I` | Mirror — mirror the selection about an axis you click (keep or erase the original) |
+| `Shift+H` / `Shift+V` | Flip the selection horizontally / vertically |
 | `Ctrl+click` | Select the object underneath (repeat to go deeper) |
 | Right-click | List of objects under the cursor + layer order |
 | `Ctrl+]` / `Ctrl+[` | Bring forward / send backward (`Shift`: to front / to back) |

@@ -118,7 +118,7 @@ Key semantics:
 | `tabs[]`, `tabIdx` | Open project tabs (issue #17): `{ id, P, hist, hi, fi, view, sel }` per tab; the **active** tab's live state is the globals above |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
-`tool` values: `select pan wall rect room poly slab void place dim text pen eraser trim calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
+`tool` values: `select pan wall rect room poly slab void place dim text pen eraser trim mirror calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
 
 ---
 
@@ -217,6 +217,11 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - 2D (`layerStrings` rooms layer): slabs under rooms, voids over them. Their hit shapes carry `data-low` (void 1, slab 2) so `pickDataId()` only picks them when nothing else is under the cursor — a large balcony must not steal clicks from furniture or room labels.
 - 3D: free slabs are extruded `t` cm down from `elev + off + 0.2` (+0.1 per overlap level) so their top never z-fights the automatic slab; furniture whose centre is on a slab is raised/lowered by that slab's `off`. `voidHoles(voids, pts)` returns the voids that lie inside a polygon (edge-touching counts — stairwells snap to room corners) pulled 0.5 cm inward, and `build3D` adds them as `Shape.holes` to the automatic slab, the free slabs and the room floors of **that floor**. A void on floor N is the hole in floor N's slab, i.e. the ceiling of floor N-1. Voids that straddle a polygon edge are skipped (no CSG).
 - A floor with no walls gets no automatic slab from slabs/voids alone (`slabPolys` ignores them). Guard: `tests/slabs-voids.test.js` + a smoke check.
+
+### Mirror & scale (issue #28)
+- `mirrorObjs(os, o, u)` reflects a selection about the line through `o` with unit direction `u` (`reflectPoint`). Walls keep `a`/`b` order, so openings keep `d` and only `side` is negated; hinged-wall `angles` become `2·axis − a`; dims negate `off`; `PTS_KINDS` polygons are reflected **and reversed** (winding kept); furniture gets `rot = 2·axis − rot + 180` so its back (−Y) still faces the same wall (`poly` shapes mirror local x); text stays readable. Ops are only moved through their walls.
+- `flipSel('h'|'v')` mirrors about the selection bbox centre (`Shift+H` / `Shift+V`). The `mirror` tool (`I`) picks a two-point axis (`ui.mAxis`, snapped, angle-locked) with a dashed axis + mirrored-outline preview, then asks whether to erase the originals; keeping them copies the selection in place with `paste(true, 0)` (attached openings included) and mirrors the copy.
+- `scaleObjs(os, orig, tx, ty, sx, sy, scaleT)` is the single scaling routine, shared by the `g0..g3` group handles and `scaleSelection()`/`scaleSelPrompt()`. `parseScale()` accepts `1.5`, `150%`, `=450` (target width) and `300:450` (reference → target). Wall thickness is kept unless `scaleT`. Panel row (`flipH flipV mirror scale`) and right-click entries (`data-cmxf`). Guard: `tests/mirror-scale.test.js`.
 
 ### Project tabs (issue #17)
 - `#ptabs` (below the header) lists `tabs[]`; click switches, double-click renames, `×` closes, `＋` opens the template picker. `switchTab()` = `syncTab()` (globals → current tab) + `activateTab()` (tab → globals, then `refresh()`, `updateUndo()`, `autosave()`, 3D rebuild if open). Each tab keeps its own `hist`/`hi`, floor, view and selection; `ui.clip` is global, so copy/paste works across projects.
@@ -350,6 +355,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/snap-tracking.test.js` | object snap tracking: L→U closes exactly with/without angle lock, Shift disables it, guides reach the preview |
 | `tests/snap-mid-underlay.test.js` | midpoint / centre / group-centre snap, ends still winning, no self-snap while dragging, underlay reference-floor choice and snap, panel + glyph wiring |
 | `tests/slabs-voids.test.js` | free slabs / floor voids: which voids become holes (edge-touching stairwells too), data-model defaults, tools, 2D X notation, 3D extrusion + holes, MCP mirror |
+| `tests/mirror-scale.test.js` | mirror / flip / scale maths on the real functions: openings keep swinging inward, polygon winding kept, furniture backs, readable text, double mirror = identity, scale with/without wall thickness, `parseScale` formats, panel / menu / key wiring |
 | `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |

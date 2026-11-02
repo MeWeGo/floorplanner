@@ -288,6 +288,105 @@ function rotateSelection(deg, os = selObjs(), bb = selectionBounds(os), origAll 
   }
   return changed;
 }
+// Aynalama (issue #28): p'yi o noktasından geçen, u birim yönlü eksene göre yansıt
+function reflectPoint(p, o, u) {
+  const dx = p.x - o.x, dy = p.y - o.y, t = dx * u.x + dy * u.y;
+  return { x: Math.round((o.x + 2 * t * u.x - dx) * 100) / 100, y: Math.round((o.y + 2 * t * u.y - dy) * 100) / 100 };
+}
+const normDeg = a => Math.round(((a % 360) + 360) % 360 * 10) / 10;
+// Seçimi eksene göre yansıt. Duvar a/b yansır (d aynı kalır), kapı/pencere açılma yönü (side) ters döner;
+// mobilyanın sırtı aynı duvara bakmaya devam eder; poligonların sarım yönü korunur; metin okunur kalır.
+function mirrorObjs(os, o, u, opsOf = w => F().ops.filter(op => op.wall === w.id)) {
+  const ax = Math.atan2(u.y, u.x) * 180 / Math.PI, R = p => reflectPoint(p, o, u);
+  let changed = false;
+  for (const { kind, o: m } of os) {
+    if (kind === 'wall' || kind === 'dim') {
+      m.a = R(m.a); m.b = R(m.b);
+      if (kind === 'dim') m.off = -(m.off || 0);
+      else {
+        if (Array.isArray(m.angles) && m.angles.length) m.angles = m.angles.map(a => normDeg(2 * ax - a));
+        for (const op of opsOf(m)) op.side = -(op.side || 1);
+      }
+    } else if (PTS_KINDS.has(kind)) m.pts = m.pts.map(R).reverse();
+    else if (kind === 'furn') {
+      const p = R(m); m.x = p.x; m.y = p.y; m.rot = normDeg(2 * ax - (m.rot || 0) + 180);
+      if (m.k === 'poly' && Array.isArray(m.pts)) m.pts = m.pts.map(q => ({ x: -q.x, y: q.y })).reverse();
+    } else if (kind === 'text') {
+      const p = R(m); m.x = p.x; m.y = p.y;
+      let r = normDeg(2 * ax - (m.rot || 0)); if (r > 90 && r < 270) r = normDeg(r + 180); m.rot = r;
+    } else continue;
+    changed = true;
+  }
+  return changed;
+}
+// Ölçekleme (#28 ve çoklu seçim tutamaçları g0..g3): orig(id) = başlangıç kopyası, tx/ty = nokta dönüşümü
+function scaleObjs(os, orig, tx, ty, sx, sy, scaleT = false) {
+  for (const { kind, o: mo } of os) {
+    const g = orig(mo.id); if (!g) continue;
+    if (kind === 'wall' || kind === 'dim') {
+      mo.a = { x: tx(g.a.x), y: ty(g.a.y) }; mo.b = { x: tx(g.b.x), y: ty(g.b.y) };
+      if (kind === 'wall') {
+        if (scaleT && g.t) mo.t = clamp(Math.round(g.t * Math.sqrt(sx * sy)), 3, 200);
+        // menteşeli duvar: açı ön ayarlarını yeni yönelime göre kaydır (eski preset'e sıçramasın)
+        if (Array.isArray(g.angles) && g.angles.length) {
+          const od = Math.atan2(g.b.y - g.a.y, g.b.x - g.a.x) * 180 / Math.PI, nd = Math.atan2(mo.b.y - mo.a.y, mo.b.x - mo.a.x) * 180 / Math.PI;
+          const diff = Math.round((nd - od) * 10) / 10;
+          if (Math.abs(diff) > 0.05) mo.angles = g.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
+        }
+        // duvara bağlı kapı/pencereler de ölçeklensin: merkez noktayı ölçekle, yeni duvara projekte et
+        const L0 = dist(g.a, g.b) || 1, L1 = wLen(mo) || 1, ux = (mo.b.x - mo.a.x) / L1, uy = (mo.b.y - mo.a.y) / L1;
+        for (const o2 of F().ops.filter(op => op.wall === mo.id)) {
+          const og = orig(o2.id) || o2, t0 = clamp(og.d / L0, 0, 1), px = tx(g.a.x + (g.b.x - g.a.x) * t0), py = ty(g.a.y + (g.b.y - g.a.y) * t0);
+          const pr = clamp(((px - mo.a.x) * ux + (py - mo.a.y) * uy) / L1, 0, 1);
+          o2.d = clamp(pr * L1, Math.min(o2.w / 2, L1 / 2), Math.max(L1 - o2.w / 2, L1 / 2));
+        }
+      }
+    }
+    else if (PTS_KINDS.has(kind)) mo.pts = g.pts.map(q => ({ x: tx(q.x), y: ty(q.y) }));
+    else if (kind === 'furn') {
+      mo.x = tx(g.x); mo.y = ty(g.y);
+      const rot = ((g.rot || 0) % 180 + 180) % 180, swap = rot >= 45 && rot < 135;
+      mo.w = Math.max(10, Math.round(g.w * (swap ? sy : sx)));
+      mo.d = Math.max(10, Math.round(g.d * (swap ? sx : sy)));
+      if (g.k === 'poly' && g.pts) mo.pts = g.pts.map(p => ({ x: Math.round(p.x * (mo.w / g.w) * 10) / 10, y: Math.round(p.y * (mo.d / g.d) * 10) / 10 }));
+    } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
+    else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
+  }
+}
+// Seçimi bbox merkezine göre s katı ölçekle; duvar kalınlığı varsayılan olarak korunur
+function scaleSelection(sc, scaleT = false, os = selObjs()) {
+  const bb = selectionBounds(os); if (!bb || !(sc > 0)) return false;
+  const c = { x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2 }, snap = new Map();
+  for (const { o } of os) snap.set(o.id, JSON.parse(JSON.stringify(o)));
+  for (const op of F().ops) if (!snap.has(op.id)) snap.set(op.id, { d: op.d });
+  const tx = x => Math.round((c.x + (x - c.x) * sc) * 10) / 10, ty = y => Math.round((c.y + (y - c.y) * sc) * 10) / 10;
+  scaleObjs(os, id => snap.get(id), tx, ty, sc, sc, scaleT);
+  return true;
+}
+const XFORM_KINDS = new Set(['wall', 'dim', 'furn', 'text', 'room', 'slab', 'void', 'sketch']);
+function afterXform() { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+function flipSel(dir) {
+  const os = selObjs().filter(x => XFORM_KINDS.has(x.kind)), bb = selectionBounds(os); if (!bb) return;
+  const c = { x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2 };
+  if (mirrorObjs(os, c, dir === 'h' ? { x: 0, y: 1 } : { x: 1, y: 0 })) afterXform();
+}
+// "1.5", "150%", "=450" (seçim genişliği 450 cm olsun) veya "300:450" (referans uzunluk → hedef uzunluk)
+function parseScale(str, width) {
+  const t = String(str || '').trim().replace(',', '.'); let m;
+  if ((m = t.match(/^=\s*([\d.]+)$/))) return width > 0 ? parseFloat(m[1]) / width : NaN;
+  if ((m = t.match(/^([\d.]+)\s*:\s*([\d.]+)$/))) return parseFloat(m[2]) / parseFloat(m[1]);
+  if ((m = t.match(/^([\d.]+)\s*%$/))) return parseFloat(m[1]) / 100;
+  return parseFloat(t);
+}
+function scaleSelPrompt() {
+  const os = selObjs().filter(x => XFORM_KINDS.has(x.kind) || x.kind === 'bg'), bb = selectionBounds(os); if (!bb) return;
+  const v = prompt(L('Ölçek: çarpan (1.5 / 150%), hedef genişlik (=450 cm) veya referans:hedef (300:450)', 'Scale: factor (1.5 / 150%), target width (=450 cm) or reference:target (300:450)'), '1.5');
+  if (v == null) return;
+  const sc = parseScale(v, bb.x1 - bb.x0);
+  if (!(sc > 0.01 && sc < 100) || Math.abs(sc - 1) < 1e-6) { if (!(sc > 0.01 && sc < 100)) toast(L('Geçersiz ölçek', 'Invalid scale')); return; }
+  const scaleT = os.some(x => x.kind === 'wall') && confirm(L('Duvar kalınlıkları da ölçeklensin mi? (İptal = kalınlık korunur)', 'Scale wall thickness too? (Cancel = keep thickness)'));
+  if (scaleSelection(sc, scaleT, os)) { afterXform(); toast(L('Ölçeklendi ×', 'Scaled ×') + Math.round(sc * 1000) / 1000); }
+}
 function contentBounds(f = F()) {
   let b = null;
   for (const arr in KINDS) for (const o of f[arr]) {
@@ -1419,7 +1518,7 @@ const TOOLS = [
   ['select', '↖', 'Seç', 'V', 'Select'], ['pan', '✋', 'Kaydır', 'H', 'Pan'], null,
   ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['slab', '🔲', 'Döşeme', 'K', 'Slab'], ['void', '🕳️', 'Boşluk', 'Y', 'Void'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
   ['door', '🚪', 'Kapı', 'D', 'Door'], ['window', '🪟', 'Pencere', 'N', 'Window'], ['furn', '🛋️', 'Mobilya', 'F', 'Furniture'], null,
-  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
+  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['mirror', '🪞', 'Aynala', 'I', 'Mirror'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
 const HINTS = {
   select: 'Seç: tıkla / kutu çiz • Shift: çoklu seçim • Ctrl+tık: alttaki nesne • sağ tık: buradaki nesneler & katman • sürükle: taşı • Del: sil',
@@ -1437,6 +1536,7 @@ const HINTS = {
   text: 'Metin eklemek için tıkla',
   eraser: 'Silmek istediğin nesneye tıkla',
   trim: 'Kırp: kesişen duvarın taşan ucuna tıkla → kesişime kadar kırpılır (iki kesişim arasındaki parça da çıkarılabilir) • kırmızı = silinecek kısım',
+  mirror: 'Aynala: önce nesneleri seç, sonra ayna ekseninin iki noktasına tıkla • orijinali silmek isteyip istemediğin sorulur • Shift+H / Shift+V: yatay / dikey aynala',
   calib: 'Ölçek: arka plan görselinde bilinen iki noktaya tıkla, gerçek mesafeyi gir',
 };
 const HINTS_EN = {
@@ -1455,6 +1555,7 @@ const HINTS_EN = {
   text: 'Click to place a text label',
   eraser: 'Click any object to delete it',
   trim: 'Trim: click the overhanging part of a crossing wall → it is cut back to the intersection (a piece between two crossings can be removed too) • red = part to remove',
+  mirror: 'Mirror: select objects first, then click two points of the mirror axis • you are asked whether to erase the originals • Shift+H / Shift+V: flip horizontal / vertical',
   calib: 'Calibrate: click two points with a known distance on the background image, then enter real distance',
 };
 function buildShapeBar() {
@@ -1491,8 +1592,9 @@ function updateTools() {
   if (showShape) buildShapeBar();
 }
 function setTool(t) {
-  ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null;
+  ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null; ui.mAxis = null;
   ui.btn = t; placing = null;
+  if (t === 'mirror' && !selObjs().some(x => XFORM_KINDS.has(x.kind))) toast(L('Aynalamak için önce nesneleri seç', 'Select the objects to mirror first'));
   if (t === 'door') { placing = { type: 'op', def: OPDEF.door, rot: 0 }; tool = 'place'; }
   else if (t === 'window') { placing = { type: 'op', def: OPDEF.window, rot: 0 }; tool = 'place'; }
   else if (t === 'furn') { ui.cat = ui.cat === 0 ? 1 : ui.cat; buildLib(); $('#search').focus(); tool = 'select'; ui.btn = 'select'; toast(L('Soldaki listeden bir mobilya seç', 'Select a furniture item from the left panel')); }
@@ -1581,6 +1683,19 @@ function drawPreview() {
     if (pts.length > 2) s += lbl(cur.x, cur.y - 14 / z, fmtArea(polyArea(pts)));
   }
   if (tool === 'dim' && ui.dimStart && cur) s += `<line x1="${ui.dimStart.x}" y1="${ui.dimStart.y}" x2="${cur.x}" y2="${cur.y}" stroke="#0f766e" stroke-width="${2 / z}" stroke-dasharray="${5 / z}"/>` + lbl((ui.dimStart.x + cur.x) / 2, (ui.dimStart.y + cur.y) / 2 - 8 / z, fmtLen(dist(ui.dimStart, cur)));
+  if (tool === 'mirror' && ui.mAxis && cur && dist(ui.mAxis, cur) > 1) {
+    // ayna ekseni + seçimin yansımış silüeti (#28)
+    const a = ui.mAxis, l = dist(a, cur), u = { x: (cur.x - a.x) / l, y: (cur.y - a.y) / l }, ext = 5000;
+    s += `<line x1="${a.x - u.x * ext}" y1="${a.y - u.y * ext}" x2="${a.x + u.x * ext}" y2="${a.y + u.y * ext}" stroke="${ac}" stroke-width="${1.5 / z}" stroke-dasharray="${10 / z} ${4 / z} ${2 / z} ${4 / z}" pointer-events="none"/>`;
+    const ghost = selObjs().filter(x => XFORM_KINDS.has(x.kind)).map(({ kind, o }) => ({ kind, o: JSON.parse(JSON.stringify(o)) }));
+    mirrorObjs(ghost, a, u, () => []);
+    for (const { kind, o } of ghost) {
+      const pts = kind === 'wall' || kind === 'dim' ? [o.a, o.b] : kind === 'furn' ? furnCorners(o) : PTS_KINDS.has(kind) ? o.pts : null;
+      if (pts) s += `<poly${kind === 'wall' || kind === 'dim' || kind === 'sketch' ? 'line' : 'gon'} points="${pts.map(p => p.x + ',' + p.y).join(' ')}" fill="${ac}" fill-opacity=".08" stroke="${ac}" stroke-width="${kind === 'wall' ? o.t : 2 / z}" stroke-opacity=".45" pointer-events="none"/>`;
+      else if (kind === 'text') s += `<circle cx="${o.x}" cy="${o.y}" r="${4 / z}" fill="${ac}" pointer-events="none"/>`;
+    }
+    s += `<circle cx="${a.x}" cy="${a.y}" r="${4 / z}" fill="${ac}" pointer-events="none"/>`;
+  }
   if (tool === 'calib' && ui.calib && cur) s += `<line x1="${ui.calib.x}" y1="${ui.calib.y}" x2="${cur.x}" y2="${cur.y}" stroke="#e11d48" stroke-width="${2 / z}"/>`;
   if ((tool === 'pen' || tool === 'shape') && ui.pen) {
     const pts = ui.pen.pts.concat(ui.raw ? [{ x: ui.raw.x, y: ui.raw.y }] : []);
@@ -1631,7 +1746,8 @@ function setCursor(e) {
   else if (tool === 'dim' && ui.dimStart) from = ui.dimStart;
   else if (POLY_TOOLS.has(tool) && ui.polyPts && ui.polyPts.length) from = ui.polyPts[ui.polyPts.length - 1];
   else if (tool === 'calib' && ui.calib) from = null;
-  ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'dim', 'calib', 'shape'].includes(tool) ? snapPt(raw, from, e) : null;
+  else if (tool === 'mirror' && ui.mAxis) from = ui.mAxis;
+  ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'dim', 'calib', 'shape', 'mirror'].includes(tool) ? snapPt(raw, from, e) : null;
   if (tool === 'wall' && ui.draw && ui.typed) {
     const a = ui.draw.start, l = parseFloat(ui.typed) || 0, dx = ui.cur.x - a.x, dy = ui.cur.y - a.y, m = Math.hypot(dx, dy) || 1;
     ui.cur = { x: a.x + dx / m * l, y: a.y + dy / m * l, hit: null };
@@ -1767,6 +1883,13 @@ function openCtxMenu(e) {
       + `<button data-cmlayer="down">↓ ${L('Bir arkaya', 'Send backward')} <kbd>Ctrl+[</kbd></button>`
       + `<button data-cmlayer="back">⤓ ${L('En arkaya gönder', 'Send to back')} <kbd>Ctrl+Shift+[</kbd></button>`;
   }
+  if (sel.length && selObjs().some(x => XFORM_KINDS.has(x.kind))) {
+    h += `<div class="cm-sep"></div>`
+      + `<button data-cmxf="flipH">⇋ ${L('Yatay aynala', 'Flip horizontal')} <kbd>Shift+H</kbd></button>`
+      + `<button data-cmxf="flipV">⇵ ${L('Dikey aynala', 'Flip vertical')} <kbd>Shift+V</kbd></button>`
+      + `<button data-cmxf="mirror">🪞 ${L('Eksene göre aynala…', 'Mirror about axis…')} <kbd>I</kbd></button>`
+      + `<button data-cmxf="scale">⤢ ${L('Ölçekle…', 'Scale…')}</button>`;
+  }
   m.innerHTML = h; document.body.appendChild(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.min(e.clientX, innerWidth - r.width - 6) + 'px';
@@ -1775,6 +1898,8 @@ function openCtxMenu(e) {
   m.addEventListener('click', ev => {
     const s = ev.target.closest('[data-cmsel]');
     if (s) { sel = [s.dataset.cmsel]; closeCtxMenu(); refresh(); return; }
+    const xf = ev.target.closest('[data-cmxf]');
+    if (xf) { closeCtxMenu(); const v = xf.dataset.cmxf; if (v === 'mirror') setTool('mirror'); else if (v === 'scale') scaleSelPrompt(); else flipSel(v === 'flipH' ? 'h' : 'v'); return; }
     const l = ev.target.closest('[data-cmlayer]');
     if (l) { if (!sel.length && ids.length) sel = [ids[0]]; closeCtxMenu(); reorderSel(l.dataset.cmlayer); }
   });
@@ -1867,6 +1992,18 @@ cv.addEventListener('pointerdown', e => {
         else deleteIds([t.dataset.id]);
         commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
       }
+      return;
+    }
+    case 'mirror': {
+      const os = selObjs().filter(x => XFORM_KINDS.has(x.kind));
+      if (!os.length) { setTool('select'); toast(L('Aynalamak için önce nesneleri seç', 'Select the objects to mirror first')); return; }
+      if (!ui.mAxis) { ui.mAxis = { x: cur.x, y: cur.y }; drawPreview(); return; }
+      const l = dist(ui.mAxis, cur); if (l < 1) return;
+      const u = { x: (cur.x - ui.mAxis.x) / l, y: (cur.y - ui.mAxis.y) / l }, o = ui.mAxis;
+      const erase = confirm(L('Orijinal nesneler silinsin mi?\n\nTamam = taşı (sil) • İptal = aynalı kopya oluştur', 'Erase the original objects?\n\nOK = move (erase) • Cancel = keep them and add a mirrored copy'));
+      if (!erase) { sel = [...new Set([...sel, ...F().ops.filter(op => sel.includes(op.wall)).map(op => op.id)])]; paste(true, 0); } // duvarların kapı/pencereleriyle birlikte kopya; kopya seçili hale gelir ve aynalanır
+      mirrorObjs(selObjs().filter(x => XFORM_KINDS.has(x.kind)), o, u);
+      ui.mAxis = null; tool = 'select'; ui.btn = 'select'; updateTools(); afterXform();
       return;
     }
     case 'calib': {
@@ -2159,36 +2296,7 @@ function doHandle(raw, e) {
     const sx = Math.max(20, Math.abs(p.x - ax)) / w0, sy = Math.max(20, Math.abs(p.y - ay)) / h0;
     const tx = x => Math.round((ax + (x - ax) * sx) * 10) / 10;
     const ty = y => Math.round((ay + (y - ay) * sy) * 10) / 10;
-    for (const { kind, o: mo } of selObjs()) {
-      const g = d.origAll.get(mo.id); if (!g) continue;
-      if (kind === 'wall' || kind === 'dim') {
-        mo.a = { x: tx(g.a.x), y: ty(g.a.y) }; mo.b = { x: tx(g.b.x), y: ty(g.b.y) };
-        if (kind === 'wall') {
-          // menteşeli duvar: açı ön ayarlarını yeni yönelime göre kaydır (eski preset'e sıçramasın)
-          if (Array.isArray(g.angles) && g.angles.length) {
-            const od = Math.atan2(g.b.y - g.a.y, g.b.x - g.a.x) * 180 / Math.PI, nd = Math.atan2(mo.b.y - mo.a.y, mo.b.x - mo.a.x) * 180 / Math.PI;
-            const diff = Math.round((nd - od) * 10) / 10;
-            if (Math.abs(diff) > 0.05) mo.angles = g.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
-          }
-          // duvara bağlı kapı/pencereler de ölçeklensin: merkez noktayı ölçekle, yeni duvara projekte et
-          const L0 = dist(g.a, g.b) || 1, L1 = wLen(mo) || 1, ux = (mo.b.x - mo.a.x) / L1, uy = (mo.b.y - mo.a.y) / L1;
-          for (const o2 of F().ops.filter(op => op.wall === mo.id)) {
-            const t0 = clamp(o2.d / L0, 0, 1), px = tx(g.a.x + (g.b.x - g.a.x) * t0), py = ty(g.a.y + (g.b.y - g.a.y) * t0);
-            const pr = clamp(((px - mo.a.x) * ux + (py - mo.a.y) * uy) / L1, 0, 1);
-            o2.d = clamp(pr * L1, Math.min(o2.w / 2, L1 / 2), Math.max(L1 - o2.w / 2, L1 / 2));
-          }
-        }
-      }
-      else if (PTS_KINDS.has(kind)) mo.pts = g.pts.map(q => ({ x: tx(q.x), y: ty(q.y) }));
-      else if (kind === 'furn') {
-        mo.x = tx(g.x); mo.y = ty(g.y);
-        const rot = ((g.rot || 0) % 180 + 180) % 180, swap = rot >= 45 && rot < 135;
-        mo.w = Math.max(10, Math.round(g.w * (swap ? sy : sx)));
-        mo.d = Math.max(10, Math.round(g.d * (swap ? sx : sy)));
-        if (g.k === 'poly' && g.pts) mo.pts = g.pts.map(p => ({ x: Math.round(p.x * (mo.w / g.w) * 10) / 10, y: Math.round(p.y * (mo.d / g.d) * 10) / 10 }));
-      } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
-      else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
-    }
+    scaleObjs(selObjs(), id => d.origAll.get(id), tx, ty, sx, sy);
   } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e, new Set([o.a, o.b])); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; ui.cur = p; }
   else if (h === 'doff') {
     const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, mx = (o.a.x + o.b.x) / 2, my = (o.a.y + o.b.y) / 2;
@@ -2239,7 +2347,8 @@ function renderProps() {
   const el = $('#props'), os = selObjs();
   if (!os.length) { el.innerHTML = projectPanel(); return; }
   const kinds = [...new Set(os.map(x => x.kind))];
-  const acts = (extra = '') => `<div class="row">${extra}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+  const xf = os.some(x => XFORM_KINDS.has(x.kind)) ? `<div class="row"><button class="btn sm" data-act="flipH" title="Shift+H">${L('⇋ Yatay aynala', '⇋ Flip H')}</button><button class="btn sm" data-act="flipV" title="Shift+V">${L('⇵ Dikey aynala', '⇵ Flip V')}</button><button class="btn sm" data-act="mirror" title="I">${L('🪞 Eksene göre…', '🪞 Mirror…')}</button><button class="btn sm" data-act="scale">${L('⤢ Ölçekle…', '⤢ Scale…')}</button></div>` : '';
+  const acts = (extra = '') => xf + `<div class="row">${extra}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
   if (kinds.length > 1) {
     const gs = os.filter(x => GROUPABLE[x.kind]);
     const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
@@ -2460,6 +2569,9 @@ $('#props').addEventListener('click', e => {
   if (a === 'del') return deleteSel();
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
+  if (a === 'flipH' || a === 'flipV') return flipSel(a === 'flipH' ? 'h' : 'v');
+  if (a === 'mirror') return setTool('mirror');
+  if (a === 'scale') return scaleSelPrompt();
   if (a === 'bgadd') return $('#fileBg').click();
   if (a === 'bgsel') { if (P.bg) { P.bg.lock = false; sel = ['bg']; setTool('select'); refresh(); } return; }
   if (a === 'bgreset') { if (P.bg) { P.bg.x = 0; P.bg.y = 0; commit(); refresh(); } return; }
@@ -2911,10 +3023,11 @@ function variantUIHtml() {
   <p class="muted" style="margin:4px 0 6px">${L('Aktif düzendeki konum ve boyut değişiklikleri otomatik kaydedilir. Tuvalde "👆 Tıkla" göstergesine tıklayarak düzenler arasında geçin.', 'Position & size changes in the active layout are auto-saved. Click the "👆 Click me" badge on canvas to cycle layouts.')}</p>`;
 }
 function copySel() { ui.clip = selObjs().map(({ kind, o }) => ({ kind, o: JSON.parse(JSON.stringify(o)) })); pasteN = 0; if (ui.clip.length) toast(ui.clip.length + L(' nesne kopyalandı', ' object(s) copied')); }
-function paste(fromSel) {
+function paste(fromSel, at = null) {
   if (fromSel) copySel();
   const items = ui.clip; if (!items || !items.length) return;
-  pasteN++; const off = 40 * pasteN, f = F(), idm = {}, gmap = {}, ids = [];
+  if (at == null) pasteN++;
+  const off = at == null ? 40 * pasteN : at, f = F(), idm = {}, gmap = {}, ids = [];
   const mv = p => ({ x: p.x + off, y: p.y + off });
   for (const { kind, o } of items) {
     if (kind === 'op') continue;
@@ -2929,7 +3042,8 @@ function paste(fromSel) {
     else if (kind === 'text') { n.x += off; n.y += off; f.texts.push(n); }
   }
   for (const { kind, o } of items) if (kind === 'op' && idm[o.wall]) { const n = JSON.parse(JSON.stringify(o)); n.id = uid(); n.wall = idm[o.wall]; f.ops.push(n); ids.push(n.id); }
-  sel = ids; commit(); refresh();
+  sel = ids; if (at != null) return; // yerinde kopya (aynalama): çağıran commit eder
+  commit(); refresh();
   if (ui.view3d && T3) schedBuild3D();
 }
 
@@ -2990,7 +3104,7 @@ window.addEventListener('keydown', e => {
   }
   if (POLY_TOOLS.has(tool) && e.key === 'Enter') { finishPoly(); return; }
   if (e.key === 'Escape') {
-    if (ui.draw || ui.polyPts || ui.dimStart || ui.calib || ui.pen) { ui.draw = null; ui.polyPts = null; ui.dimStart = null; ui.calib = null; ui.pen = null; ui.typed = ''; render(); }
+    if (ui.draw || ui.polyPts || ui.dimStart || ui.calib || ui.pen || ui.mAxis) { ui.draw = null; ui.polyPts = null; ui.dimStart = null; ui.calib = null; ui.pen = null; ui.mAxis = null; ui.typed = ''; render(); }
     else if (tool !== 'select') setTool('select'); else { sel = []; refresh(); }
     return;
   }
@@ -3014,7 +3128,8 @@ window.addEventListener('keydown', e => {
     selObjs().forEach(({ kind, o }) => { if (kind === 'wall' || kind === 'dim') { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (PTS_KINDS.has(kind)) o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
     commit(); render(); if (sel.includes('bg')) renderProps(); if (ui.view3d && T3) schedBuild3D(); return;
   }
-  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen', k: 'slab', y: 'void' };
+  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen', k: 'slab', y: 'void', i: 'mirror' };
+  if (e.shiftKey && (k === 'h' || k === 'v') && sel.length) { flipSel(k); return; } // Shift+H / Shift+V: aynala (#28)
   if (map[k]) { setTool(map[k]); return; }
   if (k === 'g') { $('#cSnap').click(); return; }
   if (k === '0') fit(); else if (k === '+' || k === '=') zoomBtn(1.25); else if (k === '-') zoomBtn(0.8);
@@ -3071,6 +3186,8 @@ function helpModal() {
     ['B', 'Pen: freehand sketch on the plan (drag to draw, release to finish)'],
     ['E', 'Eraser (click object to delete)'],
     ['X', 'Trim (click the overhanging part of a crossing wall)'],
+    ['I', 'Mirror the selection about an axis (click two points)'],
+    ['Shift+H / Shift+V', 'Flip the selection horizontally / vertically'],
     ['Ctrl+click', 'Select the object underneath (repeat to go deeper)'],
     ['Right-click', 'List the objects under the cursor + layer order'],
     ['Ctrl+] / Ctrl+[', 'Bring forward / send backward (+Shift: to front / to back)'],
@@ -3115,6 +3232,8 @@ function helpModal() {
     ['B', 'Kalem: plana serbest elle çizim (sürükle, bırak tamamlar)'],
     ['E', 'Sil'],
     ['X', 'Kırp (kesişen duvarın taşan ucuna tıkla)'],
+    ['I', 'Seçimi bir eksene göre aynala (iki noktaya tıkla)'],
+    ['Shift+H / Shift+V', 'Seçimi yatay / dikey aynala'],
     ['Ctrl+tık', 'Alttaki nesneyi seç (tekrarla: daha alttaki)'],
     ['Sağ tık', 'İmlecin altındaki nesneler + katman sırası'],
     ['Ctrl+] / Ctrl+[', 'Bir öne / bir arkaya (+Shift: en öne / en arkaya)'],
