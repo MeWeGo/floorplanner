@@ -422,6 +422,39 @@ check('slab tool draws a wall-less balcony, void tool cuts the slab in 3D (issue
   return info.balcony !== undefined ? 'slab + void drawn, 3D slab 20 cm, hole cut, sofa on balcony' : 'slab + void drawn (3D unavailable)';
 });
 
+check('3D: walls and windows are selectable, a window drags along its wall (issue #29)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400);
+    const f = F(); f.ops.push(mkOp(OPDEF.window, f.walls[0], 300)); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { skipped: true };
+    set3DCam('fit'); await new Promise(r => setTimeout(r, 150));
+    const cnv = T3.r.domElement, rect = cnv.getBoundingClientRect();
+    const scr = obj => { const c = new THREE.Box3().setFromObject(obj).getCenter(new THREE.Vector3()).project(T3.cam); return { x: rect.left + (c.x + 1) / 2 * rect.width, y: rect.top + (1 - c.y) / 2 * rect.height }; };
+    const opG = id => { let r = null; T3.scene.traverse(o => { if (o.userData && o.userData.opId === id) r = o; }); return r; };
+    const ev = (el, t, p) => el.dispatchEvent(new PointerEvent(t, { clientX: p.x, clientY: p.y, bubbles: true, button: 0, pointerId: 1 }));
+    const win = f.ops[0], out = { grouped: !!opG(win.id) };
+    let p = scr(opG(win.id)); ev(cnv, 'pointerdown', p); ev(cnv, 'pointerup', p);
+    out.winSel = sel.join() === win.id; out.hl = h3.length;
+    const h0 = hi; p = scr(opG(win.id)); ev(cnv, 'pointerdown', p);
+    for (let i = 1; i <= 5; i++) ev(window, 'pointermove', { x: p.x + i * 12, y: p.y });
+    ev(window, 'pointerup', { x: p.x + 60, y: p.y });
+    out.moved = win.d !== 300; out.committed = hi === h0 + 1;
+    await new Promise(r => setTimeout(r, 150));
+    const wg = T3.scene.children.find(c => c.userData && c.userData.wallId === f.walls[1].id && !c.isMesh);
+    p = scr(wg); ev(cnv, 'pointerdown', p); ev(cnv, 'pointerup', p);
+    out.wallSel = sel.join() === f.walls[1].id; out.panel = !!document.querySelector('#props [data-k="wall"][data-p="h"]');
+    show3D(false); sel = []; refresh();
+    return out;
+  })()`);
+  if (info.skipped) return '3D unavailable';
+  if (!info.grouped) throw new Error('the window has no opId group in 3D');
+  if (!info.winSel || !info.hl) throw new Error('clicking a window in 3D did not select + highlight it: ' + JSON.stringify(info));
+  if (!info.moved || !info.committed) throw new Error('dragging a window in 3D did not move it along the wall (or did not commit): ' + JSON.stringify(info));
+  if (!info.wallSel || !info.panel) throw new Error('clicking a plain wall in 3D did not select it: ' + JSON.stringify(info));
+  return 'window select + highlight, wall-constrained drag committed, plain wall selected';
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');

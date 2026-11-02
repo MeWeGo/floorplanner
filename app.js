@@ -4328,8 +4328,19 @@ function init3D() {
     if (!hits.length) return;
     // en yakın mesh kazanır: duvar/döşeme arkasındaki mobilya seçilmez (örtücüye saygı)
     let cur = hits[0].object;
-    while (cur && !(cur.userData && cur.userData.furnId)) cur = cur.parent;
+    while (cur && !(cur.userData && (cur.userData.furnId || cur.userData.opId))) cur = cur.parent;
     if (!cur) return;
+    if (cur.userData.opId) {
+      // kapı/pencere (#29): tık = seç (kapıda aç/kapa), sürükle = duvar boyunca kaydır
+      const fo = findAnyFloor(cur.userData.opId), wd = fo && fo.kind === 'op' && fo.floor.walls.find(w => w.id === fo.o.wall);
+      if (!wd) return;
+      e.stopImmediatePropagation(); // orbit başlamasın
+      sel = [fo.o.id];
+      const p0 = opDragHit(rc.ray, wd, cur.userData.elev || 0);
+      d3 = { op: true, id: fo.o.id, wallId: wd.id, elev: cur.userData.elev || 0, sx: e.clientX, sy: e.clientY, moved: false, alt: e.altKey, d0: fo.o.d, t0: p0 ? p0.t : null };
+      refreshSel3D(); renderProps();
+      return;
+    }
     const fd = findAnyFloor(cur.userData.furnId);
     if (!fd || fd.kind !== 'furn') return;
     const o = fd.o, elev = cur.userData.elev || 0, p0 = new THREE.Vector3();
@@ -4358,6 +4369,14 @@ function init3D() {
     if (!d3) return;
     if (!d3.moved && Math.hypot(e.clientX - d3.sx, e.clientY - d3.sy) < 4) return;
     d3.moved = true;
+    if (d3.op) {
+      const fo = findAnyFloor(d3.id), w = fo && fo.floor.walls.find(x => x.id === d3.wallId); if (!w || d3.t0 == null) return;
+      const p = opDragHit(ray3(e).ray, w, d3.elev); if (!p) return;
+      const L = wLen(w); let d = d3.d0 + p.t - d3.t0;
+      if (ui.snap && !e.shiftKey) d = rnd(d, 5);
+      fo.o.d = clamp(d, Math.min(fo.o.w / 2, L / 2), Math.max(L - fo.o.w / 2, L / 2));
+      schedBuild3D(); return;
+    }
     const o = findAnyFloor(d3.id)?.o; if (!o) { d3 = null; return; }
     const p = new THREE.Vector3();
     if (!ray3(e).ray.intersectPlane(floorPlane(d3.elev), p)) return;
@@ -4386,6 +4405,17 @@ function init3D() {
   });
   window.addEventListener('pointerup', e => {
     if (!d3 || e.button !== 0) return;
+    if (d3.op) {
+      const { id, moved, alt } = d3; d3 = null;
+      const fd = findAnyFloor(id); if (!fd) return;
+      if (moved) { commit(); refresh(); build3D(true); return; }
+      const o = fd.o;
+      if (!alt && (o.type === 'door' || o.type === 'double' || o.type === 'slide')) { // Alt+tık: açmadan yalnızca seç
+        o.open = o.open ? 0 : 90; commit(); refresh(); build3D(true);
+        toast(o.open ? (o.type === 'slide' ? L('Sürgülü kapı açıldı', 'Sliding door opened') : L('Kapı açıldı (90°)', 'Door opened (90°)')) : (o.type === 'slide' ? L('Sürgülü kapı kapandı', 'Sliding door closed') : L('Kapı kapandı', 'Door closed')));
+      } else { refresh(); refreshSel3D(); }
+      return;
+    }
     const { id, moved } = d3; d3 = null;
     const fd = findAnyFloor(id); if (!fd || fd.kind !== 'furn') return;
     if (moved) {
@@ -4398,8 +4428,8 @@ function init3D() {
   let downPt = null;
   r.domElement.addEventListener('pointerdown', e => { if (e.button === 0) downPt = { x: e.clientX, y: e.clientY }; });
   r.domElement.addEventListener('pointerup', e => {
-    if (!downPt || e.button !== 0 || Math.hypot(e.clientX - downPt.x, e.clientY - downPt.y) > 5) return;
-    downPt = null;
+    const dp = downPt; downPt = null; // eski bir basış konumu sonraki tıkı tetiklemesin
+    if (!dp || e.button !== 0 || Math.hypot(e.clientX - dp.x, e.clientY - dp.y) > 5) return;
     cam.updateMatrixWorld(); scene.updateMatrixWorld();
     const rect = r.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
@@ -4410,16 +4440,12 @@ function init3D() {
     let cur = hits[0].object;
     while (cur && !cur.userData?.wallId && !cur.userData?.opId) cur = cur.parent;
     let hit3 = false;
-    if (cur && cur.userData?.opId) {
-      const fd = findAnyFloor(cur.userData.opId);
-      if (fd && fd.kind === 'op' && (fd.o.type === 'door' || fd.o.type === 'double' || fd.o.type === 'slide')) {
-        fd.o.open = fd.o.open ? 0 : 90; sel = [fd.o.id]; commit(); refresh(); build3D(true);
-        toast(fd.o.open ? (fd.o.type === 'slide' ? L('Sürgülü kapı açıldı', 'Sliding door opened') : L('Kapı açıldı (90°)', 'Door opened (90°)')) : (fd.o.type === 'slide' ? L('Sürgülü kapı kapandı', 'Sliding door closed') : L('Kapı kapandı', 'Door closed')));
-      }
-      hit3 = true;
-    } else if (cur && cur.userData?.wallId) {
+    if (cur && cur.userData?.opId) hit3 = true; // açıklıklar pointerdown/pointerup (d3) yolunda işlenir
+    else if (cur && cur.userData?.wallId) {
       const fd = findAnyFloor(cur.userData.wallId);
-      if (fd && fd.kind === 'wall' && fd.o.grp) {
+      if (fd && fd.kind === 'wall' && (e.altKey || (!fd.o.grp && !(Array.isArray(fd.o.angles) && fd.o.angles.length >= 2)))) {
+        sel = [fd.o.id]; refresh(); refreshSel3D(); // düz duvar (veya Alt+tık): seç → yan panelde yükseklik/kalınlık/tür/boya (#29)
+      } else if (fd && fd.kind === 'wall' && fd.o.grp) {
         if (fd.floorIdx === fi && cycleGroupVars(fd.o.grp)) { sel = groupMemberIds(fd.o.grp); build3D(true); }
       } else if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
         cycleWallPos(fd.o); sel = [fd.o.id]; commit(); refresh(); build3D(true);
@@ -4962,10 +4988,8 @@ function build3D(keepCam = false) {
         if (o.sill > 0) seg(s, e, 0, o.sill); seg(s, e, Math.min(H, o.sill + o.h), H);
         const span = e - s, xm = (s + e) / 2 - L / 2;
         if (span >= 1) {
-          // kapı/sürgü grubu: opId taşır ki 3B tıklama çalışsın
-          const isLeaf = o.type === 'door' || o.type === 'double' || o.type === 'slide';
-          let og = g;
-          if (isLeaf) { og = new THREE.Group(); og.userData = { opId: o.id }; g.add(og); }
+          // her açıklık kendi grubunda: opId taşır ki 3B'de tıklanıp seçilebilsin, vurgulansın ve duvar boyunca sürüklenebilsin (#29)
+          const og = new THREE.Group(); og.userData = { opId: o.id, elev }; g.add(og);
           const fCol = shade(wCol, -0.22), fr = Math.min(6, Math.max(2, span * 0.07));
           if (det && !curt) {
             // kasa: söveler + üst lento (+ pencere denizliği)
@@ -5070,15 +5094,25 @@ function build3D(keepCam = false) {
 
 /* ---------- 3B seçim vurgusu & canlı güncelleme ---------- */
 let h3 = [], b3t = null;
+// 3B'de kapı/pencere sürükleme (#29): ışını duvarın düşey düzlemiyle kes, duvar ekseni boyunca konum (cm, a ucundan)
+function opDragHit(ray, w, elev) {
+  const L = wLen(w); if (L < 1) return null;
+  const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, p = new THREE.Vector3();
+  const vert = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(-uy, 0, ux), new THREE.Vector3(w.a.x, elev, w.a.y));
+  if (Math.abs(ray.direction.dot(vert.normal)) < 0.05 || !ray.intersectPlane(vert, p)) { if (!ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -elev), p)) return null; }
+  return { t: (p.x - w.a.x) * ux + (p.z - w.a.y) * uy };
+}
 function refreshSel3D() {
   if (!T3 || !T3.scene) return;
   for (const h of h3) { T3.scene.remove(h); h.geometry.dispose(); h.material.dispose(); }
   h3 = [];
   if (!ui.view3d || !sel.length) return;
-  // tekil veya gruplu seçimde tüm mobilya üyeleri turuncu kutuyla vurgulanır
-  for (const id of sel) {
-    const g = T3.scene.children.find(c => c.userData && c.userData.furnId === id);
-    if (g) h3.push(new THREE.BoxHelper(g, isLight() ? 0xd97706 : 0xfbbf24));
+  // tekil veya gruplu seçimde mobilya, duvar ve kapı/pencere üyeleri turuncu kutuyla vurgulanır (#29)
+  const ids = new Set(sel), col = isLight() ? 0xd97706 : 0xfbbf24;
+  for (const c of T3.scene.children) {
+    const u = c.userData || {};
+    if (ids.has(u.furnId) || (ids.has(u.wallId) && !c.isMesh)) h3.push(new THREE.BoxHelper(c, col));
+    else if (!c.isMesh && u.wallId) for (const og of c.children) if (og.userData && ids.has(og.userData.opId)) h3.push(new THREE.BoxHelper(og, col));
   }
   for (const h of h3) T3.scene.add(h);
 }
