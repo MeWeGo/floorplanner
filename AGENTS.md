@@ -33,6 +33,7 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 | `.github/workflows/` | `ci.yml` (tests) and `deploy.yml` (test-gated Pages publish) — see §12 |
 | `legacy-index.html` | Original prototype. **Do not edit**; kept for reference only |
 | `README.md` | User-facing docs. Keep shortcuts / features in sync with the code |
+| `.github/ISSUE_GUIDE.md` | How to write a GitHub issue (title, templates, rules, checklist) — see §13 |
 
 ---
 
@@ -493,7 +494,7 @@ Bugs also get a `severity:` label (impact). Severity is separate from priority: 
 - `duplicate`, `invalid` and `wontfix` are closing states, not types. `accessibility`, `help wanted` and `good first issue` are optional extras.
 - A high-severity bug is not automatically high priority (e.g. a rare crash on an unused path), and a low-severity bug can be high priority (e.g. a typo in the main toolbar).
 - Do not invent labels — check `gh label list` first.
-- Body: summary, current behaviour, repro steps (bugs) or scope / non-goals (features), acceptance criteria, test notes.
+- Body: summary, current behaviour, repro steps (bugs) or scope / non-goals (features), acceptance criteria, test notes. **Follow [`.github/ISSUE_GUIDE.md`](.github/ISSUE_GUIDE.md)** for the title format, section templates, what to leave out (line numbers, mockups, exact UI text) and the pre-filing checklist.
 
 ```bash
 gh issue create --title "..." \
