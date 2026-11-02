@@ -20,6 +20,7 @@ function env(initialFloor = { walls: [], ops: [] }) {
   const f = initialFloor;
   const api = new Function('f', `
     const PTS_KINDS = new Set(['room', 'sketch', 'slab', 'void']);
+    const AB_KINDS = new Set(['wall', 'dim', 'section']);
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const wLen = w => dist(w.a, w.b);

@@ -73,6 +73,7 @@ Floor = {
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone", pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
   "slabs":  [ { id, name, floor:"concrete|…", color:null|"#hex", t:20, off:0, pts:[{x,y},…] } ],   // free slabs: balconies / terraces (issue #22)
   "voids":  [ { id, name, type:"stair|shaft|atrium", pts:[{x,y},…] } ],                     // holes in this floor's slab (issue #23)
+  "sections": [ { id, name:"A", a:{x,y}, b:{x,y}, dir:1|-1 } ],                            // section lines (issue #30); view direction = normal of a→b × dir
   "dims":   [ { id, a:{x,y}, b:{x,y}, off } ],
   "texts":  [ { id, x, y, text, size, color, rot } ],
   "sketches": [ { id, pts:[{x,y},…], w, color } ]   // pen tool: freehand strokes (already simplified)
@@ -118,7 +119,7 @@ Key semantics:
 | `tabs[]`, `tabIdx` | Open project tabs (issue #17): `{ id, P, hist, hi, fi, view, sel }` per tab; the **active** tab's live state is the globals above |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
-`tool` values: `select pan wall rect room poly slab void place dim text pen eraser trim mirror calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
+`tool` values: `select pan wall rect room poly slab void place dim text pen eraser trim mirror section calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
 
 ---
 
@@ -217,6 +218,13 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - 2D (`layerStrings` rooms layer): slabs under rooms, voids over them. Their hit shapes carry `data-low` (void 1, slab 2) so `pickDataId()` only picks them when nothing else is under the cursor — a large balcony must not steal clicks from furniture or room labels.
 - 3D: free slabs are extruded `t` cm down from `elev + off + 0.2` (+0.1 per overlap level) so their top never z-fights the automatic slab; furniture whose centre is on a slab is raised/lowered by that slab's `off`. `voidHoles(voids, pts)` returns the voids that lie inside a polygon (edge-touching counts — stairwells snap to room corners) pulled 0.5 cm inward, and `build3D` adds them as `Shape.holes` to the automatic slab, the free slabs and the room floors of **that floor**. A void on floor N is the hole in floor N's slab, i.e. the ceiling of floor N-1. Voids that straddle a polygon edge are skipped (no CSG).
 - A floor with no walls gets no automatic slab from slabs/voids alone (`slabPolys` ignores them). Guard: `tests/slabs-voids.test.js` + a smoke check.
+
+### Sections & elevations (issues #30, #31)
+- One projection engine: `archPrims(spec)` projects **every floor** onto a vertical plane (`spec = { O, n, cut, crop }`, view direction `n`, drawing axis `u = (-n.y, n.x)` = the viewer's right, height `z` from `floorElev(i) = i·(wallH + 20)` like `build3D`). It returns pure data (`face` / `cut` / `glass` / `label` prims + `levels`); `archSvg(spec, title)` paints it far-to-near on white paper (`pal(true)`) with level datums (`fmtLevel`: ±0.00, +2.90), a ground line, title and 2 m scale bar.
+- **Section** (`cut: true`): walls crossing the plane become solid cut bands (split around an opening at the cut point; width = `t / sin` of the crossing angle), the part beyond becomes a face; slabs (`slabPolys` + free slabs) are cut with `lineCutIntervals` minus voids (`subIntervals`); rooms crossing the line are labelled; everything is cropped to the section line's extent. **Elevation** (`cut: false`): `elevationSpec(dir)` puts the plane outside the building looking along `ELEV_DIRS[dir]`; every wall is a face with its openings as holes.
+- **Section objects** live in `Floor.sections` and are an ordinary kind (`KINDS.sections`) drawn in the dims layer by `sectionSvg()`. Line-type kinds share `AB_KINDS` (`wall`, `dim`, `section`) in move / rotate / mirror (mirroring negates `dir`) / scale / paste / nudge / 3D drag; endpoints reuse the `da`/`db` handles. Tool `section` (`L`, `ui.secStart`); `nextSectionName()` hands out A, B, C….
+- **3D cutaway:** `ui.secCut` = section id; `applySecClip()` sets `T3.r.clippingPlanes` to the plane (keeps `d > 0`) and runs at the end of every `build3D`; `lookAtSection()` / `camAlong()` face the cut. **Facade cameras:** `set3DCam('north'|'east'|'south'|'west')` (`#b3dN/E/S/W`, labels K/D/G/B in Turkish).
+- `archModal(key)` (`ui.modal === 'arch'`, keys `sec:<id>` / `elev:<dir>`) tabs through all sections and the four elevations and downloads SVG / PNG (`svgToPng`). Guard: `tests/section-elevation.test.js` + a smoke check.
 
 ### Mirror & scale (issue #28)
 - `mirrorObjs(os, o, u)` reflects a selection about the line through `o` with unit direction `u` (`reflectPoint`). Walls keep `a`/`b` order, so openings keep `d` and only `side` is negated; hinged-wall `angles` become `2·axis − a`; dims negate `off`; `PTS_KINDS` polygons are reflected **and reversed** (winding kept); furniture gets `rot = 2·axis − rot + 180` so its back (−Y) still faces the same wall (`poly` shapes mirror local x); text stays readable. Ops are only moved through their walls.
@@ -358,6 +366,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/slabs-voids.test.js` | free slabs / floor voids: which voids become holes (edge-touching stairwells too), data-model defaults, tools, 2D X notation, 3D extrusion + holes, MCP mirror |
 | `tests/mirror-scale.test.js` | mirror / flip / scale maths on the real functions: openings keep swinging inward, polygon winding kept, furniture backs, readable text, double mirror = identity, scale with/without wall thickness, `parseScale` formats, panel / menu / key wiring |
 | `tests/edit-3d.test.js` | 3D editing of walls and openings: opening groups carry `opId`, `opDragHit` maths (both wall directions), drag handlers ordered before OrbitControls, Alt / door toggle rules, plain-wall selection, highlight of walls and openings |
+| `tests/section-elevation.test.js` | section / elevation engine on the real functions: line-polygon intervals, void subtraction, section frame direction, cut walls / slabs / openings for a 2-floor building, near side dropped, elevation faces and window holes, tool / kind / 3D clip / facade camera / modal wiring |
 | `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |

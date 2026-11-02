@@ -455,6 +455,36 @@ check('3D: walls and windows are selectable, a window drags along its wall (issu
   return 'window select + highlight, wall-constrained drag committed, plain wall selected';
 });
 
+check('section tool, 2D section / elevation drawings and the 3D cutaway (issues #30, #31)', async page => {
+  const info = await page.evaluate(`(async () => {
+    const p = newProject(); p.floors.push(newFloor('1')); loadProject(p);
+    fi = 0; addRectWalls(0, 0, 800, 500); F().ops.push(mkOp(OPDEF.window, F().walls[0], 200));
+    fi = 1; addRectWalls(0, 0, 800, 500); fi = 0; commit(); view.z = 0.5; view.x = 100; view.y = 50; sel = []; refresh();
+    const r = cv.getBoundingClientRect();
+    const at = (q, type) => { const s = w2s(q); cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 })); };
+    setTool('section');
+    for (const q of [{ x: -100, y: 250 }, { x: 900, y: 250 }]) { at(q, 'pointermove'); at(q, 'pointerdown'); at(q, 'pointerup'); }
+    const sec = F().sections[0], out = { sec: !!sec, name: sec && sec.name, drawn2d: sec ? document.querySelectorAll('#gDims [data-id="' + sec.id + '"]').length : 0 };
+    if (!sec) return out;
+    document.querySelector('#props [data-act="secdraw"]').click();
+    const svg = document.querySelector('#modal .archview svg');
+    out.modal = ui.modal; out.sectionSvg = !!svg; out.cutRects = svg ? svg.querySelectorAll('rect').length : 0; out.levels = svg ? /±0\\.00/.test(svg.textContent) && /\\+2\\.90/.test(svg.textContent) : false;
+    document.querySelector('#modal [data-arch="elev:north"]').click();
+    out.elev = !!document.querySelector('#modal .archview svg') && ui.archDraw && /North|Kuzey/.test(ui.archDraw.title);
+    closeModal(); sel = [sec.id]; refresh();
+    document.querySelector('#props [data-act="sec3d"]').click(); await new Promise(r => setTimeout(r, 150));
+    out.clip = ui.view3d ? T3.r.clippingPlanes.length : -1;
+    if (ui.view3d) { set3DCam('south'); out.camSouth = T3.cam.position.z > T3.ctl.target.z; ui.secCut = null; applySecClip(); out.unclip = T3.r.clippingPlanes.length; show3D(false); }
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.sec || info.name !== 'A' || info.drawn2d !== 1) throw new Error('the section tool did not create section A on the plan: ' + JSON.stringify(info));
+  if (info.modal !== 'arch' || !info.sectionSvg || info.cutRects < 6 || !info.levels) throw new Error('the 2D section drawing is missing parts: ' + JSON.stringify(info));
+  if (!info.elev) throw new Error('the north elevation did not render');
+  if (info.clip !== -1 && (info.clip !== 1 || info.unclip !== 0 || !info.camSouth)) throw new Error('3D cutaway / facade camera broken: ' + JSON.stringify(info));
+  return info.clip === -1 ? 'section + drawings (3D unavailable)' : 'section A drawn, section + elevation sheets, 3D cutaway on/off, south facade camera';
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');

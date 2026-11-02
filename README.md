@@ -100,6 +100,7 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
 - Object snap tracking: while drawing walls / rooms / dimensions or dragging wall ends and room corners, the cursor aligns with existing corners horizontally and vertically and shows a dashed guide (Shift or Snap off disables it).
 - Project tabs: keep several projects open, switch with one click (each keeps its own undo history and view), copy/paste between them, ＋ for a new tab, double-click to rename, × to close (asks if unsaved). Opening a template, saved project or file never replaces work in progress — it opens a new tab.
+- **Sections & elevations:** draw a section line (`L`) — A–A' balloons and arrows show where you look. From its panel, **✂ 3D cutaway** slices the 3D model along it and turns the camera to face the cut, and **📐 Section drawing** opens a printable 2D section through every floor (cut walls and slabs solid, openings, room names, ±0.00 / +2.90 level datums, scale bar). **Project ▸ Sections & elevations** shows the four facade elevations; all sheets download as SVG or PNG. In 3D, the **N / E / S / W** buttons square the camera to each facade.
 - **Mirror & scale:** flip any selection horizontally / vertically (`Shift+H` / `Shift+V`), mirror it about a two-point axis (`I`, as a copy or a move) or scale it by a factor (`1.5`, `150%`), a target width (`=450`) or a reference length (`300:450`). Doors keep swinging into the room, sofas keep their backs to the wall, text stays readable and wall thickness is kept unless you ask. Panel buttons and the right-click menu offer the same commands.
 - Layering: overlapping objects can be picked with Ctrl+click or the right-click list, and reordered (front / forward / backward / back). 3D follows the 2D order, so overlapping rooms or items (e.g. a river made of pools) no longer flicker.
 - Layer visibility toggles, floor patterns (wood, tile, carpet, marble, concrete, stone), room colors.
@@ -182,6 +183,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | `B` | Pen – freehand sketch (drag to draw, release to finish) |
 | `E` | Eraser |
 | `X` | Trim — cut a crossing wall back to the intersection |
+| `L` | Section line — click both ends; then 3D cutaway or 2D section drawing from the panel |
 | `I` | Mirror — mirror the selection about an axis you click (keep or erase the original) |
 | `Shift+H` / `Shift+V` | Flip the selection horizontally / vertically |
 | `Ctrl+click` | Select the object underneath (repeat to go deeper) |
