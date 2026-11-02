@@ -646,6 +646,70 @@ check('midpoint / centre snap and the floor underlay (issues #25, #26)', async p
   return 'mid / centre / underlay snaps, centred table, underlay toggles off cleanly';
 });
 
+check('site-plan zoom: the grid steps up and never disappears (issue #38)', async page => {
+  const info = await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    P = newProject(); loadProject(P);
+    addRectWalls(0, 0, 800, 500); commit(); refresh(); fit();
+    const cvEl = document.getElementById('cv');
+    const cx = cvEl.clientWidth / 2, cy = cvEl.clientHeight / 2;
+    const gridEl = document.getElementById('gGrid');
+    const steps = [];
+    zoomAt(0.7, cx, cy); // start outside the fit zoom so the ladder is exercised
+    for (let i = 0; i < 60; i++) {
+      zoomAt(0.7, cx, cy);
+      const g = gridScale();
+      steps.push({
+        z: +view.z.toFixed(5), minor: g.minor, major: g.major,
+        majorPx: +g.majorPx.toFixed(1), gridLen: gridEl.innerHTML.length,
+        label: document.getElementById('gridlbl').textContent,
+        zoomText: document.getElementById('zoomlbl').textContent,
+      });
+      if (view.z <= 0.0021) break;
+    }
+    // snapping must still follow P.grid, never the drawn interval
+    const snapped = snapToGrid({ x: 1234.6, y: 987.4 });
+
+    // Fit must frame a two-kilometre site instead of clamping far above the content
+    P = newProject(); loadProject(P);
+    addRectWalls(0, 0, 200000, 100000); commit(); refresh(); fit();
+    const fitted = { z: +view.z.toFixed(5), spanPx: +(200000 * view.z).toFixed(1), canvas: cvEl.clientWidth };
+
+    // at 50 % (thumbnails, SVG/PNG export) the pattern must look exactly as before
+    const z0 = view.z; view.z = 0.5;
+    const exportGrid = gridScale(); view.z = z0;
+
+    P = newProject(); loadProject(P);
+    addRectWalls(0, 0, 800, 500); commit(); refresh(); fit();
+    return { steps, snapped, grid: P.grid, fitted, exportGrid, minZoom: MIN_ZOOM };
+  })()`);
+
+  if (info.steps.length < 6) throw new Error('the zoom-out loop never ran: ' + info.steps.length);
+  const last = info.steps[info.steps.length - 1];
+  if (last.z > 0.0021) throw new Error('could not zoom out to the site-plan limit, stopped at z=' + last.z);
+  for (const s of info.steps) {
+    if (!s.gridLen) throw new Error('the grid disappeared at z=' + s.z + ' (blank canvas)');
+    if (s.majorPx < 44) throw new Error('the grid became illegible at z=' + s.z + ' (' + s.majorPx + ' px)');
+    if (!/\d/.test(s.label)) throw new Error('the footer has no grid interval at z=' + s.z + ': "' + s.label + '"');
+  }
+  // zooming out only ever coarsens the grid, never resets it
+  for (let i = 1; i < info.steps.length; i++) {
+    if (info.steps[i].major < info.steps[i - 1].major) throw new Error('grid interval went backwards at z=' + info.steps[i].z);
+  }
+  if (!/m\b/.test(last.label)) throw new Error('the far-out grid is not labelled in metres: "' + last.label + '"');
+  if (last.zoomText === '0%') throw new Error('the zoom readout rounds the minimum zoom to 0 %');
+  if (info.fitted.spanPx > info.fitted.canvas + 1 || info.fitted.z < info.minZoom) {
+    throw new Error('Fit does not frame a 2 km site: ' + JSON.stringify(info.fitted));
+  }
+  if (info.snapped.x % info.grid !== 0 || info.snapped.y % info.grid !== 0) {
+    throw new Error('snapping left P.grid: ' + JSON.stringify(info.snapped));
+  }
+  if (info.exportGrid.minor !== 0 || info.exportGrid.major !== 100) {
+    throw new Error('the 50 % export grid changed: ' + JSON.stringify(info.exportGrid));
+  }
+  return 'zoomed to ' + last.z + ', grid ' + last.label + ', 2 km fit at ' + info.fitted.z;
+});
+
 check('3D: a real render is produced, and PNG follows the active view', async page => {
   const info = await page.evaluate(`(async () => {
     document.getElementById('b3d').click();

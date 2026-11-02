@@ -101,6 +101,9 @@ const ROOMCOL = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#e9d5ff', '#fed7aa
 let P, fi = 0;
 let hist = [], hi = -1;
 const view = { x: 0, y: 0, z: 0.5 };
+/* Uzaklaştırma sınırı (issue #38): 0.002 · ~1000 px = ~5 km. Böylece vaziyet
+   planları, parsel sınırları ve çok binalı yerleşimler bütünüyle görülebilir. */
+const MIN_ZOOM = 0.002, MAX_ZOOM = 8;
 let tool = 'select', sel = [], placing = null;
 const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true, underlay: true };
@@ -705,10 +708,16 @@ function w2s(p) { return { x: p.x * view.z + view.x, y: p.y * view.z + view.y };
 function wpos(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left - view.x) / view.z, y: (e.clientY - r.top - view.y) / view.z }; }
 function applyView() {
   $('#world').setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.z})`);
-  $('#zoomlbl').textContent = Math.round(view.z * 100) + '%';
+  const pct = view.z * 100;
+  $('#zoomlbl').textContent = (pct >= 10 ? Math.round(pct) : +pct.toFixed(1)) + '%';
+  const gl = $('#gridlbl');
+  if (gl) {
+    const G = gridScale();
+    gl.textContent = (P.gridType || 'square') === 'none' ? '' : L('Izgara', 'Grid') + ' ' + gridStepLabel(G.minor || G.major);
+  }
 }
 function zoomAt(f, sx, sy) {
-  const nz = clamp(view.z * f, 0.04, 8), wx = (sx - view.x) / view.z, wy = (sy - view.y) / view.z;
+  const nz = clamp(view.z * f, MIN_ZOOM, MAX_ZOOM), wx = (sx - view.x) / view.z, wy = (sy - view.y) / view.z;
   view.z = nz; view.x = sx - wx * nz; view.y = sy - wy * nz; render();
 }
 function fit() {
@@ -716,7 +725,7 @@ function fit() {
   if (!b && P.bg) b = { x0: P.bg.x, y0: P.bg.y, x1: P.bg.x + P.bg.w, y1: P.bg.y + P.bg.h };
   if (!b) b = { x0: 0, y0: 0, x1: 1000, y1: 700 };
   const bw = Math.max(b.x1 - b.x0, 200), bh = Math.max(b.y1 - b.y0, 200);
-  view.z = clamp(Math.min(s.w / bw, s.h / bh) * 0.8, 0.05, 3);
+  view.z = clamp(Math.min(s.w / bw, s.h / bh) * 0.8, MIN_ZOOM, 3);
   view.x = s.w / 2 - (b.x0 + b.x1) / 2 * view.z; view.y = s.h / 2 - (b.y0 + b.y1) / 2 * view.z;
   render();
 }
@@ -740,9 +749,38 @@ function pal(forceLight = ui.exporting) {
     roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af', marble: '#cbd5e1', concrete: '#a8a29e', stone: '#a8a29e'
   };
 }
+/* ---------- Uyarlanan ızgara (issue #38) ----------
+   Yakalama daima P.grid'e bağlıdır; burada yalnızca ÇİZİLEN aralık büyür.
+   Uzaklaştıkça ana ızgara kademelenir (50 cm → 1 m → 5 m → 10 m → 50 m →
+   100 m → 500 m …), alt ızgara ise ekranda okunamayacak kadar sıklaşınca
+   gizlenir. Böylece kilometrelerce genişlikteki vaziyet planlarında tuval
+   boş kalmaz ve ölçek duygusu korunur. */
+const GRID_MINOR_PX = 6;    // alt çizgiler bundan sık olursa lekeye döner
+const GRID_MAJOR_PX = 46;   // ana çizgiler en az bu kadar aralıkla çizilir
+/** Çarpan merdiveni: 1 → 2 → 5 → 10 → 20 → 50 … (ana ızgara hep P.grid'in katı olur). */
+function gridFactor(k) {
+  const e = Math.floor(Math.log10(Math.max(k, 1))), p = Math.pow(10, e), n = k / p;
+  return (n < 1.5 ? 2 : n < 3.5 ? 5 : n < 7.5 ? 10 : 20) * p;
+}
+/** O an ekranda çizilecek ızgara aralıkları (cm); minor = 0 → alt ızgara gizli. */
+function gridScale(z = view.z) {
+  const base = Math.max(1, +P.grid || 1);
+  const minor = base * z >= GRID_MINOR_PX ? base : 0;
+  let f = 1, guard = 0;
+  // ana çizgiler ekranda ≥46 px ve (alt ızgara varsa) en az 4 hücre arayla
+  while ((base * f * z < GRID_MAJOR_PX || (minor && base * f < minor * 4)) && guard++ < 24) f = gridFactor(f);
+  const major = base * f;
+  return { minor, major, minorPx: minor * z, majorPx: major * z };
+}
+/** Izgara aralığını okunur yazar: 25 cm · 1 m · 2.5 m · 500 m. */
+function gridStepLabel(cm) {
+  if (cm >= 100) { const m = cm / 100; return (Number.isInteger(m) ? m : +m.toFixed(2)) + ' m'; }
+  return +(Math.round(cm * 10) / 10) + ' cm';
+}
 function defsSvg() {
-  const C = pal(), s = P.grid, h = +(s * Math.sqrt(3) / 2).toFixed(4), h2 = +(2 * h).toFixed(4);
-  const ms = s >= 100 ? s * 5 : s >= 25 ? s * 4 : 100, mh = +(ms * Math.sqrt(3) / 2).toFixed(4), mh2 = +(2 * mh).toFixed(4);
+  const C = pal(), G = gridScale(), s = G.minor || Math.max(1, +P.grid || 1), ms = G.major;
+  const h = +(s * Math.sqrt(3) / 2).toFixed(4), h2 = +(2 * h).toFixed(4);
+  const mh = +(ms * Math.sqrt(3) / 2).toFixed(4), mh2 = +(2 * mh).toFixed(4);
   const swMin = 0.65 / view.z, swMaj = 0.95 / view.z, rDot = Math.max(1.1, 1.5 / view.z), rDotM = Math.max(1.8, 2.3 / view.z);
   return `
   <pattern id="p-wood" width="120" height="24" patternUnits="userSpaceOnUse"><path d="M0 0H120M0 12H120M40 0V12M90 12V24" stroke="${C.wood}" stroke-opacity=".3" fill="none" stroke-width="1"/></pattern>
@@ -761,12 +799,14 @@ function defsSvg() {
 function gridSvg() {
   const gt = P.gridType || 'square';
   if (gt === 'none') return '';
+  const G = gridScale();
   const s = svgSize(), x0 = -view.x / view.z, y0 = -view.y / view.z, w = s.w / view.z, h = s.h / view.z;
   let out = '';
   const minId = gt === 'triangle' ? 'g-tri-minor' : gt === 'dots' ? 'g-dots-minor' : 'g-minor';
   const majId = gt === 'triangle' ? 'g-tri-major' : gt === 'dots' ? 'g-dots-major' : 'g-major';
-  if (P.grid * view.z >= 6) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${minId})" pointer-events="none"/>`;
-  if (view.z > 0.12) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${majId})" pointer-events="none"/>`;
+  if (G.minor) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${minId})" pointer-events="none"/>`;
+  // Ana ızgara hiçbir yakınlaştırmada kaybolmaz; aralığı gridScale() büyütür (issue #38)
+  out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${majId})" pointer-events="none"/>`;
   return out;
 }
 function bgSvg(live = true) {

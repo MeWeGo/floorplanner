@@ -174,7 +174,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
+`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -206,7 +206,9 @@ Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|b
 
 ### Grids (`defsSvg`, `gridSvg`)
 - Patterns `g-minor/g-major`, `g-tri-*`, `g-dots-*` are rebuilt on every render (stroke widths depend on `view.z` to stay hairline).
-- Major interval `ms`: `s≥100 → 5s`, `s≥25 → 4s`, else 100 cm. Minor grid hidden when `P.grid*view.z < 6`; major hidden when `view.z ≤ 0.12`.
+- **Adaptive metric grid (issue #38).** The drawn interval comes from `gridScale(z)` = `{ minor, major, minorPx, majorPx }`: `minor` is `P.grid` while its spacing is ≥ `GRID_MINOR_PX` (6 px), else 0 (hidden — the old "hide the minor grid" rule, now explicit); `major` climbs the `gridFactor()` ladder (×2 / ×5 / ×10 / ×20 …) until it is ≥ `GRID_MAJOR_PX` (46 px) apart and at least 4 minor cells wide, so it is **always** drawn and always a multiple of `P.grid` (major lines sit on minor lines). For the default 10 cm step this walks 50 cm → 1 m → 5 m → 10 m → 50 m → 100 m → 500 m as you zoom out. `defsSvg()` sizes the tiles from `gridScale()` (falling back to `P.grid` when the minor grid is hidden); `gridSvg()` has no `view.z` gate any more.
+- **Zoom range.** `MIN_ZOOM = 0.002` / `MAX_ZOOM = 8` (≈ 2 km across a 1000 px canvas, ~5 km at 1400 px) are shared by `zoomAt()` and `fit()`, so a site plan can be framed with **0 / Fit**. `applyView()` prints the active interval in `#gridlbl` ("Izgara 1 m") and keeps `#zoomlbl` readable below 1 % (one decimal).
+- **Snapping stays on `P.grid`.** `snapToGrid()`, `snapPt()` and the adaptive grid are deliberately independent: the drawn step is visual only, so pointing never jumps when the grid coarsens.
 - `syncGridUI()` must be called whenever `P.grid` / `P.gridType` changes outside the footer controls (load, undo/redo) — it handles the "Özel…" custom-step input.
 
 ### Wall corners (`wallJoints`, issue #14)
@@ -394,6 +396,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/plot-dialog.test.js` | plot dialog: ISO paper sizes / orientation, mm-per-cm for 1:50 / 1:100 / 1:200 / fit, centring and overflow, scale-bar choice, the print → dialog → window-pick wiring |
 | `tests/wall-length.test.js` | numeric wall length on the real `applyWallLength`: direction kept, connected corners follow (or not), pivot end, openings kept in place / clamped, bad input rejected, and the label / keyboard / drag wiring |
 | `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
+| `tests/adaptive-grid.test.js` | site-plan zoom + adaptive grid (issue #38): the metric ladder, major grid legible at every zoom, minor hiding, major staying a multiple of `P.grid`, 2 km fitting at `MIN_ZOOM`, footer labels, and `snapToGrid` still following `P.grid` |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |
 | `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed) |
