@@ -668,6 +668,28 @@ check('library presets: save a door, place it twice, delete + undo, JSON keeps t
   return 'saved K1 85×210, placed twice (glass kept), delete undone';
 });
 
+check('command line: ":" finds tools in TR / EN, runs them, respects inputs and 3D (issue #43)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); setTool('select'); sel = []; refresh();
+    const key = k => (document.activeElement && document.activeElement !== document.body ? document.activeElement : window).dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+    const type = s => { const i = document.getElementById('cmdIn'); i.value = s; i.dispatchEvent(new Event('input', { bubbles: true })); };
+    const out = {};
+    key(':'); out.open = !!document.getElementById('cmdPal'); out.rows = document.querySelectorAll('.cmditem').length;
+    type('KESİT'); out.top = document.querySelector('.cmditem.on kbd').textContent; key('Enter'); out.tool = tool;
+    out.closed = !document.getElementById('cmdPal'); setTool('select');
+    const pn = document.getElementById('pname'); pn.focus(); pn.dispatchEvent(new KeyboardEvent('keydown', { key: ':', bubbles: true })); out.input = !!document.getElementById('cmdPal'); pn.blur();
+    show3D(true); await new Promise(r => setTimeout(r, 800));
+    key(':'); type('yinele'); key('Enter'); out.redo3d = ui.view3d;
+    key(':'); type('duvar'); key('Enter'); out.wall2d = !ui.view3d && tool === 'wall';
+    setTool('select'); return out;
+  })()`);
+  if (!info.open || info.rows < 30) throw new Error('":" did not open the command list: ' + JSON.stringify(info));
+  if (info.top !== 'L' || info.tool !== 'section' || !info.closed) throw new Error('searching "KESİT" did not run the Section tool: ' + JSON.stringify(info));
+  if (info.input) throw new Error('":" typed in a text field opened the command line');
+  if (!info.redo3d || !info.wall2d) throw new Error('3D rules broken (redo should stay in 3D, wall should go to 2D): ' + JSON.stringify(info));
+  return `${info.rows} commands, KESİT → Section (L), inputs ignored, 3D rules kept`;
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');
