@@ -69,8 +69,11 @@ test('(e) pointerup handler for d3.op commits after a drag, toggles open for doo
 
   assert.ok(puBlock.includes('if (d3.op) {'), 'must handle d3.op in pointerup');
   assert.match(puBlock, /if\s*\(moved\)\s*\{\s*commit\(\);\s*refresh\(\);\s*build3D\(true\);/, 'must commit, refresh and rebuild 3D after a drag');
-  assert.match(puBlock, /if\s*\(!alt\s*&&\s*\(o\.type === 'door' \|\| o\.type === 'double' \|\| o\.type === 'slide'\)\)/, 'must toggle open only when not alt');
+  assert.match(puBlock, /if\s*\(!alt\s*&&\s*isDoorOp\(o\)\)\s*toggleDoor3D\(o\)/, 'must toggle open only when not alt');
   assert.match(puBlock, /else\s*\{\s*refresh\(\);\s*refreshSel3D\(\);\s*\}/, 'otherwise must select (refresh and refreshSel3D)');
+  // the toggle itself is shared with walk mode (#46)
+  assert.match(src, /const isDoorOp = o => o\.type === 'door' \|\| o\.type === 'double' \|\| o\.type === 'slide'/, 'isDoorOp must cover door / double / slide');
+  assert.match(fnSrc('toggleDoor3D'), /o\.open = o\.open \? 0 : 90;\s*commit\(\);\s*refresh\(\);\s*build3D\(true\);/, 'toggleDoor3D must flip open, commit and rebuild');
 });
 
 test('(f) click handler resets downPt before checking distance and selects plain walls with sel = [fd.o.id] when e.altKey or neither grouped nor hinged', () => {

@@ -3758,7 +3758,7 @@ window.addEventListener('keydown', e => {
   // komut satırı (#43): ":" — 2B'de de 3B'de de; açık bir pencere (modal) varken değil
   if (e.key === ':' && !ctrl && !e.altKey && $('#modalbg').style.display !== 'flex') { e.preventDefault(); keys3D.clear(); openCmdPalette(); return; }
   if (ui.view3d) {
-    if (e.key === 'Escape') { show3D(false); return; }
+    if (e.key === 'Escape') { if (T3 && T3.walk) exitWalk(true); else show3D(false); return; }
     // Editing shortcuts must keep working while the user is looking at the 3D
     // model: undo/redo used to fall through to the early return below, so the
     // most-pressed key in the app silently did nothing in 3D. restore() already
@@ -3917,6 +3917,7 @@ function helpModal() {
     ['S (while placing)', 'Flip door swing direction'],
     ['Arrow keys', 'Nudge selection / background image by 1 cm (Shift: 10 cm)'],
     ['WASD / Q / E (3D)', 'Walk around in 3D view (Q/E: down/up, Shift: faster)'],
+    ['👁 (3D): walk mode', 'Walk through at eye level: WASD / arrows walk, Shift runs, drag to look around, walls block, open doors and arches let you through, click a door to open it • Esc: back to the orbit camera'],
     ['Ctrl+Z / Ctrl+Y (3D)', 'Undo / redo while staying in the 3D view (Del also works there; Ctrl+A / C / V / D / G / S too)'],
     ['3D: click / drag furniture', 'Select & highlight • drag to move on the floor (Shift: no grid snap) • resize via the side panel'],
     ['Wall type: Curtain Wall', 'Select a wall → Wall Type → 🪟 Curtain Wall: glass facade with aluminum frame in 2D & 3D'],
@@ -3965,6 +3966,7 @@ function helpModal() {
     ['S (yerleştirirken)', 'Kapı açılış yönünü çevir'],
     ['Ok tuşları', 'Seçileni / arka plan görselini 1 cm kaydır (Shift: 10 cm)'],
     ['WASD / Q / E (3B)', '3B görünümde gezin (Q/E: alçal/yüksel, Shift: hızlı)'],
+    ['👁 (3B): yürüme modu', 'Göz hizasında gezin: WASD / oklar yürür, Shift koşar, sürükleyerek etrafa bakın; duvarlar durdurur, açık kapı ve kemerlerden geçilir, kapıya tıklayınca açılır • Esc: yörünge kamerasına dön'],
     ['Ctrl+Z / Ctrl+Y (3B)', '3B görünümden çıkmadan geri al / yinele (Del de çalışır; Ctrl+A / C / V / D / G / S dahil)'],
     ['3B: mobilyaya tıkla / sürükle', 'Seç & vurgula • zeminde sürükle (Shift: ızgara yok) • boyutu sağ panelden değiştir'],
     ['Duvar tipi: Cam Cephe', 'Duvar seç → Duvar Tipi → 🪟 Cam Cephe: 2B ve 3B içinde alüminyum çerçeveli cam cephe'],
@@ -4895,6 +4897,7 @@ function applySecClip() {
 // kesite / cepheye dik bak (izleyici n'nin tersinde, n yönüne bakar)
 function camAlong(n, c, span, hgt) {
   if (!T3) return;
+  exitWalk(false);
   const D = Math.max(span, hgt) * 1.25 + 400, zc = hgt / 2;
   T3.cam.position.set(c.x - n.x * D, zc, c.y - n.y * D); T3.ctl.target.set(c.x, zc, c.y); T3.ctl.update();
 }
@@ -5441,8 +5444,9 @@ function show3D(on) {
     build3D(keep);
     if (!keep) orient3DFrom2D(focus);
     T3.center2d = c;
-    T3.run = true; loop3D();
+    T3.lastT = 0; T3.run = true; loop3D();
   } else if (T3) {
+    exitWalk(true); // yürüme modundan çıkılır: saklanan kamera yörünge kamerasıdır
     // 2B'ye dönerken bırakılan kamera: bir sonraki girişte aynen geri gelir
     T3.lastCam = { pos: T3.cam.position.clone(), target: T3.ctl.target.clone() };
     T3.run = false;
@@ -5469,6 +5473,7 @@ function init3D() {
   const floorPlane = elev => new THREE.Plane(new THREE.Vector3(0, 1, 0), -elev);
   r.domElement.addEventListener('pointerdown', e => {
     if (e.button !== 0 || !ui.view3d) return;
+    if (T3 && T3.walk) { T3.walk.drag = { x: e.clientX, y: e.clientY }; return; } // yürüme (#46): sürükle = etrafa bak
     const rc = ray3(e);
     const hits = rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh);
     if (!hits.length) return;
@@ -5513,6 +5518,7 @@ function init3D() {
     refreshSel3D(); renderProps();
   });
   window.addEventListener('pointermove', e => {
+    if (T3 && T3.walk && T3.walk.drag) { walkLook(e.clientX - T3.walk.drag.x, e.clientY - T3.walk.drag.y); T3.walk.drag = { x: e.clientX, y: e.clientY }; return; }
     if (!d3) return;
     if (!d3.moved && Math.hypot(e.clientX - d3.sx, e.clientY - d3.sy) < 4) return;
     d3.moved = true;
@@ -5551,16 +5557,15 @@ function init3D() {
     for (const h of h3) h.update();
   });
   window.addEventListener('pointerup', e => {
+    if (T3 && T3.walk) T3.walk.drag = null;
     if (!d3 || e.button !== 0) return;
     if (d3.op) {
       const { id, moved, alt } = d3; d3 = null;
       const fd = findAnyFloor(id); if (!fd) return;
       if (moved) { commit(); refresh(); build3D(true); return; }
       const o = fd.o;
-      if (!alt && (o.type === 'door' || o.type === 'double' || o.type === 'slide')) { // Alt+tık: açmadan yalnızca seç
-        o.open = o.open ? 0 : 90; commit(); refresh(); build3D(true);
-        toast(o.open ? (o.type === 'slide' ? L('Sürgülü kapı açıldı', 'Sliding door opened') : L('Kapı açıldı (90°)', 'Door opened (90°)')) : (o.type === 'slide' ? L('Sürgülü kapı kapandı', 'Sliding door closed') : L('Kapı kapandı', 'Door closed')));
-      } else { refresh(); refreshSel3D(); }
+      if (!alt && isDoorOp(o)) toggleDoor3D(o); // Alt+tık: açmadan yalnızca seç
+      else { refresh(); refreshSel3D(); }
       return;
     }
     const { id, moved } = d3; d3 = null;
@@ -5571,7 +5576,7 @@ function init3D() {
       schedBuild3D(); // tutkal/rotasyon/pin değişimi olabilir -> sahne tazelensin
     } else { if (fd.floorIdx === fi && fd.o.grp && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
   });
-  const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI / 2.02;
+  const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = ORBIT_MAX_POLAR;
   let downPt = null;
   r.domElement.addEventListener('pointerdown', e => { if (e.button === 0) downPt = { x: e.clientX, y: e.clientY }; });
   r.domElement.addEventListener('pointerup', e => {
@@ -5582,6 +5587,7 @@ function init3D() {
     const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     const rc = new THREE.Raycaster(); rc.setFromCamera(mouse, cam);
     const hits = rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh); // kenar çizgileri (LineSegments) tık çalmasın
+    if (T3.walk) { walkClick(hits.length ? hits[0].object : null, e.altKey); return; }
     if (!hits.length) return;
     // en yakın mesh kazanır: örtücünün arkasındaki kapı/duvar tıklanamaz
     let cur = hits[0].object;
@@ -5607,6 +5613,8 @@ function init3D() {
 function resize3D() { const el = $('#v3d'); T3.r.setSize(el.clientWidth, el.clientHeight); T3.cam.aspect = el.clientWidth / el.clientHeight; T3.cam.updateProjectionMatrix(); }
 function set3DCam(kind) {
   if (!T3 || !T3.fit) return;
+  if (kind !== 'eye') exitWalk(false);
+  else if (!T3.walk) T3.walkSaved = { pos: T3.cam.position.clone(), target: T3.ctl.target.clone() }; // Esc buraya döner
   const f = T3.fit;
   const { cx, cz, sz, elev } = f;
   const x0 = f.x0 != null ? f.x0 : cx - sz / 2, x1 = f.x1 != null ? f.x1 : cx + sz / 2;
@@ -5641,6 +5649,7 @@ function set3DCam(kind) {
     T3.ctl.target.set(cx, elev + 40, cz);
   }
   T3.ctl.update();
+  if (kind === 'eye') enterWalk(); // göz hizası = yürüme modu (#46): başlangıç noktası ve bakış yönü yukarıdan
 }
 /* Bounding box of the biggest room on the current floor — the best spot to stand. */
 function eyeRoom() {
@@ -5660,11 +5669,133 @@ function eyeRoom() {
   // ignore slivers/degenerate polygons
   return best && best.area > 10000 ? best : null;
 }
+/* ---------- Yürüme modu (#46) ---------- */
+const ORBIT_MAX_POLAR = Math.PI / 2.02;
+// göz yüksekliği, gövde yarıçapı (cm), yürüme / koşma hızı (cm/s), bakış hassasiyeti (rad/px), bakış sınırı (rad)
+const WALK = { eye: 165, r: 20, speed: 140, run: 320, look: 0.004, pitch: 1.35 };
+/** Kemerler ve açık kapılar geçit verir; kapalı kapı ve pencere duvar sayılır. */
+function walkPassable(o) { return o.type === 'arch' || (isDoorOp(o) && !!o.open); }
+/** Bir katın yürürken geçilemeyen duvar parçaları: { a, b, h } (h = yarım kalınlık), geçit veren açıklıklar çıkarılmış. */
+function walkSegs(f) {
+  const out = [];
+  for (const w of (f && f.walls) || []) {
+    const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y); if (L < 1) continue;
+    const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, h = (w.t || 20) / 2;
+    const at = t => ({ x: w.a.x + ux * t, y: w.a.y + uy * t });
+    const gaps = ((f.ops) || []).filter(o => o.wall === w.id && walkPassable(o))
+      .map(o => [o.d - o.w / 2, o.d + o.w / 2]).sort((p, q) => p[0] - q[0]);
+    let t0 = 0;
+    for (const [s, e] of gaps) { if (s - t0 > 0.5) out.push({ a: at(t0), b: at(s), h }); t0 = Math.max(t0, e); }
+    if (L - t0 > 0.5) out.push({ a: at(t0), b: at(L), h });
+  }
+  return out;
+}
+/** Yarıçapı r olan bir daireyi (plan cm) mv kadar taşır; duvar kutularına girmez, açılı çarpınca boyunca kayar. */
+function walkMove(p, mv, segs, r) {
+  const len = Math.hypot(mv.x, mv.y), n = Math.max(1, Math.ceil(len / (r * 0.5))); // ince duvardan tünellemesin
+  let x = p.x, y = p.y;
+  for (let i = 0; i <= n; i++) {
+    if (i) { x += mv.x / n; y += mv.y / n; }
+    for (let it = 0; it < 4; it++) {
+      let hit = false;
+      for (const s of segs) {
+        const L = Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y); if (L < 1e-6) continue;
+        const ux = (s.b.x - s.a.x) / L, uy = (s.b.y - s.a.y) / L, dx = x - s.a.x, dy = y - s.a.y;
+        const u = dx * ux + dy * uy, v = -dx * uy + dy * ux;            // duvarın yerel ekseninde
+        const eu = u - Math.min(L, Math.max(0, u)), ev = v - Math.min(s.h, Math.max(-s.h, v)), d = Math.hypot(eu, ev);
+        if (d >= r) continue;
+        let nu, nv, pen;
+        if (d > 1e-6) { nu = eu / d; nv = ev / d; pen = r - d; }
+        else { // merkez duvarın içinde: en yakın yüzden çık
+          const c = [[L - u, 1, 0], [u, -1, 0], [s.h - v, 0, 1], [s.h + v, 0, -1]].sort((p2, q) => p2[0] - q[0])[0];
+          pen = c[0] + r; nu = c[1]; nv = c[2];
+        }
+        x += (nu * ux - nv * uy) * pen; y += (nu * uy + nv * ux) * pen; hit = true;
+      }
+      if (!hit) break;
+    }
+  }
+  return { x, y };
+}
+// yürüyenin katı: 3B'de tek kat seçiliyse o, yoksa 2B'deki kat; kotu build3D ile aynı
+function walkFloorIdx() { const i = ui.v3dFloor === 'all' ? -1 : P.floors.findIndex(f => f.id === ui.v3dFloor); return i >= 0 ? i : fi; }
+function walkElev(i) { return ui.v3dFloor === 'all' ? i * (P.wallH + 20) : 0; }
+function walkSegsAt(i) { const f = P.floors[i]; return f ? walkSegs(visFloor(f)) : []; }
+function enterWalk() {
+  if (!T3) return;
+  const c = T3.cam.position, t = T3.ctl.target, i = walkFloorIdx();
+  const p = walkMove({ x: c.x, y: c.z }, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); // duvarın içinde başlamasın
+  T3.walk = { fi: i, x: p.x, y: p.y, yaw: Math.atan2(t.z - c.z, t.x - c.x), pitch: -0.15, drag: null };
+  T3.ctl.enabled = false; T3.ctl.maxPolarAngle = Math.PI; // yukarı bakınca render'daki ctl.update() bakışı kırpmasın
+  applyWalkCam(); syncWalkUI();
+}
+function exitWalk(restore) {
+  if (!T3 || !T3.walk) return;
+  T3.walk = null; T3.ctl.enabled = true; T3.ctl.maxPolarAngle = ORBIT_MAX_POLAR;
+  if (restore && T3.walkSaved) { T3.cam.position.copy(T3.walkSaved.pos); T3.ctl.target.copy(T3.walkSaved.target); }
+  T3.walkSaved = null; T3.ctl.update(); syncWalkUI();
+}
+function walkToFloor(i) {
+  const w = T3.walk; w.fi = i;
+  const p = walkMove(w, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); w.x = p.x; w.y = p.y;
+}
+// kamera + hedef (render ve 2B dönüşü hedefi okur): hedef 1 m ileride
+function applyWalkCam() {
+  const w = T3.walk, y = walkElev(w.fi) + WALK.eye, cp = Math.cos(w.pitch);
+  T3.cam.position.set(w.x, y, w.y);
+  T3.ctl.target.set(w.x + Math.cos(w.yaw) * cp * 100, y + Math.sin(w.pitch) * 100, w.y + Math.sin(w.yaw) * cp * 100);
+  T3.cam.lookAt(T3.ctl.target);
+}
+function walkLook(dx, dy) {
+  const w = T3.walk;
+  w.yaw += dx * WALK.look; w.pitch = clamp(w.pitch - dy * WALK.look, -WALK.pitch, WALK.pitch);
+  applyWalkCam();
+}
+function walkStep(dt) {
+  const w = T3.walk, k = keys3D;
+  const f = (k.has('w') || k.has('arrowup') ? 1 : 0) - (k.has('s') || k.has('arrowdown') ? 1 : 0);
+  const s = (k.has('d') || k.has('arrowright') ? 1 : 0) - (k.has('a') || k.has('arrowleft') ? 1 : 0);
+  if (f || s) { // Q / E (uçma) yürürken yok sayılır
+    const sp = (k.has('shift') ? WALK.run : WALK.speed) * dt / Math.hypot(f, s), cy = Math.cos(w.yaw), sy = Math.sin(w.yaw);
+    const p = walkMove(w, { x: (cy * f - sy * s) * sp, y: (sy * f + cy * s) * sp }, walkSegsAt(w.fi), WALK.r);
+    w.x = p.x; w.y = p.y;
+  }
+  applyWalkCam();
+}
+function toggleDoor3D(o) {
+  o.open = o.open ? 0 : 90; commit(); refresh(); build3D(true);
+  toast(o.open ? (o.type === 'slide' ? L('Sürgülü kapı açıldı', 'Sliding door opened') : L('Kapı açıldı (90°)', 'Door opened (90°)')) : (o.type === 'slide' ? L('Sürgülü kapı kapandı', 'Sliding door closed') : L('Kapı kapandı', 'Door closed')));
+}
+// yürürken tık: kapı aç/kapa (Alt: yalnızca seç), mobilya / duvar / pencere seç, boşluk seçimi bırakır
+function walkClick(obj, alt) {
+  let cur = obj;
+  while (cur && !(cur.userData && (cur.userData.opId || cur.userData.furnId || cur.userData.wallId))) cur = cur.parent;
+  const id = cur && (cur.userData.opId || cur.userData.furnId || cur.userData.wallId), fd = id && findAnyFloor(id);
+  if (!fd || !pickable(id)) { if (sel.length) { sel = []; render(); refreshSel3D(); renderProps(); } return; }
+  sel = [id];
+  if (fd.kind === 'op' && !alt && isDoorOp(fd.o)) toggleDoor3D(fd.o);
+  else { refresh(); refreshSel3D(); }
+}
+// 👁 düğmesi etkin görünür; kısa iki dilli ipucu (#walkHint, ilk kullanımda oluşturulur)
+function syncWalkUI() {
+  const on = !!(T3 && T3.walk);
+  if ($('#b3dEye')) $('#b3dEye').classList.toggle('on', on);
+  if ($('#hud') && ui.view3d) $('#hud').style.display = on ? 'none' : ''; // yörünge ipucu (Q/E, Fare: Döndür) yürürken yanlış olur
+  let h = document.getElementById('walkHint');
+  if (!on) { if (h) h.style.display = 'none'; return; }
+  if (!h) { h = document.createElement('div'); h.id = 'walkHint'; $('#v3d').appendChild(h); }
+  h.textContent = L('🚶 Yürüme modu · WASD / oklar: yürü · Shift: koş · sürükle: etrafa bak · kapıya tıkla: aç / kapa · Esc: çık',
+    '🚶 Walk mode · WASD / arrows: walk · Shift: run · drag: look around · click a door: open / close · Esc: exit');
+  h.style.display = '';
+}
 function loop3D() {
   if (!T3 || !T3.run) return;
   requestAnimationFrame(loop3D);
+  // kare süresi (s): hız her makinede aynı olsun; sekme arkadayken büyük sıçrama olmasın
+  const now = performance.now(), dt = Math.min(0.1, T3.lastT ? (now - T3.lastT) / 1000 : 1 / 60); T3.lastT = now;
+  if (T3.walk) { walkStep(dt); T3.r.render(T3.scene, T3.cam); return; } // OrbitControls.update() bakışı ezmesin
   if (keys3D.size) {
-    const spd = keys3D.has('shift') ? 22 : 9;
+    const spd = (keys3D.has('shift') ? 1320 : 540) * dt; // eskiden 60 fps'de kare başına 22 / 9 cm
     const fwd = new THREE.Vector3(); T3.cam.getWorldDirection(fwd); fwd.y = 0;
     if (fwd.lengthSq() > 1e-6) fwd.normalize(); else fwd.set(0, 0, -1);
     const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
@@ -5882,17 +6013,37 @@ function furn3D(g, o, C) {
       break;
     }
     case 'dresser': case 'night': case 'shelf': case 'bookcase': {
-      const open = o.type === 'shelf' || o.type === 'bookcase';
-      bb(w, h * 0.96, d, sh(-0.06), 0, h * 0.02, 0, 0, ed);
-      if (open) {
-        const ns = Math.max(2, Math.round(h / 40));
-        for (let i = 1; i < ns; i++) bb(w * 0.96, 2.5, d * 0.9, sh(-0.16), 0, (i / ns) * h * 0.94, 0);
-      } else {
+      if (o.type === 'dresser' || o.type === 'night') {
+        bb(w, h * 0.96, d, sh(-0.06), 0, h * 0.02, 0, 0, ed);
         const nd = Math.max(2, Math.round(h / 28));
         for (let i = 0; i < nd; i++) {
           const dh = (h * 0.9) / nd;
           bb(w * 0.9, dh * 0.84, 2, sh(0.05), 0, h * 0.05 + i * dh + dh * 0.08, d / 2 + 1);
           bb(w * 0.2, 2.5, 2.5, metal, 0, h * 0.05 + i * dh + dh * 0.5, d / 2 + 3);
+        }
+      } else {
+        const t = Math.min(2.5, w * 0.05);
+        const iw = w - 2 * t;
+        const plH = Math.max(2, h * 0.04);
+        for (const sx of [-1, 1]) bb(t, h, d, sh(-0.06), sx * (w / 2 - t / 2), 0, 0, 0, ed);
+        bb(iw, t, d, sh(-0.06), 0, h - t, 0, 0, ed);
+        bb(iw, plH, d, sh(-0.08), 0, 0, 0, 0, ed);
+        bb(iw, h - plH - t, 1.2, sh(-0.12), 0, plH, -d / 2 + 0.6);
+        const ns = Math.max(2, Math.round(h / 40));
+        const ch = (h - plH - t) / ns;
+        for (let i = 1; i < ns; i++) bb(iw, 2, d - 1.5, sh(-0.16), 0, plH + i * ch, 0.6);
+        if (o.type === 'bookcase' && ed) {
+          const nb = Math.min(ns, 4);
+          const bookCols = [0x7f5539, 0x4a5d6e, 0x8c7a4f, 0x6b3f3f];
+          for (let i = 0; i < nb; i++) {
+            const rw = iw * [0.68, 0.58, 0.74, 0.62][i % 4];
+            const rh = (ch - 2) * [0.78, 0.72, 0.84, 0.75][i % 4];
+            const rd = d * 0.7;
+            const rx = (i % 2 === 0 ? -1 : 1) * (iw / 2 - rw / 2 - 0.5);
+            const shelfY = i === 0 ? plH : plH + i * ch + 2;
+            const rz = -d / 2 + 1.2 + rd / 2;
+            bb(rw, rh, rd, bookCols[i % 4], rx, shelfY, rz);
+          }
         }
       }
       break;
@@ -6316,6 +6467,7 @@ function build3D(keepCam = false) {
   T3.mats = Object.values(matCache).concat(extraMats, [lineMat]); // sonraki build3D çağrısında dispose edilmek üzere
   T3.texs = texs;
   T3.ctl.update();
+  if (T3.walk) applyWalkCam();
   refreshSel3D(); applySecClip();
 }
 
@@ -6428,7 +6580,8 @@ function applyLangUI() {
   $('#lbl3dFloor').textContent = L('Kat', 'Floor');
   if ($('#b3dFit')) $('#b3dFit').title = L('Sığdır', 'Fit');
   if ($('#b3dTop')) $('#b3dTop').title = L('Üstten görünüm', 'Top view');
-  if ($('#b3dEye')) $('#b3dEye').title = L('Göz hizası (1.6 m)', 'Eye level (1.6 m)');
+  if ($('#b3dEye')) $('#b3dEye').title = L('Yürüme modu: göz hizasında gez (Esc: çık)', 'Walk mode: walk through at eye level (Esc: exit)');
+  syncWalkUI();
   if ($('#lblLayer')) $('#lblLayer').textContent = L('Katman', 'Layer');
   if ($('#b3dStudio')) $('#b3dStudio').title = L('🎨 Render stüdyosu: stil, güneş, çözünürlük', '🎨 Render studio: style, sun, resolution');
   for (const [id, k, tr, en] of [['b3dN', 'north', 'K', 'N'], ['b3dE', 'east', 'D', 'E'], ['b3dS', 'south', 'G', 'S'], ['b3dW', 'west', 'B', 'W']]) if ($('#' + id)) { $('#' + id).textContent = L(tr, en); $('#' + id).title = L(...ELEV_NAMES[k]); }
@@ -6460,7 +6613,7 @@ $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
 $('#bPng').onclick = e => (ui.view3d ? export3DRender(e && e.shiftKey) : exportPng()); $('#bPrint').onclick = exportPrint;
 $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { type: 'image/svg+xml' }));
 $('#b2d').onclick = () => show3D(false); $('#b3d').onclick = () => show3D(true);
-$('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && ui.view3d) build3D(true); };
+$('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && T3.walk) walkToFloor(walkFloorIdx()); if (T3 && ui.view3d) build3D(true); };
 $('#b3dFit').onclick = () => set3DCam('fit');
 $('#b3dTop').onclick = () => set3DCam('top');
 $('#b3dEye').onclick = () => set3DCam('eye');
