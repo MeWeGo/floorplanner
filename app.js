@@ -3662,11 +3662,101 @@ function paste(fromSel, at = null) {
 /* ---------- Klavye ---------- */
 const keys3D = new Set();
 window.addEventListener('blur', () => keys3D.clear());
+/* ---------- Komut satırı (issue #43) ----------
+   ":" (iki nokta) açılır; araçları ve mevcut eylemleri Türkçe ya da İngilizce adıyla bulup çalıştırır.
+   Liste yalnızca var olan eylemlerden oluşur ve her satırda kısayol tuşu görünür. Arama büyük/küçük harf
+   ve aksan duyarsızdır (ı/İ/I → i, ş → s …). in3d: 3B görünümdeyken olduğu yerde çalışır; diğerleri önce
+   2B'ye döner (araçlar setTool() ile zaten döner). Komut satırı bir girdi kutusu olduğundan, rakamla duvar
+   uzunluğu ve tek tuş kısayolları hiç etkilenmez. */
+const foldText = s => String(s || '').replace(/[İIı]/g, 'i').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+function cmdList() {
+  const act = (id, icon, tr, en, key, run, in3d = false, alias = '') => ({ id, icon, tr, en, key, run, in3d, alias });
+  const tools = TOOLS.filter(Boolean).map(([id, icon, tr, key, en]) => act('tool:' + id, icon, tr, en, key, () => setTool(id), false, (HINTS_EN[id] || '').split(':')[0]));
+  return tools.concat([
+    act('undo', '↶', 'Geri al', 'Undo', 'Ctrl+Z', undo, true),
+    act('redo', '↷', 'Yinele', 'Redo', 'Ctrl+Y', redo, true),
+    act('2d', '▭', '2B görünüm', '2D view', 'Esc (3B)', () => show3D(false), true, 'plan'),
+    act('3d', '🧊', '3B görünüm', '3D view', '', () => show3D(true), true, 'model'),
+    act('fit', '⤢', 'Sığdır', 'Zoom to fit', '0', () => ui.view3d ? set3DCam('fit') : fit(), true, 'zoom extents yakınlaştır'),
+    act('save', '💾', 'Kaydet', 'Save project', 'Ctrl+S', saveBrowser, true),
+    act('print', '🖨', 'Yazdır / çıktı', 'Print / plot', '', exportPrint, true, 'pdf paper kağıt'),
+    act('png', '🖼', 'PNG dışa aktar', 'Export PNG', '', () => $('#bPng').click(), true, 'image görsel render'),
+    act('svg', '⬇', 'SVG dışa aktar', 'Export SVG', '', () => $('#bSvg').click(), false),
+    act('json', '⬇', 'JSON indir', 'Download JSON', '', () => downloadJson(P), true, 'export backup yedek'),
+    act('open', '📂', 'Dosya aç', 'Open file', '', () => $('#fileOpen').click(), true),
+    act('new', '＋', 'Yeni proje', 'New project', '', templatesModal, true, 'template şablon'),
+    act('flipH', '⇋', 'Yatay aynala', 'Flip horizontal', 'Shift+H', () => flipSel('h'), false, 'mirror ayna'),
+    act('flipV', '⇵', 'Dikey aynala', 'Flip vertical', 'Shift+V', () => flipSel('v'), false, 'mirror ayna'),
+    act('scale', '⤡', 'Ölçekle', 'Scale', '', scaleSelPrompt, false, 'resize boyutlandır'),
+    act('selall', '⬚', 'Tümünü seç', 'Select all', 'Ctrl+A', () => { const f = F(); sel = []; for (const a in KINDS) f[a].forEach(o => { if (pickable(o.id)) sel.push(o.id); }); refresh(); }, false),
+    act('del', '🗑', 'Seçileni sil', 'Delete selection', 'Del', deleteSel, true),
+    act('dup', '⧉', 'Çoğalt', 'Duplicate', 'Ctrl+D', () => paste(true), false, 'copy kopyala'),
+    act('group', '⛓', 'Grupla', 'Group', 'Ctrl+G', groupSel, false),
+    act('ungroup', '⛓', 'Grubu çöz', 'Ungroup', 'Ctrl+Shift+G', ungroupSel, false),
+    act('elev', '📐', 'Görünüşler ve kesitler', 'Elevations & sections', '', () => archModal('elev:south'), true, 'facade cephe drawing çizim'),
+    act('layers', '🗂', 'Katmanlar', 'Layers', '', () => { sel = []; refresh(); const h = [...document.querySelectorAll('#props h4')].find(x => /Çizim katmanları|Drawing layers/.test(x.textContent)); if (h) h.scrollIntoView({ block: 'start' }); }, false, 'layer'),
+    act('addlayer', '🗂', 'Katman ekle', 'Add layer', '', () => layerAct('lyradd'), false, 'new layer yeni'),
+    act('studio', '🎨', 'Render stüdyosu', 'Render studio', '', () => openRenderStudio(), true, '3d image'),
+    act('snap', '🧲', 'Yakalama aç/kapa', 'Toggle snap', 'G', () => $('#cSnap').click(), true, 'osnap'),
+    act('theme', '🌓', 'Tema değiştir', 'Toggle theme', '', () => $('#bTheme').click(), true, 'dark light koyu açık'),
+    act('lang', '🌐', 'Dil değiştir', 'Switch language', '', () => $('#bLang').click(), true, 'turkish english türkçe ingilizce'),
+    act('help', '❓', 'Yardım', 'Help', '', helpModal, true, 'shortcuts kısayollar'),
+  ]);
+}
+// sonuçlar: ad başı > kelime başı > içerir; her sorgu kelimesi bir yerde geçmeli
+function cmdFilter(cmds, q) {
+  const qs = foldText(q).trim().split(/\s+/).filter(Boolean);
+  if (!qs.length) return cmds.slice();
+  const out = [];
+  cmds.forEach((c, i) => {
+    const names = [foldText(c.en), foldText(c.tr)], hay = names.join(' ') + ' ' + foldText(c.alias) + ' ' + foldText(c.key);
+    if (!qs.every(t => hay.includes(t))) return;
+    const q0 = qs.join(' ');
+    const sc = names.some(n => n.startsWith(q0)) ? 0 : names.some(n => (' ' + n).includes(' ' + qs[0])) ? 1 : foldText(c.key) === q0 ? 1 : 2;
+    out.push({ c, sc, i });
+  });
+  return out.sort((a, b) => a.sc - b.sc || a.i - b.i).map(x => x.c);
+}
+function runCmd(c) {
+  closeCmdPalette();
+  if (!c) return;
+  if (ui.view3d && !c.in3d) show3D(false);
+  c.run();
+}
+function closeCmdPalette() { const el = document.getElementById('cmdPal'); if (el) el.remove(); }
+function openCmdPalette() {
+  closeCmdPalette();
+  const cmds = cmdList(), box = document.createElement('div');
+  box.id = 'cmdPal'; box.className = 'cmdpal';
+  box.innerHTML = `<input id="cmdIn" type="text" autocomplete="off" spellcheck="false" placeholder="${L('Komut ara… (ör. duvar, aynala, yazdır)', 'Type a command… (e.g. wall, mirror, print)')}"><div class="cmdlist" role="listbox"></div><div class="cmdfoot">${L('↑↓ / Tab: seç • Enter: çalıştır • Esc: kapat', '↑↓ / Tab: move • Enter: run • Esc: close')}</div>`;
+  document.body.appendChild(box);
+  const inp = box.querySelector('input'), list = box.querySelector('.cmdlist');
+  let hits = cmds, cur = 0;
+  const paint = () => {
+    list.innerHTML = hits.length ? hits.map((c, i) => `<div class="cmditem${i === cur ? ' on' : ''}" data-ci="${i}" role="option"><span class="ci">${c.icon}</span><span class="cn">${esc(L(c.tr, c.en))}<small>${esc(L(c.en, c.tr))}</small></span>${c.key ? `<kbd>${esc(c.key)}</kbd>` : ''}</div>`).join('')
+      : `<div class="cmdnone">${L('Eşleşen komut yok', 'No matching command')}</div>`;
+    const on = list.querySelector('.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+  };
+  inp.addEventListener('input', () => { hits = cmdFilter(cmds, inp.value); cur = 0; paint(); });
+  inp.addEventListener('keydown', ev => {
+    ev.stopPropagation(); // tek tuş kısayolları ve 3B yürüyüş tuşları komut yazarken çalışmasın
+    const n = hits.length;
+    if (ev.key === 'Escape') { ev.preventDefault(); closeCmdPalette(); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); runCmd(hits[cur]); }
+    else if (ev.key === 'ArrowDown' || (ev.key === 'Tab' && !ev.shiftKey)) { ev.preventDefault(); if (n) { cur = (cur + 1) % n; paint(); } }
+    else if (ev.key === 'ArrowUp' || (ev.key === 'Tab' && ev.shiftKey)) { ev.preventDefault(); if (n) { cur = (cur - 1 + n) % n; paint(); } }
+  });
+  list.addEventListener('mousedown', ev => { const it = ev.target.closest('[data-ci]'); if (it) { ev.preventDefault(); runCmd(hits[+it.dataset.ci]); } });
+  inp.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== inp) closeCmdPalette(); }, 120));
+  paint(); inp.focus();
+}
 window.addEventListener('keydown', e => {
-  const tag = e.target.tagName, typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+  const tag = e.target.tagName, typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || e.target.isContentEditable;
   if (typing) { if (e.key === 'Escape') e.target.blur(); return; }
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
   if (e.key === 'Escape' && document.getElementById('ctxMenu')) { closeCtxMenu(); return; }
+  // komut satırı (#43): ":" — 2B'de de 3B'de de; açık bir pencere (modal) varken değil
+  if (e.key === ':' && !ctrl && !e.altKey && $('#modalbg').style.display !== 'flex') { e.preventDefault(); keys3D.clear(); openCmdPalette(); return; }
   if (ui.view3d) {
     if (e.key === 'Escape') { show3D(false); return; }
     // Editing shortcuts must keep working while the user is looking at the 3D
@@ -3797,6 +3887,7 @@ function aiSetupPrompt() {
 }
 function helpModal() {
   const rows = isEN() ? [
+    [':', 'Command line: run any tool or action by name (English or Turkish), shortcut keys shown'],
     ['V / H', 'Select / Pan (hold Space for temporary pan)'],
     ['W', 'Draw wall (type number + Enter: exact length in cm)'],
     ['R', 'Rect room (draws 4 walls + room)'],
@@ -3844,6 +3935,7 @@ function helpModal() {
     ['Drag a room', 'Room + furniture & texts inside move together (single room)'],
     ['Ctrl+G / Ctrl+Shift+G', 'Group / ungroup selected objects'],
   ] : [
+    [':', 'Komut satırı: araç ya da eylemi adıyla çalıştır (Türkçe veya İngilizce), kısayolları gösterir'],
     ['V / H', 'Seç / Kaydır (Boşluk basılı: geçici kaydır)'],
     ['W', 'Duvar çiz (rakam + Enter: tam uzunluk)'],
     ['R', 'Oda (dikdörtgen duvar)'],
