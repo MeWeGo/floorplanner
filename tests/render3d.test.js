@@ -91,8 +91,8 @@ test('the 3D capture is reachable from both UIs, with a 3D-named file', () => {
 test('the default export is a rendered image, not a viewport screenshot', () => {
   const fn = sliceFn('export3DRender');
   // the regression this guards: "it just takes a photo of the scene"
-  assert.match(fn, /render3DHQ\(\)/, 'the button no longer runs the high-quality render');
-  assert.match(fn, /let url = quick \? fast\(\) : await render3DHQ\(\)/, 'Shift should keep the cheap capture');
+  assert.match(fn, /render3DHQ\((opts)?\)/, 'the button no longer runs the high-quality render');
+  assert.match(fn, /let url = quick \? fast\(\) : await render3DHQ\((opts)?\)/, 'Shift should keep the cheap capture');
   assert.match(fn, /render3DDataUrl\(\)/, 'the quick/fallback capture must still exist');
 
   const hq = sliceFn('render3DHQ');

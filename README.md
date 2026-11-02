@@ -61,6 +61,7 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 
 ### 🧱 Drawing
 - **Free-form walls** with live length + angle read-out; type a number and press `Enter` for an exact length.
+- **Change a wall's length by number** later: select it and type the new length + `Enter`, click its length label on the canvas to edit it in place, or type a length while dragging one of its ends. The wall keeps its angle, connected corners stay joined and doors / windows stay put.
 - **Room-from-rectangle** tool (4 walls + room in one drag).
 - **Automatic room detection** — click inside any closed area and get its polygon, area (m²) and perimeter.
 - **Polygon room** tool for irregular spaces.
@@ -100,6 +101,11 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
 - Object snap tracking: while drawing walls / rooms / dimensions or dragging wall ends and room corners, the cursor aligns with existing corners horizontally and vertically and shows a dashed guide (Shift or Snap off disables it).
 - Project tabs: keep several projects open, switch with one click (each keeps its own undo history and view), copy/paste between them, ＋ for a new tab, double-click to rename, × to close (asks if unsaved). Opening a template, saved project or file never replaces work in progress — it opens a new tab.
+- **Render studio (🎨 in 3D):** pick a style — **realistic**, **shaded technical** (white model, ink edges), **pencil sketch** or **white clay** — set the sun by azimuth / altitude or a preset (morning, noon, golden hour), preview it, then render at the viewport size, **1080p, 2K or 4K** as PNG or JPEG. Everything runs in the browser.
+- **Parametric stairs:** select a staircase to set its type (**straight, L or U with a landing, spiral**), the number of risers and the railing (none / left / right / both sides). The panel shows riser height and tread depth with a **Blondel comfort check** (2 × riser + tread ≈ 63 cm), and **⇕ Match storey height** sets the stair to one floor pitch. The 2D plan and the 3D model draw exactly the same treads.
+- **Drawing layers:** add your own CAD-style layers (**Project ▸ Drawing layers**) with a name and colour; new objects go onto the **active layer** (footer selector). Each layer can be hidden (gone from 2D, 3D and exports), **locked** (cannot be clicked, box-selected, Ctrl+A-selected or deleted) or kept off the printouts. Move a selection to another layer from its side panel. Old projects open unchanged on the Default layer.
+- **Sections & elevations:** draw a section line (`L`) — A–A' balloons and arrows show where you look. From its panel, **✂ 3D cutaway** slices the 3D model along it and turns the camera to face the cut, and **📐 Section drawing** opens a printable 2D section through every floor (cut walls and slabs solid, openings, room names, ±0.00 / +2.90 level datums, scale bar). **Project ▸ Sections & elevations** shows the four facade elevations; all sheets download as SVG or PNG. In 3D, the **N / E / S / W** buttons square the camera to each facade.
+- **Mirror & scale:** flip any selection horizontally / vertically (`Shift+H` / `Shift+V`), mirror it about a two-point axis (`I`, as a copy or a move) or scale it by a factor (`1.5`, `150%`), a target width (`=450`) or a reference length (`300:450`). Doors keep swinging into the room, sofas keep their backs to the wall, text stays readable and wall thickness is kept unless you ask. Panel buttons and the right-click menu offer the same commands.
 - Layering: overlapping objects can be picked with Ctrl+click or the right-click list, and reordered (front / forward / backward / back). 3D follows the 2D order, so overlapping rooms or items (e.g. a river made of pools) no longer flicker.
 - Layer visibility toggles, floor patterns (wood, tile, carpet, marble, concrete, stone), room colors.
 - Wall paint: pick a colour or a preset swatch for one or many selected walls (2D paint strips, full colour in 3D).
@@ -117,7 +123,8 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 | `localStorage` | Theme & language preferences only (legacy data is auto-migrated to IndexedDB) |
 
 ### 📤 Export
-- **PNG**, **SVG**, and **PDF / Print** (A4 landscape) with title block and scale bar.
+- **PNG** and **SVG** with title block and scale bar.
+- **🖨 PDF / Print** opens a **plot setup** dialog: paper **A4–A0**, landscape / portrait, a true architectural **scale** (1:50, 1:100, 1:200, 1:500 — 1:100 prints 1 m as 10 mm) or *fit to paper*, the area to print (**whole plan**, **current view** or a **window** you drag on the canvas), centring and margins. The preview warns when the plan does not fit; print it (or save as PDF from the print dialog) or download the sheet as SVG.
 - Exports always render on **white paper** regardless of the editor theme.
 - **3D render:** while the 3D view is open, the **🖼 PNG** button renders the scene (and the **🎬** button in the 3D overlay does the same from inside the view). This is a real render, not a screenshot: the camera outlines are removed, the backdrop becomes a studio white, shadows are rebuilt at high resolution and several supersampled passes are averaged, so edges come out smooth instead of jagged. Files are named `<project>-3d-render.png`. **Shift-click** either button for a quick capture of exactly what is on screen (`-3d-view.png`). SVG and PDF always describe the **2D plan**.
 
@@ -128,7 +135,7 @@ One click turns the plan into an interactive 3D model — walls with real door/w
 
 **Camera presets:** three small buttons next to the floor selector give **fit**, **top-down** and **eye level (1.6 m)** views. The **🎬** button beside them renders the current view to a high-resolution PNG (the top-bar **🖼 PNG** does the same while you are in 3D; hold **Shift** for a quick capture).
 
-**3D editing:** click furniture to select and highlight it (orange box), drag it across the floor (`Shift` = no grid snap; a single item magnets to the nearest wall on drop), and edit width / depth / height / rotation / color in the side panel — the 3D model refreshes live. Clicking a door opens/closes it; clicking a hinged wall (or a group with saved layouts) cycles its positions. The usual editing shortcuts keep working **without leaving 3D**: `Ctrl+Z` / `Ctrl+Y`, `Del`, and `Ctrl+A` / `C` / `V` / `D` / `G` / `S`.
+**3D editing:** click furniture to select and highlight it (orange box), drag it across the floor (`Shift` = no grid snap; a single item magnets to the nearest wall on drop), and edit width / depth / height / rotation / color in the side panel — the 3D model refreshes live. Click a **wall** or a **window** to select it (orange box) and edit its height, thickness, type, paint, or the opening's width / height / sill in the side panel — 3D follows live; **drag a door or window along its wall** to slide it (`Shift` = no 5 cm snap). Clicking a door opens/closes it (`Alt+click` selects it without toggling, and selects a hinged / grouped wall without cycling it); clicking a hinged wall (or a group with saved layouts) cycles its positions. The usual editing shortcuts keep working **without leaving 3D**: `Ctrl+Z` / `Ctrl+Y`, `Del`, and `Ctrl+A` / `C` / `V` / `D` / `G` / `S`.
 
 **Floor selector:** the menu at the top-left of the 3D view shows **🏢 all floors stacked**, or **only the selected floor** (e.g. just the 1st or 2nd floor) — the isolated floor is drawn at ground level for a clean, unobstructed look.
 
@@ -181,6 +188,9 @@ python -m http.server 8080      # then open http://localhost:8080
 | `B` | Pen – freehand sketch (drag to draw, release to finish) |
 | `E` | Eraser |
 | `X` | Trim — cut a crossing wall back to the intersection |
+| `L` | Section line — click both ends; then 3D cutaway or 2D section drawing from the panel |
+| `I` | Mirror — mirror the selection about an axis you click (keep or erase the original) |
+| `Shift+H` / `Shift+V` | Flip the selection horizontally / vertically |
 | `Ctrl+click` | Select the object underneath (repeat to go deeper) |
 | Right-click | List of objects under the cursor + layer order |
 | `Ctrl+]` / `Ctrl+[` | Bring forward / send backward (`Shift`: to front / to back) |

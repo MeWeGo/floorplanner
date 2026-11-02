@@ -62,6 +62,8 @@ P = {
   "wallT": 20,                  // default wall thickness (cm) for new walls
   "wallH": 270,                 // default wall height (cm) for new walls / floor pitch in 3D
   "bg": null | { "src": "<dataURL>", "x": 0, "y": 0, "w": 1200, "h": 800, "op": 0.5 },
+  "layers": [ { "id": "0", "name": "Varsayılan", "color": "#64748b", "vis": true, "lock": false, "print": true }, … ],   // drawing layers (issue #32); "0" = Default, cannot be deleted
+  "activeLayer": "0",            // new objects are stamped with it (any object may carry "layer": id; absent = "0")
   "floors": [ Floor, ... ]
 }
 
@@ -69,10 +71,11 @@ Floor = {
   "id": "…", "name": "Zemin Kat", "slabFloor": "none", "slabColor": null,   // 3D slab finish (same kinds as room floors)
   "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain", color?:"#hex" (paint; absent = theme default), pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
   "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1, open?:0|90 } ],   // doors & windows
-  "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label } ],
+  "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label, stepN?, stairType?:"straight|l|u|spiral", railing?:"none|left|right|both" } ],   // stair fields only for k:"stairs" (issue #33)
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone", pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
   "slabs":  [ { id, name, floor:"concrete|…", color:null|"#hex", t:20, off:0, pts:[{x,y},…] } ],   // free slabs: balconies / terraces (issue #22)
   "voids":  [ { id, name, type:"stair|shaft|atrium", pts:[{x,y},…] } ],                     // holes in this floor's slab (issue #23)
+  "sections": [ { id, name:"A", a:{x,y}, b:{x,y}, dir:1|-1 } ],                            // section lines (issue #30); view direction = normal of a→b × dir
   "dims":   [ { id, a:{x,y}, b:{x,y}, off } ],
   "texts":  [ { id, x, y, text, size, color, rot } ],
   "sketches": [ { id, pts:[{x,y},…], w, color } ]   // pen tool: freehand strokes (already simplified)
@@ -118,7 +121,7 @@ Key semantics:
 | `tabs[]`, `tabIdx` | Open project tabs (issue #17): `{ id, P, hist, hi, fi, view, sel }` per tab; the **active** tab's live state is the globals above |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
-`tool` values: `select pan wall rect room poly slab void place dim text pen eraser trim calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
+`tool` values: `select pan wall rect room poly slab void place dim text pen eraser trim mirror section calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
 
 ---
 
@@ -170,7 +173,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
+`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -208,6 +211,9 @@ Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|b
 ### Wall corners (`wallJoints`, issue #14)
 Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)` groups coincident endpoints (≤ 1 cm), sorts the walls by outward angle and intersects neighbouring face lines to find each miter point; the convex hull of the butt corners plus the outward miter points is the filler polygon. Miters longer than 2.5 × max thickness are dropped (bevel). `jointsSvg()` fills it with `pal().wall` in 2D; `build3D()` extrudes it to the lowest solid wall height. T-junctions (an end on another wall's middle) need no filler — the through-wall covers the butt end. Guard: `tests/wall-joints.test.js` runs the real functions cut out of `app.js`.
 
+### Numeric wall length (issue #36)
+`applyWallLength(w, len, end = wallFree(w), conn = ui.connWalls)` moves the free end along the wall's own direction (a hinged wall keeps its pivot), drags coincident ends of other walls (< 1 cm) when `conn`, and keeps openings in place (`d` shifts when the `a` end moved) clamped to the new length — for the wall and for every connected wall it moved. Three entry points: a single selected wall + digits / `Enter` (`ui.lenTyped`, shown by `drawPreview`; `Backspace` edits the buffer instead of deleting); the canvas length label (`wallDimSvg` carries `data-wdim` except while exporting → `openWallDimInput()` puts a fixed `#wdimInput` over it); digits typed while dragging a `wa`/`wb` handle (`ui.drag.typed`; `doHandle` places the end exactly that far from the other end, toward the cursor). The panel `len` field uses the same routine on `change` only, so half-typed values never squeeze openings. Guard: `tests/wall-length.test.js` + a smoke check.
+
 ### Trim / split / corner (issue #15)
 `trim` tool (`X`): `wallCuts(w)` lists where other wall centrelines cross `w` (cm from `a`, ends excluded); `trimPlan(w, click)` picks the nearest crossing on each side of the click and `trimWall()` removes that piece — an end overhang moves the end, a piece between two crossings splits the wall (`splitWallAt`). Openings on the kept part are re-based, those on the removed part are deleted via `deleteIds`. The hover preview paints the doomed piece red. Wall panel: **✂ Split at intersection** (`splitx`, one wall) and **⌐ Join corner** (`corner`, exactly two walls → `joinCorner()` moves each wall's nearer end to the line intersection, trimming or extending). Guard: `tests/wall-trim.test.js`.
 
@@ -217,6 +223,28 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - 2D (`layerStrings` rooms layer): slabs under rooms, voids over them. Their hit shapes carry `data-low` (void 1, slab 2) so `pickDataId()` only picks them when nothing else is under the cursor — a large balcony must not steal clicks from furniture or room labels.
 - 3D: free slabs are extruded `t` cm down from `elev + off + 0.2` (+0.1 per overlap level) so their top never z-fights the automatic slab; furniture whose centre is on a slab is raised/lowered by that slab's `off`. `voidHoles(voids, pts)` returns the voids that lie inside a polygon (edge-touching counts — stairwells snap to room corners) pulled 0.5 cm inward, and `build3D` adds them as `Shape.holes` to the automatic slab, the free slabs and the room floors of **that floor**. A void on floor N is the hole in floor N's slab, i.e. the ceiling of floor N-1. Voids that straddle a polygon edge are skipped (no CSG).
 - A floor with no walls gets no automatic slab from slabs/voids alone (`slabPolys` ignores them). Guard: `tests/slabs-voids.test.js` + a smoke check.
+
+### Parametric stairs (issue #33)
+- `stairSteps(o)` is the single source of treads for `k: 'stairs'`: `{ n, riser, tread, type, steps: [{ x, y, w, d, a, z, dx, dy, across, run, flight, landing }] }` in local plan coordinates (climbing toward −y on a straight stair, like the 2D arrow). `n = stairN(o)` = `stepN` or `round(h / 17.5)`, clamped 2–60 — legacy stairs without fields open as straight with a right-hand rail. L and U stairs get one landing (one riser); spiral sweeps 270° around a pole.
+- `furnBody` draws every step with `stepCorners()` + a walking line and arrow; `furn3D` extrudes the same steps (open treads on a spiral) and builds railings from `stairRails()` (posts every third step, sloped handrail boxes with Euler order `YZX`). Up to ~45 meshes with rails on both sides.
+- Panel: type, riser count, railing, riser / tread readout, `blondel(riser, tread)` (60–64 cm ✓, 57–67 ≈) and `stairfit` (h = wallH + 20, risers re-derived). Guard: `tests/stairs.test.js` + a smoke check.
+
+### Drawing layers (issue #32)
+- `P.layers` / `P.activeLayer` are project data (undo, save, tabs). An object's `layer` field is **optional: absent = '0'** so projects without custom layers stay byte-identical. `commit()` calls `stampLayers()`, which stamps objects without a layer with the active layer — only when the active layer is not '0'. Because of that, `layerAct('lyradd')` first stamps every unlayered object '0' (`stampLayers(true)`), and `normalizeProject()` does the same whenever a project has more than one layer.
+- `visFloor(f, print)` is the single filter: a shallow copy of the floor without objects on hidden layers (and, with `print`, layers whose `print` is false); openings on hidden walls drop too. Used by `layerStrings` (`print` = exporting), the underlay, `build3D`'s floor loop and `archPrims`. `pickable(id)` (visible and unlocked) gates `pickDataId`, `idsAt`, box select, Ctrl+A, `deleteSel` and 3D picking.
+- UI: `layersPanelHtml()` in the project panel (radio = active, colour, name, 👁 / 🔒 / 🖨, 🗑 moves objects to Default), `selLayerHtml()` in every selection panel (`data-k="sellayer"`), footer `#sLayer` synced by `syncLayerUI()` from `refresh()`. Guard: `tests/drawing-layers.test.js` + a smoke check.
+
+### Sections & elevations (issues #30, #31)
+- One projection engine: `archPrims(spec)` projects **every floor** onto a vertical plane (`spec = { O, n, cut, crop }`, view direction `n`, drawing axis `u = (-n.y, n.x)` = the viewer's right, height `z` from `floorElev(i) = i·(wallH + 20)` like `build3D`). It returns pure data (`face` / `cut` / `glass` / `label` prims + `levels`); `archSvg(spec, title)` paints it far-to-near on white paper (`pal(true)`) with level datums (`fmtLevel`: ±0.00, +2.90), a ground line, title and 2 m scale bar.
+- **Section** (`cut: true`): walls crossing the plane become solid cut bands (split around an opening at the cut point; width = `t / sin` of the crossing angle), the part beyond becomes a face; slabs (`slabPolys` + free slabs) are cut with `lineCutIntervals` minus voids (`subIntervals`); rooms crossing the line are labelled; everything is cropped to the section line's extent. **Elevation** (`cut: false`): `elevationSpec(dir)` puts the plane outside the building looking along `ELEV_DIRS[dir]`; every wall is a face with its openings as holes.
+- **Section objects** live in `Floor.sections` and are an ordinary kind (`KINDS.sections`) drawn in the dims layer by `sectionSvg()`. Line-type kinds share `AB_KINDS` (`wall`, `dim`, `section`) in move / rotate / mirror (mirroring negates `dir`) / scale / paste / nudge / 3D drag; endpoints reuse the `da`/`db` handles. Tool `section` (`L`, `ui.secStart`); `nextSectionName()` hands out A, B, C….
+- **3D cutaway:** `ui.secCut` = section id; `applySecClip()` sets `T3.r.clippingPlanes` to the plane (keeps `d > 0`) and runs at the end of every `build3D`; `lookAtSection()` / `camAlong()` face the cut. **Facade cameras:** `set3DCam('north'|'east'|'south'|'west')` (`#b3dN/E/S/W`, labels K/D/G/B in Turkish).
+- `archModal(key)` (`ui.modal === 'arch'`, keys `sec:<id>` / `elev:<dir>`) tabs through all sections and the four elevations and downloads SVG / PNG (`svgToPng`). Guard: `tests/section-elevation.test.js` + a smoke check.
+
+### Mirror & scale (issue #28)
+- `mirrorObjs(os, o, u)` reflects a selection about the line through `o` with unit direction `u` (`reflectPoint`). Walls keep `a`/`b` order, so openings keep `d` and only `side` is negated; hinged-wall `angles` become `2·axis − a`; dims negate `off`; `PTS_KINDS` polygons are reflected **and reversed** (winding kept); furniture gets `rot = 2·axis − rot + 180` so its back (−Y) still faces the same wall (`poly` shapes mirror local x); text stays readable. Ops are only moved through their walls.
+- `flipSel('h'|'v')` mirrors about the selection bbox centre (`Shift+H` / `Shift+V`). The `mirror` tool (`I`) picks a two-point axis (`ui.mAxis`, snapped, angle-locked) with a dashed axis + mirrored-outline preview, then asks whether to erase the originals; keeping them copies the selection in place with `paste(true, 0)` (attached openings included) and mirrors the copy.
+- `scaleObjs(os, orig, tx, ty, sx, sy, scaleT)` is the single scaling routine, shared by the `g0..g3` group handles and `scaleSelection()`/`scaleSelPrompt()`. `parseScale()` accepts `1.5`, `150%`, `=450` (target width) and `300:450` (reference → target). Wall thickness is kept unless `scaleT`. Panel row (`flipH flipV mirror scale`) and right-click entries (`data-cmxf`). Guard: `tests/mirror-scale.test.js`.
 
 ### Project tabs (issue #17)
 - `#ptabs` (below the header) lists `tabs[]`; click switches, double-click renames, `×` closes, `＋` opens the template picker. `switchTab()` = `syncTab()` (globals → current tab) + `activateTab()` (tab → globals, then `refresh()`, `updateUndo()`, `autosave()`, 3D rebuild if open). Each tab keeps its own `hist`/`hi`, floor, view and selection; `ui.clip` is global, so copy/paste works across projects.
@@ -256,7 +284,8 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 ### 3D interaction notes
 - Picking uses `findAnyFloor()` (ids are unique across floors) and respects **occluders**: only the closest mesh hit is considered — walls/slabs/room floors hide furniture behind them.
 - 3D group drags mirror 2D `doMove`: connected wall ends follow (`conn`), hinge pins translate (`pins`), room/sketch polygons update in the plan and are rebuilt into the scene on drop (`schedBuild3D`).
-- `h3[]` holds one `BoxHelper` per selected furniture item, so grouped selections highlight too.
+- `h3[]` holds one `BoxHelper` per selected furniture item, wall group or opening group, so grouped selections highlight too.
+- **Walls & openings in 3D (issue #29).** Every opening is its own `THREE.Group` with `userData = { opId, elev }` inside the wall group (windows and arches included, not just door leaves). The 3D `pointerdown` handler starts `d3 = { op: true, … }` on an opening and stops propagation (no orbit); `pointermove` slides it with `opDragHit(ray, wall, elev)` — the ray hits the wall's vertical plane (floor plane fallback) and gives the distance along the wall — clamped like 2D and snapped to 5 cm, rebuilt via `schedBuild3D()`; `pointerup` commits after a drag, otherwise toggles a door (`Alt` = select only) or selects a window. The click handler selects plain walls (`Alt` also selects hinged / grouped walls instead of cycling) and always clears `downPt` first so a stale press cannot fire a second click. Height / thickness / type / paint and opening `w/h/sill` edits already rebuild through `affects3D`. Guard: `tests/edit-3d.test.js` + a smoke check.
 - **Keyboard while in 3D.** The `if (ui.view3d)` branch of the window `keydown` handler owns the keyboard in 3D: `Escape` leaves, `WASD`/arrows/`Q`/`E`/`Shift` feed `keys3D`, and a **`ctrl` layer runs first** for `Z`/`Y` (undo/redo), `S`, `A`, `G`, `C`, `V`, `D` — plus `Delete`/`Backspace`. Ordering matters twice over: the ctrl layer must come **before** the walk-key capture (otherwise `Ctrl+A` would push `a` into `keys3D` and strafe the camera) and before the branch's early `return` (that return is what made `Ctrl+Z` dead in 3D — the most-pressed key in the app silently doing nothing). `restore()` already calls `schedBuild3D()`, so undo rebuilds the model and keeps the user in 3D; use `refreshSel3D()` after anything that changes `sel` without rebuilding. Guards: `tests/shortcuts-3d.test.js` (handler shape + ordering) and a real `Input.dispatchKeyEvent` check in `browser-smoke.js` that fails with "Ctrl+Z did nothing in 3D".
 - `build3D()` disposes previous geometries/materials (`T3.mats`) before rebuilding; `affects3D(k, p)` gates which panel properties trigger `schedBuild3D()`.
 
@@ -274,6 +303,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
   - **`export3DRender(true)` (Shift, `-3d-view.png`)** → `render3DDataUrl()`: one synchronous capture of the live view, for when the user wants exactly what is on screen fast.
   - `render3DDataUrl()` must stay **synchronous**: the renderer has no `preserveDrawingBuffer`, so `r.render()` and `toDataURL()` cannot be split by an await/`toBlob`/`setTimeout` or the PNG comes back blank. `render3DHQ()` has no such constraint (it reads the canvas inside the same pass loop).
   - Sizing: `shot3DScale(w, h, maxSide, maxPixels)` — 2–3×, capped, never below 1×. The render additionally caps the final image at 2600 px / 6 MP and the *buffer* at 4096 px. `ui.shot` is the re-entrancy guard.
+  - **Render studio (issue #34).** `#b3dStudio` (🎨) opens `openRenderStudio()` (`ui.modal === 'studio'`, settings in `ui.studio`); 🎬 and `#bPng` keep their old contract. `render3DHQ(opts)` takes `style` (`RENDER_STYLES`: `realistic` = the studio above; `technical` / `clay` / `sketch` swap every mesh to one matte material, glass stays translucent; `technical` and `sketch` keep the `LineSegments` and ink them; `sketch` adds `sketchFilter()` — grayscale, contrast, light hatching), `sun: { az, alt }` (`sunVector()`, north = −z; the shadow light moves and turns warm below 20°), `longSide` (1920 / 2560 / 3840; otherwise `shot3DScale`) and `format` (`jpeg` → `toDataURL('image/jpeg', 0.92)`). Every swap — materials, ink, light position and colour — is restored in `finally`. Preview = the same call at 720 px, one pass. Guard: `tests/render-studio.test.js` + a smoke check.
   - **SVG and PDF stay 2D-only on purpose** (they carry a title block and scale bar). Tests: `tests/render3d.test.js` (scale maths, the synchronous-capture contract, the render-vs-screenshot guards) and a real render check in `browser-smoke.js` that fails on a blank PNG or an unrestored shadow map/viewport.
 - Floors stack with pitch `P.wallH + 20`. Floor slabs follow the outer contour of walls and enclosed spaces (via `slabPolys` and `ExtrudeGeometry`) rather than axis-aligned bounding boxes, eliminating overhang on angled walls. Built once on entering 3D (and on theme change) — it does **not** live-update; leave 3D (`Esc` or `2B`) to edit.
 - Camera travel: `keys3D` tracks held keys (`W/A/S/D`, Arrow keys, `Q/E`, `Shift`) and `loop3D()` translates both `T3.cam.position` and `T3.ctl.target` along the horizontal XZ camera forward/right vectors (or Y for `Q/E`).
@@ -281,7 +311,9 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 - If CDN scripts fail, `show3D` shows a toast and stays in 2D.
 
 ### Export
-`exportSvg()` → `{svg,w,h}`; PNG rasterises that SVG via `Image` + canvas; PDF opens a print window (`window.open` + `print()`). Includes a title block (project, floor, date, total room area) and a 2 m scale bar. Background image is included only if its layer is visible.
+**Plot dialog (issue #35).** `#bPrint` → `exportPrint()` → `openPlotDialog()` (`ui.modal === 'plot'`, settings in `ui.plot`). `plotSheetSvg()` builds a sheet sized in **millimetres** (`width="297mm"`, viewBox in mm) from the same `layerStrings` as `exportSvg` under one transform: `calcPlotTransform(paper, scale, bounds, margin, center)` → `k` = mm per cm (`10 / N` for 1:N, or fit), plan size, origin and `overflow`. The plan is clipped to plan-rect ∩ printable area (`#plotclip`), with a frame, a title strip (project, floor, date, scale, paper) and a scale bar of `plotBarCm(k)` (≥ 25 mm). Areas: `all` (content + 60 cm), `view` (visible canvas) or `window` (`ui.plot.win`, picked with the transient `plotwin` tool: a `plotbox` drag that reopens the dialog). `plotPrint()` writes `@page { size: A3 landscape; margin: 0 }` and the mm-sized SVG, so the browser prints at true scale. Guard: `tests/plot-dialog.test.js` + a smoke check.
+
+`exportSvg()` → `{svg,w,h}`; PNG rasterises that SVG via `Image` + canvas; PDF goes through the plot dialog above (`plotPrint()`: `window.open` + `print()`). Includes a title block (project, floor, date, total room area) and a 2 m scale bar. Background image is included only if its layer is visible.
 
 ### MCP server (`mcp/server.js`)
 - **Optional tooling, not part of the app.** A zero-dependency Node (≥ 16) MCP server over stdio — JSON-RPC 2.0 is implemented by hand, so there is no `npm install` and no build. It lets AI agents (Claude Desktop, OpenCode, Cursor, …) author plans as JSON: `new_project`, `add_wall` / `add_rect_walls`, `add_opening`, `add_furniture`, `add_room`, `add_slab`, `add_void`, `add_text`, `update_object`, `delete_objects`, `add_floor`, `summarize`, `list_catalog`, `load_project` / `save_project` / `get_project` / `set_project`.
@@ -350,6 +382,14 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/snap-tracking.test.js` | object snap tracking: L→U closes exactly with/without angle lock, Shift disables it, guides reach the preview |
 | `tests/snap-mid-underlay.test.js` | midpoint / centre / group-centre snap, ends still winning, no self-snap while dragging, underlay reference-floor choice and snap, panel + glyph wiring |
 | `tests/slabs-voids.test.js` | free slabs / floor voids: which voids become holes (edge-touching stairwells too), data-model defaults, tools, 2D X notation, 3D extrusion + holes, MCP mirror |
+| `tests/mirror-scale.test.js` | mirror / flip / scale maths on the real functions: openings keep swinging inward, polygon winding kept, furniture backs, readable text, double mirror = identity, scale with/without wall thickness, `parseScale` formats, panel / menu / key wiring |
+| `tests/edit-3d.test.js` | 3D editing of walls and openings: opening groups carry `opId`, `opDragHit` maths (both wall directions), drag handlers ordered before OrbitControls, Alt / door toggle rules, plain-wall selection, highlight of walls and openings |
+| `tests/section-elevation.test.js` | section / elevation engine on the real functions: line-polygon intervals, void subtraction, section frame direction, cut walls / slabs / openings for a 2-floor building, near side dropped, elevation faces and window holes, tool / kind / 3D clip / facade camera / modal wiring |
+| `tests/drawing-layers.test.js` | custom drawing layers on the real functions: old projects stay unchanged, stamping rules, hidden / non-printing filter, lock / hide picking, and the 2D / 3D / export / selection wiring |
+| `tests/stairs.test.js` | parametric stairs on the real functions: legacy defaults, riser count / landings / final height for all four types, treads inside the footprint, Blondel rule, railing sides, 2D / 3D / panel wiring |
+| `tests/render-studio.test.js` | render studio: sun direction maths, the four styles and output sizes, material / ink / light swaps restored in `finally`, JPEG encoding, the 🎨 button and studio controls |
+| `tests/plot-dialog.test.js` | plot dialog: ISO paper sizes / orientation, mm-per-cm for 1:50 / 1:100 / 1:200 / fit, centring and overflow, scale-bar choice, the print → dialog → window-pick wiring |
+| `tests/wall-length.test.js` | numeric wall length on the real `applyWallLength`: direction kept, connected corners follow (or not), pivot end, openings kept in place / clamped, bad input rejected, and the label / keyboard / drag wiring |
 | `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |

@@ -422,6 +422,197 @@ check('slab tool draws a wall-less balcony, void tool cuts the slab in 3D (issue
   return info.balcony !== undefined ? 'slab + void drawn, 3D slab 20 cm, hole cut, sofa on balcony' : 'slab + void drawn (3D unavailable)';
 });
 
+check('3D: walls and windows are selectable, a window drags along its wall (issue #29)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400);
+    const f = F(); f.ops.push(mkOp(OPDEF.window, f.walls[0], 300)); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { skipped: true };
+    set3DCam('fit'); await new Promise(r => setTimeout(r, 150));
+    const cnv = T3.r.domElement, rect = cnv.getBoundingClientRect();
+    const scr = obj => { const c = new THREE.Box3().setFromObject(obj).getCenter(new THREE.Vector3()).project(T3.cam); return { x: rect.left + (c.x + 1) / 2 * rect.width, y: rect.top + (1 - c.y) / 2 * rect.height }; };
+    const opG = id => { let r = null; T3.scene.traverse(o => { if (o.userData && o.userData.opId === id) r = o; }); return r; };
+    const ev = (el, t, p) => el.dispatchEvent(new PointerEvent(t, { clientX: p.x, clientY: p.y, bubbles: true, button: 0, pointerId: 1 }));
+    const win = f.ops[0], out = { grouped: !!opG(win.id) };
+    let p = scr(opG(win.id)); ev(cnv, 'pointerdown', p); ev(cnv, 'pointerup', p);
+    out.winSel = sel.join() === win.id; out.hl = h3.length;
+    const h0 = hi; p = scr(opG(win.id)); ev(cnv, 'pointerdown', p);
+    for (let i = 1; i <= 5; i++) ev(window, 'pointermove', { x: p.x + i * 12, y: p.y });
+    ev(window, 'pointerup', { x: p.x + 60, y: p.y });
+    out.moved = win.d !== 300; out.committed = hi === h0 + 1;
+    await new Promise(r => setTimeout(r, 150));
+    const wg = T3.scene.children.find(c => c.userData && c.userData.wallId === f.walls[1].id && !c.isMesh);
+    p = scr(wg); ev(cnv, 'pointerdown', p); ev(cnv, 'pointerup', p);
+    out.wallSel = sel.join() === f.walls[1].id; out.panel = !!document.querySelector('#props [data-k="wall"][data-p="h"]');
+    show3D(false); sel = []; refresh();
+    return out;
+  })()`);
+  if (info.skipped) return '3D unavailable';
+  if (!info.grouped) throw new Error('the window has no opId group in 3D');
+  if (!info.winSel || !info.hl) throw new Error('clicking a window in 3D did not select + highlight it: ' + JSON.stringify(info));
+  if (!info.moved || !info.committed) throw new Error('dragging a window in 3D did not move it along the wall (or did not commit): ' + JSON.stringify(info));
+  if (!info.wallSel || !info.panel) throw new Error('clicking a plain wall in 3D did not select it: ' + JSON.stringify(info));
+  return 'window select + highlight, wall-constrained drag committed, plain wall selected';
+});
+
+check('section tool, 2D section / elevation drawings and the 3D cutaway (issues #30, #31)', async page => {
+  const info = await page.evaluate(`(async () => {
+    const p = newProject(); p.floors.push(newFloor('1')); loadProject(p);
+    fi = 0; addRectWalls(0, 0, 800, 500); F().ops.push(mkOp(OPDEF.window, F().walls[0], 200));
+    fi = 1; addRectWalls(0, 0, 800, 500); fi = 0; commit(); view.z = 0.5; view.x = 100; view.y = 50; sel = []; refresh();
+    const r = cv.getBoundingClientRect();
+    const at = (q, type) => { const s = w2s(q); cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 })); };
+    setTool('section');
+    for (const q of [{ x: -100, y: 250 }, { x: 900, y: 250 }]) { at(q, 'pointermove'); at(q, 'pointerdown'); at(q, 'pointerup'); }
+    const sec = F().sections[0], out = { sec: !!sec, name: sec && sec.name, drawn2d: sec ? document.querySelectorAll('#gDims [data-id="' + sec.id + '"]').length : 0 };
+    if (!sec) return out;
+    document.querySelector('#props [data-act="secdraw"]').click();
+    const svg = document.querySelector('#modal .archview svg');
+    out.modal = ui.modal; out.sectionSvg = !!svg; out.cutRects = svg ? svg.querySelectorAll('rect').length : 0; out.levels = svg ? /±0\\.00/.test(svg.textContent) && /\\+2\\.90/.test(svg.textContent) : false;
+    document.querySelector('#modal [data-arch="elev:north"]').click();
+    out.elev = !!document.querySelector('#modal .archview svg') && ui.archDraw && /North|Kuzey/.test(ui.archDraw.title);
+    closeModal(); sel = [sec.id]; refresh();
+    document.querySelector('#props [data-act="sec3d"]').click(); await new Promise(r => setTimeout(r, 150));
+    out.clip = ui.view3d ? T3.r.clippingPlanes.length : -1;
+    if (ui.view3d) { set3DCam('south'); out.camSouth = T3.cam.position.z > T3.ctl.target.z; ui.secCut = null; applySecClip(); out.unclip = T3.r.clippingPlanes.length; show3D(false); }
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.sec || info.name !== 'A' || info.drawn2d !== 1) throw new Error('the section tool did not create section A on the plan: ' + JSON.stringify(info));
+  if (info.modal !== 'arch' || !info.sectionSvg || info.cutRects < 6 || !info.levels) throw new Error('the 2D section drawing is missing parts: ' + JSON.stringify(info));
+  if (!info.elev) throw new Error('the north elevation did not render');
+  if (info.clip !== -1 && (info.clip !== 1 || info.unclip !== 0 || !info.camSouth)) throw new Error('3D cutaway / facade camera broken: ' + JSON.stringify(info));
+  return info.clip === -1 ? 'section + drawings (3D unavailable)' : 'section A drawn, section + elevation sheets, 3D cutaway on/off, south facade camera';
+});
+
+check('drawing layers: active layer stamps, hide removes from 2D/3D/export, lock blocks selection (issue #32)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); sel = []; refresh();
+    const out = { legacy: !JSON.stringify(P.floors).includes('"layer"') };
+    document.querySelector('#props [data-act="lyradd"]').click();
+    const L1 = P.layers[1] && P.layers[1].id; out.added = !!L1 && P.activeLayer === L1;
+    F().furn.push(mkFurn(BYID.sofa3, 300, 200)); commit(); const sofa = F().furn[0];
+    out.stamped = sofa.layer === L1 && F().walls.every(w => w.layer === '0');
+    document.querySelector('#props [data-act="lyrvis"][data-lid="' + L1 + '"]').click();
+    out.hidden2D = !document.querySelector('#gFurn [data-id="' + sofa.id + '"]');
+    out.hiddenExport = !exportSvg().svg.includes('translate(300 200)');
+    document.getElementById('b3d').click();
+    if (ui.view3d) { out.hidden3D = !T3.scene.children.some(c => c.userData && c.userData.furnId === sofa.id); show3D(false); }
+    document.querySelector('#props [data-act="lyrvis"][data-lid="' + L1 + '"]').click();
+    document.querySelector('#props [data-act="lyrlock"][data-lid="' + L1 + '"]').click();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true }));
+    out.lockSkipsCtrlA = sel.length === 4 && !sel.includes(sofa.id);
+    sel = [sofa.id]; deleteSel(); out.lockSurvivesDelete = F().furn.length === 1;
+    out.footer = document.getElementById('sLayer').options.length;
+    sel = []; refresh();
+    return out;
+  })()`);
+  for (const k of ['legacy', 'added', 'stamped', 'hidden2D', 'hiddenExport', 'lockSkipsCtrlA', 'lockSurvivesDelete']) if (!info[k]) throw new Error('layers: ' + k + ' failed: ' + JSON.stringify(info));
+  if (info.hidden3D === false) throw new Error('a hidden layer still shows in 3D');
+  if (info.footer !== 2) throw new Error('the footer layer selector is out of sync: ' + info.footer);
+  return 'stamp, hide (2D/3D/export), lock (Ctrl+A, Delete), footer selector';
+});
+
+check('parametric stairs: 2D and 3D draw the same treads for every type (issue #33)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    ['straight', 'l', 'u', 'spiral'].forEach((t, i) => { const s = mkFurn(BYID.stairs, 150 + i * 300, 200, 0); s.stairType = t; s.w = t === 'straight' ? 100 : t === 'spiral' ? 200 : 220; s.d = t === 'spiral' ? 200 : t === 'straight' ? 300 : 260; F().furn.push(s); });
+    commit(); sel = []; refresh();
+    const out = { types: F().furn.map(s => { const st = stairSteps(s), g = document.querySelector('#gFurn [data-id="' + s.id + '"]'); return { t: s.stairType, n: st.n, poly: g ? g.querySelectorAll('polygon').length : -1, top: Math.round(st.steps[st.steps.length - 1].z) }; }) };
+    sel = [F().furn[0].id]; refresh();
+    out.panel = !!document.querySelector('#props [data-p="stepN"]') && !!document.querySelector('#props [data-act="stairfit"]');
+    document.getElementById('b3d').click();
+    if (ui.view3d) { out.built = T3.scene.children.filter(c => c.userData && c.userData.furnId).length; show3D(false); }
+    sel = []; refresh();
+    return out;
+  })()`);
+  for (const t of info.types) if (t.poly !== t.n || t.top !== 270) throw new Error('stairs ' + t.t + ': 2D treads ' + t.poly + ' vs ' + t.n + ' risers, top ' + t.top);
+  if (!info.panel) throw new Error('the stairs panel has no step count / storey-height controls');
+  if (info.built !== undefined && info.built !== 4) throw new Error('not every stair type built in 3D: ' + info.built);
+  return info.types.map(t => t.t + ' ' + t.n).join(', ') + (info.built ? ' · 3D built' : '');
+});
+
+check('render studio: every style renders and restores the scene (issue #34)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); F().ops.push(mkOp(OPDEF.window, F().walls[0], 300)); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { skipped: true };
+    document.getElementById('b3dStudio').click();
+    const out = { modal: ui.modal, styles: document.querySelectorAll('#modal [data-rs-style]').length, sizes: {} };
+    closeModal();
+    const dl = shadowLights(T3.scene)[0], pos0 = dl.position.clone();
+    for (const st of ['realistic', 'technical', 'sketch', 'clay']) {
+      const url = await render3DHQ({ style: st, sun: { az: 255, alt: 12 }, longSide: 480, supersample: 1, frames: 1, format: st === 'clay' ? 'jpeg' : 'png' });
+      out.sizes[st] = url ? url.slice(0, 15) + ':' + url.length : '';
+    }
+    out.lightBack = dl.position.distanceTo(pos0) < 0.01 && dl.color.getHex() !== 0xffc58a;
+    let left = 0; T3.scene.traverse(o => { if (o.isMesh && o.material && o.material.color && o.material.color.getHex() === 0xefe9df) left++; });
+    out.matsBack = left === 0;
+    show3D(false);
+    return out;
+  })()`);
+  if (info.skipped) return '3D unavailable';
+  if (info.modal !== 'studio' || info.styles !== 4) throw new Error('the render studio did not open with 4 styles: ' + JSON.stringify(info));
+  for (const [k, v] of Object.entries(info.sizes)) if (!v || +v.split(':')[1] < 1000) throw new Error('style ' + k + ' rendered nothing: ' + v);
+  if (!/^data:image\/jpeg/.test(info.sizes.clay)) throw new Error('JPEG format ignored: ' + info.sizes.clay);
+  if (!info.lightBack || !info.matsBack) throw new Error('the studio left the scene modified: ' + JSON.stringify(info));
+  return '4 styles rendered, JPEG honoured, light + materials restored';
+});
+
+check('print opens the plot dialog: paper, true scale, overflow warning, window area (issue #35)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); addRectWalls(0, 0, 1200, 800); commit(); view.z = 0.4; view.x = 80; view.y = 60; sel = []; refresh();
+    Object.assign(ui.plot, { paper: 'a4', orient: 'landscape', scale: '100', area: 'all', center: true, margin: 10, win: null });
+    document.getElementById('bPrint').click();
+    const out = { modal: ui.modal, preview: !!document.querySelector('#modal svg') };
+    const sh = plotSheetSvg(); out.k = sh.t.k; out.mm = /width="297mm" height="210mm"/.test(sh.svg); out.fits = !sh.t.overflow;
+    const s = document.querySelector('#modal [data-plot="scale"]'); s.value = '50'; s.dispatchEvent(new Event('change', { bubbles: true }));
+    out.warn = /does not fit|sığmıyor/.test(document.getElementById('modal').textContent);
+    document.querySelector('#modal [data-plot-act="win"]').click(); out.tool = tool;
+    const r = cv.getBoundingClientRect(), at = (q, t) => { const p = w2s(q); cv.dispatchEvent(new PointerEvent(t, { clientX: r.left + p.x, clientY: r.top + p.y, bubbles: true, pointerId: 1, button: 0 })); };
+    at({ x: 0, y: 0 }, 'pointerdown'); at({ x: 600, y: 400 }, 'pointermove'); at({ x: 600, y: 400 }, 'pointerup');
+    out.win = ui.plot.area === 'window' && ui.plot.win && ui.plot.win.x1 === 600; out.back = ui.modal;
+    closeModal(); Object.assign(ui.plot, { scale: '100', area: 'all', win: null });
+    return out;
+  })()`);
+  if (info.modal !== 'plot' || !info.preview) throw new Error('#bPrint did not open the plot dialog: ' + JSON.stringify(info));
+  if (info.k !== 0.1 || !info.mm || !info.fits) throw new Error('1:100 on A4 is not 0.1 mm/cm on a 297×210 mm sheet: ' + JSON.stringify(info));
+  if (!info.warn) throw new Error('no overflow warning at 1:50 on A4');
+  if (info.tool !== 'plotwin' || !info.win || info.back !== 'plot') throw new Error('window picking broken: ' + JSON.stringify(info));
+  return 'dialog, 1:100 = 0.1 mm/cm on A4, overflow warning, window picked';
+});
+
+check('numeric wall length: typed on a selected wall, inline label, typed during an end drag (issue #36)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); const f = F(); f.ops.push(mkOp(OPDEF.window, f.walls[0], 450)); commit();
+    view.z = 0.6; view.x = 120; view.y = 120; sel = []; refresh();
+    const key = k => window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })), out = {};
+    sel = [f.walls[0].id]; refresh(); ['8', '0', '0', 'Enter'].forEach(key);
+    out.typed = wLen(F().walls[0]) === 800 && F().walls[1].a.x === 800 && F().ops[0].d === 450;
+    undo(); sel = []; refresh();
+    const lw = F().walls[3], lbl = document.querySelector('[data-wdim="' + lw.id + '"]');
+    if (lbl) { const r = lbl.getBoundingClientRect(); lbl.dispatchEvent(new PointerEvent('pointerdown', { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, button: 0, pointerId: 1 })); }
+    const inp = document.getElementById('wdimInput'); out.inline = !!inp;
+    if (inp) { inp.value = '350'; inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }
+    out.inlineLen = Math.round(wLen(F().walls[3])); out.joined = F().walls[0].a.y === F().walls[3].b.y;
+    undo(); const rw = F().walls[1]; sel = [rw.id]; refresh();
+    const hb = document.querySelector('[data-h="wb"]'), hr = hb.getBoundingClientRect(), p = { x: hr.left + hr.width / 2, y: hr.top + hr.height / 2 };
+    hb.dispatchEvent(new PointerEvent('pointerdown', { clientX: p.x, clientY: p.y, bubbles: true, button: 0, pointerId: 1 }));
+    cv.dispatchEvent(new PointerEvent('pointermove', { clientX: p.x, clientY: p.y + 40, bubbles: true, pointerId: 1 }));
+    ['2', '5', '0'].forEach(key);
+    cv.dispatchEvent(new PointerEvent('pointerup', { clientX: p.x, clientY: p.y + 40, bubbles: true, button: 0, pointerId: 1 }));
+    out.drag = Math.round(wLen(F().walls[1]));
+    out.export = !exportSvg().svg.includes('data-wdim');
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.typed) throw new Error('typing 800 + Enter on a selected wall did not resize it with its corner / window: ' + JSON.stringify(info));
+  if (!info.inline || info.inlineLen !== 350 || !info.joined) throw new Error('the clickable length label did not edit the wall: ' + JSON.stringify(info));
+  if (info.drag !== 250) throw new Error('typing during an end drag did not lock the length: ' + info.drag);
+  if (!info.export) throw new Error('exports carry the interactive length labels');
+  return 'typed 800, inline 350 (corner joined), drag-typed 250, export clean';
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');

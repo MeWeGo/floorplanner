@@ -107,11 +107,13 @@ const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, 
 // Kat izdüşümü (issue #26): hangi kat altlık olarak gösterilir ('prev' = bir alt kat) ve opaklığı — görünüm ayarı, projeye kaydedilmez
 const underlay = { floor: 'prev', op: 0.2 };
 
-const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null });
+const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null });
 const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
 const F = () => P.floors[fi];
-const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', dims: 'dim', texts: 'text', sketches: 'sketch' };
+const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', dims: 'dim', texts: 'text', sketches: 'sketch' };
 // Köşe listesiyle (pts) tanımlanan türler; POLY_KINDS kapalı poligonlar (köşe/kenar tutamaçları)
+// a/b uçlu çizgi türleri: duvar, ölçü, kesit çizgisi (#30) — taşı/döndür/aynala/ölçekle bunları birlikte işler
+const AB_KINDS = new Set(['wall', 'dim', 'section']);
 const PTS_KINDS = new Set(['room', 'sketch', 'slab', 'void']), POLY_KINDS = new Set(['room', 'slab', 'void']);
 // Döşeme boşluğu türleri (issue #23)
 const VOID_TYPES = { stair: ['Merdiven boşluğu', 'Stairwell'], shaft: ['Şaft', 'Shaft'], atrium: ['Galeri boşluğu', 'Atrium / void'] };
@@ -247,7 +249,7 @@ function furnCorners(f) {
 }
 function bboxOf(kind, o) {
   let pts;
-  if (kind === 'wall' || kind === 'dim') pts = [o.a, o.b];
+  if (AB_KINDS.has(kind)) pts = [o.a, o.b];
   else if (kind === 'furn') pts = furnCorners(o);
   else if (PTS_KINDS.has(kind)) pts = o.pts;
   else if (kind === 'op') { const p = opPos(o); pts = p ? [p] : []; }
@@ -275,7 +277,7 @@ function rotateSelection(deg, os = selObjs(), bb = selectionBounds(os), origAll 
   let changed = false;
   for (const { kind, o } of os) {
     const g = origAll?.get(o.id) || o;
-    if (kind === 'wall' || kind === 'dim') {
+    if (AB_KINDS.has(kind)) {
       o.a = rotatePoint(g.a, c, rad); o.b = rotatePoint(g.b, c, rad);
       if (kind === 'wall' && Array.isArray(g.angles) && g.angles.length) o.angles = g.angles.map(a => Math.round((((a + deg) % 360) + 360) % 360 * 10) / 10);
       changed = true;
@@ -287,6 +289,106 @@ function rotateSelection(deg, os = selObjs(), bb = selectionBounds(os), origAll 
     }
   }
   return changed;
+}
+// Aynalama (issue #28): p'yi o noktasından geçen, u birim yönlü eksene göre yansıt
+function reflectPoint(p, o, u) {
+  const dx = p.x - o.x, dy = p.y - o.y, t = dx * u.x + dy * u.y;
+  return { x: Math.round((o.x + 2 * t * u.x - dx) * 100) / 100, y: Math.round((o.y + 2 * t * u.y - dy) * 100) / 100 };
+}
+const normDeg = a => Math.round(((a % 360) + 360) % 360 * 10) / 10;
+// Seçimi eksene göre yansıt. Duvar a/b yansır (d aynı kalır), kapı/pencere açılma yönü (side) ters döner;
+// mobilyanın sırtı aynı duvara bakmaya devam eder; poligonların sarım yönü korunur; metin okunur kalır.
+function mirrorObjs(os, o, u, opsOf = w => F().ops.filter(op => op.wall === w.id)) {
+  const ax = Math.atan2(u.y, u.x) * 180 / Math.PI, R = p => reflectPoint(p, o, u);
+  let changed = false;
+  for (const { kind, o: m } of os) {
+    if (AB_KINDS.has(kind)) {
+      m.a = R(m.a); m.b = R(m.b);
+      if (kind === 'dim') m.off = -(m.off || 0);
+      else if (kind === 'section') m.dir = -(m.dir || 1); // yansıyan çizgi ters döner: bakış yönü de yansısın
+      else {
+        if (Array.isArray(m.angles) && m.angles.length) m.angles = m.angles.map(a => normDeg(2 * ax - a));
+        for (const op of opsOf(m)) op.side = -(op.side || 1);
+      }
+    } else if (PTS_KINDS.has(kind)) m.pts = m.pts.map(R).reverse();
+    else if (kind === 'furn') {
+      const p = R(m); m.x = p.x; m.y = p.y; m.rot = normDeg(2 * ax - (m.rot || 0) + 180);
+      if (m.k === 'poly' && Array.isArray(m.pts)) m.pts = m.pts.map(q => ({ x: -q.x, y: q.y })).reverse();
+    } else if (kind === 'text') {
+      const p = R(m); m.x = p.x; m.y = p.y;
+      let r = normDeg(2 * ax - (m.rot || 0)); if (r > 90 && r < 270) r = normDeg(r + 180); m.rot = r;
+    } else continue;
+    changed = true;
+  }
+  return changed;
+}
+// Ölçekleme (#28 ve çoklu seçim tutamaçları g0..g3): orig(id) = başlangıç kopyası, tx/ty = nokta dönüşümü
+function scaleObjs(os, orig, tx, ty, sx, sy, scaleT = false) {
+  for (const { kind, o: mo } of os) {
+    const g = orig(mo.id); if (!g) continue;
+    if (AB_KINDS.has(kind)) {
+      mo.a = { x: tx(g.a.x), y: ty(g.a.y) }; mo.b = { x: tx(g.b.x), y: ty(g.b.y) };
+      if (kind === 'wall') {
+        if (scaleT && g.t) mo.t = clamp(Math.round(g.t * Math.sqrt(sx * sy)), 3, 200);
+        // menteşeli duvar: açı ön ayarlarını yeni yönelime göre kaydır (eski preset'e sıçramasın)
+        if (Array.isArray(g.angles) && g.angles.length) {
+          const od = Math.atan2(g.b.y - g.a.y, g.b.x - g.a.x) * 180 / Math.PI, nd = Math.atan2(mo.b.y - mo.a.y, mo.b.x - mo.a.x) * 180 / Math.PI;
+          const diff = Math.round((nd - od) * 10) / 10;
+          if (Math.abs(diff) > 0.05) mo.angles = g.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
+        }
+        // duvara bağlı kapı/pencereler de ölçeklensin: merkez noktayı ölçekle, yeni duvara projekte et
+        const L0 = dist(g.a, g.b) || 1, L1 = wLen(mo) || 1, ux = (mo.b.x - mo.a.x) / L1, uy = (mo.b.y - mo.a.y) / L1;
+        for (const o2 of F().ops.filter(op => op.wall === mo.id)) {
+          const og = orig(o2.id) || o2, t0 = clamp(og.d / L0, 0, 1), px = tx(g.a.x + (g.b.x - g.a.x) * t0), py = ty(g.a.y + (g.b.y - g.a.y) * t0);
+          const pr = clamp(((px - mo.a.x) * ux + (py - mo.a.y) * uy) / L1, 0, 1);
+          o2.d = clamp(pr * L1, Math.min(o2.w / 2, L1 / 2), Math.max(L1 - o2.w / 2, L1 / 2));
+        }
+      }
+    }
+    else if (PTS_KINDS.has(kind)) mo.pts = g.pts.map(q => ({ x: tx(q.x), y: ty(q.y) }));
+    else if (kind === 'furn') {
+      mo.x = tx(g.x); mo.y = ty(g.y);
+      const rot = ((g.rot || 0) % 180 + 180) % 180, swap = rot >= 45 && rot < 135;
+      mo.w = Math.max(10, Math.round(g.w * (swap ? sy : sx)));
+      mo.d = Math.max(10, Math.round(g.d * (swap ? sx : sy)));
+      if (g.k === 'poly' && g.pts) mo.pts = g.pts.map(p => ({ x: Math.round(p.x * (mo.w / g.w) * 10) / 10, y: Math.round(p.y * (mo.d / g.d) * 10) / 10 }));
+    } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
+    else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
+  }
+}
+// Seçimi bbox merkezine göre s katı ölçekle; duvar kalınlığı varsayılan olarak korunur
+function scaleSelection(sc, scaleT = false, os = selObjs()) {
+  const bb = selectionBounds(os); if (!bb || !(sc > 0)) return false;
+  const c = { x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2 }, snap = new Map();
+  for (const { o } of os) snap.set(o.id, JSON.parse(JSON.stringify(o)));
+  for (const op of F().ops) if (!snap.has(op.id)) snap.set(op.id, { d: op.d });
+  const tx = x => Math.round((c.x + (x - c.x) * sc) * 10) / 10, ty = y => Math.round((c.y + (y - c.y) * sc) * 10) / 10;
+  scaleObjs(os, id => snap.get(id), tx, ty, sc, sc, scaleT);
+  return true;
+}
+const XFORM_KINDS = new Set(['wall', 'dim', 'furn', 'text', 'room', 'slab', 'void', 'sketch']);
+function afterXform() { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+function flipSel(dir) {
+  const os = selObjs().filter(x => XFORM_KINDS.has(x.kind)), bb = selectionBounds(os); if (!bb) return;
+  const c = { x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2 };
+  if (mirrorObjs(os, c, dir === 'h' ? { x: 0, y: 1 } : { x: 1, y: 0 })) afterXform();
+}
+// "1.5", "150%", "=450" (seçim genişliği 450 cm olsun) veya "300:450" (referans uzunluk → hedef uzunluk)
+function parseScale(str, width) {
+  const t = String(str || '').trim().replace(',', '.'); let m;
+  if ((m = t.match(/^=\s*([\d.]+)$/))) return width > 0 ? parseFloat(m[1]) / width : NaN;
+  if ((m = t.match(/^([\d.]+)\s*:\s*([\d.]+)$/))) return parseFloat(m[2]) / parseFloat(m[1]);
+  if ((m = t.match(/^([\d.]+)\s*%$/))) return parseFloat(m[1]) / 100;
+  return parseFloat(t);
+}
+function scaleSelPrompt() {
+  const os = selObjs().filter(x => XFORM_KINDS.has(x.kind) || x.kind === 'bg'), bb = selectionBounds(os); if (!bb) return;
+  const v = prompt(L('Ölçek: çarpan (1.5 / 150%), hedef genişlik (=450 cm) veya referans:hedef (300:450)', 'Scale: factor (1.5 / 150%), target width (=450 cm) or reference:target (300:450)'), '1.5');
+  if (v == null) return;
+  const sc = parseScale(v, bb.x1 - bb.x0);
+  if (!(sc > 0.01 && sc < 100) || Math.abs(sc - 1) < 1e-6) { if (!(sc > 0.01 && sc < 100)) toast(L('Geçersiz ölçek', 'Invalid scale')); return; }
+  const scaleT = os.some(x => x.kind === 'wall') && confirm(L('Duvar kalınlıkları da ölçeklensin mi? (İptal = kalınlık korunur)', 'Scale wall thickness too? (Cancel = keep thickness)'));
+  if (scaleSelection(sc, scaleT, os)) { afterXform(); toast(L('Ölçeklendi ×', 'Scaled ×') + Math.round(sc * 1000) / 1000); }
 }
 function contentBounds(f = F()) {
   let b = null;
@@ -375,6 +477,7 @@ async function migrateLegacyStorage() {
 let saveTimer = null;
 function commit() {
   if (typeof syncActiveVars === 'function') syncActiveVars();
+  stampLayers(); // yeni nesneler etkin katmana (#32)
   const s = JSON.stringify(P);
   if (hist[hi] === s) return;
   hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 150) hist.shift();
@@ -416,11 +519,87 @@ function restore(s) {
 function undo() { if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
 function redo() { if (hi < hist.length - 1) { hi++; restore(hist[hi]); autosave(); updateUndo(); } }
 function updateUndo() { $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = hi >= hist.length - 1; }
+/* ---------- Çizim katmanları (issue #32) ----------
+   P.layers = [{ id, name, color, vis, lock, print }], P.activeLayer = id. '0' = Varsayılan katman, silinemez.
+   Nesnede layer alanı yoksa '0' sayılır (eski projeler değişmeden açılır). commit() etkin katman '0' değilse
+   katmansız (= yeni) nesneleri etkin katmana damgalar; ilk özel katman eklenirken mevcut nesneler önce '0'a yazılır. */
+const LAYER_COLS = ['#64748b', '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777'];
+const defaultLayer = () => ({ id: '0', name: L('Varsayılan', 'Default'), color: '#64748b', vis: true, lock: false, print: true });
+const layerById = id => (P.layers || []).find(l => l.id === (id || '0'));
+// Gizli (veya baskıda çıkmayan) katmanlardaki nesneler olmadan katın sığ kopyası; hepsi görünürse kat aynen döner
+function visFloor(f, print = false) {
+  if (!P.layers || P.layers.length < 2) return f;
+  const hide = new Set(P.layers.filter(l => !l.vis || (print && l.print === false)).map(l => l.id));
+  if (!hide.size) return f;
+  const ok = o => !hide.has(o.layer || '0'), g = Object.assign({}, f);
+  for (const k in KINDS) g[k] = (f[k] || []).filter(ok);
+  const wl = new Set(g.walls.map(w => w.id)); g.ops = g.ops.filter(o => wl.has(o.wall));
+  return g;
+}
+// Seçilebilir mi: gizli ve kilitli katmanlardaki nesneler tıklanamaz, kutuyla seçilemez, silinemez
+function pickable(id) {
+  const fd = find(id); if (!fd) return true;
+  const l = layerById(fd.o.layer); return !l || (l.vis && !l.lock);
+}
+function stampLayers(all = false) {
+  const act = all ? '0' : (P.activeLayer || '0'); if (act === '0' && !all) return;
+  for (const f of P.floors) for (const k in KINDS) for (const o of f[k] || []) if (!o.layer) o.layer = act;
+}
+function syncLayerUI() {
+  const s = $('#sLayer'); if (!s || !P) return;
+  s.innerHTML = (P.layers || [defaultLayer()]).map(l => `<option value="${esc(l.id)}">${l.vis ? '' : '🚫 '}${l.lock ? '🔒 ' : ''}${esc(l.name)}</option>`).join('');
+  s.value = P.activeLayer || '0';
+}
+function layersPanelHtml() {
+  let h = `<h4>${L('Çizim katmanları', 'Drawing layers')}</h4>`;
+  for (const l of P.layers) {
+    const lid = esc(l.id), on = (P.activeLayer || '0') === l.id;
+    h += `<div class="row lyr" style="gap:4px;align-items:center;margin:2px 0;flex-wrap:nowrap">`
+      + `<input type="radio" name="actlayer" data-k="lyr" data-p="active" data-lid="${lid}" ${on ? 'checked' : ''} title="${L('Etkin katman (yeni nesneler buraya)', 'Active layer (new objects go here)')}">`
+      + `<input type="color" data-k="lyr" data-p="color" data-lid="${lid}" value="${esc(l.color || '#64748b')}" style="width:22px;height:22px;padding:0;border:0;flex:none">`
+      + `<input type="text" data-k="lyr" data-p="name" data-lid="${lid}" value="${esc(l.name)}" style="flex:1;min-width:0">`
+      + `<button class="btn sm" data-act="lyrvis" data-lid="${lid}" title="${L('Göster / gizle (2B, 3B, çıktı)', 'Show / hide (2D, 3D, export)')}">${l.vis ? '👁' : '🚫'}</button>`
+      + `<button class="btn sm" data-act="lyrlock" data-lid="${lid}" title="${L('Kilitle (seçilemez, silinemez)', 'Lock (cannot be selected or deleted)')}">${l.lock ? '🔒' : '🔓'}</button>`
+      + `<button class="btn sm" data-act="lyrprint" data-lid="${lid}" title="${L('Çıktıya dahil (PNG / SVG / PDF)', 'Include in exports (PNG / SVG / PDF)')}">${l.print === false ? '⛔' : '🖨'}</button>`
+      + (l.id === '0' ? '' : `<button class="btn sm" data-act="lyrdel" data-lid="${lid}" style="color:var(--danger)" title="${L('Katmanı sil (nesneler Varsayılan katmana geçer)', 'Delete layer (objects move to Default)')}">🗑</button>`)
+      + `</div>`;
+  }
+  return h + `<div class="row"><button class="btn sm" data-act="lyradd">${L('＋ Katman ekle', '＋ Add layer')}</button></div>`;
+}
+// Seçim panelinde "Katman" listesi (yalnızca birden fazla katman varken)
+function selLayerHtml(os) {
+  if (!P.layers || P.layers.length < 2 || !os.length) return '';
+  const cur = new Set(os.map(x => x.o.layer || '0')), one = cur.size === 1 ? [...cur][0] : '';
+  return `<label class="f"><span>${L('Katman', 'Layer')}</span><select data-k="sellayer" data-p="layer">${one ? '' : `<option value="" selected>${L('(karışık)', '(mixed)')}</option>`}${P.layers.map(l => `<option value="${esc(l.id)}" ${one === l.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>`;
+}
+function layerAct(a, lid) {
+  const l = layerById(lid);
+  if (a === 'lyradd') {
+    stampLayers(true); // mevcut katmansız nesneler Varsayılan'da kalsın
+    const id = uid(); P.layers.push({ id, name: L('Katman ', 'Layer ') + P.layers.length, color: LAYER_COLS[P.layers.length % LAYER_COLS.length], vis: true, lock: false, print: true });
+    P.activeLayer = id;
+  } else if (!l) return;
+  else if (a === 'lyrvis') l.vis = !l.vis;
+  else if (a === 'lyrlock') l.lock = !l.lock;
+  else if (a === 'lyrprint') l.print = l.print === false;
+  else if (a === 'lyrdel') {
+    if (l.id === '0' || !confirm(L(`“${l.name}” katmanı silinsin mi? Nesneleri Varsayılan katmana geçer.`, `Delete layer “${l.name}”? Its objects move to Default.`))) return;
+    for (const f of P.floors) for (const k in KINDS) for (const o of f[k] || []) if (o.layer === l.id) o.layer = '0';
+    P.layers = P.layers.filter(x => x !== l); if (P.activeLayer === l.id) P.activeLayer = '0';
+  }
+  sel = sel.filter(pickable);
+  commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+}
 function normalizeProject(P) {
   if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
   if (P.bg) P.bg.id = 'bg';
+  if (!Array.isArray(P.layers) || !P.layers.length) P.layers = [defaultLayer()];
+  if (!P.layers.some(l => l.id === '0')) P.layers.unshift(defaultLayer());
+  P.layers.forEach(l => { l.vis = l.vis !== false; l.lock = !!l.lock; l.print = l.print !== false; l.name = l.name || l.id; });
+  if (!P.layers.some(l => l.id === P.activeLayer)) P.activeLayer = '0';
+  if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid';
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; }
     for (const v of f.voids) if (!VOID_TYPES[v.type]) v.type = 'stair'; });
@@ -745,11 +924,12 @@ function jointsSvg(f) {
 }
 function wallDimSvg(w) {
   const L = wLen(w); if (L < 30) return '';
+  const hit = ui.exporting ? 'pointer-events="none"' : `data-wdim="${w.id}" style="cursor:text"`; // tıkla → uzunluğu yaz (#36)
   const C = pal();
   let ang = wAng(w) * 180 / Math.PI; const mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2;
   let flip = 1; if (ang > 90 || ang <= -90) { ang += 180; flip = -1; }
   const fs = clamp(13 / view.z, 9, 40), off = w.t / 2 + fs * 0.9;
-  return `<text transform="translate(${mx} ${my}) rotate(${ang}) translate(0 ${-off})" text-anchor="middle" font-size="${fs}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" pointer-events="none">${fmtLen(L)}</text>`;
+  return `<text transform="translate(${mx} ${my}) rotate(${ang}) translate(0 ${-off})" text-anchor="middle" font-size="${fs}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" ${hit}>${fmtLen(L)}</text>`;
 }
 function opSvg(op, live) {
   const p = opPos(op); if (!p) return '';
@@ -786,10 +966,14 @@ function furnBody(f) {
   if (f.k === 'round') s += `<ellipse rx="${hw}" ry="${hd}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
   else if (f.k === 'poly') s += `<polygon points="${(f.pts || []).map(p => p.x + ',' + p.y).join(' ')}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
   else if (f.k === 'stairs') {
-    s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
-    const n = Math.max(3, Math.round(f.d / 25)); let l = '';
-    for (let i = 1; i < n; i++) l += `M${-hw} ${-hd + f.d / n * i}H${hw}`;
-    s += `<path d="${l}" stroke="${sk}" stroke-width="1.2" fill="none"/><path d="M0 ${hd - 10}V${-hd + 14}M-8 ${-hd + 26}L0 ${-hd + 12}L8 ${-hd + 26}" stroke="${sk}" stroke-width="2" fill="none"/>`;
+    // parametrik merdiven (#33): 3B ile aynı basamak listesi; ok çıkış yönünü gösterir
+    const st = stairSteps(f), R = Math.min(f.w, f.d) / 2;
+    s += st.type === 'spiral' ? `<circle r="${R}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/><circle r="${R * 0.14}" fill="none" stroke="${sk}" stroke-width="1.5"/>`
+      : `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
+    s += st.steps.map(q => `<polygon points="${stepCorners(q).map(p => p.x + ',' + p.y).join(' ')}" fill="${q.landing ? sk : 'none'}" fill-opacity="${q.landing ? 0.08 : 0}" stroke="${sk}" stroke-width="1.1"/>`).join('');
+    const e = st.steps[st.steps.length - 1], b0 = st.steps[0], ux = e.dx, uy = e.dy;
+    s += `<polyline points="${st.steps.map(q => q.x + ',' + q.y).join(' ')}" fill="none" stroke="${sk}" stroke-width="1.8"/><circle cx="${b0.x}" cy="${b0.y}" r="3" fill="${sk}"/>`
+      + `<path d="M${e.x - ux * 10 - uy * 7} ${e.y - uy * 10 + ux * 7}L${e.x + ux * 4} ${e.y + uy * 4}L${e.x - ux * 10 + uy * 7} ${e.y - uy * 10 - ux * 7}" stroke="${sk}" stroke-width="2" fill="none"/>`;
   } else {
     s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" rx="${Math.min(6, hw / 3)}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
     if (f.k === 'bed') {
@@ -802,6 +986,65 @@ function furnBody(f) {
     }
   }
   return s;
+}
+/* ---------- Parametrik merdiven (issue #33) ----------
+   2B ve 3B aynı basamak listesini kullanır, böylece basamak sayısı her iki görünümde birebir aynıdır.
+   Alanlar (hepsi isteğe bağlı, eski merdivenler varsayılanla açılır): stepN (rıht sayısı), stairType
+   ('straight' | 'l' | 'u' | 'spiral'), railing ('none' | 'left' | 'right' | 'both', varsayılan 'right').
+   Yerel düzlem koordinatları (merkez 0,0; y aşağı); çıkış yönü düz merdivende −y (2B ok ile aynı). */
+const STAIR_TYPES = { straight: ['Düz', 'Straight'], l: ['L (sahanlıklı)', 'L-shaped (landing)'], u: ['U (sahanlıklı)', 'U-shaped (landing)'], spiral: ['Döner', 'Spiral'] };
+const STAIR_RAILS = { none: ['Yok', 'None'], left: ['Sol', 'Left'], right: ['Sağ', 'Right'], both: ['İki yan', 'Both sides'] };
+const stairN = o => clamp(Math.round(+o.stepN || o.h / 17.5) || 2, 2, 60);
+// → { n, riser, tread, steps: [{ x, y, w, d, a, z, dx, dy, across, run, flight, landing }] }
+function stairSteps(o) {
+  const n = stairN(o), r = o.h / n, W = o.w, D = o.d, type = STAIR_TYPES[o.stairType] ? o.stairType : 'straight', steps = [];
+  const push = (x, y, w, d, a, i, dx, dy, across, run, flight, landing = false) => steps.push({ x, y, w, d, a, z: r * (i + 1), dx, dy, across, run, flight, landing });
+  if (type === 'straight') {
+    const td = D / n;
+    for (let i = 0; i < n; i++) push(0, D / 2 - (i + 0.5) * td, W, td, 0, i, 0, -1, W, td, 0);
+  } else if (type === 'l') {
+    const fw = Math.min(W, D) / 2, L1 = D - fw, L2 = W - fw;
+    const n1 = clamp(Math.round((n - 1) * L1 / (L1 + L2)), 1, n - 2), n2 = n - 1 - n1, t1 = L1 / n1, t2 = L2 / n2;
+    for (let i = 0; i < n1; i++) push(-W / 2 + fw / 2, D / 2 - (i + 0.5) * t1, fw, t1, 0, i, 0, -1, fw, t1, 0);
+    push(-W / 2 + fw / 2, -D / 2 + fw / 2, fw, fw, 0, n1, 0, -1, fw, fw, 0, true);
+    for (let j = 0; j < n2; j++) push(-W / 2 + fw + (j + 0.5) * t2, -D / 2 + fw / 2, t2, fw, 0, n1 + 1 + j, 1, 0, fw, t2, 1);
+  } else if (type === 'u') {
+    const fw = W / 2, ld = Math.min(fw, D / 3), Lf = D - ld;
+    const n1 = Math.max(1, Math.floor((n - 1) / 2)), n2 = Math.max(1, n - 1 - n1), t1 = Lf / n1, t2 = Lf / n2;
+    for (let i = 0; i < n1; i++) push(-fw / 2, D / 2 - (i + 0.5) * t1, fw, t1, 0, i, 0, -1, fw, t1, 0);
+    push(0, -D / 2 + ld / 2, W, ld, 0, n1, 0, -1, W, ld, 0, true);
+    for (let j = 0; j < n2; j++) push(fw / 2, -D / 2 + ld + (j + 0.5) * t2, fw, t2, 0, n1 + 1 + j, 0, 1, fw, t2, 1);
+  } else {
+    // döner merdiven: 270° süpürme, orta direk; basamak = radyal kutu (kama yaklaşığı)
+    const R = Math.min(W, D) / 2, r0 = R * 0.14, rm = (R + r0) / 2, sweep = Math.PI * 1.5, da = sweep / n;
+    for (let i = 0; i < n; i++) {
+      const t = Math.PI / 2 - (i + 0.5) * da, cx = Math.cos(t) * rm, cy = Math.sin(t) * rm;
+      push(cx, cy, R - r0, 2 * rm * Math.sin(da / 2) * 1.08, t, i, Math.sin(t), -Math.cos(t), R - r0, 2 * (R * 0.66) * Math.sin(da / 2), 0);
+    }
+  }
+  const s0 = steps.find(s => !s.landing) || steps[0];
+  return { n, riser: r, tread: s0 ? s0.run : 0, type, steps };
+}
+// Blondel konfor kuralı: 2·rıht + basamak ≈ 63 cm (60–64 iyi)
+const blondel = (riser, tread) => { const v = 2 * riser + tread; return { v, ok: v >= 60 && v <= 64, warn: v >= 57 && v <= 67 }; };
+// Bir basamağın yerel köşeleri (döndürülmüş dikdörtgen)
+function stepCorners(s) {
+  const c = Math.cos(s.a), sn = Math.sin(s.a), hw = s.w / 2, hd = s.d / 2;
+  return [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([x, y]) => ({ x: s.x + x * c - y * sn, y: s.y + x * sn + y * c }));
+}
+// Korkuluk noktaları: her kolun her iki yanında, basamak üst kotu + 90 cm (yerel düzlem + z)
+function stairRails(o, st = stairSteps(o)) {
+  const side = o.railing || 'right', sides = side === 'none' ? [] : side === 'both' ? [-1, 1] : [side === 'left' ? -1 : 1], out = [];
+  for (const sg of sides) {
+    let cur = null;
+    for (const s of st.steps) {
+      if (s.landing) { cur = null; continue; }
+      const px = -s.dy * sg, py = s.dx * sg, off = s.across / 2 - 4; // yüzü çıkış yönüne dönük: sağ = (−dy, dx)
+      if (!cur || cur.flight !== s.flight) { cur = { flight: s.flight, pts: [] }; out.push(cur); }
+      cur.pts.push({ x: s.x + px * off, y: s.y + py * off, z: s.z });
+    }
+  }
+  return out.filter(r => r.pts.length >= 1);
 }
 function furnSvg(f, live) {
   const C = pal(), fs = Math.max(12, Math.min(f.w, f.d) * 0.42);
@@ -889,6 +1132,7 @@ function groupVarsSvg(f, live) {
   return s;
 }
 function layerStrings(f, live) {
+  f = visFloor(f, !live && ui.exporting); // gizli / baskıda çıkmayan katmanlar (#32)
   return {
     // döşemeler odaların altında, boşluklar oda dolgusunun üstünde (delik oda zeminini de keser)
     rooms: (f.slabs || []).map(s => slabSvg(s, live)).join('') + f.rooms.map(r => roomSvg(r, live)[0]).join('') + (f.voids || []).map(v => voidSvg(v, live)).join(''),
@@ -896,7 +1140,7 @@ function layerStrings(f, live) {
     walls: f.walls.map(w => wallSvg(w, live)).join('') + jointsSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
     ops: f.ops.map(o => opSvg(o, live)).join(''),
     furn: f.furn.map(x => furnSvg(x, live)).join(''),
-    dims: f.dims.map(d => dimSvg(d, live)).join(''),
+    dims: f.dims.map(d => dimSvg(d, live)).join('') + (f.sections || []).map(x => sectionSvg(x, live)).join(''),
     texts: f.texts.map(t => textSvg(t, live)).join(''),
     sketches: (f.sketches || []).map(s => sketchSvg(s, live)).join(''),
   };
@@ -915,7 +1159,7 @@ function handleSvg() {
     }
     if (POLY_KINDS.has(kind)) s += `<polygon points="${o.pts.map(p => p.x + ',' + p.y).join(' ')}" fill="#f59e0b" fill-opacity=".12" stroke="#f59e0b" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
     if (kind === 'op') { const p = opPos(o); if (p) s += `<g transform="translate(${p.x} ${p.y}) rotate(${p.ang})" pointer-events="none"><rect x="${-o.w / 2 - 3}" y="${-p.t / 2 - 5}" width="${o.w + 6}" height="${p.t + 10}" fill="#f59e0b" fill-opacity=".2" stroke="#f59e0b" stroke-width="${1.6 / z}"/></g>`; }
-    if (kind === 'dim') s += `<circle cx="${o.a.x}" cy="${o.a.y}" r="${hs}" fill="#f59e0b"/><circle cx="${o.b.x}" cy="${o.b.y}" r="${hs}" fill="#f59e0b"/>`;
+    if (kind === 'dim' || kind === 'section') s += `<circle cx="${o.a.x}" cy="${o.a.y}" r="${hs}" fill="#f59e0b"/><circle cx="${o.b.x}" cy="${o.b.y}" r="${hs}" fill="#f59e0b"/>`;
     if (kind === 'text') s += `<circle cx="${o.x}" cy="${o.y}" r="${hs}" fill="#f59e0b"/>`;
     if (kind === 'sketch' && o.pts && o.pts.length > 1) s += `<polyline points="${o.pts.map(p => p.x + ',' + p.y).join(' ')}" fill="none" stroke="#f59e0b" stroke-width="${(o.w || 4) + 4 / z}" stroke-linecap="round" stroke-linejoin="round" opacity=".45" pointer-events="none"/>`;
     if (kind === 'bg') s += `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="none" stroke="#f59e0b" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
@@ -936,6 +1180,7 @@ function handleSvg() {
       });
       o.pts.forEach((p, i) => s += hnd(p.x, p.y, 'v' + i, 'move'));
     }
+    if (kind === 'section') s += hnd(o.a.x, o.a.y, 'da', 'move') + hnd(o.b.x, o.b.y, 'db', 'move');
     if (kind === 'dim') {
       const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, off = o.off ?? 40;
       s += hnd(o.a.x, o.a.y, 'da', 'move') + hnd(o.b.x, o.b.y, 'db', 'move') + hnd((o.a.x + o.b.x) / 2 + nx * off, (o.a.y + o.b.y) / 2 + ny * off, 'doff', 'move', 'circle');
@@ -1004,8 +1249,8 @@ function snapToGrid(p) {
 function underlayFloor() {
   if (!layersVis.underlay || !P || P.floors.length < 2) return null;
   const f = underlay.floor !== 'prev' && P.floors.find(x => x.id === underlay.floor);
-  if (f && f !== F()) return f; // kendisi seçiliyse (başka katta seçilmiş) bir alt kata dön
-  return fi > 0 ? P.floors[fi - 1] : null;
+  if (f && f !== F()) return visFloor(f); // kendisi seçiliyse (başka katta seçilmiş) bir alt kata dön
+  return fi > 0 ? visFloor(P.floors[fi - 1]) : null;
 }
 const isStructFurn = o => o.k === 'stairs' || o.type === 'column' || o.type === 'colSq';
 // İzdüşüm: duvarlar (köşe dolgularıyla), döşeme/balkon sınırları, boşluklar, kolon ve merdivenler — silik, tıklanmaz
@@ -1160,13 +1405,55 @@ function deleteIds(ids) {
   f.walls = f.walls.filter(w => !s.has(w.id));
   const wl = new Set(f.walls.map(w => w.id));
   f.ops = f.ops.filter(o => !s.has(o.id) && wl.has(o.wall));
-  for (const k of ['furn', 'rooms', 'slabs', 'voids', 'dims', 'texts', 'sketches']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
+  for (const k of ['furn', 'rooms', 'slabs', 'voids', 'sections', 'dims', 'texts', 'sketches']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
   dropPoseOrphans(ids, true); // silinen nesnelerin (grup + oda) düzen kayıtlarındaki eski pozları temizlensin
   pruneGroups();
   sel = sel.filter(id => !s.has(id));
 }
-function deleteSel() { if (!sel.length) return; deleteIds(sel); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+function deleteSel() { if (!sel.length) return; deleteIds(sel.filter(pickable)); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
 
+/* ---------- Duvar uzunluğunu sayıyla değiştirme (issue #36) ----------
+   Serbest uç (menteşeli duvarda pim sabit kalır) duvarın kendi açısı boyunca taşınır; bitişik duvar uçları
+   (ui.connWalls) birlikte gelir, böylece köşeler açılmaz; kapı/pencereler yerinde kalır ve yeni boya sığdırılır. */
+function applyWallLength(w, len, ek = wallFree(w), conn = ui.connWalls, f = F()) {
+  const L0 = wLen(w); len = +len;
+  if (!(len >= 1) || L0 < 0.01) return false;
+  const fixed = ek === 'a' ? w.b : w.a, ux = (w[ek].x - fixed.x) / L0, uy = (w[ek].y - fixed.y) / L0;
+  const old = { x: w[ek].x, y: w[ek].y }, np = { x: Math.round((fixed.x + ux * len) * 100) / 100, y: Math.round((fixed.y + uy * len) * 100) / 100 };
+  const moved = [{ w, k: ek, L0 }];
+  if (conn) for (const o of f.walls) if (o !== w) for (const k of ['a', 'b']) if (dist(o[k], old) < 1) moved.push({ w: o, k, L0: wLen(o) });
+  for (const m of moved) m.w[m.k] = { x: np.x, y: np.y };
+  // açıklıklar: d a ucundan ölçülür — a ucu taşındıysa aynı yerde kalmaları için kaydır, sonra duvara sığdır
+  for (const m of moved) {
+    const L1 = wLen(m.w);
+    for (const op of f.ops) if (op.wall === m.w.id) {
+      if (m.k === 'a') op.d += L1 - m.L0;
+      op.d = clamp(op.d, Math.min(op.w / 2, L1 / 2), Math.max(L1 - op.w / 2, L1 / 2));
+    }
+  }
+  return true;
+}
+// Tuvaldeki duvar ölçü yazısına tıklayınca yerinde sayı kutusu
+function openWallDimInput(id, x, y) {
+  closeWallDimInput();
+  const fd = find(id); if (!fd || fd.kind !== 'wall' || !pickable(id)) return;
+  const w = fd.o; sel = [id]; refresh();
+  const inp = document.createElement('input');
+  inp.id = 'wdimInput'; inp.type = 'number'; inp.min = '1'; inp.step = '1'; inp.className = 'wdim-input';
+  inp.value = Math.round(wLen(w) * 10) / 10;
+  inp.title = L('Yeni uzunluk (cm) — Enter: uygula, Esc: iptal', 'New length (cm) — Enter: apply, Esc: cancel');
+  inp.style.left = Math.round(x - 48) + 'px'; inp.style.top = Math.round(y - 16) + 'px';
+  document.body.appendChild(inp); inp.focus(); inp.select();
+  inp.addEventListener('keydown', ev => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') {
+      const v = parseFloat(String(inp.value).replace(',', '.')); closeWallDimInput();
+      if (applyWallLength(w, v)) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+    } else if (ev.key === 'Escape') closeWallDimInput();
+  });
+  inp.addEventListener('blur', () => setTimeout(closeWallDimInput, 0));
+}
+function closeWallDimInput() { const el = document.getElementById('wdimInput'); if (el) el.remove(); }
 /* ---------- Duvar kırpma / bölme (issue #15) ---------- */
 // İki doğru parçasının kesişimi: t (p1→p2), u (p3→p4) parametreleriyle; paralelse null
 function segIntersect(p1, p2, p3, p4, eps = 1e-6) {
@@ -1419,10 +1706,10 @@ const TOOLS = [
   ['select', '↖', 'Seç', 'V', 'Select'], ['pan', '✋', 'Kaydır', 'H', 'Pan'], null,
   ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['slab', '🔲', 'Döşeme', 'K', 'Slab'], ['void', '🕳️', 'Boşluk', 'Y', 'Void'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
   ['door', '🚪', 'Kapı', 'D', 'Door'], ['window', '🪟', 'Pencere', 'N', 'Window'], ['furn', '🛋️', 'Mobilya', 'F', 'Furniture'], null,
-  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
+  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['mirror', '🪞', 'Aynala', 'I', 'Mirror'], ['section', '🔪', 'Kesit', 'L', 'Section'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
 const HINTS = {
-  select: 'Seç: tıkla / kutu çiz • Shift: çoklu seçim • Ctrl+tık: alttaki nesne • sağ tık: buradaki nesneler & katman • sürükle: taşı • Del: sil',
+  select: 'Seç: duvar seçiliyken rakam yaz + Enter: yeni uzunluk • ölçü yazısına tıkla: uzunluğu düzenle • tıkla / kutu çiz • Shift: çoklu seçim • Ctrl+tık: alttaki nesne • sağ tık: buradaki nesneler & katman • sürükle: taşı • Del: sil',
   pan: 'Kaydır: sürükle • Tekerlek: yakınlaştır',
   wall: 'Duvar: tıkla ile başla, devam ettikçe zincir • rakam yaz + Enter: tam uzunluk • çift tık / Esc: bitir • Shift: yakalamayı kapat',
   rect: 'Dikdörtgen oda: köşeden köşeye sürükle (4 duvar + oda oluşturur)',
@@ -1437,10 +1724,13 @@ const HINTS = {
   text: 'Metin eklemek için tıkla',
   eraser: 'Silmek istediğin nesneye tıkla',
   trim: 'Kırp: kesişen duvarın taşan ucuna tıkla → kesişime kadar kırpılır (iki kesişim arasındaki parça da çıkarılabilir) • kırmızı = silinecek kısım',
+  plotwin: 'Çıktı penceresi: yazdırılacak alanı köşeden köşeye sürükle • Esc: iptal',
+  section: 'Kesit: kesit çizgisinin iki ucuna tıkla • ok bakış yönünü gösterir • panelden yönü çevir, 3B kesit aç veya 2B kesit çizimini göster',
+  mirror: 'Aynala: önce nesneleri seç, sonra ayna ekseninin iki noktasına tıkla • orijinali silmek isteyip istemediğin sorulur • Shift+H / Shift+V: yatay / dikey aynala',
   calib: 'Ölçek: arka plan görselinde bilinen iki noktaya tıkla, gerçek mesafeyi gir',
 };
 const HINTS_EN = {
-  select: 'Select: click / drag box • Shift: multi-select • Ctrl+click: object underneath • right-click: objects here & layers • drag: move • Del: delete',
+  select: 'Select: with a wall selected type a number + Enter: new length • click a length label: edit it • click / drag box • Shift: multi-select • Ctrl+click: object underneath • right-click: objects here & layers • drag: move • Del: delete',
   pan: 'Pan: drag • Wheel: zoom in/out',
   wall: 'Wall: click to start & chain • type number + Enter: exact length (cm) • double-click / Esc: finish • Shift: disable snap',
   rect: 'Rect Room: drag corner to corner (creates 4 walls + room)',
@@ -1455,6 +1745,9 @@ const HINTS_EN = {
   text: 'Click to place a text label',
   eraser: 'Click any object to delete it',
   trim: 'Trim: click the overhanging part of a crossing wall → it is cut back to the intersection (a piece between two crossings can be removed too) • red = part to remove',
+  plotwin: 'Plot window: drag the area to print corner to corner • Esc: cancel',
+  section: 'Section: click both ends of the cut line • the arrows show the viewing direction • the panel flips it, cuts the 3D view or opens the 2D section drawing',
+  mirror: 'Mirror: select objects first, then click two points of the mirror axis • you are asked whether to erase the originals • Shift+H / Shift+V: flip horizontal / vertical',
   calib: 'Calibrate: click two points with a known distance on the background image, then enter real distance',
 };
 function buildShapeBar() {
@@ -1491,8 +1784,9 @@ function updateTools() {
   if (showShape) buildShapeBar();
 }
 function setTool(t) {
-  ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null;
+  ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null; ui.mAxis = null; ui.secStart = null;
   ui.btn = t; placing = null;
+  if (t === 'mirror' && !selObjs().some(x => XFORM_KINDS.has(x.kind))) toast(L('Aynalamak için önce nesneleri seç', 'Select the objects to mirror first'));
   if (t === 'door') { placing = { type: 'op', def: OPDEF.door, rot: 0 }; tool = 'place'; }
   else if (t === 'window') { placing = { type: 'op', def: OPDEF.window, rot: 0 }; tool = 'place'; }
   else if (t === 'furn') { ui.cat = ui.cat === 0 ? 1 : ui.cat; buildLib(); $('#search').focus(); tool = 'select'; ui.btn = 'select'; toast(L('Soldaki listeden bir mobilya seç', 'Select a furniture item from the left panel')); }
@@ -1551,6 +1845,11 @@ function drawPreview() {
     const rm = F().rooms.find(r => r.pts.length > 2 && pointInPoly(ui.raw, r.pts));
     if (rm) s += snapGlyph({ ...polyCentroid(rm.pts), hit: 'center' }, C, z, false, .45);
   }
+  if (ui.lenTyped && tool === 'select' && sel.length === 1) {
+    const fw = find(sel[0]);
+    if (fw && fw.kind === 'wall') { const w = fw.o; s += lbl((w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2 - w.t / 2 - 22 / z, `[${ui.lenTyped} cm] ↵`); }
+  }
+  if (cur && cur.typed) s += lbl(cur.x, cur.y - 18 / z, `[${cur.typed} cm]`);
   if (tool === 'wall' && cur) {
     if (ui.draw) {
       const a = ui.draw.start;
@@ -1571,6 +1870,10 @@ function drawPreview() {
     s += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="${ac}" fill-opacity=".12" stroke="${ac}" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${3 / z}"/>`;
     if (w > 10 && h > 10) s += lbl(x0 + w / 2, y0 - 10 / z, `${fmtLen(w)} × ${fmtLen(h)} = ${fmtArea(w * h)}`);
   }
+  if (d && d.type === 'plotbox') {
+    const x0 = Math.min(d.start.x, d.cur.x), y0 = Math.min(d.start.y, d.cur.y), w = Math.abs(d.cur.x - d.start.x), h = Math.abs(d.cur.y - d.start.y);
+    s += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="${ac}" fill-opacity=".06" stroke="${ac}" stroke-width="${2 / z}" stroke-dasharray="${10 / z} ${5 / z}"/>` + lbl(x0 + w / 2, y0 - 10 / z, L('Çıktı alanı', 'Plot area') + ` ${fmtLen(w)} × ${fmtLen(h)}`);
+  }
   if (d && d.type === 'box') {
     s += `<rect x="${Math.min(d.start.x, d.cur.x)}" y="${Math.min(d.start.y, d.cur.y)}" width="${Math.abs(d.cur.x - d.start.x)}" height="${Math.abs(d.cur.y - d.start.y)}" fill="${ac}" fill-opacity=".1" stroke="${ac}" stroke-width="${1.5 / z}" stroke-dasharray="${5 / z}"/>`;
   }
@@ -1581,6 +1884,20 @@ function drawPreview() {
     if (pts.length > 2) s += lbl(cur.x, cur.y - 14 / z, fmtArea(polyArea(pts)));
   }
   if (tool === 'dim' && ui.dimStart && cur) s += `<line x1="${ui.dimStart.x}" y1="${ui.dimStart.y}" x2="${cur.x}" y2="${cur.y}" stroke="#0f766e" stroke-width="${2 / z}" stroke-dasharray="${5 / z}"/>` + lbl((ui.dimStart.x + cur.x) / 2, (ui.dimStart.y + cur.y) / 2 - 8 / z, fmtLen(dist(ui.dimStart, cur)));
+  if (tool === 'section' && ui.secStart && cur && dist(ui.secStart, cur) > 1) s += sectionSvg({ id: 'pv', name: nextSectionName(), a: ui.secStart, b: cur, dir: 1 }, false);
+  if (tool === 'mirror' && ui.mAxis && cur && dist(ui.mAxis, cur) > 1) {
+    // ayna ekseni + seçimin yansımış silüeti (#28)
+    const a = ui.mAxis, l = dist(a, cur), u = { x: (cur.x - a.x) / l, y: (cur.y - a.y) / l }, ext = 5000;
+    s += `<line x1="${a.x - u.x * ext}" y1="${a.y - u.y * ext}" x2="${a.x + u.x * ext}" y2="${a.y + u.y * ext}" stroke="${ac}" stroke-width="${1.5 / z}" stroke-dasharray="${10 / z} ${4 / z} ${2 / z} ${4 / z}" pointer-events="none"/>`;
+    const ghost = selObjs().filter(x => XFORM_KINDS.has(x.kind)).map(({ kind, o }) => ({ kind, o: JSON.parse(JSON.stringify(o)) }));
+    mirrorObjs(ghost, a, u, () => []);
+    for (const { kind, o } of ghost) {
+      const pts = AB_KINDS.has(kind) ? [o.a, o.b] : kind === 'furn' ? furnCorners(o) : PTS_KINDS.has(kind) ? o.pts : null;
+      if (pts) s += `<poly${AB_KINDS.has(kind) || kind === 'sketch' ? 'line' : 'gon'} points="${pts.map(p => p.x + ',' + p.y).join(' ')}" fill="${ac}" fill-opacity=".08" stroke="${ac}" stroke-width="${kind === 'wall' ? o.t : 2 / z}" stroke-opacity=".45" pointer-events="none"/>`;
+      else if (kind === 'text') s += `<circle cx="${o.x}" cy="${o.y}" r="${4 / z}" fill="${ac}" pointer-events="none"/>`;
+    }
+    s += `<circle cx="${a.x}" cy="${a.y}" r="${4 / z}" fill="${ac}" pointer-events="none"/>`;
+  }
   if (tool === 'calib' && ui.calib && cur) s += `<line x1="${ui.calib.x}" y1="${ui.calib.y}" x2="${cur.x}" y2="${cur.y}" stroke="#e11d48" stroke-width="${2 / z}"/>`;
   if ((tool === 'pen' || tool === 'shape') && ui.pen) {
     const pts = ui.pen.pts.concat(ui.raw ? [{ x: ui.raw.x, y: ui.raw.y }] : []);
@@ -1631,7 +1948,9 @@ function setCursor(e) {
   else if (tool === 'dim' && ui.dimStart) from = ui.dimStart;
   else if (POLY_TOOLS.has(tool) && ui.polyPts && ui.polyPts.length) from = ui.polyPts[ui.polyPts.length - 1];
   else if (tool === 'calib' && ui.calib) from = null;
-  ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'dim', 'calib', 'shape'].includes(tool) ? snapPt(raw, from, e) : null;
+  else if (tool === 'mirror' && ui.mAxis) from = ui.mAxis;
+  else if (tool === 'section' && ui.secStart) from = ui.secStart;
+  ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'dim', 'calib', 'shape', 'mirror', 'section'].includes(tool) ? snapPt(raw, from, e) : null;
   if (tool === 'wall' && ui.draw && ui.typed) {
     const a = ui.draw.start, l = parseFloat(ui.typed) || 0, dx = ui.cur.x - a.x, dy = ui.cur.y - a.y, m = Math.hypot(dx, dy) || 1;
     ui.cur = { x: a.x + dx / m * l, y: a.y + dy / m * l, hit: null };
@@ -1662,7 +1981,7 @@ function pickDataId(e) {
     const b = el.closest ? el.closest('[data-var-badge]') : null;
     if (b) return b;
     const t = el.closest ? el.closest('[data-id]') : null;
-    if (!t) continue;
+    if (!t || !pickable(t.dataset.id)) continue; // kilitli katman: tık alttakine geçer (#32)
     if (!first) first = t;
     if (t.hasAttribute('data-rlabel') || t.hasAttribute('data-rpoly')) {
       if (!roomHit) roomHit = t;
@@ -1690,7 +2009,7 @@ function idsAt(clientX, clientY) {
     const t = el.closest ? el.closest('[data-id]') : null;
     if (!t || t.dataset.varBadge) continue;
     const id = t.dataset.id;
-    if (!out.includes(id) && find(id)) out.push(id);
+    if (!out.includes(id) && find(id) && pickable(id)) out.push(id);
   }
   return out;
 }
@@ -1698,7 +2017,7 @@ function objLabel(id) {
   const fd = find(id); if (!fd) return id;
   const o = fd.o, k = (isEN() ? KIND_EN : KIND_TR)[fd.kind] || fd.kind;
   const nm = fd.kind === 'furn' ? (o.label || (BYID[o.type] ? itemName(BYID[o.type]) : o.name))
-    : fd.kind === 'room' || fd.kind === 'slab' || fd.kind === 'void' ? o.name : fd.kind === 'text' ? o.text
+    : fd.kind === 'room' || fd.kind === 'slab' || fd.kind === 'void' || fd.kind === 'section' ? o.name : fd.kind === 'text' ? o.text
     : fd.kind === 'wall' ? fmtLen(wLen(o)) : fd.kind === 'op' ? o.type : '';
   return nm ? `${k} · ${nm}` : k;
 }
@@ -1767,6 +2086,13 @@ function openCtxMenu(e) {
       + `<button data-cmlayer="down">↓ ${L('Bir arkaya', 'Send backward')} <kbd>Ctrl+[</kbd></button>`
       + `<button data-cmlayer="back">⤓ ${L('En arkaya gönder', 'Send to back')} <kbd>Ctrl+Shift+[</kbd></button>`;
   }
+  if (sel.length && selObjs().some(x => XFORM_KINDS.has(x.kind))) {
+    h += `<div class="cm-sep"></div>`
+      + `<button data-cmxf="flipH">⇋ ${L('Yatay aynala', 'Flip horizontal')} <kbd>Shift+H</kbd></button>`
+      + `<button data-cmxf="flipV">⇵ ${L('Dikey aynala', 'Flip vertical')} <kbd>Shift+V</kbd></button>`
+      + `<button data-cmxf="mirror">🪞 ${L('Eksene göre aynala…', 'Mirror about axis…')} <kbd>I</kbd></button>`
+      + `<button data-cmxf="scale">⤢ ${L('Ölçekle…', 'Scale…')}</button>`;
+  }
   m.innerHTML = h; document.body.appendChild(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.min(e.clientX, innerWidth - r.width - 6) + 'px';
@@ -1775,6 +2101,8 @@ function openCtxMenu(e) {
   m.addEventListener('click', ev => {
     const s = ev.target.closest('[data-cmsel]');
     if (s) { sel = [s.dataset.cmsel]; closeCtxMenu(); refresh(); return; }
+    const xf = ev.target.closest('[data-cmxf]');
+    if (xf) { closeCtxMenu(); const v = xf.dataset.cmxf; if (v === 'mirror') setTool('mirror'); else if (v === 'scale') scaleSelPrompt(); else flipSel(v === 'flipH' ? 'h' : 'v'); return; }
     const l = ev.target.closest('[data-cmlayer]');
     if (l) { if (!sel.length && ids.length) sel = [ids[0]]; closeCtxMenu(); reorderSel(l.dataset.cmlayer); }
   });
@@ -1789,6 +2117,8 @@ cv.addEventListener('pointerdown', e => {
   const f = F();
   switch (tool) {
     case 'select': {
+      const wd = e.target.closest('[data-wdim]');
+      if (wd && !e.shiftKey && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); openWallDimInput(wd.dataset.wdim, e.clientX, e.clientY); return; }
       const h = e.target.closest('[data-h]');
       if (h) { startHandle(h.dataset.h, raw, e); return; }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && cycleStackAt(e)) { // Ctrl+tık: alttaki nesneyi seç
@@ -1867,6 +2197,26 @@ cv.addEventListener('pointerdown', e => {
         else deleteIds([t.dataset.id]);
         commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
       }
+      return;
+    }
+    case 'section': {
+      if (!ui.secStart) { ui.secStart = { x: cur.x, y: cur.y }; drawPreview(); return; }
+      if (dist(ui.secStart, cur) < 20) return;
+      const sc = { id: uid(), name: nextSectionName(), a: ui.secStart, b: { x: cur.x, y: cur.y }, dir: 1 };
+      (f.sections = f.sections || []).push(sc); sel = [sc.id]; ui.secStart = null; commit(); setTool('select'); refresh();
+      return;
+    }
+    case 'plotwin': ui.drag = { type: 'plotbox', start: { x: raw.x, y: raw.y }, cur: { x: raw.x, y: raw.y } }; return;
+    case 'mirror': {
+      const os = selObjs().filter(x => XFORM_KINDS.has(x.kind));
+      if (!os.length) { setTool('select'); toast(L('Aynalamak için önce nesneleri seç', 'Select the objects to mirror first')); return; }
+      if (!ui.mAxis) { ui.mAxis = { x: cur.x, y: cur.y }; drawPreview(); return; }
+      const l = dist(ui.mAxis, cur); if (l < 1) return;
+      const u = { x: (cur.x - ui.mAxis.x) / l, y: (cur.y - ui.mAxis.y) / l }, o = ui.mAxis;
+      const erase = confirm(L('Orijinal nesneler silinsin mi?\n\nTamam = taşı (sil) • İptal = aynalı kopya oluştur', 'Erase the original objects?\n\nOK = move (erase) • Cancel = keep them and add a mirrored copy'));
+      if (!erase) { sel = [...new Set([...sel, ...F().ops.filter(op => sel.includes(op.wall)).map(op => op.id)])]; paste(true, 0); } // duvarların kapı/pencereleriyle birlikte kopya; kopya seçili hale gelir ve aynalanır
+      mirrorObjs(selObjs().filter(x => XFORM_KINDS.has(x.kind)), o, u);
+      ui.mAxis = null; tool = 'select'; ui.btn = 'select'; updateTools(); afterXform();
       return;
     }
     case 'calib': {
@@ -1974,6 +2324,7 @@ cv.addEventListener('pointermove', e => {
   if (d) {
     if (d.type === 'pan') { view.x = d.vx + e.clientX - d.sx; view.y = d.vy + e.clientY - d.sy; render(); return; }
     if (d.type === 'box') { d.cur = ui.raw; d.moved = true; drawPreview(); return; }
+    if (d.type === 'plotbox') { d.cur = ui.raw; drawPreview(); return; }
     if (d.type === 'shape') { d.cur = ui.cur || ui.raw; drawPreview(); return; }
     if (d.type === 'move') { doMove(ui.raw, e); return; }
     if (d.type === 'handle') { doHandle(ui.raw, e); return; }
@@ -1984,6 +2335,11 @@ cv.addEventListener('pointerup', e => {
   if ((tool === 'pen' || tool === 'shape') && ui.pen) { tool === 'shape' ? finishShapeFree() : finishPen(); return; }
   const d = ui.drag; if (!d) return; ui.drag = null; setCursor(e);
   if (d.type === 'pan') { updateTools(); return; }
+  if (d.type === 'plotbox') {
+    const x0 = Math.min(d.start.x, d.cur.x), x1 = Math.max(d.start.x, d.cur.x), y0 = Math.min(d.start.y, d.cur.y), y1 = Math.max(d.start.y, d.cur.y);
+    if (x1 - x0 < 20 || y1 - y0 < 20) { toast(L('Alan çok küçük — tekrar sürükle', 'Area too small — drag again')); return; }
+    ui.plot.win = { x0, y0, x1, y1 }; ui.plot.area = 'window'; setTool('select'); openPlotDialog(); return;
+  }
   if (d.type === 'box') {
     if (d.moved && dist(d.start, d.cur) > 4 / view.z) {
       const x0 = Math.min(d.start.x, d.cur.x), x1 = Math.max(d.start.x, d.cur.x), y0 = Math.min(d.start.y, d.cur.y), y1 = Math.max(d.start.y, d.cur.y);
@@ -1992,6 +2348,7 @@ cv.addEventListener('pointerup', e => {
         const kd = KINDS[arr];
         if (scope === 'wall' && kd !== 'wall') continue;
         if (scope === 'furn' && kd !== 'furn') continue;
+        if (!pickable(o.id)) continue;
         const bb = bboxOf(kd, o); if (!bb) continue;
         const inside = bb.x0 >= x0 && bb.x1 <= x1 && bb.y0 >= y0 && bb.y1 <= y1;
         const inter = bb.x1 >= x0 && bb.x0 <= x1 && bb.y1 >= y0 && bb.y0 <= y1;
@@ -2067,7 +2424,7 @@ function startMove(raw, e) {
     for (const tx of F().texts.filter(t => pointInPoly(t, r.pts))) roomInner.push({ kind: 'text', o: tx, g: JSON.parse(JSON.stringify(tx)) });
   }
   const first = objs[0]; let anchor = { x: raw.x, y: raw.y };
-  if (first) { const o = orig.get(first.o.id); anchor = first.kind === 'wall' || first.kind === 'dim' ? o.a : PTS_KINDS.has(first.kind) ? o.pts[0] : first.kind === 'op' ? anchor : { x: o.x, y: o.y }; }
+  if (first) { const o = orig.get(first.o.id); anchor = AB_KINDS.has(first.kind) ? o.a : PTS_KINDS.has(first.kind) ? o.pts[0] : first.kind === 'op' ? anchor : { x: o.x, y: o.y }; }
   ui.drag = { type: 'move', start: raw, orig, conn, roomInner, anchor, moved: false };
 }
 function doMove(raw, e) {
@@ -2079,7 +2436,7 @@ function doMove(raw, e) {
   }
   for (const { kind, o } of selObjs()) {
     const g = d.orig.get(o.id);
-    if (kind === 'wall' || kind === 'dim') { o.a = { x: g.a.x + dx, y: g.a.y + dy }; o.b = { x: g.b.x + dx, y: g.b.y + dy }; }
+    if (AB_KINDS.has(kind)) { o.a = { x: g.a.x + dx, y: g.a.y + dy }; o.b = { x: g.b.x + dx, y: g.b.y + dy }; }
     else if (PTS_KINDS.has(kind)) o.pts = g.pts.map(p => ({ x: p.x + dx, y: p.y + dy }));
     else if (kind === 'furn') {
       o.x = g.x + dx; o.y = g.y + dy;
@@ -2127,7 +2484,14 @@ function doHandle(raw, e) {
   if (h === 'wa' || h === 'wb') {
     const ek = h === 'wa' ? 'a' : 'b', other = h === 'wa' ? o.b : o.a;
     const ign = new Set([o.id, ...d.conn.map(c => c.w.id)]);
-    const p = snapPt(raw, other, e, ign); ui.cur = p;
+    let p = snapPt(raw, other, e, ign); ui.cur = p;
+    const tl = parseFloat(d.typed);
+    if (tl > 0) { // yazılan uzunluk (#36): imleç yönünde, karşı uçtan tam bu uzaklıkta
+      let dx = p.x - other.x, dy = p.y - other.y, m = Math.hypot(dx, dy);
+      if (m < 1e-6) { dx = d.orig ? d.orig[ek].x - other.x : 1; dy = d.orig ? d.orig[ek].y - other.y : 0; m = Math.hypot(dx, dy) || 1; }
+      p = { x: Math.round((other.x + dx / m * tl) * 100) / 100, y: Math.round((other.y + dy / m * tl) * 100) / 100, hit: null, typed: d.typed };
+    }
+    ui.cur = p;
     o[ek] = { x: p.x, y: p.y }; for (const c of d.conn) c.w[c.k] = { x: p.x, y: p.y };
     if (Array.isArray(o.angles) && o.angles.length) { const idx = clamp(o.posIdx ?? 0, 0, o.angles.length - 1); o.posIdx = idx; o.angles[idx] = wallDeg(o); }
   } else if (h === 'wrot') {
@@ -2159,36 +2523,7 @@ function doHandle(raw, e) {
     const sx = Math.max(20, Math.abs(p.x - ax)) / w0, sy = Math.max(20, Math.abs(p.y - ay)) / h0;
     const tx = x => Math.round((ax + (x - ax) * sx) * 10) / 10;
     const ty = y => Math.round((ay + (y - ay) * sy) * 10) / 10;
-    for (const { kind, o: mo } of selObjs()) {
-      const g = d.origAll.get(mo.id); if (!g) continue;
-      if (kind === 'wall' || kind === 'dim') {
-        mo.a = { x: tx(g.a.x), y: ty(g.a.y) }; mo.b = { x: tx(g.b.x), y: ty(g.b.y) };
-        if (kind === 'wall') {
-          // menteşeli duvar: açı ön ayarlarını yeni yönelime göre kaydır (eski preset'e sıçramasın)
-          if (Array.isArray(g.angles) && g.angles.length) {
-            const od = Math.atan2(g.b.y - g.a.y, g.b.x - g.a.x) * 180 / Math.PI, nd = Math.atan2(mo.b.y - mo.a.y, mo.b.x - mo.a.x) * 180 / Math.PI;
-            const diff = Math.round((nd - od) * 10) / 10;
-            if (Math.abs(diff) > 0.05) mo.angles = g.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
-          }
-          // duvara bağlı kapı/pencereler de ölçeklensin: merkez noktayı ölçekle, yeni duvara projekte et
-          const L0 = dist(g.a, g.b) || 1, L1 = wLen(mo) || 1, ux = (mo.b.x - mo.a.x) / L1, uy = (mo.b.y - mo.a.y) / L1;
-          for (const o2 of F().ops.filter(op => op.wall === mo.id)) {
-            const t0 = clamp(o2.d / L0, 0, 1), px = tx(g.a.x + (g.b.x - g.a.x) * t0), py = ty(g.a.y + (g.b.y - g.a.y) * t0);
-            const pr = clamp(((px - mo.a.x) * ux + (py - mo.a.y) * uy) / L1, 0, 1);
-            o2.d = clamp(pr * L1, Math.min(o2.w / 2, L1 / 2), Math.max(L1 - o2.w / 2, L1 / 2));
-          }
-        }
-      }
-      else if (PTS_KINDS.has(kind)) mo.pts = g.pts.map(q => ({ x: tx(q.x), y: ty(q.y) }));
-      else if (kind === 'furn') {
-        mo.x = tx(g.x); mo.y = ty(g.y);
-        const rot = ((g.rot || 0) % 180 + 180) % 180, swap = rot >= 45 && rot < 135;
-        mo.w = Math.max(10, Math.round(g.w * (swap ? sy : sx)));
-        mo.d = Math.max(10, Math.round(g.d * (swap ? sx : sy)));
-        if (g.k === 'poly' && g.pts) mo.pts = g.pts.map(p => ({ x: Math.round(p.x * (mo.w / g.w) * 10) / 10, y: Math.round(p.y * (mo.d / g.d) * 10) / 10 }));
-      } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
-      else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
-    }
+    scaleObjs(selObjs(), id => d.origAll.get(id), tx, ty, sx, sy);
   } else if (h === 'da' || h === 'db') { const p = snapPt(raw, null, e, new Set([o.a, o.b])); o[h === 'da' ? 'a' : 'b'] = { x: p.x, y: p.y }; ui.cur = p; }
   else if (h === 'doff') {
     const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, mx = (o.a.x + o.b.x) / 2, my = (o.a.y + o.b.y) / 2;
@@ -2223,8 +2558,8 @@ const fld = (lbl, k, p, v, o = {}) => {
   const val = type === 'number' ? Math.round(v * 100) / 100 : v;
   return `<label class="f"><span>${lbl}</span><input type="${type}" data-k="${k}" data-p="${p}" value="${esc(val)}" ${o.step ? `step="${o.step}"` : ''} ${o.min != null ? `min="${o.min}"` : ''} ${o.max != null ? `max="${o.max}"` : ''}></label>`;
 };
-const KIND_TR = { wall: '🧱 Duvar', op: '🚪 Kapı / Pencere', furn: '🛋️ Mobilya', room: '🏠 Oda', slab: '🔲 Döşeme', void: '🕳️ Döşeme Boşluğu', dim: '📏 Ölçü', text: '🔤 Metin', sketch: '✏️ Serbest Çizim', bg: '🖼 Arka Plan Görseli' };
-const KIND_EN = { wall: '🧱 Wall', op: '🚪 Door / Window', furn: '🛋️ Furniture', room: '🏠 Room', slab: '🔲 Slab', void: '🕳️ Floor Void', dim: '📏 Dimension', text: '🔤 Text', sketch: '✏️ Freehand Sketch', bg: '🖼 Background Image' };
+const KIND_TR = { wall: '🧱 Duvar', op: '🚪 Kapı / Pencere', furn: '🛋️ Mobilya', room: '🏠 Oda', slab: '🔲 Döşeme', void: '🕳️ Döşeme Boşluğu', dim: '📏 Ölçü', section: '🔪 Kesit', text: '🔤 Metin', sketch: '✏️ Serbest Çizim', bg: '🖼 Arka Plan Görseli' };
+const KIND_EN = { wall: '🧱 Wall', op: '🚪 Door / Window', furn: '🛋️ Furniture', room: '🏠 Room', slab: '🔲 Slab', void: '🕳️ Floor Void', dim: '📏 Dimension', section: '🔪 Section', text: '🔤 Text', sketch: '✏️ Freehand Sketch', bg: '🖼 Background Image' };
 function bgFields(inProps = false) {
   if (!P.bg) return '';
   return fld(L('Konum X (cm)', 'Position X (cm)'), 'bg', 'x', P.bg.x, { step: 10 })
@@ -2239,7 +2574,8 @@ function renderProps() {
   const el = $('#props'), os = selObjs();
   if (!os.length) { el.innerHTML = projectPanel(); return; }
   const kinds = [...new Set(os.map(x => x.kind))];
-  const acts = (extra = '') => `<div class="row">${extra}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+  const xf = os.some(x => XFORM_KINDS.has(x.kind)) ? `<div class="row"><button class="btn sm" data-act="flipH" title="Shift+H">${L('⇋ Yatay aynala', '⇋ Flip H')}</button><button class="btn sm" data-act="flipV" title="Shift+V">${L('⇵ Dikey aynala', '⇵ Flip V')}</button><button class="btn sm" data-act="mirror" title="I">${L('🪞 Eksene göre…', '🪞 Mirror…')}</button><button class="btn sm" data-act="scale">${L('⤢ Ölçekle…', '⤢ Scale…')}</button></div>` : '';
+  const acts = (extra = '') => selLayerHtml(os) + xf + `<div class="row">${extra}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
   if (kinds.length > 1) {
     const gs = os.filter(x => GROUPABLE[x.kind]);
     const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
@@ -2301,6 +2637,18 @@ function renderProps() {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button>`);
+    if (o.k === 'stairs' && n === 1) {
+      // merdiven ayarları (#33): rıht sayısı, tür, korkuluk; rıht / basamak ve Blondel konfor kontrolü
+      const st = stairSteps(o), bl = blondel(st.riser, st.tread), bc = bl.ok ? '#16a34a' : bl.warn ? '#d97706' : 'var(--danger)';
+      const opt = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
+      h += `<h4>${L('Merdiven', 'Stairs')}</h4>` + fld(L('Tür', 'Type'), 'furn', 'stairType', st.type, { sel: opt(STAIR_TYPES) })
+        + fld(L('Rıht sayısı', 'Number of risers'), 'furn', 'stepN', st.n, { min: 2, max: 60, step: 1 })
+        + fld(L('Korkuluk', 'Railing'), 'furn', 'railing', o.railing || 'right', { sel: opt(STAIR_RAILS) })
+        + `<div class="stat"><span>${L('Rıht yüksekliği', 'Riser height')}</span><b>${(Math.round(st.riser * 10) / 10)} cm</b></div>`
+        + `<div class="stat"><span>${L('Basamak derinliği', 'Tread depth')}</span><b>${(Math.round(st.tread * 10) / 10)} cm</b></div>`
+        + `<div class="stat" title="${L('Blondel kuralı: 2 × rıht + basamak ≈ 63 cm (60–64 rahat)', 'Blondel rule: 2 × riser + tread ≈ 63 cm (60–64 is comfortable)')}"><span>2r + t</span><b style="color:${bc}">${Math.round(bl.v * 10) / 10} cm ${bl.ok ? '✓' : bl.warn ? '≈' : '✗'}</b></div>`
+        + `<div class="row"><button class="btn sm" data-act="stairfit">${L('⇕ Kat yüksekliğine eşitle', '⇕ Match storey height')} (${P.wallH + 20} cm)</button></div>`;
+    }
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
     h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: getFloors() });
@@ -2339,6 +2687,11 @@ function renderProps() {
     h += acts();
   } else if (k === 'dim') {
     h += `<div class="stat"><span>${L('Ölçü', 'Length')}</span><b>${fmtLen(dist(o.a, o.b))}</b></div>` + fld(L('Ofset (cm)', 'Offset (cm)'), 'dim', 'off', o.off ?? 40) + acts();
+  } else if (k === 'section') {
+    const on = ui.secCut === o.id;
+    h += fld(L('Ad', 'Name'), 'section', 'name', o.name || '', { type: 'text' }) + `<div class="stat"><span>${L('Uzunluk', 'Length')}</span><b>${fmtLen(dist(o.a, o.b))}</b></div>`;
+    h += `<div class="row"><button class="btn sm" data-act="secflip">${L('⇅ Yönü çevir', '⇅ Flip direction')}</button><button class="btn sm${on ? ' primary' : ''}" data-act="sec3d">${on ? L('✂ 3B kesiti kapat', '✂ Close 3D cut') : L('✂ 3B kesit', '✂ 3D cutaway')}</button><button class="btn sm" data-act="secdraw">${L('📐 Kesit çizimi', '📐 Section drawing')}</button></div>`;
+    h += `<p class="muted" style="margin:0 0 6px">${L('Oklar bakış yönünü gösterir. Kesit tüm katları keser.', 'The arrows show the viewing direction. The section cuts through every floor.')}</p>` + acts();
   } else if (k === 'text') {
     h += fld(L('Metin', 'Text'), 'text', 'text', o.text, { type: 'text' }) + fld(L('Boyut', 'Size'), 'text', 'size', o.size, { min: 6, max: 200 }) + fld(L('Açı (°)', 'Angle (°)'), 'text', 'rot', o.rot || 0) + fld(L('Renk', 'Color'), 'text', 'color', o.color, { type: 'color' }) + acts();
   } else if (k === 'sketch') {
@@ -2358,6 +2711,7 @@ function renderProps() {
 function projectPanel() {
   const f = F(); let h = `<h3>⚙️ ${L('Proje', 'Project')}</h3>`;
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
+  h += layersPanelHtml();
   h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['dims', L('Ölçüler', 'Dimensions')], ['sketch', L('Serbest çizimler', 'Freehand sketches')]].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
   if (P.floors.length > 1) {
     // Kat izdüşümü (issue #26): aç/kapa, referans kat, opaklık
@@ -2372,6 +2726,7 @@ function projectPanel() {
   h += `<h4>${L('Arka plan görseli', 'Background image')}</h4>`;
   if (P.bg) h += bgFields(false);
   else h += `<p class="muted" style="margin:0 0 6px">${L('Kroki / mevcut plan görselini altlık olarak ekleyip üzerinden çizebilirsin.', 'Import a blueprint or floor plan image as an underlay to trace over.')}</p><div class="row"><button class="btn sm" data-act="bgadd">${L('🖼 Görsel ekle', '🖼 Add image')}</button></div>`;
+  h += `<h4>${L('Kesit & görünüş', 'Sections & elevations')}</h4><div class="row"><button class="btn sm" data-act="archview">${L('📐 Görünüşler ve kesitler', '📐 Elevations & sections')}</button></div><p class="muted" style="margin:0 0 6px">${L('Dört cephe görünüşü kat kotlarıyla; kesit eklemek için 🔪 Kesit aracı (L).', 'Four facade elevations with floor levels; add a section with the 🔪 Section tool (L).')}</p>`;
   h += `<h4>${L('Kat döşemesi', 'Floor slab')} – ${esc(f.name)}</h4>`;
   h += fld(L('Malzeme', 'Material'), 'floor', 'slabFloor', f.slabFloor || 'none', { sel: getFloors() })
     + fld(L('Döşeme rengi', 'Slab colour'), 'floor', 'slabColor', f.slabColor || '#cbd5e1', { type: 'color' });
@@ -2400,6 +2755,16 @@ function affects3D(k, p) {
 function applyProp(t, final) {
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
+  if (k === 'lyr') {
+    const l = layerById(t.dataset.lid); if (!l) return;
+    if (p === 'active') { if (t.checked) P.activeLayer = l.id; } else l[p] = v;
+    if (final) { commit(); syncLayerUI(); } return;
+  }
+  if (k === 'sellayer') {
+    if (!final || !v || !layerById(v)) return;
+    for (const { o } of selObjs()) o.layer = v;
+    sel = sel.filter(pickable); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
   if (k === 'layer') { layersVis[p] = v; render(); if (p === 'underlay') renderProps(); return; }
   if (k === 'ul') { if (p === 'op') underlay.op = clamp(v / 100, 0.1, 0.5); else { underlay.floor = v; renderProps(); } render(); return; }
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
@@ -2417,8 +2782,7 @@ function applyProp(t, final) {
   const os = selObjs().filter(x => x.kind === k); if (!os.length) return;
   for (const { o } of os) {
     if (k === 'wall' && p === 'len') {
-      const pv = o[wallPivot(o)], fk = wallFree(o), L = wLen(o) || 1, ux = (o[fk].x - pv.x) / L, uy = (o[fk].y - pv.y) / L;
-      o[fk] = { x: pv.x + ux * v, y: pv.y + uy * v };
+      if (final) applyWallLength(o, v); // yazarken her tuşta değil: ara değerler kapıları sıkıştırmasın
     } else if (k === 'wall' && p === 'deg') {
       setWallDeg(o, v, true);
     } else if (k === 'wall' && p === 'pivot') {
@@ -2449,7 +2813,7 @@ function applyProp(t, final) {
     if (k === 'furn' && p === 'rot') os.forEach(x => moveFurn3D(x.o));
     else if (affects3D(k, p)) schedBuild3D();
   }
-  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p) || ((k === 'wall' || k === 'slab') && p === 'color')) renderProps(); }
+  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot', 'stepN', 'stairType', 'railing'].includes(p) || (k === 'furn' && os.some(x => x.o.k === 'stairs') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color')) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -2460,6 +2824,21 @@ $('#props').addEventListener('click', e => {
   if (a === 'del') return deleteSel();
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
+  if (a === 'flipH' || a === 'flipV') return flipSel(a === 'flipH' ? 'h' : 'v');
+  if (a === 'archview') return archModal('elev:south');
+  if (a === 'stairfit') { for (const { o } of os) if (o.k === 'stairs') { o.h = P.wallH + 20; o.stepN = Math.round(o.h / 17.5); } commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
+  if (a.startsWith('lyr')) return layerAct(a, b.dataset.lid);
+  const sco = os.length === 1 && os[0].kind === 'section' ? os[0].o : null;
+  if (sco && a === 'secflip') { sco.dir = -(sco.dir || 1); commit(); refresh(); if (ui.secCut === sco.id) { applySecClip(); lookAtSection(sco); } return; }
+  if (sco && a === 'secdraw') return archModal('sec:' + sco.id);
+  if (sco && a === 'sec3d') {
+    ui.secCut = ui.secCut === sco.id ? null : sco.id;
+    if (ui.secCut && !ui.view3d) show3D(true); else applySecClip();
+    if (ui.secCut && ui.view3d) lookAtSection(sco);
+    renderProps(); return;
+  }
+  if (a === 'mirror') return setTool('mirror');
+  if (a === 'scale') return scaleSelPrompt();
   if (a === 'bgadd') return $('#fileBg').click();
   if (a === 'bgsel') { if (P.bg) { P.bg.lock = false; sel = ['bg']; setTool('select'); refresh(); } return; }
   if (a === 'bgreset') { if (P.bg) { P.bg.x = 0; P.bg.y = 0; commit(); refresh(); } return; }
@@ -2589,7 +2968,7 @@ $('#floors').addEventListener('click', e => {
   if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
 });
 $('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) { const f = P.floors[+t.dataset.fl], n = prompt(L('Kat adı:', 'Floor name:'), f.name); if (n) { f.name = n; commit(); refresh(); } } });
-function refresh() { render(); renderProps(); renderFloors(); updateTools(); }
+function refresh() { if (ui.lenTyped && !(sel.length === 1 && find(sel[0])?.kind === 'wall')) ui.lenTyped = ''; render(); renderProps(); renderFloors(); updateTools(); syncLayerUI(); }
 
 /* ---------- Kopyala / yapıştır ---------- */
 let pasteN = 0;
@@ -2911,10 +3290,11 @@ function variantUIHtml() {
   <p class="muted" style="margin:4px 0 6px">${L('Aktif düzendeki konum ve boyut değişiklikleri otomatik kaydedilir. Tuvalde "👆 Tıkla" göstergesine tıklayarak düzenler arasında geçin.', 'Position & size changes in the active layout are auto-saved. Click the "👆 Click me" badge on canvas to cycle layouts.')}</p>`;
 }
 function copySel() { ui.clip = selObjs().map(({ kind, o }) => ({ kind, o: JSON.parse(JSON.stringify(o)) })); pasteN = 0; if (ui.clip.length) toast(ui.clip.length + L(' nesne kopyalandı', ' object(s) copied')); }
-function paste(fromSel) {
+function paste(fromSel, at = null) {
   if (fromSel) copySel();
   const items = ui.clip; if (!items || !items.length) return;
-  pasteN++; const off = 40 * pasteN, f = F(), idm = {}, gmap = {}, ids = [];
+  if (at == null) pasteN++;
+  const off = at == null ? 40 * pasteN : at, f = F(), idm = {}, gmap = {}, ids = [];
   const mv = p => ({ x: p.x + off, y: p.y + off });
   for (const { kind, o } of items) {
     if (kind === 'op') continue;
@@ -2922,6 +3302,7 @@ function paste(fromSel) {
     if (n.grp) n.grp = gmap[n.grp] || (gmap[n.grp] = uid()); // yapıştırılan kopya yeni grubuna girer
     if (kind === 'wall') { n.a = mv(n.a); n.b = mv(n.b); f.walls.push(n); }
     else if (kind === 'dim') { n.a = mv(n.a); n.b = mv(n.b); f.dims.push(n); }
+    else if (kind === 'section') { n.a = mv(n.a); n.b = mv(n.b); n.name = nextSectionName(); (f.sections = f.sections || []).push(n); }
     else if (kind === 'room') { n.pts = n.pts.map(mv); delete n.vars; delete n.vIdx; f.rooms.push(n); }
     else if (kind === 'sketch') { n.pts = n.pts.map(mv); f.sketches.push(n); }
     else if (kind === 'slab' || kind === 'void') { n.pts = n.pts.map(mv); f[kind === 'slab' ? 'slabs' : 'voids'].push(n); }
@@ -2929,7 +3310,8 @@ function paste(fromSel) {
     else if (kind === 'text') { n.x += off; n.y += off; f.texts.push(n); }
   }
   for (const { kind, o } of items) if (kind === 'op' && idm[o.wall]) { const n = JSON.parse(JSON.stringify(o)); n.id = uid(); n.wall = idm[o.wall]; f.ops.push(n); ids.push(n.id); }
-  sel = ids; commit(); refresh();
+  sel = ids; if (at != null) return; // yerinde kopya (aynalama): çağıran commit eder
+  commit(); refresh();
   if (ui.view3d && T3) schedBuild3D();
 }
 
@@ -2975,10 +3357,24 @@ window.addEventListener('keydown', e => {
     else if (k === 'v') paste(false);
     else if (k === 'd') { e.preventDefault(); paste(true); }
     else if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }
-    else if (k === 'a') { e.preventDefault(); const f = F(); sel = []; for (const a in KINDS) f[a].forEach(o => sel.push(o.id)); refresh(); }
+    else if (k === 'a') { e.preventDefault(); const f = F(); sel = []; for (const a in KINDS) f[a].forEach(o => { if (pickable(o.id)) sel.push(o.id); }); refresh(); }
     else if (k === 's') { e.preventDefault(); saveBrowser(); }
     return;
   }
+  // sayıyla uzunluk (#36): seçili tek duvar → rakam + Enter; duvar ucu sürüklenirken → rakam yazınca uç o uzaklığa kilitlenir
+  const hd = ui.drag && ui.drag.type === 'handle' && (ui.drag.h === 'wa' || ui.drag.h === 'wb') ? ui.drag : null;
+  const sw = !hd && tool === 'select' && sel.length === 1 && find(sel[0])?.kind === 'wall' ? find(sel[0]).o : null;
+  if (hd && (/^[0-9.,]$/.test(e.key) || e.key === 'Backspace')) {
+    hd.typed = e.key === 'Backspace' ? (hd.typed || '').slice(0, -1) : (hd.typed || '') + (e.key === ',' ? '.' : e.key);
+    if (ui.raw) doHandle(ui.raw, ui.lastE || { shiftKey: false }); render(); e.preventDefault(); return;
+  }
+  if (sw && (/^[0-9.,]$/.test(e.key) || (ui.lenTyped && (e.key === 'Backspace' || e.key === 'Enter' || e.key === 'Escape')))) {
+    e.preventDefault();
+    if (e.key === 'Enter') { const v = parseFloat(ui.lenTyped); ui.lenTyped = ''; if (applyWallLength(sw, v)) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); } else render(); return; }
+    ui.lenTyped = e.key === 'Escape' ? '' : e.key === 'Backspace' ? ui.lenTyped.slice(0, -1) : (ui.lenTyped || '') + (e.key === ',' ? '.' : e.key);
+    drawPreview(); return;
+  }
+  if (ui.lenTyped && !sw) ui.lenTyped = '';
   if (tool === 'wall' && ui.draw) {
     if (/^[0-9.]$/.test(e.key)) { ui.typed += e.key; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Backspace') { ui.typed = ui.typed.slice(0, -1); if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
@@ -2990,7 +3386,7 @@ window.addEventListener('keydown', e => {
   }
   if (POLY_TOOLS.has(tool) && e.key === 'Enter') { finishPoly(); return; }
   if (e.key === 'Escape') {
-    if (ui.draw || ui.polyPts || ui.dimStart || ui.calib || ui.pen) { ui.draw = null; ui.polyPts = null; ui.dimStart = null; ui.calib = null; ui.pen = null; ui.typed = ''; render(); }
+    if (ui.draw || ui.polyPts || ui.dimStart || ui.calib || ui.pen || ui.mAxis || ui.secStart) { ui.draw = null; ui.polyPts = null; ui.dimStart = null; ui.calib = null; ui.pen = null; ui.mAxis = null; ui.secStart = null; ui.typed = ''; render(); }
     else if (tool !== 'select') setTool('select'); else { sel = []; refresh(); }
     return;
   }
@@ -3011,10 +3407,11 @@ window.addEventListener('keydown', e => {
   }
   if (e.key.startsWith('Arrow') && sel.length) {
     e.preventDefault(); const st = e.shiftKey ? 10 : 1; const dx = e.key === 'ArrowLeft' ? -st : e.key === 'ArrowRight' ? st : 0, dy = e.key === 'ArrowUp' ? -st : e.key === 'ArrowDown' ? st : 0;
-    selObjs().forEach(({ kind, o }) => { if (kind === 'wall' || kind === 'dim') { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (PTS_KINDS.has(kind)) o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
+    selObjs().forEach(({ kind, o }) => { if (AB_KINDS.has(kind)) { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (PTS_KINDS.has(kind)) o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
     commit(); render(); if (sel.includes('bg')) renderProps(); if (ui.view3d && T3) schedBuild3D(); return;
   }
-  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen', k: 'slab', y: 'void' };
+  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen', k: 'slab', y: 'void', i: 'mirror', l: 'section' };
+  if (e.shiftKey && (k === 'h' || k === 'v') && sel.length) { flipSel(k); return; } // Shift+H / Shift+V: aynala (#28)
   if (map[k]) { setTool(map[k]); return; }
   if (k === 'g') { $('#cSnap').click(); return; }
   if (k === '0') fit(); else if (k === '+' || k === '=') zoomBtn(1.25); else if (k === '-') zoomBtn(0.8);
@@ -3071,6 +3468,9 @@ function helpModal() {
     ['B', 'Pen: freehand sketch on the plan (drag to draw, release to finish)'],
     ['E', 'Eraser (click object to delete)'],
     ['X', 'Trim (click the overhanging part of a crossing wall)'],
+    ['I', 'Mirror the selection about an axis (click two points)'],
+    ['L', 'Section line (click both ends) → 3D cutaway / 2D section drawing'],
+    ['Shift+H / Shift+V', 'Flip the selection horizontally / vertically'],
     ['Ctrl+click', 'Select the object underneath (repeat to go deeper)'],
     ['Right-click', 'List the objects under the cursor + layer order'],
     ['Ctrl+] / Ctrl+[', 'Bring forward / send backward (+Shift: to front / to back)'],
@@ -3115,6 +3515,9 @@ function helpModal() {
     ['B', 'Kalem: plana serbest elle çizim (sürükle, bırak tamamlar)'],
     ['E', 'Sil'],
     ['X', 'Kırp (kesişen duvarın taşan ucuna tıkla)'],
+    ['I', 'Seçimi bir eksene göre aynala (iki noktaya tıkla)'],
+    ['L', 'Kesit çizgisi (iki uca tıkla) → 3B kesit / 2B kesit çizimi'],
+    ['Shift+H / Shift+V', 'Seçimi yatay / dikey aynala'],
     ['Ctrl+tık', 'Alttaki nesneyi seç (tekrarla: daha alttaki)'],
     ['Sağ tık', 'İmlecin altındaki nesneler + katman sırası'],
     ['Ctrl+] / Ctrl+[', 'Bir öne / bir arkaya (+Shift: en öne / en arkaya)'],
@@ -3873,6 +4276,215 @@ function exportSvg() {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x0} ${y0} ${w} ${h}" width="${w}" height="${h}"><defs>${defs}</defs><rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="#fff"/>${P.bg && layersVis.bg ? bgSvg(false) : ''}${LS.rooms}${LS.walls}${LS.ops}${LS.furn}${LS.roomLabels}${LS.dims}${LS.texts}${LS.sketches}${sb}</svg>`;
   return { svg, w, h };
 }
+/* ---------- Kesit & görünüş çizimleri (issue #30, #31) ----------
+   Tek bir izdüşüm motoru: bina, bakış yönü n olan düşey bir düzleme (O noktasından geçen) yansıtılır.
+   Çizim koordinatları: s = düzlem boyunca (izleyicinin sağı, u = (-n.y, n.x)), z = yükseklik (cm, yukarı).
+   Kesitte (cut) düzlemin önü (d ≤ 0) atılır, düzlemi kesen duvar ve döşemeler koyu (poché) çizilir;
+   görünüşte her şey düzlemin arkasındadır. Uzaktan yakına (ressam algoritması) çizilir. */
+const floorElev = i => i * (P.wallH + 20); // build3D ile aynı kat aralığı (her kat sayılır)
+const fmtLevel = cm => (Math.abs(cm) < 0.5 ? '±' : cm > 0 ? '+' : '−') + (Math.abs(cm) / 100).toFixed(2);
+// Doğru (O, u) ile poligonun kesiştiği aralıklar, doğru boyunca s cinsinden
+function lineCutIntervals(pts, O, u) {
+  const n = { x: -u.y, y: u.x }, xs = [];
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    const dp = (p.x - O.x) * n.x + (p.y - O.y) * n.y, dq = (q.x - O.x) * n.x + (q.y - O.y) * n.y;
+    if ((dp > 0) === (dq > 0)) continue;
+    const t = dp / (dp - dq), x = p.x + (q.x - p.x) * t, y = p.y + (q.y - p.y) * t;
+    xs.push((x - O.x) * u.x + (y - O.y) * u.y);
+  }
+  xs.sort((a, b) => a - b);
+  const out = []; for (let i = 0; i + 1 < xs.length; i += 2) if (xs[i + 1] - xs[i] > 0.1) out.push([xs[i], xs[i + 1]]);
+  return out;
+}
+// aralık listesi a'dan b'dekileri çıkar
+function subIntervals(a, b) {
+  let out = a.map(x => x.slice());
+  for (const [b0, b1] of b) out = out.flatMap(([a0, a1]) => (b1 <= a0 || b0 >= a1) ? [[a0, a1]] : [[a0, b0], [b1, a1]].filter(([x, y]) => y - x > 0.1));
+  return out;
+}
+// Bir kesit çizgisinin bakış yönü: a→b'nin normali (dir ile çevrilir); 3B kırpma ve çizim aynı yönü kullanır
+function sectionFrame(sec) {
+  const L = dist(sec.a, sec.b) || 1, ux = (sec.b.x - sec.a.x) / L, uy = (sec.b.y - sec.a.y) / L, k = sec.dir === -1 ? -1 : 1;
+  return { O: sec.a, n: { x: -uy * k, y: ux * k }, L };
+}
+const ELEV_DIRS = { north: { x: 0, y: 1 }, south: { x: 0, y: -1 }, east: { x: -1, y: 0 }, west: { x: 1, y: 0 } };
+const ELEV_NAMES = { north: ['Kuzey görünüşü', 'North elevation'], south: ['Güney görünüşü', 'South elevation'], east: ['Doğu görünüşü', 'East elevation'], west: ['Batı görünüşü', 'West elevation'] };
+// spec: { O, n, cut, crop:[s0,s1]|null } → { prims, levels } (saf veri; svg'ye archSvg çevirir)
+function archPrims(spec) {
+  const { O, n, cut } = spec, u = { x: -n.y, y: n.x }, prims = [], levels = [];
+  const pr = p => ({ s: (p.x - O.x) * u.x + (p.y - O.y) * u.y, d: (p.x - O.x) * n.x + (p.y - O.y) * n.y });
+  const crop = spec.crop, inCrop = (s0, s1) => crop ? [Math.max(s0, crop[0]), Math.min(s1, crop[1])] : [s0, s1];
+  const face = (corners, z0, z1, extra) => {
+    const ps = corners.map(pr), sv = ps.map(q => q.s);
+    let [s0, s1] = inCrop(Math.min(...sv), Math.max(...sv)); if (s1 - s0 < 0.5) return;
+    prims.push({ t: 'face', s0, s1, z0, z1, depth: ps.reduce((a, q) => a + q.d, 0) / ps.length, ...extra });
+  };
+  P.floors.forEach((f, i) => {
+    const E = floorElev(i); levels.push({ z: E, name: f.name });
+    f = visFloor(f, true);
+    // döşemeler
+    const plates = [...slabPolys(f).map(pts => ({ pts, z0: E - 20, z1: E })), ...(f.slabs || []).filter(s => s.pts && s.pts.length > 2).map(s => ({ pts: s.pts, z0: E + (+s.off || 0) - (+s.t || 20), z1: E + (+s.off || 0) }))];
+    const voidIv = cut ? (f.voids || []).flatMap(v => lineCutIntervals(v.pts, O, u)) : [];
+    for (const pl of plates) {
+      if (cut) {
+        for (const [s0, s1] of subIntervals(lineCutIntervals(pl.pts, O, u), voidIv)) { const c = inCrop(s0, s1); if (c[1] - c[0] > 0.5) prims.push({ t: 'cut', s0: c[0], s1: c[1], z0: pl.z0, z1: pl.z1, depth: 0 }); }
+      } else face(pl.pts, pl.z0, pl.z1, { slab: true });
+    }
+    // duvarlar (+ kapı/pencereler)
+    for (const w of f.walls) {
+      const L = wLen(w); if (L < 1) continue;
+      const wx = (w.b.x - w.a.x) / L, wy = (w.b.y - w.a.y) / L, nx = -wy * w.t / 2, ny = wx * w.t / 2, H = +w.h || P.wallH;
+      const at = t => ({ x: w.a.x + (w.b.x - w.a.x) * t, y: w.a.y + (w.b.y - w.a.y) * t });
+      const A = pr(w.a), B = pr(w.b), ops = f.ops.filter(o => o.wall === w.id);
+      const curtain = w.wt === 'curtain';
+      const faceOf = (t0, t1) => {
+        const p0 = at(t0), p1 = at(t1);
+        const corners = [{ x: p0.x + nx, y: p0.y + ny }, { x: p0.x - nx, y: p0.y - ny }, { x: p1.x + nx, y: p1.y + ny }, { x: p1.x - nx, y: p1.y - ny }];
+        const holes = ops.filter(o => o.d / L >= t0 && o.d / L <= t1).map(o => {
+          const q0 = pr(at(clamp((o.d - o.w / 2) / L, t0, t1))), q1 = pr(at(clamp((o.d + o.w / 2) / L, t0, t1)));
+          return { s0: Math.min(q0.s, q1.s), s1: Math.max(q0.s, q1.s), z0: E + (+o.sill || 0), z1: E + (+o.sill || 0) + (+o.h || 0), type: o.type };
+        }).filter(hh => hh.s1 - hh.s0 > 1);
+        face(corners, E, E + H, { holes, curtain });
+      };
+      if (cut && (A.d > 0) !== (B.d > 0)) {
+        const t = A.d / (A.d - B.d), sc = A.s + (B.s - A.s) * t, sin = Math.abs(B.d - A.d) / L, cw = w.t / Math.max(sin, 0.2);
+        const pos = t * L, op = ops.find(o => Math.abs(pos - o.d) < o.w / 2);
+        const [c0, c1] = inCrop(sc - cw / 2, sc + cw / 2);
+        if (c1 - c0 > 0.2) {
+          const bands = op ? [[E, E + (+op.sill || 0)], [E + (+op.sill || 0) + (+op.h || 0), E + H]] : [[E, E + H]];
+          for (const [z0, z1] of bands) if (z1 - z0 > 0.5) prims.push({ t: 'cut', s0: c0, s1: c1, z0, z1, depth: 0, curtain });
+          if (op && op.type === 'window') prims.push({ t: 'glass', s0: c0, s1: c1, z0: E + (+op.sill || 0), z1: E + (+op.sill || 0) + (+op.h || 0), depth: 0 });
+        }
+        if (A.d > 0) faceOf(0, t); else faceOf(t, 1);
+      } else if (!cut || (A.d > 0 && B.d > 0)) faceOf(0, 1);
+    }
+    // kesilen odaların adları
+    if (cut) for (const r of f.rooms) for (const [s0, s1] of lineCutIntervals(r.pts, O, u)) {
+      const c = inCrop(s0, s1); if (c[1] - c[0] > 60) prims.push({ t: 'label', s: (c[0] + c[1]) / 2, z: E + P.wallH * 0.45, text: r.name, depth: -1 });
+    }
+  });
+  return { prims, levels };
+}
+// Çizimi kağıda bas (her zaman beyaz kağıt paleti). Döner: { svg, w, h }
+function archSvg(spec, title) {
+  const C = pal(true), { prims, levels } = archPrims(spec), st = C.text;
+  const geo = prims.filter(p => p.t !== 'label');
+  if (!geo.length) return null;
+  let s0 = Math.min(...geo.map(p => p.s0)), s1 = Math.max(...geo.map(p => p.s1));
+  const zTop = Math.max(...geo.map(p => p.z1)), zBot = -20;
+  const M = 90, LM = 170, w = Math.round(s1 - s0 + LM + M), h = Math.round(zTop - zBot + M * 2 + 70);
+  const X = s => s - s0 + LM, Y = z => zTop - z + M;
+  let out = '';
+  // kat kotları: kesikli seviye çizgisi + ▼ işareti + ±0.00
+  for (const lv of levels) {
+    if (lv.z > zTop + 1) continue;
+    const y = Y(lv.z);
+    out += `<line x1="${LM - 120}" y1="${y}" x2="${w - M / 2}" y2="${y}" stroke="${C.sub}" stroke-width="1" stroke-dasharray="14 6 3 6"/>`;
+    out += `<path d="M${LM - 110} ${y - 14}L${LM - 96} ${y}L${LM - 82} ${y - 14}Z" fill="${C.sub}"/>`;
+    out += `<text x="${LM - 118}" y="${y - 20}" font-size="17" font-weight="700" fill="${C.text}" font-family="Segoe UI,sans-serif">${fmtLevel(lv.z)}</text>`;
+    out += `<text x="${LM - 118}" y="${y + 20}" font-size="13" fill="${C.sub}" font-family="Segoe UI,sans-serif">${esc(lv.name)}</text>`;
+  }
+  // uzaktan yakına: yüzler, sonra kesilenler, en son etiketler
+  const faces = prims.filter(p => p.t === 'face').sort((a, b) => b.depth - a.depth);
+  for (const p of faces) {
+    const fill = p.slab ? C.gMin : p.curtain ? C.glass : C.bg;
+    out += `<rect x="${X(p.s0)}" y="${Y(p.z1)}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="${fill}" stroke="${st}" stroke-width="1.6"/>`;
+    for (const hh of p.holes || []) {
+      const win = hh.type === 'window', x = X(hh.s0), y = Y(hh.z1), ww = hh.s1 - hh.s0, hgt = hh.z1 - hh.z0;
+      out += `<rect x="${x}" y="${y}" width="${ww}" height="${hgt}" fill="${win ? C.glass : C.bg}" stroke="${st}" stroke-width="1.3"/>`;
+      if (win) out += `<path d="M${x + ww / 2} ${y}V${y + hgt}M${x} ${y + hgt * 0.35}H${x + ww}" stroke="${st}" stroke-width="0.9" fill="none"/>`;
+      else if (hh.type !== 'arch') out += `<rect x="${x + ww * 0.12}" y="${y + hgt * 0.08}" width="${ww * 0.76}" height="${hgt * 0.84}" fill="none" stroke="${C.sub}" stroke-width="0.8"/><circle cx="${x + ww * 0.8}" cy="${y + hgt * 0.52}" r="2.5" fill="${st}"/>`;
+    }
+  }
+  for (const p of prims.filter(p => p.t === 'cut')) out += `<rect x="${X(p.s0)}" y="${Y(p.z1)}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="${p.curtain ? C.glass : C.wall}" stroke="${C.wall}" stroke-width="1"/>`;
+  for (const p of prims.filter(p => p.t === 'glass')) out += `<rect x="${X(p.s0) + (p.s1 - p.s0) * 0.4}" y="${Y(p.z1)}" width="${(p.s1 - p.s0) * 0.2}" height="${p.z1 - p.z0}" fill="${C.glass}" stroke="${st}" stroke-width="0.8"/>`;
+  for (const p of prims.filter(p => p.t === 'label')) out += `<text x="${X(p.s)}" y="${Y(p.z)}" text-anchor="middle" font-size="20" font-weight="600" fill="${C.text}" stroke="${C.halo}" stroke-width="4" paint-order="stroke" font-family="Segoe UI,sans-serif">${esc(p.text)}</text>`;
+  // zemin çizgisi + başlık + 2 m ölçek çubuğu
+  out += `<line x1="${LM - 130}" y1="${Y(zBot)}" x2="${w - 20}" y2="${Y(zBot)}" stroke="${st}" stroke-width="5"/>`;
+  const ty = h - 30;
+  out += `<text x="${LM}" y="${ty}" font-size="24" font-weight="700" fill="${C.text}" font-family="Segoe UI,sans-serif">${esc(title)}</text>`;
+  out += `<text x="${LM}" y="${ty + 22}" font-size="14" fill="${C.sub}" font-family="Segoe UI,sans-serif">${esc(P.name)} · ${new Date().toLocaleDateString()}</text>`;
+  const bx = w - M / 2 - 200;
+  out += `<g font-family="Segoe UI,sans-serif" font-size="13" fill="${C.text}"><rect x="${bx}" y="${ty - 10}" width="100" height="8" fill="${st}"/><rect x="${bx + 100}" y="${ty - 10}" width="100" height="8" fill="#fff" stroke="${st}"/><text x="${bx}" y="${ty + 12}">0</text><text x="${bx + 100}" y="${ty + 12}" text-anchor="middle">1 m</text><text x="${bx + 200}" y="${ty + 12}" text-anchor="end">2 m</text></g>`;
+  return { svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="#fff"/>${out}</svg>`, w, h };
+}
+function elevationSpec(dir) {
+  const n = ELEV_DIRS[dir]; let bb = null;
+  for (const f of P.floors) { const b = contentBounds(f); if (b) bb = bb ? { x0: Math.min(bb.x0, b.x0), y0: Math.min(bb.y0, b.y0), x1: Math.max(bb.x1, b.x1), y1: Math.max(bb.y1, b.y1) } : b; }
+  if (!bb) return null;
+  const c = { x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2 }, R = Math.hypot(bb.x1 - bb.x0, bb.y1 - bb.y0) + 500;
+  return { O: { x: c.x - n.x * R, y: c.y - n.y * R }, n, cut: false, crop: null };
+}
+function sectionSpec(sec) {
+  const fr = sectionFrame(sec), u = { x: -fr.n.y, y: fr.n.x }, sb = (sec.b.x - sec.a.x) * u.x + (sec.b.y - sec.a.y) * u.y;
+  return { O: fr.O, n: fr.n, cut: true, crop: [Math.min(0, sb), Math.max(0, sb)] };
+}
+// Çizim penceresi: kesitler ve dört görünüş arasında sekme; SVG / PNG indir
+function archModal(key) {
+  const secs = []; P.floors.forEach(f => (f.sections || []).forEach(s => secs.push(s)));
+  const tabs = [...secs.map(s => ['sec:' + s.id, L('Kesit ', 'Section ') + s.name + '–' + s.name + "'"]), ...Object.keys(ELEV_DIRS).map(d => ['elev:' + d, L(...ELEV_NAMES[d])])];
+  if (!tabs.some(t => t[0] === key)) key = tabs[0][0];
+  const [kind, id] = key.split(':'), sec = kind === 'sec' && secs.find(s => s.id === id);
+  const title = sec ? L('Kesit ', 'Section ') + sec.name + '–' + sec.name + "'" : L(...ELEV_NAMES[id]);
+  const spec = sec ? sectionSpec(sec) : elevationSpec(id), dr = spec && archSvg(spec, title);
+  ui.archDraw = dr ? { ...dr, title } : null; ui.archKey = key;
+  openModal(`<h2>📐 ${L('Kesit & görünüşler', 'Sections & elevations')} <button class="btn sm" data-close>✕</button></h2>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 10px">${tabs.map(([k, n]) => `<button class="btn sm${k === key ? ' primary' : ''}" data-arch="${k}">${esc(n)}</button>`).join('')}</div>
+    <div class="archview" style="background:#fff;border-radius:8px;overflow:auto;max-height:62vh;padding:8px">${dr ? dr.svg.replace('<svg ', '<svg style="width:100%;height:auto;max-height:60vh" ') : `<p class="muted" style="color:#475569">${L('Çizilecek bir şey yok — önce duvar ekle.', 'Nothing to draw yet — add some walls first.')}</p>`}</div>
+    <div class="row" style="margin-top:10px;gap:8px"><button class="btn sm" data-archdl="svg" ${dr ? '' : 'disabled'}>⬇ SVG</button><button class="btn sm primary" data-archdl="png" ${dr ? '' : 'disabled'}>⬇ PNG</button></div>`, 'arch');
+}
+function svgToPng(svg, w, h, name) {
+  const sc = Math.min(3, 3200 / Math.max(w, h)) * (w < 1200 ? 1.5 : 1), img = new Image();
+  img.onload = () => { const c = document.createElement('canvas'); c.width = Math.round(w * sc); c.height = Math.round(h * sc); const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height); c.toBlob(b => download(name, b)); };
+  img.onerror = () => toast(L('PNG oluşturulamadı', 'Failed to generate PNG'));
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+$('#modal').addEventListener('click', e => {
+  if (ui.modal !== 'arch') return;
+  const t = e.target.closest('[data-arch]'); if (t) { archModal(t.dataset.arch); return; }
+  const d = e.target.closest('[data-archdl]'); if (!d || !ui.archDraw) return;
+  const base = fname('x').replace(/\.x$/, '') + '-' + ui.archDraw.title.toLowerCase().replace(/[^a-z0-9ğüşöçı]+/gi, '-');
+  if (d.dataset.archdl === 'svg') download(base + '.svg', new Blob([ui.archDraw.svg], { type: 'image/svg+xml' }));
+  else svgToPng(ui.archDraw.svg, ui.archDraw.w, ui.archDraw.h, base + '.png');
+});
+// 3B kesit (issue #30): seçili kesitin önünü kırp (renderer genel kırpma düzlemi)
+function applySecClip() {
+  if (!T3 || !T3.r) return;
+  const fd = ui.secCut && findAnyFloor(ui.secCut);
+  if (!fd || fd.kind !== 'section') { ui.secCut = null; T3.r.clippingPlanes = []; return; }
+  const { O, n } = sectionFrame(fd.o);
+  T3.r.clippingPlanes = [new THREE.Plane(new THREE.Vector3(n.x, 0, n.y), -(n.x * O.x + n.y * O.y))];
+}
+// kesite / cepheye dik bak (izleyici n'nin tersinde, n yönüne bakar)
+function camAlong(n, c, span, hgt) {
+  if (!T3) return;
+  const D = Math.max(span, hgt) * 1.25 + 400, zc = hgt / 2;
+  T3.cam.position.set(c.x - n.x * D, zc, c.y - n.y * D); T3.ctl.target.set(c.x, zc, c.y); T3.ctl.update();
+}
+function lookAtSection(sec) {
+  const { n, L } = sectionFrame(sec);
+  camAlong(n, { x: (sec.a.x + sec.b.x) / 2, y: (sec.a.y + sec.b.y) / 2 }, L, (T3 && T3.fit ? T3.fit.elev : P.wallH) || P.wallH);
+}
+// 2B kesit çizgisi sembolü: kalın kesik-noktalı çizgi, uçlarda harf balonu ve bakış oku
+function sectionSvg(sec, live) {
+  const L = dist(sec.a, sec.b); if (L < 1) return '';
+  const C = pal(), z = live ? view.z : 0.5, { n } = sectionFrame(sec), ux = (sec.b.x - sec.a.x) / L, uy = (sec.b.y - sec.a.y) / L;
+  const r = 16 / z, sw = 2.4 / z, col = C.accent;
+  let s = `<g ${live ? `data-id="${sec.id}" style="cursor:pointer"` : ''}><line x1="${sec.a.x}" y1="${sec.a.y}" x2="${sec.b.x}" y2="${sec.b.y}" stroke="${col}" stroke-width="${sw}" stroke-dasharray="${18 / z} ${5 / z} ${4 / z} ${5 / z}"/>`;
+  [[sec.a, -1, ''], [sec.b, 1, "'"]].forEach(([p, sg, mark]) => {
+    const cx = p.x + ux * sg * r * 1.4, cy = p.y + uy * sg * r * 1.4, ax = p.x + n.x * r * 1.6, ay = p.y + n.y * r * 1.6;
+    s += `<path d="M${p.x} ${p.y}L${ax} ${ay}" stroke="${col}" stroke-width="${sw}"/><path d="M${ax + n.x * r * 0.7} ${ay + n.y * r * 0.7}L${ax - n.y * r * 0.45} ${ay + n.x * r * 0.45}L${ax + n.y * r * 0.45} ${ay - n.x * r * 0.45}Z" fill="${col}"/>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${C.bg}" stroke="${col}" stroke-width="${sw}"/><text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-size="${r * 1.05}" font-weight="700" fill="${col}" font-family="Segoe UI,sans-serif">${esc(sec.name || 'A')}${mark}</text>`;
+  });
+  if (live) s += `<line x1="${sec.a.x}" y1="${sec.a.y}" x2="${sec.b.x}" y2="${sec.b.y}" stroke="transparent" stroke-width="${Math.max(12, 12 / view.z)}"/>`;
+  return s + '</g>';
+}
+function nextSectionName() {
+  const used = new Set(); P.floors.forEach(f => (f.sections || []).forEach(s => used.add(s.name)));
+  for (let i = 0; i < 26; i++) { const c = String.fromCharCode(65 + i); if (!used.has(c)) return c; }
+  return 'S' + (used.size + 1);
+}
 function exportPng() {
   const { svg, w, h } = exportSvg(), sc = Math.min(3, 3200 / Math.max(w, h)) * (w < 1200 ? 1.5 : 1);
   const img = new Image();
@@ -3880,12 +4492,90 @@ function exportPng() {
   img.onerror = () => toast(L('PNG oluşturulamadı', 'Failed to generate PNG'));
   img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
-function exportPrint() {
-  const { svg } = exportSvg(), win = window.open('', '_blank');
+// Yazdır düğmesi doğrudan yazdırmaz: önce çıktı ayarları (#35)
+function exportPrint() { openPlotDialog(); }
+/* ---------- Çıktı / plot iletişim kutusu (issue #35) ----------
+   Kağıt (A4–A0, yatay/dikey), mimari ölçek (1:50 / 1:100 / 1:200 / 1:500 / sığdır), çıktı alanı (tüm plan /
+   ekran / pencere), ortalama ve kenar boşluğu. Pafta milimetre cinsinden bir SVG'dir; 1:100'de 100 cm = 10 mm. */
+const PAPERS = { a4: [297, 210], a3: [420, 297], a2: [594, 420], a1: [841, 594], a0: [1189, 841] };
+const PLOT_TITLE_MM = 16;
+ui.plot = { paper: 'a4', orient: 'landscape', scale: '100', area: 'all', center: true, margin: 10, win: null };
+const paperMm = p => { const [a, b] = PAPERS[p.paper] || PAPERS.a4; return p.orient === 'portrait' ? { w: b, h: a } : { w: a, h: b }; };
+// plan sınırları (cm) → kağıt (mm): k = mm / cm; taşma varsa overflow
+function calcPlotTransform(paper, scale, b, margin, center, titleH = PLOT_TITLE_MM) {
+  const areaW = paper.w - 2 * margin, areaH = paper.h - 2 * margin - titleH;
+  const bw = Math.max(1, b.x1 - b.x0), bh = Math.max(1, b.y1 - b.y0);
+  const k = scale === 'fit' ? Math.min(areaW / bw, areaH / bh) : 10 / +scale;
+  const pw = bw * k, ph = bh * k;
+  return { k, pw, ph, areaW, areaH, ox: margin + (center ? (areaW - pw) / 2 : 0), oy: margin + (center ? (areaH - ph) / 2 : 0), overflow: pw > areaW + 0.5 || ph > areaH + 0.5 };
+}
+function plotBounds(area) {
+  if (area === 'window' && ui.plot.win) return ui.plot.win;
+  if (area === 'view') { const r = cv.getBoundingClientRect(); return { x0: -view.x / view.z, y0: -view.y / view.z, x1: (r.width - view.x) / view.z, y1: (r.height - view.y) / view.z }; }
+  const b = contentBounds(F()) || { x0: 0, y0: 0, x1: 1000, y1: 700 }, pad = 60;
+  return { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad };
+}
+// ölçek çubuğu: kağıtta en az 25 mm tutan ilk yuvarlak uzunluk
+const plotBarCm = k => [50, 100, 200, 500, 1000, 2000, 5000, 10000].find(c => c * k >= 25) || 10000;
+function plotSheetSvg(p = ui.plot) {
+  const f = F(), paper = paperMm(p), m = clamp(+p.margin || 0, 0, 40), b = plotBounds(p.area), t = calcPlotTransform(paper, p.scale, b, m, p.center);
+  const z0 = view.z; view.z = 0.5; ui.exporting = true;
+  let LS, defs;
+  try { LS = layerStrings(f, false); defs = defsSvg(); } finally { view.z = z0; ui.exporting = false; }
+  const plan = `<g clip-path="url(#plotclip)"><g transform="translate(${t.ox} ${t.oy}) scale(${t.k}) translate(${-b.x0} ${-b.y0})">${P.bg && layersVis.bg ? bgSvg(false) : ''}${LS.rooms}${LS.walls}${LS.ops}${LS.furn}${LS.roomLabels}${LS.dims}${LS.texts}${LS.sketches}</g></g>`;
+  // yalnızca seçilen alan basılır: plan dikdörtgeni ∩ yazdırılabilir alan
+  const cx0 = Math.max(m, t.ox), cy0 = Math.max(m, t.oy), cx1 = Math.min(m + t.areaW, t.ox + t.pw), cy1 = Math.min(m + t.areaH, t.oy + t.ph);
+  const ty = paper.h - m - PLOT_TITLE_MM, scl = p.scale === 'fit' ? '1:' + Math.round(10 / t.k) + ' (' + L('sığdır', 'fit') + ')' : '1:' + p.scale;
+  const bar = plotBarCm(t.k), bw = bar * t.k, bx = paper.w - m - 6 - bw, date = new Date().toLocaleDateString(isEN() ? 'en-US' : 'tr-TR');
+  const frame = `<rect x="${m}" y="${m}" width="${paper.w - 2 * m}" height="${paper.h - 2 * m}" fill="none" stroke="#334155" stroke-width="0.5"/><path d="M${m} ${ty}H${paper.w - m}" stroke="#334155" stroke-width="0.35"/>`;
+  const title = `<g font-family="Segoe UI,sans-serif" fill="#0f172a"><text x="${m + 4}" y="${ty + 7}" font-size="4.6" font-weight="700">${esc(P.name)} – ${esc(f.name)}</text><text x="${m + 4}" y="${ty + 12.5}" font-size="3" fill="#475569">${date}  •  ${L('Ölçek', 'Scale')} ${scl}  •  ${(p.paper || 'a4').toUpperCase()} ${p.orient === 'portrait' ? L('dikey', 'portrait') : L('yatay', 'landscape')}</text>`
+    + `<path d="M${bx} ${ty + 10}H${bx + bw}M${bx} ${ty + 8.5}V${ty + 11.5}M${bx + bw / 2} ${ty + 8.5}V${ty + 11.5}M${bx + bw} ${ty + 8.5}V${ty + 11.5}" stroke="#0f172a" stroke-width="0.4" fill="none"/><text x="${bx}" y="${ty + 6.5}" font-size="2.8">0</text><text x="${bx + bw}" y="${ty + 6.5}" font-size="2.8" text-anchor="end">${fmtLen(bar)}</text></g>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${paper.w}mm" height="${paper.h}mm" viewBox="0 0 ${paper.w} ${paper.h}"><defs>${defs}<clipPath id="plotclip"><rect x="${cx0}" y="${cy0}" width="${Math.max(0, cx1 - cx0)}" height="${Math.max(0, cy1 - cy0)}"/></clipPath></defs><rect width="${paper.w}" height="${paper.h}" fill="#fff"/>${plan}${frame}${title}</svg>`;
+  return { svg, t, paper, b };
+}
+function plotDialogHtml() {
+  const p = ui.plot, sh = plotSheetSvg(p), t = sh.t, sel = (k, opts) => `<select data-plot="${k}">${opts.map(([v, n]) => `<option value="${v}" ${String(p[k]) === v ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
+  const lab = (t2, c) => `<label style="display:flex;flex-direction:column;gap:2px;font-size:12px">${t2}${c}</label>`;
+  return `<h2>🖨 ${L('Çıktı ayarları', 'Plot setup')} <button class="btn sm" data-close>✕</button></h2>
+    <div class="row plotctl" style="flex-wrap:wrap;gap:10px;margin-bottom:8px;align-items:flex-end">
+      ${lab(L('Kağıt', 'Paper'), sel('paper', Object.keys(PAPERS).map(k => [k, k.toUpperCase() + ' (' + PAPERS[k].join('×') + ' mm)'])))}
+      ${lab(L('Yön', 'Orientation'), sel('orient', [['landscape', L('Yatay', 'Landscape')], ['portrait', L('Dikey', 'Portrait')]]))}
+      ${lab(L('Ölçek', 'Scale'), sel('scale', [['50', '1:50'], ['100', '1:100'], ['200', '1:200'], ['500', '1:500'], ['fit', L('Kağıda sığdır', 'Fit to paper')]]))}
+      ${lab(L('Alan', 'Area'), sel('area', [['all', L('Tüm plan', 'Whole plan')], ['view', L('Ekrandaki görünüm', 'Current view')], ['window', L('Pencere (seçilen alan)', 'Window (picked area)')]]))}
+      ${lab(L('Kenar boşluğu (mm)', 'Margin (mm)'), `<input type="number" min="0" max="40" step="1" data-plot="margin" value="${p.margin}" style="width:70px">`)}
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px"><input type="checkbox" data-plot="center" ${p.center ? 'checked' : ''}> ${L('Kağıda ortala', 'Center on paper')}</label>
+      <button class="btn sm" data-plot-act="win">▭ ${L('Pencere seç…', 'Pick window…')}</button>
+    </div>
+    <div style="background:#94a3b8;border-radius:8px;padding:12px;display:flex;justify-content:center"><div style="box-shadow:0 4px 18px rgba(0,0,0,.35);width:${p.orient === 'portrait' ? 42 : 100}%;max-height:56vh">${sh.svg.replace(/width="[\d.]+mm" height="[\d.]+mm"/, 'style="width:100%;height:auto;display:block"')}</div></div>
+    <p style="margin:8px 0 0;font-size:12px;${t.overflow ? 'color:var(--danger);font-weight:700' : 'color:var(--muted, #64748b)'}">${t.overflow
+      ? '⚠ ' + L(`Plan bu ölçekte kağıda sığmıyor (${Math.round(t.pw)}×${Math.round(t.ph)} mm, alan ${Math.round(t.areaW)}×${Math.round(t.areaH)} mm) — kenarlar kesilecek. Daha büyük kağıt, küçük ölçek ya da "Kağıda sığdır" seç.`, `The plan does not fit at this scale (${Math.round(t.pw)}×${Math.round(t.ph)} mm on a ${Math.round(t.areaW)}×${Math.round(t.areaH)} mm area) — it will be clipped. Pick a larger paper, a smaller scale or "Fit to paper".`)
+      : L(`Plan kağıtta ${Math.round(t.pw)}×${Math.round(t.ph)} mm.`, `The plan measures ${Math.round(t.pw)}×${Math.round(t.ph)} mm on paper.`)}</p>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm primary" data-plot-act="print">🖨 ${L('Yazdır / PDF', 'Print / PDF')}</button><button class="btn sm" data-plot-act="svg">⬇ SVG</button></div>`;
+}
+function openPlotDialog() { openModal(plotDialogHtml(), 'plot'); }
+function plotPrint() {
+  const p = ui.plot, { svg, paper } = plotSheetSvg(p), win = window.open('', '_blank');
   if (!win) return toast(L('Açılır pencere engellendi', 'Pop-up window blocked'));
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(P.name)}</title><style>@page{size:A4 landscape;margin:10mm}body{margin:0}svg{width:100%;height:auto;max-height:190mm}</style></head><body>${svg}<script>setTimeout(()=>print(),400)<\/script></body></html>`);
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(P.name)}</title><style>@page{size:${p.paper.toUpperCase()} ${p.orient};margin:0}html,body{margin:0}svg{display:block;width:${paper.w}mm;height:${paper.h}mm}</style></head><body>${svg}<script>setTimeout(()=>print(),400)<\/script></body></html>`);
   win.document.close();
 }
+$('#modal').addEventListener('change', e => {
+  if (ui.modal !== 'plot') return;
+  const t = e.target.closest('[data-plot]'); if (!t) return;
+  const k = t.dataset.plot; ui.plot[k] = t.type === 'checkbox' ? t.checked : t.value;
+  if (k === 'area' && t.value === 'window' && !ui.plot.win) { startPlotWindow(); return; }
+  openPlotDialog();
+});
+$('#modal').addEventListener('click', e => {
+  if (ui.modal !== 'plot') return;
+  const a = e.target.closest('[data-plot-act]'); if (!a) return;
+  if (a.dataset.plotAct === 'win') startPlotWindow();
+  else if (a.dataset.plotAct === 'print') plotPrint();
+  else download(fname('svg').replace(/\.svg$/, '-' + ui.plot.paper + '.svg'), new Blob([plotSheetSvg().svg], { type: 'image/svg+xml' }));
+});
+// pencere seçimi: iletişim kutusu kapanır, tuvalde bir dikdörtgen sürüklenir, sonra geri açılır
+function startPlotWindow() { closeModal(); if (ui.view3d) show3D(false); setTool('plotwin'); toast(L('Çıktı alanını tuvalde sürükleyerek seç', 'Drag the plot area on the canvas')); }
+
 
 /* ---------- 3B render (PNG) ----------
    The 3D view is a live WebGL canvas, so the only honest "export" is a capture
@@ -3976,7 +4666,9 @@ async function render3DHQ(opts) {
   const w = Math.max(1, el.clientWidth), h = Math.max(1, el.clientHeight);
 
   // 1. final image size (what the user gets) and the buffer we render into
-  const outK = opts.scale || shot3DScale(w, h, 2600, 6e6);
+  // render stüdyosu (#34): sabit uzun kenar (1080p / 2K / 4K) ya da ekranın 2–3 katı
+  const outK = opts.longSide ? opts.longSide / Math.max(w, h) : (opts.scale || shot3DScale(w, h, 2600, 6e6));
+  const style = RENDER_STYLES[opts.style] ? opts.style : 'realistic', inkStyle = style === 'technical' || style === 'sketch';
   const outW = Math.max(2, Math.round(w * outK)), outH = Math.max(2, Math.round(h * outK));
   const bufK = Math.max(1, Math.min(opts.supersample || 2, 4096 / Math.max(outW, outH)));
   const W = Math.max(2, Math.round(outW * bufK)), H = Math.max(2, Math.round(outH * bufK));
@@ -3996,7 +4688,7 @@ async function render3DHQ(opts) {
   // CAD, not as a rendered image. A render shows shaded surfaces only, so the
   // edge helpers (LineSegments) are hidden for the passes and restored after.
   const edges = [];
-  if (opts.outlines !== true) scene.traverse(o => { if (o.isLineSegments && o.visible) { edges.push(o); o.visible = false; } });
+  if (opts.outlines !== true && !inkStyle) scene.traverse(o => { if (o.isLineSegments && o.visible) { edges.push(o); o.visible = false; } });
 
   // Studio backdrop: a white sweep + a neutral ground, so the output reads as a
   // presentation render instead of a screenshot of the dark viewport. In dark
@@ -4016,7 +4708,28 @@ async function render3DHQ(opts) {
       if (o.userData && o.userData.slab) { slabs.push({ m: o, mat: o.material }); o.material = studioSlab; }
     });
   }
-  const fit = T3.fit;
+  // stil (#34): kil / teknik / eskiz tüm yüzeyleri tek mat malzemeye çevirir; teknik ve eskiz kenarları mürekkep rengine
+  const swapped = [], styleMats = [];
+  if (style !== 'realistic') {
+    const solid = new THREE.MeshLambertMaterial({ color: style === 'clay' ? 0xefe9df : 0xfbfbfb, side: THREE.DoubleSide });
+    const glassM = new THREE.MeshLambertMaterial({ color: 0xdbe7ef, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+    styleMats.push(solid, glassM);
+    scene.traverse(o => {
+      if (!o.isMesh || o === T3.ground) return;
+      const m0 = Array.isArray(o.material) ? o.material[0] : o.material;
+      swapped.push({ m: o, mat: o.material }); o.material = m0 && m0.transparent ? glassM : solid;
+    });
+    if (inkStyle) { const ink = new THREE.LineBasicMaterial({ color: 0x1f2937 }); styleMats.push(ink); scene.traverse(o => { if (o.isLineSegments) { swapped.push({ m: o, mat: o.material }); o.material = ink; } }); }
+  }
+  // güneş (#34): ana ışığı azimut / yüksekliğe taşı (alçak güneşte sıcak renk)
+  const sunSaved = [];
+  if (opts.sun) for (const l of lights) {
+    const tg = l.target.position, d0 = l.position.distanceTo(tg) || 1000, v = sunVector(opts.sun.az, opts.sun.alt);
+    sunSaved.push({ l, pos: l.position.clone(), col: l.color.clone() });
+    l.position.set(tg.x + v.x * d0, tg.y + v.y * d0, tg.z + v.z * d0);
+    if (opts.sun.alt < 20) l.color.setHex(0xffc58a);
+  }
+  const fit = T3.fit, mime = opts.format === 'jpeg' ? 'image/jpeg' : 'image/png';
   let url = '';
   try {
     T3.run = false;                                   // the animation loop must not overwrite a sample
@@ -4067,23 +4780,27 @@ async function render3DHQ(opts) {
     r.shadowMap.autoUpdate = oldShadowAuto;
 
     // 2. downscale the supersampled buffer to the final image
-    if (W === outW && H === outH) {
-      url = acc.toDataURL('image/png');
-    } else {
+    let fin = acc;
+    if (W !== outW || H !== outH) {
       const out = document.createElement('canvas'); out.width = outW; out.height = outH;
       const octx = out.getContext('2d');
       octx.imageSmoothingEnabled = true;
       octx.imageSmoothingQuality = 'high';
       octx.drawImage(acc, 0, 0, W, H, 0, 0, outW, outH);
       sharpenCanvas(octx, outW, outH, bufK >= 2 ? 0.25 : 0.6);   // a supersampled downscale is already crisp
-      url = out.toDataURL('image/png');
+      fin = out;
     }
+    if (style === 'sketch') sketchFilter(fin);         // kurşun kalem son işlemi (#34)
+    url = fin.toDataURL(mime, 0.92);
   } catch (e) {
     url = '';
   } finally {
     if (r.shadowMap) { r.shadowMap.autoUpdate = true; r.shadowMap.needsUpdate = true; }
     for (const e of edges) e.visible = true;
     if (oldBg !== null) scene.background = oldBg;
+    for (let i = swapped.length - 1; i >= 0; i--) swapped[i].m.material = swapped[i].mat;
+    for (const m of styleMats) m.dispose();
+    for (const s of sunSaved) { s.l.position.copy(s.pos); s.l.color.copy(s.col); }
     for (const s of slabs) s.m.material = s.mat;
     studioSlab.dispose();
     if (T3.ground && oldGroundMat) { T3.ground.material = oldGroundMat; if (studioGround) studioGround.dispose(); }
@@ -4129,7 +4846,7 @@ function sharpenCanvas(ctx, w, h, amount) {
   ctx.putImageData(new ImageData(out, w, h), 0, 0);
 }
 
-function export3DRender(quick) {
+function export3DRender(quick, opts) {
   if (!ui.view3d || !T3) return toast(L('Önce 3B görünüme geçin', 'Switch to the 3D view first'));
   if (ui.shot) return;                                    // guard against a double click
   ui.shot = true;
@@ -4137,13 +4854,15 @@ function export3DRender(quick) {
   return (async () => {
     try {
       // the real render: many jittered samples + a high-res shadow map
-      let url = quick ? fast() : await render3DHQ();
+      let url = quick ? fast() : await render3DHQ(opts);
       if (!url || url.length < 100) {
         toast(L('Yüksek kalite desteklenmiyor — hızlı görüntü alınıyor', 'High quality unavailable — saving a plain capture'));
         url = fast();
       }
       if (!url || url.length < 100) return toast(L('Render alınamadı', 'Could not capture the render'));
-      const suffix = quick ? '-3d-view.png' : '-3d-render.png';
+      const jpg = !quick && opts && opts.format === 'jpeg' && /^data:image\/jpeg/.test(url);
+      const styled = opts && opts.style && opts.style !== 'realistic';
+      const suffix = quick ? '-3d-view.png' : !styled && !jpg ? '-3d-render.png' : (styled ? '-3d-' + opts.style : '-3d-render') + (jpg ? '.jpg' : '.png');
       download(fname('png').replace(/\.png$/, suffix), dataUrlBlob(url));
       toast(quick
         ? L('📸 Görünüm kaydedildi', '📸 View saved')
@@ -4154,6 +4873,63 @@ function export3DRender(quick) {
   })();
 }
 
+/* ---------- Render stüdyosu (issue #34) ----------
+   render3DHQ() üzerine stil, güneş ve çözünürlük seçenekleri: gerçekçi (mevcut stüdyo), teknik (beyaz yüzey +
+   siyah kenar), eskiz (teknik + kurşun kalem son işlem), kil (tek renk mat malzeme). Hepsi tarayıcıda, ek kütüphane yok. */
+const RENDER_STYLES = { realistic: ['🌅 Gerçekçi', '🌅 Realistic'], technical: ['📐 Gölgeli teknik', '📐 Shaded technical'], sketch: ['✏️ Kurşun kalem eskiz', '✏️ Pencil sketch'], clay: ['🏺 Beyaz kil', '🏺 White clay'] };
+const SUN_PRESETS = { morning: [['Sabah', 'Morning'], 100, 20], noon: [['Öğle', 'Noon'], 180, 68], golden: [['Altın saat', 'Golden hour'], 255, 12] };
+const RENDER_RES = { view: ['Ekran ×2–3', 'Viewport ×2–3', 0], hd: ['1080p (1920 px)', '1080p (1920 px)', 1920], qhd: ['2K (2560 px)', '2K (2560 px)', 2560], uhd: ['4K (3840 px)', '4K (3840 px)', 3840] };
+ui.studio = { style: 'realistic', az: 215, alt: 42, res: 'view', format: 'png' };
+// güneş yönü (az: kuzeyden saat yönünde, plan kuzeyi = −y = 3B −z; alt: ufuktan yükseklik)
+function sunVector(az, alt) {
+  const a = az * Math.PI / 180, e = clamp(alt, 1, 89) * Math.PI / 180;
+  return { x: Math.sin(a) * Math.cos(e), y: Math.sin(e), z: -Math.cos(a) * Math.cos(e) };
+}
+// kurşun kalem son işlemi: gri ton + kontrast + kağıt dokusu + hafif tarama
+function sketchFilter(cnv) {
+  const w = cnv.width, h = cnv.height, t = document.createElement('canvas'); t.width = w; t.height = h;
+  const c = t.getContext('2d'); c.filter = 'grayscale(1) contrast(1.35) brightness(1.06)'; c.drawImage(cnv, 0, 0); c.filter = 'none';
+  c.globalAlpha = 0.05; c.strokeStyle = '#000'; c.lineWidth = Math.max(1, w / 1600);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 900; i++) { const x = rnd() * w, y = rnd() * h, l = (8 + rnd() * 24) * w / 1600; c.beginPath(); c.moveTo(x, y); c.lineTo(x + l, y - l * 0.6); c.stroke(); }
+  c.globalAlpha = 1;
+  const g = cnv.getContext('2d'); g.clearRect(0, 0, w, h); g.drawImage(t, 0, 0);
+}
+function studioHtml(preview) {
+  const st = ui.studio, opt = (m, v) => Object.entries(m).map(([k, x]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${L(x[0], x[1])}</option>`).join('');
+  return `<h2>🎨 ${L('Render stüdyosu', 'Render studio')} <button class="btn sm" data-close>✕</button></h2>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 10px">${Object.entries(RENDER_STYLES).map(([k, v]) => `<button class="btn sm${k === st.style ? ' primary' : ''}" data-rs-style="${k}">${L(...v)}</button>`).join('')}</div>
+    <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center;margin-bottom:8px">
+      <span>☀ ${L('Güneş yönü', 'Sun azimuth')}</span><input type="range" min="0" max="360" step="5" value="${st.az}" data-rs="az"><b>${st.az}°</b>
+      <span>⛰ ${L('Güneş yüksekliği', 'Sun altitude')}</span><input type="range" min="10" max="85" step="1" value="${st.alt}" data-rs="alt"><b>${st.alt}°</b>
+    </div>
+    <div class="row" style="gap:6px;margin-bottom:8px">${Object.entries(SUN_PRESETS).map(([k, v]) => `<button class="btn sm" data-rs-sun="${k}">${L(...v[0])}</button>`).join('')}</div>
+    <div class="row" style="gap:10px;margin-bottom:10px;flex-wrap:wrap"><label>${L('Çözünürlük', 'Resolution')} <select data-rs="res">${opt(RENDER_RES, st.res)}</select></label><label>${L('Biçim', 'Format')} <select data-rs="format"><option value="png" ${st.format === 'png' ? 'selected' : ''}>PNG</option><option value="jpeg" ${st.format === 'jpeg' ? 'selected' : ''}>JPEG</option></select></label></div>
+    <div class="rs-prev" style="background:#fff;border-radius:8px;min-height:120px;display:flex;align-items:center;justify-content:center;overflow:hidden">${preview ? `<img src="${preview}" style="max-width:100%;max-height:40vh;display:block">` : `<span class="muted" style="color:#64748b">${L('Önizleme için 👁 Önizle', 'Press 👁 Preview to see it')}</span>`}</div>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm" data-rs-go="preview">👁 ${L('Önizle', 'Preview')}</button><button class="btn sm primary" data-rs-go="render">🎬 ${L('Render al ve indir', 'Render & download')}</button></div>`;
+}
+const studioOpts = () => ({ style: ui.studio.style, sun: { az: ui.studio.az, alt: ui.studio.alt }, longSide: RENDER_RES[ui.studio.res][2] || 0, format: ui.studio.format });
+function openRenderStudio(preview) {
+  if (!ui.view3d) show3D(true);
+  if (!ui.view3d) return;
+  openModal(studioHtml(preview), 'studio');
+}
+$('#modal').addEventListener('input', e => {
+  if (ui.modal !== 'studio') return;
+  const t = e.target.closest('[data-rs]'); if (!t) return;
+  const k = t.dataset.rs; ui.studio[k] = k === 'az' || k === 'alt' ? +t.value : t.value;
+  if (t.nextElementSibling && (k === 'az' || k === 'alt')) t.nextElementSibling.textContent = t.value + '°';
+});
+$('#modal').addEventListener('click', async e => {
+  if (ui.modal !== 'studio') return;
+  const s = e.target.closest('[data-rs-style]'); if (s) { ui.studio.style = s.dataset.rsStyle; openRenderStudio(); return; }
+  const p = e.target.closest('[data-rs-sun]'); if (p) { const v = SUN_PRESETS[p.dataset.rsSun]; ui.studio.az = v[1]; ui.studio.alt = v[2]; openRenderStudio(); return; }
+  const g = e.target.closest('[data-rs-go]'); if (!g || ui.shot) return;
+  if (g.dataset.rsGo === 'render') { closeModal(); export3DRender(false, studioOpts()); return; }
+  ui.shot = true; g.disabled = true;
+  try { const url = await render3DHQ({ ...studioOpts(), longSide: 720, supersample: 1, frames: 1, format: 'jpeg' }); if (ui.modal === 'studio') openRenderStudio(url || null); }
+  finally { ui.shot = false; }
+});
 /** The top-bar PNG button is context-aware, so say what it will do. */
 function syncExportTitles() {
   const b = $('#bPng');
@@ -4209,8 +4985,20 @@ function init3D() {
     if (!hits.length) return;
     // en yakın mesh kazanır: duvar/döşeme arkasındaki mobilya seçilmez (örtücüye saygı)
     let cur = hits[0].object;
-    while (cur && !(cur.userData && cur.userData.furnId)) cur = cur.parent;
+    while (cur && !(cur.userData && (cur.userData.furnId || cur.userData.opId))) cur = cur.parent;
     if (!cur) return;
+    if (!pickable(cur.userData.opId || cur.userData.furnId)) return; // kilitli katman (#32): yörünge serbest
+    if (cur.userData.opId) {
+      // kapı/pencere (#29): tık = seç (kapıda aç/kapa), sürükle = duvar boyunca kaydır
+      const fo = findAnyFloor(cur.userData.opId), wd = fo && fo.kind === 'op' && fo.floor.walls.find(w => w.id === fo.o.wall);
+      if (!wd) return;
+      e.stopImmediatePropagation(); // orbit başlamasın
+      sel = [fo.o.id];
+      const p0 = opDragHit(rc.ray, wd, cur.userData.elev || 0);
+      d3 = { op: true, id: fo.o.id, wallId: wd.id, elev: cur.userData.elev || 0, sx: e.clientX, sy: e.clientY, moved: false, alt: e.altKey, d0: fo.o.d, t0: p0 ? p0.t : null };
+      refreshSel3D(); renderProps();
+      return;
+    }
     const fd = findAnyFloor(cur.userData.furnId);
     if (!fd || fd.kind !== 'furn') return;
     const o = fd.o, elev = cur.userData.elev || 0, p0 = new THREE.Vector3();
@@ -4239,6 +5027,14 @@ function init3D() {
     if (!d3) return;
     if (!d3.moved && Math.hypot(e.clientX - d3.sx, e.clientY - d3.sy) < 4) return;
     d3.moved = true;
+    if (d3.op) {
+      const fo = findAnyFloor(d3.id), w = fo && fo.floor.walls.find(x => x.id === d3.wallId); if (!w || d3.t0 == null) return;
+      const p = opDragHit(ray3(e).ray, w, d3.elev); if (!p) return;
+      const L = wLen(w); let d = d3.d0 + p.t - d3.t0;
+      if (ui.snap && !e.shiftKey) d = rnd(d, 5);
+      fo.o.d = clamp(d, Math.min(fo.o.w / 2, L / 2), Math.max(L - fo.o.w / 2, L / 2));
+      schedBuild3D(); return;
+    }
     const o = findAnyFloor(d3.id)?.o; if (!o) { d3 = null; return; }
     const p = new THREE.Vector3();
     if (!ray3(e).ray.intersectPlane(floorPlane(d3.elev), p)) return;
@@ -4249,7 +5045,7 @@ function init3D() {
       const fd = findAnyFloor(sid); if (!fd) continue;
       const fo = fd.o, g0 = d3.orig.get(sid); if (!g0) continue;
       if (fd.kind === 'furn' || fd.kind === 'text') { fo.x = g0.x + dx; fo.y = g0.y + dy; }
-      else if (fd.kind === 'wall' || fd.kind === 'dim') { fo.a = { x: g0.a.x + dx, y: g0.a.y + dy }; fo.b = { x: g0.b.x + dx, y: g0.b.y + dy }; }
+      else if (AB_KINDS.has(fd.kind)) { fo.a = { x: g0.a.x + dx, y: g0.a.y + dy }; fo.b = { x: g0.b.x + dx, y: g0.b.y + dy }; }
       else if (PTS_KINDS.has(fd.kind)) fo.pts = g0.pts.map(q => ({ x: q.x + dx, y: q.y + dy })); // oda/poligon da grupsa birlikte
     }
     for (const c of d3.conn) c.w[c.e] = { x: c.o.x + dx, y: c.o.y + dy }; // bitişik duvar uçları (2B davranışı)
@@ -4267,6 +5063,17 @@ function init3D() {
   });
   window.addEventListener('pointerup', e => {
     if (!d3 || e.button !== 0) return;
+    if (d3.op) {
+      const { id, moved, alt } = d3; d3 = null;
+      const fd = findAnyFloor(id); if (!fd) return;
+      if (moved) { commit(); refresh(); build3D(true); return; }
+      const o = fd.o;
+      if (!alt && (o.type === 'door' || o.type === 'double' || o.type === 'slide')) { // Alt+tık: açmadan yalnızca seç
+        o.open = o.open ? 0 : 90; commit(); refresh(); build3D(true);
+        toast(o.open ? (o.type === 'slide' ? L('Sürgülü kapı açıldı', 'Sliding door opened') : L('Kapı açıldı (90°)', 'Door opened (90°)')) : (o.type === 'slide' ? L('Sürgülü kapı kapandı', 'Sliding door closed') : L('Kapı kapandı', 'Door closed')));
+      } else { refresh(); refreshSel3D(); }
+      return;
+    }
     const { id, moved } = d3; d3 = null;
     const fd = findAnyFloor(id); if (!fd || fd.kind !== 'furn') return;
     if (moved) {
@@ -4279,8 +5086,8 @@ function init3D() {
   let downPt = null;
   r.domElement.addEventListener('pointerdown', e => { if (e.button === 0) downPt = { x: e.clientX, y: e.clientY }; });
   r.domElement.addEventListener('pointerup', e => {
-    if (!downPt || e.button !== 0 || Math.hypot(e.clientX - downPt.x, e.clientY - downPt.y) > 5) return;
-    downPt = null;
+    const dp = downPt; downPt = null; // eski bir basış konumu sonraki tıkı tetiklemesin
+    if (!dp || e.button !== 0 || Math.hypot(e.clientX - dp.x, e.clientY - dp.y) > 5) return;
     cam.updateMatrixWorld(); scene.updateMatrixWorld();
     const rect = r.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
@@ -4291,16 +5098,12 @@ function init3D() {
     let cur = hits[0].object;
     while (cur && !cur.userData?.wallId && !cur.userData?.opId) cur = cur.parent;
     let hit3 = false;
-    if (cur && cur.userData?.opId) {
-      const fd = findAnyFloor(cur.userData.opId);
-      if (fd && fd.kind === 'op' && (fd.o.type === 'door' || fd.o.type === 'double' || fd.o.type === 'slide')) {
-        fd.o.open = fd.o.open ? 0 : 90; sel = [fd.o.id]; commit(); refresh(); build3D(true);
-        toast(fd.o.open ? (fd.o.type === 'slide' ? L('Sürgülü kapı açıldı', 'Sliding door opened') : L('Kapı açıldı (90°)', 'Door opened (90°)')) : (fd.o.type === 'slide' ? L('Sürgülü kapı kapandı', 'Sliding door closed') : L('Kapı kapandı', 'Door closed')));
-      }
-      hit3 = true;
-    } else if (cur && cur.userData?.wallId) {
+    if (cur && cur.userData?.opId) hit3 = true; // açıklıklar pointerdown/pointerup (d3) yolunda işlenir
+    else if (cur && cur.userData?.wallId && findAnyFloor(cur.userData.wallId) && (() => { const l = layerById(findAnyFloor(cur.userData.wallId).o.layer); return !l || !l.lock; })()) {
       const fd = findAnyFloor(cur.userData.wallId);
-      if (fd && fd.kind === 'wall' && fd.o.grp) {
+      if (fd && fd.kind === 'wall' && (e.altKey || (!fd.o.grp && !(Array.isArray(fd.o.angles) && fd.o.angles.length >= 2)))) {
+        sel = [fd.o.id]; refresh(); refreshSel3D(); // düz duvar (veya Alt+tık): seç → yan panelde yükseklik/kalınlık/tür/boya (#29)
+      } else if (fd && fd.kind === 'wall' && fd.o.grp) {
         if (fd.floorIdx === fi && cycleGroupVars(fd.o.grp)) { sel = groupMemberIds(fd.o.grp); build3D(true); }
       } else if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
         cycleWallPos(fd.o); sel = [fd.o.id]; commit(); refresh(); build3D(true);
@@ -4321,6 +5124,9 @@ function set3DCam(kind) {
   const z0 = f.z0 != null ? f.z0 : cz - sz / 2, z1 = f.z1 != null ? f.z1 : cz + sz / 2;
   const w = Math.max(x1 - x0, 200), d = Math.max(z1 - z0, 200);
 
+  if (ELEV_DIRS[kind]) { // cephe görünüşü (#31): cepheye dik, binayı çerçeveleyen kamera
+    const n = ELEV_DIRS[kind]; camAlong(n, { x: (x0 + x1) / 2, y: (z0 + z1) / 2 }, n.x ? d : w, elev || P.wallH); return;
+  }
   if (kind === 'top') {
     T3.cam.position.set(cx, elev + sz * 2.1, cz + 1);
     T3.ctl.target.set(cx, 0, cz);
@@ -4676,12 +5482,22 @@ function furn3D(g, o, C) {
       break;
     }
     case 'stairs': {
-      const n = Math.max(6, Math.round(h / 18));
-      for (let i = 0; i < n; i++) { const shp = h / n * (i + 1); bb(w, shp, d / n, col, 0, 0, d / n * (n / 2 - i - .5), 0, ed && i === 0); }
-      if (ed) {
-        const rx = w / 2 - 3;
-        for (let i = 0; i < n; i++) { const shp = h / n * (i + 1); bb(3, 92, 3, metal, rx, shp, d / n * (n / 2 - i - .5)); }
-        bb(3.5, 4, d, metal, rx, h + 90, 0);
+      // parametrik merdiven (#33): stairSteps() 2B ile ortak; döner merdivende açık basamak + orta direk
+      const st = stairSteps(o), spiral = st.type === 'spiral';
+      st.steps.forEach((s, i) => {
+        if (spiral) bb(s.w, 5, s.d, col, s.x, s.z - 5, s.y, -s.a, ed && i === 0);
+        else bb(s.w, s.z, s.d, s.landing ? sh(-0.06) : col, s.x, 0, s.y, -s.a, ed && i === 0);
+      });
+      if (spiral) cyl(g, Math.max(3, Math.min(w, d) * 0.07), h + 90, metal, 0, (h + 90) / 2, 0, 16);
+      if (ed) for (const rail of stairRails(o, st)) {
+        // dikmeler her 3 basamakta bir (+ son), aralarında eğimli küpeşte
+        const pts = rail.pts.filter((p, i, a) => i % 3 === 0 || i === a.length - 1);
+        for (const p of pts) bb(3, 92, 3, metal, p.x, p.z, p.y);
+        for (let i = 0; i + 1 < pts.length; i++) {
+          const p = pts[i], q = pts[i + 1], dx = q.x - p.x, dz = q.y - p.y, dy = q.z - p.z, Lh = Math.hypot(dx, dz);
+          const m = box(g, Math.hypot(Lh, dy) + 3, 4, 3.5, metal, (p.x + q.x) / 2, (p.z + q.z) / 2 + 90, (p.y + q.y) / 2, 0, 0, false);
+          m.rotation.order = 'YZX'; m.rotation.y = -Math.atan2(dz, dx); m.rotation.z = Math.atan2(dy, Lh);
+        }
       }
       break;
     }
@@ -4768,7 +5584,8 @@ function build3D(keepCam = false) {
   const furnCtx = { box, cyl, sph, mat, det };
   let elev = 0;
   P.floors.forEach((f, fidx) => {
-    if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return; // kat seçici: yalnızca seçili kat çizilir
+    if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return;
+    f = visFloor(f); // gizli katmanlar 3B'de de yok (#32) // kat seçici: yalnızca seçili kat çizilir
     // zemin plakası: duvarların dış konturunu izleyen poligon — açılı planlarda AABB gibi taşmaz
     const slabCol = lt ? 0xded8cc : (fidx === 0 ? 0x171e29 : 0x232b38);
     // kat döşemesi malzemesi (issue #12): kullanıcı seçtiyse üst yüze doku/renk, yan yüzler düz
@@ -4843,10 +5660,8 @@ function build3D(keepCam = false) {
         if (o.sill > 0) seg(s, e, 0, o.sill); seg(s, e, Math.min(H, o.sill + o.h), H);
         const span = e - s, xm = (s + e) / 2 - L / 2;
         if (span >= 1) {
-          // kapı/sürgü grubu: opId taşır ki 3B tıklama çalışsın
-          const isLeaf = o.type === 'door' || o.type === 'double' || o.type === 'slide';
-          let og = g;
-          if (isLeaf) { og = new THREE.Group(); og.userData = { opId: o.id }; g.add(og); }
+          // her açıklık kendi grubunda: opId taşır ki 3B'de tıklanıp seçilebilsin, vurgulansın ve duvar boyunca sürüklenebilsin (#29)
+          const og = new THREE.Group(); og.userData = { opId: o.id, elev }; g.add(og);
           const fCol = shade(wCol, -0.22), fr = Math.min(6, Math.max(2, span * 0.07));
           if (det && !curt) {
             // kasa: söveler + üst lento (+ pencere denizliği)
@@ -4946,20 +5761,30 @@ function build3D(keepCam = false) {
   T3.mats = Object.values(matCache).concat(extraMats, [lineMat]); // sonraki build3D çağrısında dispose edilmek üzere
   T3.texs = texs;
   T3.ctl.update();
-  refreshSel3D();
+  refreshSel3D(); applySecClip();
 }
 
 /* ---------- 3B seçim vurgusu & canlı güncelleme ---------- */
 let h3 = [], b3t = null;
+// 3B'de kapı/pencere sürükleme (#29): ışını duvarın düşey düzlemiyle kes, duvar ekseni boyunca konum (cm, a ucundan)
+function opDragHit(ray, w, elev) {
+  const L = wLen(w); if (L < 1) return null;
+  const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, p = new THREE.Vector3();
+  const vert = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(-uy, 0, ux), new THREE.Vector3(w.a.x, elev, w.a.y));
+  if (Math.abs(ray.direction.dot(vert.normal)) < 0.05 || !ray.intersectPlane(vert, p)) { if (!ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -elev), p)) return null; }
+  return { t: (p.x - w.a.x) * ux + (p.z - w.a.y) * uy };
+}
 function refreshSel3D() {
   if (!T3 || !T3.scene) return;
   for (const h of h3) { T3.scene.remove(h); h.geometry.dispose(); h.material.dispose(); }
   h3 = [];
   if (!ui.view3d || !sel.length) return;
-  // tekil veya gruplu seçimde tüm mobilya üyeleri turuncu kutuyla vurgulanır
-  for (const id of sel) {
-    const g = T3.scene.children.find(c => c.userData && c.userData.furnId === id);
-    if (g) h3.push(new THREE.BoxHelper(g, isLight() ? 0xd97706 : 0xfbbf24));
+  // tekil veya gruplu seçimde mobilya, duvar ve kapı/pencere üyeleri turuncu kutuyla vurgulanır (#29)
+  const ids = new Set(sel), col = isLight() ? 0xd97706 : 0xfbbf24;
+  for (const c of T3.scene.children) {
+    const u = c.userData || {};
+    if (ids.has(u.furnId) || (ids.has(u.wallId) && !c.isMesh)) h3.push(new THREE.BoxHelper(c, col));
+    else if (!c.isMesh && u.wallId) for (const og of c.children) if (og.userData && ids.has(og.userData.opId)) h3.push(new THREE.BoxHelper(og, col));
   }
   for (const h of h3) T3.scene.add(h);
 }
@@ -5049,6 +5874,9 @@ function applyLangUI() {
   if ($('#b3dFit')) $('#b3dFit').title = L('Sığdır', 'Fit');
   if ($('#b3dTop')) $('#b3dTop').title = L('Üstten görünüm', 'Top view');
   if ($('#b3dEye')) $('#b3dEye').title = L('Göz hizası (1.6 m)', 'Eye level (1.6 m)');
+  if ($('#lblLayer')) $('#lblLayer').textContent = L('Katman', 'Layer');
+  if ($('#b3dStudio')) $('#b3dStudio').title = L('🎨 Render stüdyosu: stil, güneş, çözünürlük', '🎨 Render studio: style, sun, resolution');
+  for (const [id, k, tr, en] of [['b3dN', 'north', 'K', 'N'], ['b3dE', 'east', 'D', 'E'], ['b3dS', 'south', 'G', 'S'], ['b3dW', 'west', 'B', 'W']]) if ($('#' + id)) { $('#' + id).textContent = L(tr, en); $('#' + id).title = L(...ELEV_NAMES[k]); }
   if ($('#b3dShot')) $('#b3dShot').title = L('🎬 Render al (PNG) — Shift: hızlı görünüm', '🎬 Render (PNG) — Shift: quick capture');
   syncExportTitles();
   if ($('#s3dFloor')) $('#s3dFloor').dataset.opts = ''; // dil değişince seçenekleri yeniden yaz
@@ -5081,7 +5909,10 @@ $('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && 
 $('#b3dFit').onclick = () => set3DCam('fit');
 $('#b3dTop').onclick = () => set3DCam('top');
 $('#b3dEye').onclick = () => set3DCam('eye');
+$('#sLayer').onchange = e => { if (layerById(e.target.value)) { P.activeLayer = e.target.value; commit(); refresh(); } };
+for (const [id, k] of [['b3dN', 'north'], ['b3dE', 'east'], ['b3dS', 'south'], ['b3dW', 'west']]) $('#' + id).onclick = () => set3DCam(k);
 $('#b3dShot').onclick = e => export3DRender(e && e.shiftKey);
+$('#b3dStudio').onclick = () => openRenderStudio();
 $('#bLang').onclick = () => setLang(isEN() ? 'tr' : 'en');
 $('#bTheme').onclick = () => {
   const d = document.documentElement;

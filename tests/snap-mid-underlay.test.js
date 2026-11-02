@@ -26,6 +26,7 @@ function env(floors, opts = {}) {
     const layersVis = { underlay: opts.underlay !== false }, underlay = { floor: opts.ref || 'prev' };
     const KINDS = { walls: 'wall', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', dims: 'dim' };
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), rnd = (v, s) => Math.round(v / s) * s;
+    const visFloor = f => f; // katman süzgeci (#32): bu testlerde tüm katmanlar görünür
     const snapToGrid = p => ({ x: rnd(p.x, P.grid), y: rnd(p.y, P.grid) });
     const furnCorners = o => [{ x: o.x - o.w / 2, y: o.y - o.d / 2 }, { x: o.x + o.w / 2, y: o.y - o.d / 2 }, { x: o.x + o.w / 2, y: o.y + o.d / 2 }, { x: o.x - o.w / 2, y: o.y + o.d / 2 }];
     const bboxOf = (k, o) => { const pts = o.pts || (o.a ? [o.a, o.b] : furnCorners(o)); const xs = pts.map(p => p.x), ys = pts.map(p => p.y); return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) }; };
