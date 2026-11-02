@@ -64,7 +64,7 @@ test('the snapping grid is drawn while its lines are legible', () => {
 
 test('zooming out steps the grid through 1 m / 5 m / 10 m / 50 m / 100 m', () => {
   // a 10 cm base climbs the 1-2-5 ladder exactly as the issue describes
-  assert.strictEqual(scaleAt(10, 1).major, 50);      //  50 cm
+  assert.strictEqual(scaleAt(10, 1).major, 100);     //  1 m
   assert.strictEqual(scaleAt(10, 0.5).major, 100);   //  1 m
   assert.strictEqual(scaleAt(10, 0.2).major, 500);   //  5 m
   assert.strictEqual(scaleAt(10, 0.05).major, 1000); // 10 m
@@ -74,9 +74,23 @@ test('zooming out steps the grid through 1 m / 5 m / 10 m / 50 m / 100 m', () =>
   assert.strictEqual(scaleAt(10, MIN_ZOOM).major, 50000);
 });
 
+test('at normal zoom the major grid keeps its classic interval', () => {
+  // the adaptive grid only steps UP when zooming out; zoomed in it must look as it did
+  // before issue #38 (no 50 cm major lines, no 1.25 m / 2.5 m intervals)
+  const classic = { 5: 100, 10: 100, 25: 100, 50: 200, 100: 500, 300: 1500 };
+  for (const z of [MAX_ZOOM, 4, 2, 1, 0.5]) {
+    for (const [grid, major] of Object.entries(classic)) {
+      if (major * z < GRID_MAJOR_PX) continue; // too dense: the ladder may step up
+      assert.strictEqual(scaleAt(+grid, z).major, major, `P.grid=${grid} at z=${z}`);
+    }
+  }
+  // 25 cm walks round metric steps too, never 1.25 m / 12.5 m
+  assert.deepStrictEqual([0.3, 0.1, 0.05, 0.02].map(z => scaleAt(25, z).major), [200, 500, 1000, 5000]);
+});
+
 test('the major grid never disappears and stays readable at every zoom', () => {
   for (let z = MAX_ZOOM; z >= MIN_ZOOM; z *= 0.85) {
-    for (const grid of [5, 10, 25, 50, 100, 300, 500, 1234]) {
+    for (const grid of [3, 5, 7, 10, 25, 50, 100, 300, 500, 1234]) {
       const g = scaleAt(grid, z);
       assert.ok(g.major > 0, `no major grid at z=${z}, P.grid=${grid}`);
       assert.ok(g.majorPx >= GRID_MAJOR_PX - 1e-9, `major grid only ${g.majorPx.toFixed(1)} px apart at z=${z} (P.grid=${grid})`);

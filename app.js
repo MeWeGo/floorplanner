@@ -751,8 +751,8 @@ function pal(forceLight = ui.exporting) {
 }
 /* ---------- Uyarlanan ızgara (issue #38) ----------
    Yakalama daima P.grid'e bağlıdır; burada yalnızca ÇİZİLEN aralık büyür.
-   Uzaklaştıkça ana ızgara kademelenir (50 cm → 1 m → 5 m → 10 m → 50 m →
-   100 m → 500 m …), alt ızgara ise ekranda okunamayacak kadar sıklaşınca
+   Uzaklaştıkça ana ızgara kademelenir (1 m → 2 m → 5 m → 10 m → 20 m →
+   50 m → 100 m → 500 m …), alt ızgara ise ekranda okunamayacak kadar sıklaşınca
    gizlenir. Böylece kilometrelerce genişlikteki vaziyet planlarında tuval
    boş kalmaz ve ölçek duygusu korunur. */
 const GRID_MINOR_PX = 6;    // alt çizgiler bundan sık olursa lekeye döner
@@ -766,10 +766,14 @@ function gridFactor(k) {
 function gridScale(z = view.z) {
   const base = Math.max(1, +P.grid || 1);
   const minor = base * z >= GRID_MINOR_PX ? base : 0;
+  // merdiven eski sabit ana aralıktan başlar (≥25 cm → 4–5 hücre, yoksa 1 m), böylece
+  // normal yakınlıkta ızgara eskisi gibi görünür ve 25 cm adımda 1.25 m gibi tuhaf
+  // aralıklar çıkmaz; 1 m P.grid'in katı değilse en yakın üst kata yuvarlanır
+  const ms = base >= 100 ? base * 5 : base >= 25 ? base * 4 : 100 % base ? base * Math.ceil(100 / base) : 100;
   let f = 1, guard = 0;
-  // ana çizgiler ekranda ≥46 px ve (alt ızgara varsa) en az 4 hücre arayla
-  while ((base * f * z < GRID_MAJOR_PX || (minor && base * f < minor * 4)) && guard++ < 24) f = gridFactor(f);
-  const major = base * f;
+  // ana çizgiler ekranda en az GRID_MAJOR_PX aralıkla çizilir
+  while (ms * f * z < GRID_MAJOR_PX && guard++ < 24) f = gridFactor(f);
+  const major = ms * f;
   return { minor, major, minorPx: minor * z, majorPx: major * z };
 }
 /** Izgara aralığını okunur yazar: 25 cm · 1 m · 2.5 m · 500 m. */
