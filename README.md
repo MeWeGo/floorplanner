@@ -61,6 +61,7 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 
 ### 🧱 Drawing
 - **Free-form walls** with live length + angle read-out; type a number and press `Enter` for an exact length.
+- **Change a wall's length by number** later: select it and type the new length + `Enter`, click its length label on the canvas to edit it in place, or type a length while dragging one of its ends. The wall keeps its angle, connected corners stay joined and doors / windows stay put.
 - **Room-from-rectangle** tool (4 walls + room in one drag).
 - **Automatic room detection** — click inside any closed area and get its polygon, area (m²) and perimeter.
 - **Polygon room** tool for irregular spaces.

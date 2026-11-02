@@ -924,11 +924,12 @@ function jointsSvg(f) {
 }
 function wallDimSvg(w) {
   const L = wLen(w); if (L < 30) return '';
+  const hit = ui.exporting ? 'pointer-events="none"' : `data-wdim="${w.id}" style="cursor:text"`; // tıkla → uzunluğu yaz (#36)
   const C = pal();
   let ang = wAng(w) * 180 / Math.PI; const mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2;
   let flip = 1; if (ang > 90 || ang <= -90) { ang += 180; flip = -1; }
   const fs = clamp(13 / view.z, 9, 40), off = w.t / 2 + fs * 0.9;
-  return `<text transform="translate(${mx} ${my}) rotate(${ang}) translate(0 ${-off})" text-anchor="middle" font-size="${fs}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" pointer-events="none">${fmtLen(L)}</text>`;
+  return `<text transform="translate(${mx} ${my}) rotate(${ang}) translate(0 ${-off})" text-anchor="middle" font-size="${fs}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" ${hit}>${fmtLen(L)}</text>`;
 }
 function opSvg(op, live) {
   const p = opPos(op); if (!p) return '';
@@ -1411,6 +1412,48 @@ function deleteIds(ids) {
 }
 function deleteSel() { if (!sel.length) return; deleteIds(sel.filter(pickable)); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
 
+/* ---------- Duvar uzunluğunu sayıyla değiştirme (issue #36) ----------
+   Serbest uç (menteşeli duvarda pim sabit kalır) duvarın kendi açısı boyunca taşınır; bitişik duvar uçları
+   (ui.connWalls) birlikte gelir, böylece köşeler açılmaz; kapı/pencereler yerinde kalır ve yeni boya sığdırılır. */
+function applyWallLength(w, len, ek = wallFree(w), conn = ui.connWalls, f = F()) {
+  const L0 = wLen(w); len = +len;
+  if (!(len >= 1) || L0 < 0.01) return false;
+  const fixed = ek === 'a' ? w.b : w.a, ux = (w[ek].x - fixed.x) / L0, uy = (w[ek].y - fixed.y) / L0;
+  const old = { x: w[ek].x, y: w[ek].y }, np = { x: Math.round((fixed.x + ux * len) * 100) / 100, y: Math.round((fixed.y + uy * len) * 100) / 100 };
+  const moved = [{ w, k: ek, L0 }];
+  if (conn) for (const o of f.walls) if (o !== w) for (const k of ['a', 'b']) if (dist(o[k], old) < 1) moved.push({ w: o, k, L0: wLen(o) });
+  for (const m of moved) m.w[m.k] = { x: np.x, y: np.y };
+  // açıklıklar: d a ucundan ölçülür — a ucu taşındıysa aynı yerde kalmaları için kaydır, sonra duvara sığdır
+  for (const m of moved) {
+    const L1 = wLen(m.w);
+    for (const op of f.ops) if (op.wall === m.w.id) {
+      if (m.k === 'a') op.d += L1 - m.L0;
+      op.d = clamp(op.d, Math.min(op.w / 2, L1 / 2), Math.max(L1 - op.w / 2, L1 / 2));
+    }
+  }
+  return true;
+}
+// Tuvaldeki duvar ölçü yazısına tıklayınca yerinde sayı kutusu
+function openWallDimInput(id, x, y) {
+  closeWallDimInput();
+  const fd = find(id); if (!fd || fd.kind !== 'wall' || !pickable(id)) return;
+  const w = fd.o; sel = [id]; refresh();
+  const inp = document.createElement('input');
+  inp.id = 'wdimInput'; inp.type = 'number'; inp.min = '1'; inp.step = '1'; inp.className = 'wdim-input';
+  inp.value = Math.round(wLen(w) * 10) / 10;
+  inp.title = L('Yeni uzunluk (cm) — Enter: uygula, Esc: iptal', 'New length (cm) — Enter: apply, Esc: cancel');
+  inp.style.left = Math.round(x - 48) + 'px'; inp.style.top = Math.round(y - 16) + 'px';
+  document.body.appendChild(inp); inp.focus(); inp.select();
+  inp.addEventListener('keydown', ev => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') {
+      const v = parseFloat(String(inp.value).replace(',', '.')); closeWallDimInput();
+      if (applyWallLength(w, v)) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+    } else if (ev.key === 'Escape') closeWallDimInput();
+  });
+  inp.addEventListener('blur', () => setTimeout(closeWallDimInput, 0));
+}
+function closeWallDimInput() { const el = document.getElementById('wdimInput'); if (el) el.remove(); }
 /* ---------- Duvar kırpma / bölme (issue #15) ---------- */
 // İki doğru parçasının kesişimi: t (p1→p2), u (p3→p4) parametreleriyle; paralelse null
 function segIntersect(p1, p2, p3, p4, eps = 1e-6) {
@@ -1666,7 +1709,7 @@ const TOOLS = [
   ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['mirror', '🪞', 'Aynala', 'I', 'Mirror'], ['section', '🔪', 'Kesit', 'L', 'Section'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
 const HINTS = {
-  select: 'Seç: tıkla / kutu çiz • Shift: çoklu seçim • Ctrl+tık: alttaki nesne • sağ tık: buradaki nesneler & katman • sürükle: taşı • Del: sil',
+  select: 'Seç: duvar seçiliyken rakam yaz + Enter: yeni uzunluk • ölçü yazısına tıkla: uzunluğu düzenle • tıkla / kutu çiz • Shift: çoklu seçim • Ctrl+tık: alttaki nesne • sağ tık: buradaki nesneler & katman • sürükle: taşı • Del: sil',
   pan: 'Kaydır: sürükle • Tekerlek: yakınlaştır',
   wall: 'Duvar: tıkla ile başla, devam ettikçe zincir • rakam yaz + Enter: tam uzunluk • çift tık / Esc: bitir • Shift: yakalamayı kapat',
   rect: 'Dikdörtgen oda: köşeden köşeye sürükle (4 duvar + oda oluşturur)',
@@ -1687,7 +1730,7 @@ const HINTS = {
   calib: 'Ölçek: arka plan görselinde bilinen iki noktaya tıkla, gerçek mesafeyi gir',
 };
 const HINTS_EN = {
-  select: 'Select: click / drag box • Shift: multi-select • Ctrl+click: object underneath • right-click: objects here & layers • drag: move • Del: delete',
+  select: 'Select: with a wall selected type a number + Enter: new length • click a length label: edit it • click / drag box • Shift: multi-select • Ctrl+click: object underneath • right-click: objects here & layers • drag: move • Del: delete',
   pan: 'Pan: drag • Wheel: zoom in/out',
   wall: 'Wall: click to start & chain • type number + Enter: exact length (cm) • double-click / Esc: finish • Shift: disable snap',
   rect: 'Rect Room: drag corner to corner (creates 4 walls + room)',
@@ -1802,6 +1845,11 @@ function drawPreview() {
     const rm = F().rooms.find(r => r.pts.length > 2 && pointInPoly(ui.raw, r.pts));
     if (rm) s += snapGlyph({ ...polyCentroid(rm.pts), hit: 'center' }, C, z, false, .45);
   }
+  if (ui.lenTyped && tool === 'select' && sel.length === 1) {
+    const fw = find(sel[0]);
+    if (fw && fw.kind === 'wall') { const w = fw.o; s += lbl((w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2 - w.t / 2 - 22 / z, `[${ui.lenTyped} cm] ↵`); }
+  }
+  if (cur && cur.typed) s += lbl(cur.x, cur.y - 18 / z, `[${cur.typed} cm]`);
   if (tool === 'wall' && cur) {
     if (ui.draw) {
       const a = ui.draw.start;
@@ -2069,6 +2117,8 @@ cv.addEventListener('pointerdown', e => {
   const f = F();
   switch (tool) {
     case 'select': {
+      const wd = e.target.closest('[data-wdim]');
+      if (wd && !e.shiftKey && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); openWallDimInput(wd.dataset.wdim, e.clientX, e.clientY); return; }
       const h = e.target.closest('[data-h]');
       if (h) { startHandle(h.dataset.h, raw, e); return; }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && cycleStackAt(e)) { // Ctrl+tık: alttaki nesneyi seç
@@ -2434,7 +2484,14 @@ function doHandle(raw, e) {
   if (h === 'wa' || h === 'wb') {
     const ek = h === 'wa' ? 'a' : 'b', other = h === 'wa' ? o.b : o.a;
     const ign = new Set([o.id, ...d.conn.map(c => c.w.id)]);
-    const p = snapPt(raw, other, e, ign); ui.cur = p;
+    let p = snapPt(raw, other, e, ign); ui.cur = p;
+    const tl = parseFloat(d.typed);
+    if (tl > 0) { // yazılan uzunluk (#36): imleç yönünde, karşı uçtan tam bu uzaklıkta
+      let dx = p.x - other.x, dy = p.y - other.y, m = Math.hypot(dx, dy);
+      if (m < 1e-6) { dx = d.orig ? d.orig[ek].x - other.x : 1; dy = d.orig ? d.orig[ek].y - other.y : 0; m = Math.hypot(dx, dy) || 1; }
+      p = { x: Math.round((other.x + dx / m * tl) * 100) / 100, y: Math.round((other.y + dy / m * tl) * 100) / 100, hit: null, typed: d.typed };
+    }
+    ui.cur = p;
     o[ek] = { x: p.x, y: p.y }; for (const c of d.conn) c.w[c.k] = { x: p.x, y: p.y };
     if (Array.isArray(o.angles) && o.angles.length) { const idx = clamp(o.posIdx ?? 0, 0, o.angles.length - 1); o.posIdx = idx; o.angles[idx] = wallDeg(o); }
   } else if (h === 'wrot') {
@@ -2725,8 +2782,7 @@ function applyProp(t, final) {
   const os = selObjs().filter(x => x.kind === k); if (!os.length) return;
   for (const { o } of os) {
     if (k === 'wall' && p === 'len') {
-      const pv = o[wallPivot(o)], fk = wallFree(o), L = wLen(o) || 1, ux = (o[fk].x - pv.x) / L, uy = (o[fk].y - pv.y) / L;
-      o[fk] = { x: pv.x + ux * v, y: pv.y + uy * v };
+      if (final) applyWallLength(o, v); // yazarken her tuşta değil: ara değerler kapıları sıkıştırmasın
     } else if (k === 'wall' && p === 'deg') {
       setWallDeg(o, v, true);
     } else if (k === 'wall' && p === 'pivot') {
@@ -2912,7 +2968,7 @@ $('#floors').addEventListener('click', e => {
   if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
 });
 $('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) { const f = P.floors[+t.dataset.fl], n = prompt(L('Kat adı:', 'Floor name:'), f.name); if (n) { f.name = n; commit(); refresh(); } } });
-function refresh() { render(); renderProps(); renderFloors(); updateTools(); syncLayerUI(); }
+function refresh() { if (ui.lenTyped && !(sel.length === 1 && find(sel[0])?.kind === 'wall')) ui.lenTyped = ''; render(); renderProps(); renderFloors(); updateTools(); syncLayerUI(); }
 
 /* ---------- Kopyala / yapıştır ---------- */
 let pasteN = 0;
@@ -3305,6 +3361,20 @@ window.addEventListener('keydown', e => {
     else if (k === 's') { e.preventDefault(); saveBrowser(); }
     return;
   }
+  // sayıyla uzunluk (#36): seçili tek duvar → rakam + Enter; duvar ucu sürüklenirken → rakam yazınca uç o uzaklığa kilitlenir
+  const hd = ui.drag && ui.drag.type === 'handle' && (ui.drag.h === 'wa' || ui.drag.h === 'wb') ? ui.drag : null;
+  const sw = !hd && tool === 'select' && sel.length === 1 && find(sel[0])?.kind === 'wall' ? find(sel[0]).o : null;
+  if (hd && (/^[0-9.,]$/.test(e.key) || e.key === 'Backspace')) {
+    hd.typed = e.key === 'Backspace' ? (hd.typed || '').slice(0, -1) : (hd.typed || '') + (e.key === ',' ? '.' : e.key);
+    if (ui.raw) doHandle(ui.raw, ui.lastE || { shiftKey: false }); render(); e.preventDefault(); return;
+  }
+  if (sw && (/^[0-9.,]$/.test(e.key) || (ui.lenTyped && (e.key === 'Backspace' || e.key === 'Enter' || e.key === 'Escape')))) {
+    e.preventDefault();
+    if (e.key === 'Enter') { const v = parseFloat(ui.lenTyped); ui.lenTyped = ''; if (applyWallLength(sw, v)) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); } else render(); return; }
+    ui.lenTyped = e.key === 'Escape' ? '' : e.key === 'Backspace' ? ui.lenTyped.slice(0, -1) : (ui.lenTyped || '') + (e.key === ',' ? '.' : e.key);
+    drawPreview(); return;
+  }
+  if (ui.lenTyped && !sw) ui.lenTyped = '';
   if (tool === 'wall' && ui.draw) {
     if (/^[0-9.]$/.test(e.key)) { ui.typed += e.key; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Backspace') { ui.typed = ui.typed.slice(0, -1); if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }

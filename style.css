@@ -813,6 +813,20 @@ main {
   transition: border-color 0.12s ease;
 }
 
+/* duvar ölçü yazısı üzerindeki sayı kutusu (#36) */
+.wdim-input {
+  position: fixed;
+  z-index: 90;
+  width: 96px;
+  padding: 5px 8px;
+  font: 600 13px var(--font-mono, monospace);
+  color: inherit;
+  background: var(--panel2);
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+}
+
 /* çıktı ayarları (#35): iletişim kutusundaki seçimler panel girdileriyle aynı görünsün */
 .plotctl select,
 .plotctl input[type=number] {

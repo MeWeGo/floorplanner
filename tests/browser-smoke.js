@@ -582,6 +582,37 @@ check('print opens the plot dialog: paper, true scale, overflow warning, window 
   return 'dialog, 1:100 = 0.1 mm/cm on A4, overflow warning, window picked';
 });
 
+check('numeric wall length: typed on a selected wall, inline label, typed during an end drag (issue #36)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); const f = F(); f.ops.push(mkOp(OPDEF.window, f.walls[0], 450)); commit();
+    view.z = 0.6; view.x = 120; view.y = 120; sel = []; refresh();
+    const key = k => window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })), out = {};
+    sel = [f.walls[0].id]; refresh(); ['8', '0', '0', 'Enter'].forEach(key);
+    out.typed = wLen(F().walls[0]) === 800 && F().walls[1].a.x === 800 && F().ops[0].d === 450;
+    undo(); sel = []; refresh();
+    const lw = F().walls[3], lbl = document.querySelector('[data-wdim="' + lw.id + '"]');
+    if (lbl) { const r = lbl.getBoundingClientRect(); lbl.dispatchEvent(new PointerEvent('pointerdown', { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, button: 0, pointerId: 1 })); }
+    const inp = document.getElementById('wdimInput'); out.inline = !!inp;
+    if (inp) { inp.value = '350'; inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }
+    out.inlineLen = Math.round(wLen(F().walls[3])); out.joined = F().walls[0].a.y === F().walls[3].b.y;
+    undo(); const rw = F().walls[1]; sel = [rw.id]; refresh();
+    const hb = document.querySelector('[data-h="wb"]'), hr = hb.getBoundingClientRect(), p = { x: hr.left + hr.width / 2, y: hr.top + hr.height / 2 };
+    hb.dispatchEvent(new PointerEvent('pointerdown', { clientX: p.x, clientY: p.y, bubbles: true, button: 0, pointerId: 1 }));
+    cv.dispatchEvent(new PointerEvent('pointermove', { clientX: p.x, clientY: p.y + 40, bubbles: true, pointerId: 1 }));
+    ['2', '5', '0'].forEach(key);
+    cv.dispatchEvent(new PointerEvent('pointerup', { clientX: p.x, clientY: p.y + 40, bubbles: true, button: 0, pointerId: 1 }));
+    out.drag = Math.round(wLen(F().walls[1]));
+    out.export = !exportSvg().svg.includes('data-wdim');
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.typed) throw new Error('typing 800 + Enter on a selected wall did not resize it with its corner / window: ' + JSON.stringify(info));
+  if (!info.inline || info.inlineLen !== 350 || !info.joined) throw new Error('the clickable length label did not edit the wall: ' + JSON.stringify(info));
+  if (info.drag !== 250) throw new Error('typing during an end drag did not lock the length: ' + info.drag);
+  if (!info.export) throw new Error('exports carry the interactive length labels');
+  return 'typed 800, inline 350 (corner joined), drag-typed 250, export clean';
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');
