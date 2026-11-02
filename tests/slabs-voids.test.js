@@ -81,7 +81,7 @@ test('3D: voids cut the floor slab and room floors, slabs are extruded with thei
   assert.match(b, /withHoles\(new THREE\.Shape\(pts[^\n]*\n\s*const geo = new THREE\.ExtrudeGeometry\(shp, \{ depth: 20/, 'the floor slab is not holed');
   assert.match(b, /voidHoles\(f\.voids, pts\)/);
   assert.match(b, /const shp = withHoles\(new THREE\.Shape\(r\.pts/, 'room floors would cover the stairwell');
-  assert.match(b, /ExtrudeGeometry\(withHoles\(new THREE\.Shape\(s\.pts[^\n]*depth: t/, 'free slabs are not extruded to their thickness');
+  assert.match(b, /withHoles\(new THREE\.Shape\(s\.pts[^\n]*\n\s*const geo = new THREE\.ExtrudeGeometry\(shp, \{ depth: t/, 'free slabs are not extruded to their thickness');
   assert.match(b, /elev \+ \(\+s\.off \|\| 0\) \+ 0\.2/, 'slab must sit just above the auto slab (no z-fighting)');
   assert.match(b, /const fy = elev \+ furnOff\(o\)/, 'furniture does not sit on a lowered slab');
 });

@@ -848,6 +848,34 @@ main {
   color: inherit;
 }
 
+/* özel doku satırı (#40) */
+.tex-row {
+  align-items: center;
+  gap: 5px;
+  flex-wrap: nowrap;
+  margin-bottom: 4px;
+}
+
+.tex-row input {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 5px;
+  font-size: 12px;
+  color: inherit;
+  min-width: 0;
+}
+
+.tex-row input[type=text] {
+  flex: 1;
+}
+
+.tex-row input[type=number] {
+  width: 52px;
+  font-family: var(--font-mono);
+}
+
+.tex-row .btn.sm,
 .lyr .btn.sm {
   padding: 3px 5px;
   flex: none;
@@ -860,7 +888,8 @@ main {
 
 .f input:focus,
 .f select:focus,
-.lyr input[type=text]:focus {
+.lyr input[type=text]:focus,
+.tex-row input:focus {
   border-color: var(--accent);
   outline: none;
   background: var(--bg);

@@ -613,6 +613,37 @@ check('numeric wall length: typed on a selected wall, inline label, typed during
   return 'typed 800, inline 350 (corner joined), drag-typed 250, export clean';
 });
 
+check('outdoor finishes, custom textures and door materials (issues #39, #40, #41)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); const f = F();
+    ['grass', 'water', 'gravel', 'deck', 'asphalt'].forEach((k, i) => f.rooms.push({ id: uid(), name: k, color: '#cbd5e1', floor: k, pts: [{ x: i * 120, y: 0 }, { x: i * 120 + 120, y: 0 }, { x: i * 120 + 120, y: 200 }, { x: i * 120, y: 200 }] }));
+    f.slabs.push({ id: uid(), name: 'pond', floor: 'water', color: null, t: 20, off: 0, pts: [{ x: 700, y: 0 }, { x: 900, y: 0 }, { x: 900, y: 200 }, { x: 700, y: 200 }] });
+    ['wood', 'glass', 'paneled', 'metal'].forEach((m, i) => { const o = mkOp(OPDEF.door, f.walls[2], 100 + i * 130); o.mat = m; f.ops.push(o); });
+    const c = document.createElement('canvas'); c.width = c.height = 32; const g = c.getContext('2d'); g.fillStyle = '#b91c1c'; g.fillRect(0, 0, 16, 16);
+    const tid = addTexture('Check', 40, 40, c.toDataURL());
+    f.rooms.push({ id: uid(), name: 'tex', color: '#cbd5e1', floor: 'tex:' + tid, pts: [{ x: 0, y: 220 }, { x: 300, y: 220 }, { x: 300, y: 400 }, { x: 0, y: 400 }] });
+    commit(); await new Promise(r => setTimeout(r, 300)); refresh();
+    const out = { fills: [...document.querySelectorAll('#gRooms polygon')].map(p => p.getAttribute('fill')).filter(x => x && x.startsWith('url')).length };
+    out.histClean = !hist[hi].includes('data:image');
+    out.bundle = JSON.stringify(bundleTextures(P)).includes('"texData"');
+    out.idb = !!(await dbGet('textures', tid));
+    out.export = exportSvg().svg.includes('data:image/png');
+    return out;
+  })()`);
+  if (info.fills !== 7) throw new Error('finish patterns missing in 2D (want 5 outdoor + pond + texture): ' + JSON.stringify(info));
+  if (!info.histClean) throw new Error('texture image data leaked into the undo history');
+  if (!info.bundle || !info.idb || !info.export) throw new Error('texture data not stored / bundled / exported: ' + JSON.stringify(info));
+  await page.evaluate('show3D(true)');
+  await new Promise(r => setTimeout(r, 1500));
+  const d3 = await page.evaluate(`(() => {
+    let water = 0, glass = 0, metal = 0; T3.scene.traverse(o => { if (o.isMesh && o.material && o.material.type === 'MeshPhongMaterial' && o.material.transparent) water++; });
+    T3.scene.traverse(o => { if (o.userData && o.userData.opId) o.traverse(m => { if (m.isMesh && m.material.color) { const h = m.material.color.getHexString(); if (h === '9fd3ee') glass++; if (h === '334155') metal++; } }); });
+    show3D(false); return { water, glass, metal };
+  })()`);
+  if (d3.water < 2 || !d3.glass || !d3.metal) throw new Error('3D water / glass door / metal door missing: ' + JSON.stringify(d3));
+  return `7 finish fills, texture in IndexedDB + JSON, ${d3.water} water surfaces, glass + metal doors in 3D`;
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');

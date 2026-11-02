@@ -90,8 +90,8 @@ const OPENINGS = [
   { id: 'wsmall', name: 'Küçük Pencere', en: 'Small Window', w: 60, h: 60, sill: 130, icon: '🪟' },
 ];
 const OPDEF = Object.fromEntries(OPENINGS.map(o => [o.id, o]));
-const FLOORS = { none: 'Düz renk', wood: 'Parke', tile: 'Fayans', carpet: 'Halı', marble: 'Mermer', concrete: 'Beton şap', stone: 'Dış mekan taşı' };
-const FLOORS_EN = { none: 'Solid color', wood: 'Wood parquet', tile: 'Tile', carpet: 'Carpet', marble: 'Marble', concrete: 'Polished concrete', stone: 'Outdoor stone' };
+const FLOORS = { none: 'Düz renk', wood: 'Parke', tile: 'Fayans', carpet: 'Halı', marble: 'Mermer', concrete: 'Beton şap', stone: 'Dış mekan taşı', grass: 'Çim', water: 'Su', gravel: 'Çakıl', deck: 'Ahşap deck', asphalt: 'Asfalt' };
+const FLOORS_EN = { none: 'Solid color', wood: 'Wood parquet', tile: 'Tile', carpet: 'Carpet', marble: 'Marble', concrete: 'Polished concrete', stone: 'Outdoor stone', grass: 'Grass', water: 'Water', gravel: 'Gravel', deck: 'Wood deck', asphalt: 'Asphalt' };
 // Duvar boyası paleti (issue #12): [hex, TR, EN]
 const PAINTS = [['#ffffff', 'Beyaz', 'White'], ['#f5f1e8', 'Kırık beyaz', 'Off-white'], ['#d6d3d1', 'Açık gri', 'Light grey'], ['#e7d8bf', 'Bej', 'Beige'], ['#b7c4a8', 'Adaçayı', 'Sage'], ['#9fb7c9', 'Gök mavisi', 'Sky blue'], ['#2f4058', 'Gece mavisi', 'Midnight blue'], ['#c8826b', 'Kiremit', 'Terracotta']];
 const getFloors = () => (lang === 'en' ? FLOORS_EN : FLOORS);
@@ -111,7 +111,7 @@ const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, 
 const underlay = { floor: 'prev', op: 0.2 };
 
 const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null });
-const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
+const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, textures: [], floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
 const F = () => P.floors[fi];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', dims: 'dim', texts: 'text', sketches: 'sketch' };
 // Köşe listesiyle (pts) tanımlanan türler; POLY_KINDS kapalı poligonlar (köşe/kenar tutamaçları)
@@ -403,7 +403,7 @@ function contentBounds(f = F()) {
 }
 
 /* ---------- IndexedDB + Yerel Depolama ---------- */
-const DB_NAME = 'FloorPlannerDB', DB_VER = 1;
+const DB_NAME = 'FloorPlannerDB', DB_VER = 2;   // 2: 'textures' deposu (#40)
 let _dbProm = null;
 function openDB() {
   if (_dbProm) return _dbProm;
@@ -414,6 +414,7 @@ function openDB() {
       const db = e.target.result;
       if (!db.objectStoreNames.contains('projects')) db.createObjectStore('projects', { keyPath: 'name' });
       if (!db.objectStoreNames.contains('state')) db.createObjectStore('state');
+      if (!db.objectStoreNames.contains('textures')) db.createObjectStore('textures', { keyPath: 'id' }); // özel doku görselleri, P dışında
     };
     req.onsuccess = () => res(req.result);
     req.onerror = () => rej(req.error);
@@ -593,11 +594,203 @@ function layerAct(a, lid) {
   sel = sel.filter(pickable);
   commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
 }
+/* ---------- Özel zemin dokuları (issue #40) ----------
+   Proje yalnızca künyeyi taşır: P.textures = [{ id, name, w, h }] (w/h = gerçek tekrar ölçüsü, cm).
+   Görsel verisi P'nin DIŞINDA durur — IndexedDB 'textures' deposu (id → dataURL) + bellekteki TEX önbelleği —
+   böylece 150 geri-al anlık görüntüsü ve her otomatik kayıt resmi tekrar tekrar kopyalamaz.
+   Kaplama alanında 'tex:<id>' olarak seçilir (oda, serbest döşeme, kat döşemesi). ⬇ JSON veriyi texData
+   içinde paketler; içe aktarım onu yeniden IndexedDB'ye yazar ve P'den çıkarır. */
+const TEX = new Map();            // id → { data, url, img, ready }
+const TEX_MAX = 1024;             // yüklenen görselin en uzun kenarı (px)
+const texIdOf = kind => typeof kind === 'string' && kind.startsWith('tex:') ? kind.slice(4) : null;
+const texMeta = id => ((P && P.textures) || []).find(t => t.id === id) || null;
+// kaplama gerçekten çizilebilir mi: yerleşik desen ya da künyesi + görseli hazır özel doku; değilse null (düz renk)
+function finishKind(kind) {
+  if (!kind || kind === 'none') return null;
+  const id = texIdOf(kind);
+  if (!id) return FLOORS[kind] ? kind : null;
+  const e = TEX.get(id); return texMeta(id) && e && e.ready ? kind : null;
+}
+const finishPat = kind => { const id = texIdOf(kind); return id ? 'p-tex-' + id : 'p-' + kind; };
+// kaplama seçicisi: yerleşik desenler + projenin özel dokuları
+function floorOpts() {
+  const o = { ...getFloors() };
+  for (const t of (P.textures || [])) o['tex:' + t.id] = '🖼 ' + esc(t.name);
+  return o;
+}
+function dataUrlBlob(d) {
+  const i = d.indexOf(','), mime = (d.slice(0, i).match(/data:([^;,]+)/) || [])[1] || 'image/png', bin = atob(d.slice(i + 1)), a = new Uint8Array(bin.length);
+  for (let j = 0; j < bin.length; j++) a[j] = bin.charCodeAt(j);
+  return new Blob([a], { type: mime });
+}
+// tuvalde kısa blob: adresi kullanılır (her render'da yüz KB'lık dataURL'yi DOM'a yazmamak için); dışa aktarımda dataURL
+function cacheTex(id, data) {
+  let e = TEX.get(id);
+  if (e && e.data === data) return e;
+  if (e && e.url && e.url.startsWith('blob:')) URL.revokeObjectURL(e.url);
+  e = { data, url: data, img: new Image(), ready: false };
+  try { e.url = URL.createObjectURL(dataUrlBlob(data)); } catch (er) { }
+  e.img.onload = () => { e.ready = true; if (P) render(); if (ui.view3d && T3) schedBuild3D(); };
+  e.img.src = data;
+  TEX.set(id, e); return e;
+}
+// projenin dokularını IndexedDB'den önbelleğe al (açılış, sekme geçişi, dosya açma)
+async function ensureTextures(proj = P) {
+  for (const t of (proj && proj.textures) || []) {
+    if (TEX.has(t.id)) continue;
+    try { const r = await dbGet('textures', t.id); if (r && r.data) cacheTex(t.id, r.data); } catch (e) { }
+  }
+}
+// ⬇ JSON: görsel verisi dosyayla birlikte gider, böylece başka bilgisayarda da açılır
+function bundleTextures(proj) {
+  const texData = {};
+  for (const t of proj.textures || []) { const e = TEX.get(t.id); if (e) texData[t.id] = e.data; }
+  return Object.keys(texData).length ? { ...proj, texData } : proj;
+}
+// 📂 Aç: texData → önbellek + IndexedDB; P'ye (ve geri-al geçmişine) girmez
+function absorbTextures(obj) {
+  if (!obj || !obj.texData || typeof obj.texData !== 'object') return obj;
+  for (const [id, data] of Object.entries(obj.texData)) {
+    if (!/^[\w-]{1,32}$/.test(id) || typeof data !== 'string' || !data.startsWith('data:image/')) continue;
+    cacheTex(id, data); dbPut('textures', { id, data }).catch(() => { });
+  }
+  delete obj.texData; return obj;
+}
+function downscaleImage(src, max = TEX_MAX, mime = 'image/jpeg') {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, max / Math.max(im.width, im.height)), w = Math.max(1, Math.round(im.width * k)), h = Math.max(1, Math.round(im.height * k));
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(im, 0, 0, w, h);
+      res({ data: c.toDataURL(mime, 0.9), w, h });
+    };
+    im.onerror = () => rej(new Error(L('görsel okunamadı', 'could not read the image')));
+    im.src = src;
+  });
+}
+// "60", "60x30", "60 × 30", "60*30" → { w, h } (cm)
+function parseTexSize(s) {
+  const m = String(s || '').replace(/,/g, '.').match(/(\d+(?:\.\d+)?)(?:\s*[x×*\/]\s*(\d+(?:\.\d+)?))?/i);
+  if (!m || !(+m[1] > 0)) return null;
+  return { w: clamp(+m[1], 1, 5000), h: clamp(+(m[2] || m[1]), 1, 5000) };
+}
+function addTextureFlow() {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = () => {
+    const file = inp.files && inp.files[0]; if (!file) return;
+    const r = new FileReader();
+    r.onload = async () => {
+      try {
+        const img = await downscaleImage(r.result, TEX_MAX, file.type === 'image/png' ? 'image/png' : 'image/jpeg');
+        const name = (prompt(L('Doku adı', 'Texture name'), file.name.replace(/\.[^.]+$/, '')) || '').trim(); if (!name) return;
+        const sz = parseTexSize(prompt(L('Gerçek tekrar ölçüsü (cm): genişlik × yükseklik', 'Real-world repeat size (cm): width × height'), '60 × ' + Math.round(60 * img.h / img.w)));
+        if (!sz) return toast(L('Geçersiz ölçü', 'Invalid size'));
+        addTexture(name, sz.w, sz.h, img.data);
+      } catch (er) { toast(L('Doku eklenemedi: ', 'Could not add texture: ') + er.message); }
+    };
+    r.readAsDataURL(file);
+  };
+  inp.click();
+}
+function addTexture(name, w, h, data) {
+  const id = uid(); cacheTex(id, data);
+  dbPut('textures', { id, data }).catch(() => toast(L('Doku tarayıcıya kaydedilemedi', 'The texture could not be stored in the browser')));
+  P.textures = P.textures || []; P.textures.push({ id, name: String(name).slice(0, 60), w, h });
+  // seçili oda / döşeme varsa doku doğrudan ona uygulanır
+  for (const { o } of selObjs().filter(x => x.kind === 'room' || x.kind === 'slab')) o.floor = 'tex:' + id;
+  commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+  toast(L(`“${name}” dokusu eklendi`, `Texture “${name}” added`));
+  return id;
+}
+function deleteTexture(id) {
+  const t = texMeta(id); if (!t) return;
+  const k = 'tex:' + id; let n = 0;
+  for (const f of P.floors) {
+    for (const o of [...f.rooms, ...f.slabs]) if (o.floor === k) { o.floor = 'none'; n++; }
+    if (f.slabFloor === k) { f.slabFloor = 'none'; n++; }
+  }
+  P.textures = P.textures.filter(x => x.id !== id);
+  // görsel IndexedDB'de kalır: geri al künyeyi geri getirince doku da geri gelir
+  commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+  toast(L(`“${t.name}” silindi — ${n} yüzey düz renge döndü`, `“${t.name}” removed — ${n} surface(s) reset to solid colour`));
+}
+// 2B desenleri: patternUnits=userSpaceOnUse → bir tekrar tam w × h cm
+function texPatterns() {
+  let s = '';
+  for (const t of (P.textures || [])) {
+    const e = TEX.get(t.id); if (!e || !e.ready) continue;
+    s += `<pattern id="p-tex-${t.id}" width="${t.w}" height="${t.h}" patternUnits="userSpaceOnUse"><image href="${ui.exporting ? e.data : e.url}" width="${t.w}" height="${t.h}" preserveAspectRatio="none"/></pattern>`;
+  }
+  return s;
+}
+function texturesPanelHtml() {
+  const ts = P.textures || [];
+  let h = `<h4>${L('Özel dokular', 'Custom textures')}</h4>`;
+  if (!ts.length) h += `<p class="muted" style="margin:0 0 6px">${L('Kendi karo / parke / taş görselini yükle; oda, döşeme ve kat döşemesi kaplama listesinde çıkar.', 'Upload your own tile / parquet / stone image; it shows up in the finish list of rooms, slabs and the floor slab.')}</p>`;
+  for (const t of ts) {
+    const e = TEX.get(t.id), thumb = e ? `<img src="${e.url}" alt="" style="width:26px;height:26px;object-fit:cover;border-radius:4px;flex:none">` : `<span style="width:26px;flex:none;text-align:center" title="${L('Görsel bu tarayıcıda yok', 'Image not in this browser')}">⚠</span>`;
+    h += `<div class="row tex-row">${thumb}<input type="text" data-k="tex" data-p="name" data-tid="${t.id}" value="${esc(t.name)}">`
+      + `<input type="number" data-k="tex" data-p="w" data-tid="${t.id}" value="${t.w}" min="1" title="${L('Tekrar genişliği (cm)', 'Repeat width (cm)')}">×`
+      + `<input type="number" data-k="tex" data-p="h" data-tid="${t.id}" value="${t.h}" min="1" title="${L('Tekrar yüksekliği (cm)', 'Repeat height (cm)')}">`
+      + `<button class="btn sm" data-act="texdel" data-tid="${t.id}" title="${L('Dokuyu sil', 'Delete texture')}">✕</button></div>`;
+  }
+  return h + `<div class="row"><button class="btn sm" data-act="texadd">${L('🖼 Doku yükle…', '🖼 Upload texture…')}</button></div>`;
+}
+/* ---------- Kapı malzemesi ve rengi (issue #41) ----------
+   op.mat: 'wood' | 'glass' | 'paneled' | 'metal'. Alan yoksa sürgülü kapı cam, diğer kapılar ahşap kalır,
+   böylece eski projeler aynı görünür. op.color = kanat rengi (tam camda yok), op.frameCol = kasa / pervaz
+   rengi (her açıklıkta), op.glass = 'clear' | 'frosted' (tam cam ve cam bölmelide). */
+const DOOR_MATS = { wood: ['Ahşap / lake', 'Wood / lacquer'], glass: ['Tam cam', 'Full glass'], paneled: ['Cam bölmeli (Fransız)', 'Glass-paneled (French)'], metal: ['Metal / çelik', 'Metal / steel'] };
+const GLASS_KINDS = { clear: ['Şeffaf', 'Clear'], frosted: ['Buzlu', 'Frosted'] };
+const DOOR_LEAF = { wood: '#b08968', paneled: '#f5f5f4', metal: '#334155', glass: '#cbd5e1' };
+const isDoorOp = o => o.type === 'door' || o.type === 'double' || o.type === 'slide';
+const doorMat = o => DOOR_MATS[o.mat] ? o.mat : (o.type === 'slide' ? 'glass' : 'wood');
+const doorLeafCol = o => o.color || DOOR_LEAF[doorMat(o)];
+const doorGlass = o => o.glass === 'frosted' ? { c: 0xe6eef4, op: 0.72 } : { c: 0x9fd3ee, op: 0.38 };
+/* Bir kapı kanadı (3B): merkez (cx, y0 + H/2, cz), genişlik lw; sgn = kolun olduğu yan (+1 sağ / −1 sol).
+   flush: sürgülü panellerde çıkıntılı kol yok. Parça sayısı kanat başına ≤ 9. */
+function doorLeaf3D(par, o, lw, H, cx, y0, cz, sgn, C, flush = false) {
+  const { box, cyl, det } = C, m = doorMat(o), col = doorLeafCol(o), gl = doorGlass(o), steel = 0xc7cdd4, lh = H * 0.97;
+  const hx = cx + sgn * (lw / 2 - 9);
+  const lever = c => { if (!det || flush) return; const hd = cyl(par, 1.6, 8, c, hx, y0 + H * 0.47, cz + 5.5, 12); hd.rotation.x = Math.PI / 2; };
+  if (m === 'glass') {
+    box(par, lw, lh, 1.2, gl.c, cx, y0 + H / 2, cz, 0, gl.op, false);
+    if (!det) return;
+    // üst/alt pivot menteşe blokları + iki yüzde dikey paslanmaz boru kulp
+    const px = cx - sgn * (lw / 2 - 6);
+    box(par, 10, 5, 3, steel, px, y0 + 4, cz, 0, 0, false); box(par, 10, 5, 3, steel, px, y0 + lh - 3, cz, 0, 0, false);
+    if (!flush) for (const zs of [-1, 1]) {
+      cyl(par, 1.2, H * 0.45, steel, hx, y0 + H * 0.5, cz + zs * 4.6, 10);
+      for (const dy of [-0.2, 0.2]) box(par, 1.4, 1.4, 3.6, steel, hx, y0 + H * (0.5 + dy), cz + zs * 2.6, 0, 0, false);
+    }
+  } else if (m === 'paneled') {
+    // çerçeve (dikmeler + kayıtlar) kanat renginde, ortada cam; orta kayıt camın önünden geçer
+    const fw = Math.min(10, lw * 0.14), T = 4, iw = lw - 2 * fw;
+    box(par, fw, lh, T, col, cx - lw / 2 + fw / 2, y0 + lh / 2, cz, 0, 0, det);
+    box(par, fw, lh, T, col, cx + lw / 2 - fw / 2, y0 + lh / 2, cz, 0, 0, det);
+    box(par, iw, fw * 1.2, T, col, cx, y0 + lh - fw * 0.6, cz, 0, 0, det);
+    box(par, iw, fw * 2.2, T, col, cx, y0 + fw * 1.1, cz, 0, 0, det);
+    box(par, iw, fw * 0.8, T, col, cx, y0 + H * 0.5, cz, 0, 0, false);
+    box(par, iw, lh - fw * 3.4, 1.2, gl.c, cx, y0 + (fw * 2.2 + lh - fw * 1.2) / 2, cz, 0, gl.op, false);
+    lever(0x9aa6b2);
+  } else if (m === 'metal') {
+    box(par, lw, lh, 4.5, col, cx, y0 + H / 2, cz, 0, 0, det);
+    if (det) for (const fy of [0.3, 0.7]) box(par, lw * 0.86, 1.2, 4.9, shade(col, 0.2), cx, y0 + H * fy, cz, 0, 0, false);
+    lever(steel);
+  } else {
+    box(par, lw, lh, 4, col, cx, y0 + H / 2, cz, 0, 0, det);
+    if (det) box(par, lw * 0.68, H * 0.62, 1.5, o.color ? shade(col, 0.22) : 0xd7b494, cx, y0 + H * 0.53, cz + 2.8, 0, 0, false);
+    lever(0x9aa6b2);
+  }
+}
 function normalizeProject(P) {
   if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
   if (P.bg) P.bg.id = 'bg';
+  P.textures = (Array.isArray(P.textures) ? P.textures : []).filter(t => t && /^[\w-]{1,32}$/.test(t.id))
+    .map(t => ({ id: t.id, name: String(t.name || t.id).slice(0, 60), w: clamp(+t.w || 60, 1, 5000), h: clamp(+t.h || +t.w || 60, 1, 5000) }));
   if (!Array.isArray(P.layers) || !P.layers.length) P.layers = [defaultLayer()];
   if (!P.layers.some(l => l.id === '0')) P.layers.unshift(defaultLayer());
   P.layers.forEach(l => { l.vis = l.vis !== false; l.lock = !!l.lock; l.print = l.print !== false; l.name = l.name || l.id; });
@@ -609,7 +802,8 @@ function normalizeProject(P) {
   return P;
 }
 function loadProject(obj, msg) {
-  P = normalizeProject(obj);
+  P = normalizeProject(absorbTextures(obj));
+  ensureTextures(P);
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
   $('#pname').value = P.name; syncGridUI();
@@ -638,7 +832,7 @@ function newTabSlot() {
 }
 function activateTab(i) {
   const t = tabs[i]; if (!t || !t.P) return;
-  tabIdx = i; P = normalizeProject(t.P);
+  tabIdx = i; P = normalizeProject(t.P); ensureTextures(P);
   hist = t.hist && t.hist.length ? t.hist : [JSON.stringify(P)]; hi = clamp(t.hi ?? hist.length - 1, 0, hist.length - 1);
   fi = clamp(t.fi || 0, 0, P.floors.length - 1);
   ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null; placing = null;
@@ -740,13 +934,15 @@ function pal(forceLight = ui.exporting) {
     gMin: forceLight ? '#cbd5e1' : '#dcd6ca', gMaj: forceLight ? '#94a3b8' : '#b8b0a0', dotMaj: '#64748b',
     text: '#151921', sub: '#475569', halo: paper, accent: '#1d4ed8',
     dim: '#0f766e', glass: '#e0f2fe', swing: '#8696ab',
-    roomOp: 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280', marble: '#64748b', concrete: '#57534e', stone: '#78716c'
+    roomOp: 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280', marble: '#64748b', concrete: '#57534e', stone: '#78716c',
+    grass: '#3f6212', water: '#0369a1', gravel: '#57534e', deck: '#7c4a1e', asphalt: '#1f2937'
   } : {
     lt: false, bg: '#0b0f14', wall: '#d5dee8', stroke: '#94a3b8', furnStroke: '#161e29',
     gMin: '#161f2c', gMaj: '#243244', dotMaj: '#475569',
     text: '#e6edf5', sub: '#b8c5d6', halo: '#0b0f14', accent: '#d99b26',
     dim: '#2dd4bf', glass: '#0369a1', swing: '#64748b',
-    roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af', marble: '#cbd5e1', concrete: '#a8a29e', stone: '#a8a29e'
+    roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af', marble: '#cbd5e1', concrete: '#a8a29e', stone: '#a8a29e',
+    grass: '#84cc16', water: '#38bdf8', gravel: '#d6d3d1', deck: '#f59e0b', asphalt: '#94a3b8'
   };
 }
 /* ---------- Uyarlanan ızgara (issue #38) ----------
@@ -793,6 +989,12 @@ function defsSvg() {
   <pattern id="p-marble" width="120" height="120" patternUnits="userSpaceOnUse"><path d="M0 0H120V120" stroke="${C.marble}" stroke-opacity=".3" fill="none" stroke-width="1"/><path d="M8 30C30 22 38 52 64 44S96 70 116 62M20 96C40 84 58 104 84 92" stroke="${C.marble}" stroke-opacity=".28" fill="none" stroke-width="1.2"/></pattern>
   <pattern id="p-concrete" width="40" height="40" patternUnits="userSpaceOnUse"><circle cx="6" cy="9" r="1" fill="${C.concrete}" fill-opacity=".35"/><circle cx="27" cy="5" r=".8" fill="${C.concrete}" fill-opacity=".3"/><circle cx="18" cy="24" r="1.1" fill="${C.concrete}" fill-opacity=".3"/><circle cx="34" cy="31" r=".9" fill="${C.concrete}" fill-opacity=".35"/><circle cx="9" cy="35" r=".7" fill="${C.concrete}" fill-opacity=".3"/></pattern>
   <pattern id="p-stone" width="80" height="80" patternUnits="userSpaceOnUse"><path d="M0 0H80M0 40H80M0 0V40M50 0V40M25 40V80M70 40V80" stroke="${C.stone}" stroke-opacity=".4" fill="none" stroke-width="2"/></pattern>
+  <pattern id="p-grass" width="40" height="40" patternUnits="userSpaceOnUse"><rect width="40" height="40" fill="${C.grass}" fill-opacity=".1"/><path d="M5 15l2-7l2 7M21 33l2-7l2 7M29 12l2-6l2 6M11 37l1.6-5l1.6 5M35 27l1.6-5l1.6 5" stroke="${C.grass}" stroke-opacity=".6" fill="none" stroke-width="1"/></pattern>
+  <pattern id="p-water" width="60" height="24" patternUnits="userSpaceOnUse"><rect width="60" height="24" fill="${C.water}" fill-opacity=".14"/><path d="M0 6q7.5-4 15 0t15 0t15 0t15 0M0 18q7.5-4 15 0t15 0t15 0t15 0" stroke="${C.water}" stroke-opacity=".55" fill="none" stroke-width="1.1"/></pattern>
+  <pattern id="p-gravel" width="30" height="30" patternUnits="userSpaceOnUse"><g fill="none" stroke="${C.gravel}" stroke-opacity=".55" stroke-width=".8"><ellipse cx="5" cy="6" rx="2.6" ry="1.8"/><ellipse cx="17" cy="4" rx="1.8" ry="1.4"/><ellipse cx="25" cy="13" rx="2.4" ry="1.9"/><ellipse cx="11" cy="16" rx="2" ry="1.5"/><ellipse cx="4" cy="25" rx="1.7" ry="1.3"/><ellipse cx="19" cy="25" rx="2.8" ry="2"/></g></pattern>
+  <pattern id="p-deck" width="120" height="15" patternUnits="userSpaceOnUse"><path d="M0 0.5H120M0 2H120M75 2V15" stroke="${C.deck}" stroke-opacity=".45" fill="none" stroke-width="1"/><circle cx="8" cy="8.5" r=".8" fill="${C.deck}" fill-opacity=".5"/><circle cx="68" cy="8.5" r=".8" fill="${C.deck}" fill-opacity=".5"/></pattern>
+  <pattern id="p-asphalt" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="20" height="20" fill="${C.asphalt}" fill-opacity=".16"/><g fill="${C.asphalt}" fill-opacity=".5"><circle cx="3" cy="4" r=".7"/><circle cx="11" cy="2" r=".5"/><circle cx="16" cy="9" r=".7"/><circle cx="7" cy="12" r=".5"/><circle cx="14" cy="17" r=".6"/><circle cx="2" cy="17" r=".5"/></g></pattern>
+  ${texPatterns()}
   <pattern id="g-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><path d="M${s} 0V${s}H0" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
   <pattern id="g-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><path d="M${ms} 0V${ms}H0" fill="none" stroke="${C.gMaj}" stroke-width="${swMaj}" stroke-opacity=".85"/></pattern>
   <pattern id="g-tri-minor" width="${s}" height="${h2}" patternUnits="userSpaceOnUse"><path d="M0 0H${s}M0 ${h}H${s}M0 0L${s / 2} ${h}L0 ${h2}M${s / 2} 0L${s} ${h}L${s / 2} ${h2}M${s / 2} 0L0 ${h}L${s / 2} ${h2}M${s} 0L${s / 2} ${h}L${s} ${h2}" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
@@ -857,7 +1059,8 @@ function roomSvg(r, live) {
     });
   }
   s += `<polygon points="${pts}" fill="${r.color}" fill-opacity="${C.roomOp}" ${polyHit}/>`;
-  if (r.floor && r.floor !== 'none') s += `<polygon points="${pts}" fill="url(#p-${r.floor})" pointer-events="none"/>`;
+  const fk = finishKind(r.floor);
+  if (fk) s += `<polygon points="${pts}" fill="url(#${finishPat(fk)})" pointer-events="none"/>`;
   const t1 = esc(r.name), t2 = fmtArea(area);
   const bw = Math.max(t1.length, t2.length) * fs * 0.58 + 10;
   let badge = '';
@@ -886,7 +1089,8 @@ function slabSvg(s, live) {
   const C = pal(), z = view.z, pts = s.pts.map(p => p.x + ',' + p.y).join(' ');
   const hit = live ? `data-id="${s.id}" data-low="2" style="cursor:pointer"` : `pointer-events="none"`;
   let out = `<polygon points="${pts}" fill="${s.color || C.sub}" fill-opacity="${s.color ? 0.35 : 0.12}" ${hit}/>`;
-  if (s.floor && s.floor !== 'none') out += `<polygon points="${pts}" fill="url(#p-${s.floor})" pointer-events="none"/>`;
+  const fk = finishKind(s.floor);
+  if (fk) out += `<polygon points="${pts}" fill="url(#${finishPat(fk)})" pointer-events="none"/>`;
   out += `<polygon points="${pts}" fill="none" stroke="${C.sub}" stroke-width="${Math.max(1.5, 1.5 / z)}" stroke-dasharray="${6 / z} ${3 / z}" pointer-events="none"/>`;
   if (s.name) {
     const c = polyCentroid(s.pts), fs = clamp(Math.sqrt(Math.abs(polyArea(s.pts))) / 16, 12, 26);
@@ -979,21 +1183,30 @@ function opSvg(op, live) {
   const p = opPos(op); if (!p) return '';
   const C = pal(), w = op.w, t = p.t, hw = w / 2, ht = t / 2, sd = op.side || 1, sw = sd > 0 ? 1 : 0;
   const stk = `stroke="${C.stroke}" fill="none" stroke-width="2"`;
+  // kapı malzemesi (#41): cam kanat = cam dolgulu kalın çizgi + ince kenar, cam bölmeli = çerçeve içinde cam, metal = kalın
+  const dm = isDoorOp(op) ? doorMat(op) : 'wood';
+  const leafLn = (x1, y1, x2, y2) => {
+    const xy = `x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"`;
+    if (dm === 'glass') return `<line ${xy} stroke="${C.glass}" stroke-width="5" stroke-opacity="${C.lt ? 1 : 0.8}"/><line ${xy} stroke="${C.stroke}" stroke-width="1"/>`;
+    if (dm === 'paneled') return `<line ${xy} stroke="${C.stroke}" stroke-width="3.6"/><line ${xy} stroke="${C.glass}" stroke-width="1.6"/>`;
+    return `<line ${xy} ${stk}${dm === 'metal' ? ' stroke-width="3.2"' : ''}/>`;
+  };
   let s = `<g transform="translate(${p.x} ${p.y}) rotate(${p.ang})">`;
   s += `<rect x="${-hw}" y="${-ht - 1}" width="${w}" height="${t + 2}" fill="${C.bg}"/>`;
   s += `<g transform="scale(${op.flip ? -1 : 1} 1)">`;
   if (op.type === 'door') {
-    if (op.open) s += `<line x1="${-hw}" y1="0" x2="${-hw}" y2="${sd * w}" ${stk}/>`;
-    else s += `<line x1="${-hw}" y1="0" x2="${hw}" y2="0" ${stk}/>`;
+    if (op.open) s += leafLn(-hw, 0, -hw, sd * w);
+    else s += leafLn(-hw, 0, hw, 0);
     s += `<path d="M${hw} 0A${w} ${w} 0 0 ${sw} ${-hw} ${sd * w}" stroke="${C.swing}" fill="none" stroke-width="1.2" stroke-dasharray="4 3"/>`;
   } else if (op.type === 'double') {
     const l = w / 2;
-    if (op.open) s += `<line x1="${-hw}" y1="0" x2="${-hw}" y2="${sd * l}" ${stk}/><line x1="${hw}" y1="0" x2="${hw}" y2="${sd * l}" ${stk}/>`;
-    else s += `<line x1="${-hw}" y1="0" x2="0" y2="0" ${stk}/><line x1="0" y1="0" x2="${hw}" y2="0" ${stk}/>`;
+    if (op.open) s += leafLn(-hw, 0, -hw, sd * l) + leafLn(hw, 0, hw, sd * l);
+    else s += leafLn(-hw, 0, 0, 0) + leafLn(0, 0, hw, 0);
     s += `<path d="M0 0A${l} ${l} 0 0 ${sw} ${-hw} ${sd * l}M0 0A${l} ${l} 0 0 ${1 - sw} ${hw} ${sd * l}" stroke="${C.swing}" fill="none" stroke-width="1.2" stroke-dasharray="4 3"/>`;
   } else if (op.type === 'slide') {
     const sx = op.open ? -hw : -hw + w * 0.45;
-    s += `<rect x="${-hw}" y="${-ht * 0.7}" width="${w * 0.55}" height="${ht * 0.7}" ${stk}/><rect x="${sx}" y="0" width="${w * 0.55}" height="${ht * 0.7}" ${stk}/>`;
+    const sf = dm === 'glass' || dm === 'paneled' ? ` fill="${C.glass}" fill-opacity="${C.lt ? 1 : 0.6}"` : '';
+    s += `<rect x="${-hw}" y="${-ht * 0.7}" width="${w * 0.55}" height="${ht * 0.7}" ${stk}${sf}/><rect x="${sx}" y="0" width="${w * 0.55}" height="${ht * 0.7}" ${stk}${sf}/>`;
   } else if (op.type === 'arch') {
     s += `<line x1="${-hw}" y1="${-ht}" x2="${hw}" y2="${-ht}" stroke="${C.swing}" stroke-dasharray="5 4" stroke-width="1.2"/><line x1="${-hw}" y1="${ht}" x2="${hw}" y2="${ht}" stroke="${C.swing}" stroke-dasharray="5 4" stroke-width="1.2"/>`;
   } else {
@@ -2675,6 +2888,15 @@ function renderProps() {
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'op', 'w', o.w, { min: 20, max: 500 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'op', 'h', o.h, { min: 20, max: 400 }) + fld(L('Denizlik (cm)', 'Sill height (cm)'), 'op', 'sill', o.sill, { min: 0, max: 300 });
     if (o.type === 'door' || o.type === 'double') h += `<label class="f"><span>${L('Açık (90°)', 'Open (90°)')}</span><input type="checkbox" data-k="op" data-p="open" ${o.open ? 'checked' : ''}></label>`;
     else if (o.type === 'slide') h += `<label class="f"><span>${L('Açık', 'Open')}</span><input type="checkbox" data-k="op" data-p="open" ${o.open ? 'checked' : ''}></label>`;
+    const optL = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
+    if (isDoorOp(o)) {
+      const dm = doorMat(o);
+      h += fld(L('Malzeme', 'Material'), 'op', 'mat', dm, { sel: optL(DOOR_MATS) });
+      if (dm === 'glass' || dm === 'paneled') h += fld(L('Cam', 'Glass'), 'op', 'glass', o.glass === 'frosted' ? 'frosted' : 'clear', { sel: optL(GLASS_KINDS) });
+      if (dm !== 'glass') h += fld(L('Kanat rengi', 'Leaf colour'), 'op', 'color', doorLeafCol(o), { type: 'color' });
+    }
+    if (o.type !== 'arch') h += fld(L('Kasa rengi', 'Frame colour'), 'op', 'frameCol', o.frameCol || '#c3c1bf', { type: 'color' });
+    if (o.color || o.frameCol) h += `<div class="row"><button class="btn sm" data-act="opcolreset">${L('↺ Varsayılan renkler', '↺ Default colours')}</button></div>`;
     if (o.type === 'slide') h += acts(`<button class="btn sm" data-act="opflip">${L('↔ Yön', '↔ Flip')}</button>`);
     else h += acts(`<button class="btn sm" data-act="opflip">${L('↔ Menteşe', '↔ Hinge')}</button><button class="btn sm" data-act="opside">${L('↕ Açılış yönü', '↕ Swing side')}</button>`);
   } else if (k === 'furn') {
@@ -2695,7 +2917,7 @@ function renderProps() {
     }
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
-    h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: getFloors() });
+    h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: floorOpts() }) + `<div class="row"><button class="btn sm" data-act="texadd">${L('🖼 Doku yükle…', '🖼 Upload texture…')}</button></div>`;
     if (n === 1) {
       const rb = bboxOf('room', o);
       if (rb) {
@@ -2711,7 +2933,7 @@ function renderProps() {
     // serbest döşeme (#22) / döşeme boşluğu (#23): ad, tür/malzeme, konum-boyut, alan
     h += fld(L('Ad', 'Name'), k, 'name', o.name || '', { type: 'text' });
     if (k === 'slab') {
-      h += fld(L('Kaplama', 'Finish'), 'slab', 'floor', o.floor || 'none', { sel: getFloors() })
+      h += fld(L('Kaplama', 'Finish'), 'slab', 'floor', o.floor || 'none', { sel: floorOpts() })
         + fld(L('Renk', 'Color'), 'slab', 'color', o.color || '#cbd5e1', { type: 'color' })
         + fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'slab', 't', o.t ?? 20, { min: 5, max: 100 })
         + fld(L('Kot farkı (cm)', 'Level offset (cm)'), 'slab', 'off', o.off || 0, { min: -200, max: 200 });
@@ -2772,10 +2994,11 @@ function projectPanel() {
   else h += `<p class="muted" style="margin:0 0 6px">${L('Kroki / mevcut plan görselini altlık olarak ekleyip üzerinden çizebilirsin.', 'Import a blueprint or floor plan image as an underlay to trace over.')}</p><div class="row"><button class="btn sm" data-act="bgadd">${L('🖼 Görsel ekle', '🖼 Add image')}</button></div>`;
   h += `<h4>${L('Kesit & görünüş', 'Sections & elevations')}</h4><div class="row"><button class="btn sm" data-act="archview">${L('📐 Görünüşler ve kesitler', '📐 Elevations & sections')}</button></div><p class="muted" style="margin:0 0 6px">${L('Dört cephe görünüşü kat kotlarıyla; kesit eklemek için 🔪 Kesit aracı (L).', 'Four facade elevations with floor levels; add a section with the 🔪 Section tool (L).')}</p>`;
   h += `<h4>${L('Kat döşemesi', 'Floor slab')} – ${esc(f.name)}</h4>`;
-  h += fld(L('Malzeme', 'Material'), 'floor', 'slabFloor', f.slabFloor || 'none', { sel: getFloors() })
+  h += fld(L('Malzeme', 'Material'), 'floor', 'slabFloor', f.slabFloor || 'none', { sel: floorOpts() })
     + fld(L('Döşeme rengi', 'Slab colour'), 'floor', 'slabColor', f.slabColor || '#cbd5e1', { type: 'color' });
   if (f.slabColor) h += `<div class="row"><button class="btn sm" data-act="slabreset">${L('↺ Varsayılan renk', '↺ Default colour')}</button></div>`;
   h += `<p class="muted" style="margin:0 0 6px">${L('3B görünümde odası olmayan alanlar (balkon, antre, teras) da bu malzemeyle kaplanır.', 'In 3D, areas without a room (balcony, hallway, terrace) are finished with this material too.')}</p>`;
+  h += texturesPanelHtml();
   const rooms = f.rooms; let tot = 0;
   h += `<h4>${L('Odalar', 'Rooms')} – ${esc(f.name)}</h4>`;
   if (!rooms.length) h += `<p class="muted" style="margin:0">${L('Henüz oda yok. “Oda algıla” aracı ile kapalı alanlara tıkla.', 'No rooms yet. Click inside enclosed areas with the “Auto Room” tool.')}</p>`;
@@ -2811,6 +3034,11 @@ function applyProp(t, final) {
   }
   if (k === 'layer') { layersVis[p] = v; render(); if (p === 'underlay') renderProps(); return; }
   if (k === 'ul') { if (p === 'op') underlay.op = clamp(v / 100, 0.1, 0.5); else { underlay.floor = v; renderProps(); } render(); return; }
+  if (k === 'tex') {
+    const tm = texMeta(t.dataset.tid); if (!tm) return;
+    if (p === 'name') { if (String(v).trim()) tm.name = String(v).trim().slice(0, 60); } else tm[p] = clamp(v, 1, 5000);
+    render(); if (p !== 'name' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
+  }
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
   if (k === 'bg' && P.bg) { P.bg[p] = v; if (p === 'lock' && v) sel = sel.filter(x => x !== 'bg'); render(); if (final) { commit(); if (p === 'lock') renderProps(); } return; }
@@ -2857,7 +3085,7 @@ function applyProp(t, final) {
     if (k === 'furn' && p === 'rot') os.forEach(x => moveFurn3D(x.o));
     else if (affects3D(k, p)) schedBuild3D();
   }
-  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot', 'stepN', 'stairType', 'railing'].includes(p) || (k === 'furn' && os.some(x => x.o.k === 'stairs') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color')) renderProps(); }
+  if (final) { commit(); if (['type', 'mat', 'floor', 'len', 'deg', 'pivot', 'stepN', 'stairType', 'railing'].includes(p) || (k === 'furn' && os.some(x => x.o.k === 'stairs') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color')) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -2866,6 +3094,9 @@ $('#props').addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b) return;
   const a = b.dataset.act, os = selObjs(), f = F();
   if (a === 'del') return deleteSel();
+  if (a === 'opcolreset') { os.forEach(x => { if (x.kind === 'op') { delete x.o.color; delete x.o.frameCol; } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
+  if (a === 'texadd') return addTextureFlow();
+  if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
   if (a === 'flipH' || a === 'flipV') return flipSel(a === 'flipH' ? 'h' : 'v');
@@ -4196,7 +4427,7 @@ async function saveBrowser() {
 }
 function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
 const fname = ext => (P.name || 'plan').replace(/[^\w\-çğıöşüÇĞİÖŞÜ ]+/g, '_') + '.' + ext;
-function downloadJson(proj = P) { download(fname('json'), new Blob([JSON.stringify(proj, null, 2)], { type: 'application/json' })); }
+function downloadJson(proj = P) { download(fname('json'), new Blob([JSON.stringify(bundleTextures(proj), null, 2)], { type: 'application/json' })); }
 async function projectsModal() {
   let list = [];
   try { list = await dbGetAll('projects'); list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); } catch (e) { }
@@ -5308,7 +5539,7 @@ function mixHex(a, b, t) {
 function floorTexture(kind, color, lt, C) {
   const key = kind + '|' + color + '|' + (lt ? 'l' : 'd');
   if (C.floorTex[key]) return C.floorTex[key];
-  const accent = { wood: '#b08968', tile: '#94a3b8', marble: '#e7e5e4', concrete: '#a8a29e', stone: '#a8a29e' }[kind] || '#9ca3af';
+  const accent = { wood: '#b08968', tile: '#94a3b8', marble: '#e7e5e4', concrete: '#a8a29e', stone: '#a8a29e', grass: '#4d7c0f', water: '#0e7490', gravel: '#a8a29e', deck: '#9a6b3f', asphalt: '#3f3f46' }[kind] || '#9ca3af';
   const px = 256, cv = document.createElement('canvas'); cv.width = cv.height = px;
   const g = cv.getContext('2d');
   // oda rengi korunur ama malzeme tonuna doğru harmanlanır (pastel renkler bembeyaz olmasın)
@@ -5355,16 +5586,66 @@ function floorTexture(kind, color, lt, C) {
       for (const x of xs) { g.moveTo(x * px, y); g.lineTo(x * px, y + px / 4); }
       g.stroke();
     });
+  } else if (kind === 'grass' || kind === 'asphalt' || kind === 'gravel') {
+    // dış mekan (#39): sabit tohumlu prosedürel doku — çim sapları, asfalt tanesi, çakıl taneleri
+    let sd = kind === 'grass' ? 11 : kind === 'gravel' ? 23 : 5;
+    const rnd01 = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+    if (kind === 'grass') {
+      g.lineWidth = 1.4;
+      for (let i = 0; i < 1400; i++) { const x = rnd01() * px, y = rnd01() * px, l = 3 + rnd01() * 5; g.strokeStyle = shade(base, (rnd01() - 0.5) * (lt ? 0.5 : 0.6)); g.globalAlpha = 0.5 + rnd01() * 0.4; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (rnd01() - 0.5) * 3, y - l); g.stroke(); }
+    } else if (kind === 'asphalt') {
+      for (let i = 0; i < 2600; i++) { g.fillStyle = rnd01() > 0.5 ? shade(base, 0.35) : shade(base, -0.35); g.globalAlpha = 0.2 + rnd01() * 0.35; g.fillRect(rnd01() * px, rnd01() * px, 1.6, 1.6); }
+    } else {
+      for (let i = 0; i < 520; i++) { const r = 2 + rnd01() * 4.5; g.fillStyle = shade(base, (rnd01() - 0.5) * 0.7); g.globalAlpha = 0.9; g.beginPath(); g.ellipse(rnd01() * px, rnd01() * px, r, r * (0.6 + rnd01() * 0.4), rnd01() * 3.14, 0, 6.2832); g.fill(); }
+    }
+    g.globalAlpha = 1;
+  } else if (kind === 'water') {
+    // su: açık tonlu dalga çizgileri (malzeme yarı saydam ve parlak, bkz. floorMat)
+    g.strokeStyle = shade(base, 0.45); g.lineWidth = 2;
+    for (let i = 0; i < 8; i++) {
+      g.globalAlpha = 0.25 + (i % 3) * 0.1; g.beginPath();
+      for (let x = 0; x <= px; x += 8) { const y = i * px / 8 + 10 + Math.sin(x * 0.049 + i * 1.3) * 5; x ? g.lineTo(x, y) : g.moveTo(x, y); }
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+  } else if (kind === 'deck') {
+    // ahşap deck: aralıklı tahtalar + damar + şaşırtmalı ekler
+    for (let i = 0; i < 8; i++) {
+      const y = i * px / 8; g.fillStyle = shade(base, ((i * 37) % 7 - 3) * 0.025); g.fillRect(0, y + 2, px, px / 8 - 4);
+      g.strokeStyle = line; g.globalAlpha = 0.25; g.lineWidth = 1;
+      for (let k = 0; k < 2; k++) { g.beginPath(); g.moveTo(0, y + 8 + k * 12); g.bezierCurveTo(px * 0.3, y + 6 + k * 12, px * 0.6, y + 11 + k * 12, px, y + 8 + k * 12); g.stroke(); }
+      g.globalAlpha = 1; g.fillStyle = shade(base, -0.55); g.fillRect(0, y, px, 2.5); g.fillRect(0, y + px / 8 - 2, px, 2);
+      g.fillRect((i % 2 ? 0.62 : 0.2) * px, y, 2.5, px / 8);
+    }
   }
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.encoding = THREE.sRGBEncoding;
   t.anisotropy = 4;
-  const rep = { wood: 160, tile: 120, marble: 240, concrete: 200, stone: 200 }[kind] || 80; // cm cinsinden karo boyu
+  const rep = { wood: 160, tile: 120, marble: 240, concrete: 200, stone: 200, grass: 120, water: 320, gravel: 90, deck: 120, asphalt: 160 }[kind] || 80; // cm cinsinden karo boyu
   t.repeat.set(1 / rep, 1 / rep);
   C.floorTex[key] = t; C.texs.push(t);
   return t;
 }
+// Özel doku (#40): kendi görseli, P.textures'taki w × h cm'de tekrarlanır; 2B ile aynı yön (flipY yok)
+function customTexture(id, C) {
+  const key = 'tex|' + id; if (C.floorTex[key]) return C.floorTex[key];
+  const m = texMeta(id), t = new THREE.Texture(TEX.get(id).img);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.encoding = THREE.sRGBEncoding; t.anisotropy = 4; t.flipY = false; t.needsUpdate = true;
+  t.repeat.set(1 / m.w, 1 / m.h);
+  C.floorTex[key] = t; C.texs.push(t); return t;
+}
+// Kaplama malzemesi: yerleşik desen oda rengiyle harmanlanır, özel doku kendi rengiyle, su (#39) yarı saydam + parlak.
+// kind önce finishKind() ile doğrulanmış olmalı
+function floorMat(kind, color, lt, C) {
+  const id = texIdOf(kind);
+  if (id) return new THREE.MeshLambertMaterial({ map: customTexture(id, C), side: THREE.DoubleSide });
+  const map = floorTexture(kind, color, lt, C);
+  if (kind === 'water') return new THREE.MeshPhongMaterial({ map, transparent: true, opacity: 0.78, shininess: 80, specular: 0x5f8fb0, depthWrite: false, side: THREE.DoubleSide });
+  return new THREE.MeshLambertMaterial({ map, side: THREE.DoubleSide });
+}
+// su yatağı: yarı saydam yüzeyin altındaki koyu, opak taban (su, arkadaki döşeme kenarlarını göstermesin)
+const waterBed = c => mixHex(c, '#0c4a6e', 0.7);
 // Katalog kimliğine göre parametrik mobilya: ölçüler o.w/d/h'den türetilir
 function furn3D(g, o, C) {
   const { box, cyl, sph } = C, ed = C.det;
@@ -5686,14 +5967,19 @@ function build3D(keepCam = false) {
     // zemin plakası: duvarların dış konturunu izleyen poligon — açılı planlarda AABB gibi taşmaz
     const slabCol = lt ? 0xded8cc : (fidx === 0 ? 0x171e29 : 0x232b38);
     // kat döşemesi malzemesi (issue #12): kullanıcı seçtiyse üst yüze doku/renk, yan yüzler düz
-    const sKind = f.slabFloor && f.slabFloor !== 'none' ? f.slabFloor : null, custom = !!(sKind || f.slabColor);
-    let slabMat = mat(slabCol);
+    const sKind = finishKind(f.slabFloor), custom = !!(sKind || f.slabColor);
+    let slabMat = mat(slabCol), slabWater = null;
     if (custom) {
       const sc = f.slabColor || '#cbd5e1';
       let top = mat(sc);
-      if (sKind && det) { top = new THREE.MeshLambertMaterial({ map: floorTexture(sKind, sc, lt, { floorTex, texs }), side: THREE.DoubleSide }); extraMats.push(top); }
+      if (sKind && det) {
+        const fm = floorMat(sKind, sc, lt, { floorTex, texs }); extraMats.push(fm);
+        if (sKind === 'water') { slabWater = fm; top = mat(waterBed(sc)); } else top = fm;
+      }
       slabMat = [top, mat(shade(sc, -0.25))];          // ExtrudeGeometry: grup 0 = kapaklar, grup 1 = yanlar
     }
+    // su (#39): kapak opak yatak, üstüne +0.3 cm'de ayrı yarı saydam yüzey (aynı düzlemde titremez; odalar +0.6'da)
+    const addWater = (shp, y, wm) => { const m = new THREE.Mesh(new THREE.ShapeGeometry(shp), wm); m.rotation.x = Math.PI / 2; m.position.y = y; m.receiveShadow = true; m.renderOrder = 2; S.add(m); };
     // döşeme boşlukları (issue #23): tamamen içinde kaldıkları plakada / oda zemininde Shape.holes ile gerçek delik
     const withHoles = (shp, pts) => {
       for (const h of voidHoles(f.voids, pts)) shp.holes.push(new THREE.Path(h.map(q => new THREE.Vector2(q.x, q.y))));
@@ -5707,19 +5993,25 @@ function build3D(keepCam = false) {
       m.position.y = elev; m.receiveShadow = true;
       if (!custom) m.userData.slab = true;            // the render may swap it for the light slab (user materials stay)
       S.add(m);
+      if (slabWater) addWater(shp, elev + 0.3, slabWater);
     }
     // serbest döşemeler (issue #22): duvar gerektirmeyen balkon/teras plakası; üst yüz = kat kotu + kot farkı.
     // +0.2 cm (ve çakışmada katman başına +0.1) otomatik plakayla aynı düzlemde titremesin; odalar +0.6'da kalır
     const slabs = (f.slabs || []).filter(s => s.pts && s.pts.length >= 3), slabLv = stackLevels(slabs, 'slab');
     slabs.forEach((s, si) => {
-      const t = clamp(+s.t || 20, 5, 100), sc = s.color || (lt ? '#c9c3b8' : '#3a4352'), kind = s.floor && s.floor !== 'none' ? s.floor : null;
-      let top = mat(sc);
-      if (kind && det) { top = new THREE.MeshLambertMaterial({ map: floorTexture(kind, sc, lt, { floorTex, texs }), side: THREE.DoubleSide }); extraMats.push(top); }
-      const geo = new THREE.ExtrudeGeometry(withHoles(new THREE.Shape(s.pts.map(p => new THREE.Vector2(p.x, p.y))), s.pts), { depth: t, bevelEnabled: false });
+      const t = clamp(+s.t || 20, 5, 100), sc = s.color || (lt ? '#c9c3b8' : '#3a4352'), kind = finishKind(s.floor);
+      let top = mat(sc), water = null;
+      if (kind && det) {
+        const fm = floorMat(kind, sc, lt, { floorTex, texs }); extraMats.push(fm);
+        if (kind === 'water') { water = fm; top = mat(waterBed(sc)); } else top = fm;
+      }
+      const shp = withHoles(new THREE.Shape(s.pts.map(p => new THREE.Vector2(p.x, p.y))), s.pts);
+      const geo = new THREE.ExtrudeGeometry(shp, { depth: t, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
       const m = new THREE.Mesh(geo, [top, mat(shade(sc, -0.25))]);
       m.position.y = elev + (+s.off || 0) + 0.2 + Math.min(slabLv[si], 3) * 0.1;
       m.receiveShadow = true; m.castShadow = true; S.add(m);
+      if (water) addWater(shp, m.position.y + 0.25, water);
     });
     // mobilya bir serbest döşemenin üstündeyse o döşemenin kotuna oturur (en üstteki döşeme kazanır)
     const furnOff = o => { for (let i = slabs.length - 1; i >= 0; i--) if (pointInPoly(o, slabs[i].pts)) return +slabs[i].off || 0; return 0; };
@@ -5729,11 +6021,14 @@ function build3D(keepCam = false) {
       const shp = withHoles(new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y))), r.pts);
       const geo = new THREE.ShapeGeometry(shp);
       let m;
-      const kind = r.floor && r.floor !== 'none' ? r.floor : null;
+      const kind = finishKind(r.floor);
       if (kind && det) {
-        const tex = floorTexture(kind, r.color || '#cbd5e1', lt, { floorTex, texs });
-        const mm = new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide }); extraMats.push(mm);
+        const mm = floorMat(kind, r.color || '#cbd5e1', lt, { floorTex, texs }); extraMats.push(mm);
         m = new THREE.Mesh(geo, mm);
+        if (kind === 'water') { // su odası: altta opak yatak
+          const bed = new THREE.Mesh(new THREE.ShapeGeometry(shp), mat(waterBed(r.color || '#cbd5e1')));
+          bed.rotation.x = Math.PI / 2; bed.position.y = elev + 0.35 + roomLv[ri] * 0.5; bed.receiveShadow = true; S.add(bed); m.renderOrder = 2;
+        }
       } else {
         m = new THREE.Mesh(geo, mat(r.color, lt ? undefined : 0.78));
       }
@@ -5759,7 +6054,7 @@ function build3D(keepCam = false) {
         if (span >= 1) {
           // her açıklık kendi grubunda: opId taşır ki 3B'de tıklanıp seçilebilsin, vurgulansın ve duvar boyunca sürüklenebilsin (#29)
           const og = new THREE.Group(); og.userData = { opId: o.id, elev }; g.add(og);
-          const fCol = shade(wCol, -0.22), fr = Math.min(6, Math.max(2, span * 0.07));
+          const fCol = o.frameCol || shade(wCol, -0.22), fr = Math.min(6, Math.max(2, span * 0.07)); // kasa rengi (#41)
           if (det && !curt) {
             // kasa: söveler + üst lento (+ pencere denizliği)
             box(og, fr, o.h, w.t * 1.06, fCol, s + fr / 2 - L / 2, o.sill + o.h / 2, 0, 0, 0, false);
@@ -5775,11 +6070,7 @@ function build3D(keepCam = false) {
             const sd3 = o.side || 1, a90 = Math.PI / 2, lw = span * (o.type === 'double' ? 0.48 : 0.96);
             const leaf = (hx, ry, sgn) => {
               const lg = new THREE.Group(); lg.position.set(hx, 0, 0); lg.rotation.y = ry; og.add(lg);
-              box(lg, lw, o.h * 0.97, 4, 0xb08968, sgn * lw / 2, o.h / 2, 0, 0, 0, det);
-              if (det) {
-                box(lg, lw * 0.68, o.h * 0.62, 1.5, 0xd7b494, sgn * lw / 2, o.h * 0.53, 2.8, 0, 0, false);
-                const hd = cyl(lg, 1.6, 8, 0x9aa6b2, sgn * (lw - 9), o.h * 0.47, 5.5, 12); hd.rotation.x = Math.PI / 2;
-              }
+              doorLeaf3D(lg, o, lw, o.h, sgn * lw / 2, 0, 0, sgn, furnCtx); // malzeme + renk (#41)
             };
             if (o.type === 'double') { leaf(s - L / 2, o.open ? -sd3 * a90 : 0, 1); leaf(e - L / 2, o.open ? sd3 * a90 : 0, -1); }
             else if (o.flip) leaf(e - L / 2, o.open ? sd3 * a90 : 0, -1);
@@ -5790,8 +6081,14 @@ function build3D(keepCam = false) {
             const sgn = o.flip ? -1 : 1;
             const pFixed = o.flip ? (e - pw / 2 - L / 2) : (s + pw / 2 - L / 2);
             const pSlide = o.open ? pFixed : (o.flip ? (s + pw / 2 - L / 2) : (e - pw / 2 - L / 2));
-            box(og, pw, o.h * 0.98, pt, 0x7dd3fc, pFixed, my, -sgn * pt * 0.65, 0, 0.55, false);
-            box(og, pw, o.h * 0.98, pt, 0x7dd3fc, pSlide, my, sgn * pt * 0.65, 0, 0.55, false);
+            if (doorMat(o) === 'glass') {
+              const sc2 = o.glass === 'frosted' ? 0xe6eef4 : 0x7dd3fc, so2 = o.glass === 'frosted' ? 0.75 : 0.55;
+              box(og, pw, o.h * 0.98, pt, sc2, pFixed, my, -sgn * pt * 0.65, 0, so2, false);
+              box(og, pw, o.h * 0.98, pt, sc2, pSlide, my, sgn * pt * 0.65, 0, so2, false);
+            } else { // ahşap / metal / cam bölmeli sürgü panelleri (#41): gömme kulp, çıkıntı yok
+              doorLeaf3D(og, o, pw, o.h * 0.98 / 0.97, pFixed, o.sill, -sgn * 2.6, sgn, furnCtx, true);
+              doorLeaf3D(og, o, pw, o.h * 0.98 / 0.97, pSlide, o.sill, sgn * 2.6, -sgn, furnCtx, true);
+            }
             if (det) box(og, span, 6, w.t * 0.5, frameCol, xm, o.sill + o.h - 3, 0, 0, 0, false);
           }
         }
