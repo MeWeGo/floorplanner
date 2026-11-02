@@ -644,6 +644,30 @@ check('outdoor finishes, custom textures and door materials (issues #39, #40, #4
   return `7 finish fills, texture in IndexedDB + JSON, ${d3.water} water surfaces, glass + metal doors in 3D`;
 });
 
+check('library presets: save a door, place it twice, delete + undo, JSON keeps them (issue #42)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); addRectWalls(0, 0, 800, 500); const f = F();
+    const door = mkOp(OPDEF.door, f.walls[0], 200); door.w = 85; door.mat = 'glass'; f.ops.push(door); commit();
+    const p0 = window.prompt, c0 = window.confirm; window.prompt = () => 'K1'; window.confirm = () => true;
+    sel = [door.id]; refresh(); const btn = document.querySelector('#props [data-act="savepreset"]'); if (btn) btn.click();
+    const out = { saved: (P.lib.presets || []).length, card: (document.querySelector('#items [data-type="pre"] .sz') || {}).textContent };
+    const pr = P.lib.presets[0]; document.querySelector('#items [data-type="pre"][data-id="' + pr.id + '"]').click();
+    const r = cv.getBoundingClientRect(), at = (q, type) => { const s = w2s(q); cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 })); };
+    for (const x of [450, 650]) { at({ x, y: 5 }, 'pointermove'); at({ x, y: 5 }, 'pointerdown'); at({ x, y: 5 }, 'pointerup'); }
+    setTool('select');
+    out.placed = F().ops.slice(1).map(o => o.w + ':' + o.mat).join(',');
+    out.json = JSON.parse(JSON.stringify(P)).lib.presets.length;
+    document.querySelector('#items [data-delpre="' + pr.id + '"]').click(); out.del = P.lib.presets.length;
+    undo(); out.undo = P.lib.presets.length + '/' + document.querySelectorAll('#items [data-type="pre"]').length;
+    window.prompt = p0; window.confirm = c0;
+    return out;
+  })()`);
+  if (info.saved !== 1 || info.card !== '85×210') throw new Error('door preset not saved to the library: ' + JSON.stringify(info));
+  if (info.placed !== '85:glass,85:glass') throw new Error('preset placement did not copy the saved values twice: ' + info.placed);
+  if (info.json !== 1 || info.del !== 0 || info.undo !== '1/1') throw new Error('preset JSON / delete / undo broken: ' + JSON.stringify(info));
+  return 'saved K1 85×210, placed twice (glass kept), delete undone';
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');

@@ -751,6 +751,24 @@ main {
   position: relative;
 }
 
+/* ön ayar kartı: ✎ yeniden adlandır, ✕'in solunda (#42) */
+.item .renpre {
+  position: absolute;
+  top: 3px;
+  right: 22px;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 4px;
+  border-radius: 4px;
+  color: var(--muted, inherit);
+  opacity: 0.55;
+}
+
+.item .renpre:hover {
+  opacity: 1;
+  background: var(--panel);
+}
+
 .item .delsh:hover {
   opacity: 1;
   background: var(--panel);
