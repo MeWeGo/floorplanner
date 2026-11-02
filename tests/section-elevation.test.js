@@ -26,6 +26,7 @@ function makeEnv(floors = []) {
   return new Function('floors', `
     const P = { wallH: 270, floors };
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const visFloor = f => f; // katman süzgeci (#32): bu testlerde tüm katmanlar görünür
     const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
     const wLen = w => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
     const slabPolys = f => {

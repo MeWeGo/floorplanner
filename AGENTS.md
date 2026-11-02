@@ -62,6 +62,8 @@ P = {
   "wallT": 20,                  // default wall thickness (cm) for new walls
   "wallH": 270,                 // default wall height (cm) for new walls / floor pitch in 3D
   "bg": null | { "src": "<dataURL>", "x": 0, "y": 0, "w": 1200, "h": 800, "op": 0.5 },
+  "layers": [ { "id": "0", "name": "Varsayılan", "color": "#64748b", "vis": true, "lock": false, "print": true }, … ],   // drawing layers (issue #32); "0" = Default, cannot be deleted
+  "activeLayer": "0",            // new objects are stamped with it (any object may carry "layer": id; absent = "0")
   "floors": [ Floor, ... ]
 }
 
@@ -171,7 +173,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
+`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, sGridType, sGrid, lblGridCustom, iGridCustom, coords, zoomlbl, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -218,6 +220,11 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - 2D (`layerStrings` rooms layer): slabs under rooms, voids over them. Their hit shapes carry `data-low` (void 1, slab 2) so `pickDataId()` only picks them when nothing else is under the cursor — a large balcony must not steal clicks from furniture or room labels.
 - 3D: free slabs are extruded `t` cm down from `elev + off + 0.2` (+0.1 per overlap level) so their top never z-fights the automatic slab; furniture whose centre is on a slab is raised/lowered by that slab's `off`. `voidHoles(voids, pts)` returns the voids that lie inside a polygon (edge-touching counts — stairwells snap to room corners) pulled 0.5 cm inward, and `build3D` adds them as `Shape.holes` to the automatic slab, the free slabs and the room floors of **that floor**. A void on floor N is the hole in floor N's slab, i.e. the ceiling of floor N-1. Voids that straddle a polygon edge are skipped (no CSG).
 - A floor with no walls gets no automatic slab from slabs/voids alone (`slabPolys` ignores them). Guard: `tests/slabs-voids.test.js` + a smoke check.
+
+### Drawing layers (issue #32)
+- `P.layers` / `P.activeLayer` are project data (undo, save, tabs). An object's `layer` field is **optional: absent = '0'** so projects without custom layers stay byte-identical. `commit()` calls `stampLayers()`, which stamps objects without a layer with the active layer — only when the active layer is not '0'. Because of that, `layerAct('lyradd')` first stamps every unlayered object '0' (`stampLayers(true)`), and `normalizeProject()` does the same whenever a project has more than one layer.
+- `visFloor(f, print)` is the single filter: a shallow copy of the floor without objects on hidden layers (and, with `print`, layers whose `print` is false); openings on hidden walls drop too. Used by `layerStrings` (`print` = exporting), the underlay, `build3D`'s floor loop and `archPrims`. `pickable(id)` (visible and unlocked) gates `pickDataId`, `idsAt`, box select, Ctrl+A, `deleteSel` and 3D picking.
+- UI: `layersPanelHtml()` in the project panel (radio = active, colour, name, 👁 / 🔒 / 🖨, 🗑 moves objects to Default), `selLayerHtml()` in every selection panel (`data-k="sellayer"`), footer `#sLayer` synced by `syncLayerUI()` from `refresh()`. Guard: `tests/drawing-layers.test.js` + a smoke check.
 
 ### Sections & elevations (issues #30, #31)
 - One projection engine: `archPrims(spec)` projects **every floor** onto a vertical plane (`spec = { O, n, cut, crop }`, view direction `n`, drawing axis `u = (-n.y, n.x)` = the viewer's right, height `z` from `floorElev(i) = i·(wallH + 20)` like `build3D`). It returns pure data (`face` / `cut` / `glass` / `label` prims + `levels`); `archSvg(spec, title)` paints it far-to-near on white paper (`pal(true)`) with level datums (`fmtLevel`: ±0.00, +2.90), a ground line, title and 2 m scale bar.
@@ -367,6 +374,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/mirror-scale.test.js` | mirror / flip / scale maths on the real functions: openings keep swinging inward, polygon winding kept, furniture backs, readable text, double mirror = identity, scale with/without wall thickness, `parseScale` formats, panel / menu / key wiring |
 | `tests/edit-3d.test.js` | 3D editing of walls and openings: opening groups carry `opId`, `opDragHit` maths (both wall directions), drag handlers ordered before OrbitControls, Alt / door toggle rules, plain-wall selection, highlight of walls and openings |
 | `tests/section-elevation.test.js` | section / elevation engine on the real functions: line-polygon intervals, void subtraction, section frame direction, cut walls / slabs / openings for a 2-floor building, near side dropped, elevation faces and window holes, tool / kind / 3D clip / facade camera / modal wiring |
+| `tests/drawing-layers.test.js` | custom drawing layers on the real functions: old projects stay unchanged, stamping rules, hidden / non-printing filter, lock / hide picking, and the 2D / 3D / export / selection wiring |
 | `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |

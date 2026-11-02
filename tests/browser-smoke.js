@@ -485,6 +485,34 @@ check('section tool, 2D section / elevation drawings and the 3D cutaway (issues 
   return info.clip === -1 ? 'section + drawings (3D unavailable)' : 'section A drawn, section + elevation sheets, 3D cutaway on/off, south facade camera';
 });
 
+check('drawing layers: active layer stamps, hide removes from 2D/3D/export, lock blocks selection (issue #32)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); sel = []; refresh();
+    const out = { legacy: !JSON.stringify(P.floors).includes('"layer"') };
+    document.querySelector('#props [data-act="lyradd"]').click();
+    const L1 = P.layers[1] && P.layers[1].id; out.added = !!L1 && P.activeLayer === L1;
+    F().furn.push(mkFurn(BYID.sofa3, 300, 200)); commit(); const sofa = F().furn[0];
+    out.stamped = sofa.layer === L1 && F().walls.every(w => w.layer === '0');
+    document.querySelector('#props [data-act="lyrvis"][data-lid="' + L1 + '"]').click();
+    out.hidden2D = !document.querySelector('#gFurn [data-id="' + sofa.id + '"]');
+    out.hiddenExport = !exportSvg().svg.includes('translate(300 200)');
+    document.getElementById('b3d').click();
+    if (ui.view3d) { out.hidden3D = !T3.scene.children.some(c => c.userData && c.userData.furnId === sofa.id); show3D(false); }
+    document.querySelector('#props [data-act="lyrvis"][data-lid="' + L1 + '"]').click();
+    document.querySelector('#props [data-act="lyrlock"][data-lid="' + L1 + '"]').click();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true }));
+    out.lockSkipsCtrlA = sel.length === 4 && !sel.includes(sofa.id);
+    sel = [sofa.id]; deleteSel(); out.lockSurvivesDelete = F().furn.length === 1;
+    out.footer = document.getElementById('sLayer').options.length;
+    sel = []; refresh();
+    return out;
+  })()`);
+  for (const k of ['legacy', 'added', 'stamped', 'hidden2D', 'hiddenExport', 'lockSkipsCtrlA', 'lockSurvivesDelete']) if (!info[k]) throw new Error('layers: ' + k + ' failed: ' + JSON.stringify(info));
+  if (info.hidden3D === false) throw new Error('a hidden layer still shows in 3D');
+  if (info.footer !== 2) throw new Error('the footer layer selector is out of sync: ' + info.footer);
+  return 'stamp, hide (2D/3D/export), lock (Ctrl+A, Delete), footer selector';
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');

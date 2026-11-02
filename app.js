@@ -477,6 +477,7 @@ async function migrateLegacyStorage() {
 let saveTimer = null;
 function commit() {
   if (typeof syncActiveVars === 'function') syncActiveVars();
+  stampLayers(); // yeni nesneler etkin katmana (#32)
   const s = JSON.stringify(P);
   if (hist[hi] === s) return;
   hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 150) hist.shift();
@@ -518,11 +519,87 @@ function restore(s) {
 function undo() { if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
 function redo() { if (hi < hist.length - 1) { hi++; restore(hist[hi]); autosave(); updateUndo(); } }
 function updateUndo() { $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = hi >= hist.length - 1; }
+/* ---------- Çizim katmanları (issue #32) ----------
+   P.layers = [{ id, name, color, vis, lock, print }], P.activeLayer = id. '0' = Varsayılan katman, silinemez.
+   Nesnede layer alanı yoksa '0' sayılır (eski projeler değişmeden açılır). commit() etkin katman '0' değilse
+   katmansız (= yeni) nesneleri etkin katmana damgalar; ilk özel katman eklenirken mevcut nesneler önce '0'a yazılır. */
+const LAYER_COLS = ['#64748b', '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777'];
+const defaultLayer = () => ({ id: '0', name: L('Varsayılan', 'Default'), color: '#64748b', vis: true, lock: false, print: true });
+const layerById = id => (P.layers || []).find(l => l.id === (id || '0'));
+// Gizli (veya baskıda çıkmayan) katmanlardaki nesneler olmadan katın sığ kopyası; hepsi görünürse kat aynen döner
+function visFloor(f, print = false) {
+  if (!P.layers || P.layers.length < 2) return f;
+  const hide = new Set(P.layers.filter(l => !l.vis || (print && l.print === false)).map(l => l.id));
+  if (!hide.size) return f;
+  const ok = o => !hide.has(o.layer || '0'), g = Object.assign({}, f);
+  for (const k in KINDS) g[k] = (f[k] || []).filter(ok);
+  const wl = new Set(g.walls.map(w => w.id)); g.ops = g.ops.filter(o => wl.has(o.wall));
+  return g;
+}
+// Seçilebilir mi: gizli ve kilitli katmanlardaki nesneler tıklanamaz, kutuyla seçilemez, silinemez
+function pickable(id) {
+  const fd = find(id); if (!fd) return true;
+  const l = layerById(fd.o.layer); return !l || (l.vis && !l.lock);
+}
+function stampLayers(all = false) {
+  const act = all ? '0' : (P.activeLayer || '0'); if (act === '0' && !all) return;
+  for (const f of P.floors) for (const k in KINDS) for (const o of f[k] || []) if (!o.layer) o.layer = act;
+}
+function syncLayerUI() {
+  const s = $('#sLayer'); if (!s || !P) return;
+  s.innerHTML = (P.layers || [defaultLayer()]).map(l => `<option value="${esc(l.id)}">${l.vis ? '' : '🚫 '}${l.lock ? '🔒 ' : ''}${esc(l.name)}</option>`).join('');
+  s.value = P.activeLayer || '0';
+}
+function layersPanelHtml() {
+  let h = `<h4>${L('Çizim katmanları', 'Drawing layers')}</h4>`;
+  for (const l of P.layers) {
+    const lid = esc(l.id), on = (P.activeLayer || '0') === l.id;
+    h += `<div class="row lyr" style="gap:4px;align-items:center;margin:2px 0;flex-wrap:nowrap">`
+      + `<input type="radio" name="actlayer" data-k="lyr" data-p="active" data-lid="${lid}" ${on ? 'checked' : ''} title="${L('Etkin katman (yeni nesneler buraya)', 'Active layer (new objects go here)')}">`
+      + `<input type="color" data-k="lyr" data-p="color" data-lid="${lid}" value="${esc(l.color || '#64748b')}" style="width:22px;height:22px;padding:0;border:0;flex:none">`
+      + `<input type="text" data-k="lyr" data-p="name" data-lid="${lid}" value="${esc(l.name)}" style="flex:1;min-width:0">`
+      + `<button class="btn sm" data-act="lyrvis" data-lid="${lid}" title="${L('Göster / gizle (2B, 3B, çıktı)', 'Show / hide (2D, 3D, export)')}">${l.vis ? '👁' : '🚫'}</button>`
+      + `<button class="btn sm" data-act="lyrlock" data-lid="${lid}" title="${L('Kilitle (seçilemez, silinemez)', 'Lock (cannot be selected or deleted)')}">${l.lock ? '🔒' : '🔓'}</button>`
+      + `<button class="btn sm" data-act="lyrprint" data-lid="${lid}" title="${L('Çıktıya dahil (PNG / SVG / PDF)', 'Include in exports (PNG / SVG / PDF)')}">${l.print === false ? '⛔' : '🖨'}</button>`
+      + (l.id === '0' ? '' : `<button class="btn sm" data-act="lyrdel" data-lid="${lid}" style="color:var(--danger)" title="${L('Katmanı sil (nesneler Varsayılan katmana geçer)', 'Delete layer (objects move to Default)')}">🗑</button>`)
+      + `</div>`;
+  }
+  return h + `<div class="row"><button class="btn sm" data-act="lyradd">${L('＋ Katman ekle', '＋ Add layer')}</button></div>`;
+}
+// Seçim panelinde "Katman" listesi (yalnızca birden fazla katman varken)
+function selLayerHtml(os) {
+  if (!P.layers || P.layers.length < 2 || !os.length) return '';
+  const cur = new Set(os.map(x => x.o.layer || '0')), one = cur.size === 1 ? [...cur][0] : '';
+  return `<label class="f"><span>${L('Katman', 'Layer')}</span><select data-k="sellayer" data-p="layer">${one ? '' : `<option value="" selected>${L('(karışık)', '(mixed)')}</option>`}${P.layers.map(l => `<option value="${esc(l.id)}" ${one === l.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>`;
+}
+function layerAct(a, lid) {
+  const l = layerById(lid);
+  if (a === 'lyradd') {
+    stampLayers(true); // mevcut katmansız nesneler Varsayılan'da kalsın
+    const id = uid(); P.layers.push({ id, name: L('Katman ', 'Layer ') + P.layers.length, color: LAYER_COLS[P.layers.length % LAYER_COLS.length], vis: true, lock: false, print: true });
+    P.activeLayer = id;
+  } else if (!l) return;
+  else if (a === 'lyrvis') l.vis = !l.vis;
+  else if (a === 'lyrlock') l.lock = !l.lock;
+  else if (a === 'lyrprint') l.print = l.print === false;
+  else if (a === 'lyrdel') {
+    if (l.id === '0' || !confirm(L(`“${l.name}” katmanı silinsin mi? Nesneleri Varsayılan katmana geçer.`, `Delete layer “${l.name}”? Its objects move to Default.`))) return;
+    for (const f of P.floors) for (const k in KINDS) for (const o of f[k] || []) if (o.layer === l.id) o.layer = '0';
+    P.layers = P.layers.filter(x => x !== l); if (P.activeLayer === l.id) P.activeLayer = '0';
+  }
+  sel = sel.filter(pickable);
+  commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+}
 function normalizeProject(P) {
   if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
   if (P.bg) P.bg.id = 'bg';
+  if (!Array.isArray(P.layers) || !P.layers.length) P.layers = [defaultLayer()];
+  if (!P.layers.some(l => l.id === '0')) P.layers.unshift(defaultLayer());
+  P.layers.forEach(l => { l.vis = l.vis !== false; l.lock = !!l.lock; l.print = l.print !== false; l.name = l.name || l.id; });
+  if (!P.layers.some(l => l.id === P.activeLayer)) P.activeLayer = '0';
+  if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid';
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; }
     for (const v of f.voids) if (!VOID_TYPES[v.type]) v.type = 'stair'; });
@@ -991,6 +1068,7 @@ function groupVarsSvg(f, live) {
   return s;
 }
 function layerStrings(f, live) {
+  f = visFloor(f, !live && ui.exporting); // gizli / baskıda çıkmayan katmanlar (#32)
   return {
     // döşemeler odaların altında, boşluklar oda dolgusunun üstünde (delik oda zeminini de keser)
     rooms: (f.slabs || []).map(s => slabSvg(s, live)).join('') + f.rooms.map(r => roomSvg(r, live)[0]).join('') + (f.voids || []).map(v => voidSvg(v, live)).join(''),
@@ -1107,8 +1185,8 @@ function snapToGrid(p) {
 function underlayFloor() {
   if (!layersVis.underlay || !P || P.floors.length < 2) return null;
   const f = underlay.floor !== 'prev' && P.floors.find(x => x.id === underlay.floor);
-  if (f && f !== F()) return f; // kendisi seçiliyse (başka katta seçilmiş) bir alt kata dön
-  return fi > 0 ? P.floors[fi - 1] : null;
+  if (f && f !== F()) return visFloor(f); // kendisi seçiliyse (başka katta seçilmiş) bir alt kata dön
+  return fi > 0 ? visFloor(P.floors[fi - 1]) : null;
 }
 const isStructFurn = o => o.k === 'stairs' || o.type === 'column' || o.type === 'colSq';
 // İzdüşüm: duvarlar (köşe dolgularıyla), döşeme/balkon sınırları, boşluklar, kolon ve merdivenler — silik, tıklanmaz
@@ -1268,7 +1346,7 @@ function deleteIds(ids) {
   pruneGroups();
   sel = sel.filter(id => !s.has(id));
 }
-function deleteSel() { if (!sel.length) return; deleteIds(sel); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+function deleteSel() { if (!sel.length) return; deleteIds(sel.filter(pickable)); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
 
 /* ---------- Duvar kırpma / bölme (issue #15) ---------- */
 // İki doğru parçasının kesişimi: t (p1→p2), u (p3→p4) parametreleriyle; paralelse null
@@ -1786,7 +1864,7 @@ function pickDataId(e) {
     const b = el.closest ? el.closest('[data-var-badge]') : null;
     if (b) return b;
     const t = el.closest ? el.closest('[data-id]') : null;
-    if (!t) continue;
+    if (!t || !pickable(t.dataset.id)) continue; // kilitli katman: tık alttakine geçer (#32)
     if (!first) first = t;
     if (t.hasAttribute('data-rlabel') || t.hasAttribute('data-rpoly')) {
       if (!roomHit) roomHit = t;
@@ -1814,7 +1892,7 @@ function idsAt(clientX, clientY) {
     const t = el.closest ? el.closest('[data-id]') : null;
     if (!t || t.dataset.varBadge) continue;
     const id = t.dataset.id;
-    if (!out.includes(id) && find(id)) out.push(id);
+    if (!out.includes(id) && find(id) && pickable(id)) out.push(id);
   }
   return out;
 }
@@ -2144,6 +2222,7 @@ cv.addEventListener('pointerup', e => {
         const kd = KINDS[arr];
         if (scope === 'wall' && kd !== 'wall') continue;
         if (scope === 'furn' && kd !== 'furn') continue;
+        if (!pickable(o.id)) continue;
         const bb = bboxOf(kd, o); if (!bb) continue;
         const inside = bb.x0 >= x0 && bb.x1 <= x1 && bb.y0 >= y0 && bb.y1 <= y1;
         const inter = bb.x1 >= x0 && bb.x0 <= x1 && bb.y1 >= y0 && bb.y0 <= y1;
@@ -2363,7 +2442,7 @@ function renderProps() {
   if (!os.length) { el.innerHTML = projectPanel(); return; }
   const kinds = [...new Set(os.map(x => x.kind))];
   const xf = os.some(x => XFORM_KINDS.has(x.kind)) ? `<div class="row"><button class="btn sm" data-act="flipH" title="Shift+H">${L('⇋ Yatay aynala', '⇋ Flip H')}</button><button class="btn sm" data-act="flipV" title="Shift+V">${L('⇵ Dikey aynala', '⇵ Flip V')}</button><button class="btn sm" data-act="mirror" title="I">${L('🪞 Eksene göre…', '🪞 Mirror…')}</button><button class="btn sm" data-act="scale">${L('⤢ Ölçekle…', '⤢ Scale…')}</button></div>` : '';
-  const acts = (extra = '') => xf + `<div class="row">${extra}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+  const acts = (extra = '') => selLayerHtml(os) + xf + `<div class="row">${extra}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
   if (kinds.length > 1) {
     const gs = os.filter(x => GROUPABLE[x.kind]);
     const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
@@ -2487,6 +2566,7 @@ function renderProps() {
 function projectPanel() {
   const f = F(); let h = `<h3>⚙️ ${L('Proje', 'Project')}</h3>`;
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
+  h += layersPanelHtml();
   h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['dims', L('Ölçüler', 'Dimensions')], ['sketch', L('Serbest çizimler', 'Freehand sketches')]].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
   if (P.floors.length > 1) {
     // Kat izdüşümü (issue #26): aç/kapa, referans kat, opaklık
@@ -2530,6 +2610,16 @@ function affects3D(k, p) {
 function applyProp(t, final) {
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
+  if (k === 'lyr') {
+    const l = layerById(t.dataset.lid); if (!l) return;
+    if (p === 'active') { if (t.checked) P.activeLayer = l.id; } else l[p] = v;
+    if (final) { commit(); syncLayerUI(); } return;
+  }
+  if (k === 'sellayer') {
+    if (!final || !v || !layerById(v)) return;
+    for (const { o } of selObjs()) o.layer = v;
+    sel = sel.filter(pickable); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
   if (k === 'layer') { layersVis[p] = v; render(); if (p === 'underlay') renderProps(); return; }
   if (k === 'ul') { if (p === 'op') underlay.op = clamp(v / 100, 0.1, 0.5); else { underlay.floor = v; renderProps(); } render(); return; }
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
@@ -2592,6 +2682,7 @@ $('#props').addEventListener('click', e => {
   if (a === 'dup') return paste(true);
   if (a === 'flipH' || a === 'flipV') return flipSel(a === 'flipH' ? 'h' : 'v');
   if (a === 'archview') return archModal('elev:south');
+  if (a.startsWith('lyr')) return layerAct(a, b.dataset.lid);
   const sco = os.length === 1 && os[0].kind === 'section' ? os[0].o : null;
   if (sco && a === 'secflip') { sco.dir = -(sco.dir || 1); commit(); refresh(); if (ui.secCut === sco.id) { applySecClip(); lookAtSection(sco); } return; }
   if (sco && a === 'secdraw') return archModal('sec:' + sco.id);
@@ -2732,7 +2823,7 @@ $('#floors').addEventListener('click', e => {
   if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
 });
 $('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) { const f = P.floors[+t.dataset.fl], n = prompt(L('Kat adı:', 'Floor name:'), f.name); if (n) { f.name = n; commit(); refresh(); } } });
-function refresh() { render(); renderProps(); renderFloors(); updateTools(); }
+function refresh() { render(); renderProps(); renderFloors(); updateTools(); syncLayerUI(); }
 
 /* ---------- Kopyala / yapıştır ---------- */
 let pasteN = 0;
@@ -3121,7 +3212,7 @@ window.addEventListener('keydown', e => {
     else if (k === 'v') paste(false);
     else if (k === 'd') { e.preventDefault(); paste(true); }
     else if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }
-    else if (k === 'a') { e.preventDefault(); const f = F(); sel = []; for (const a in KINDS) f[a].forEach(o => sel.push(o.id)); refresh(); }
+    else if (k === 'a') { e.preventDefault(); const f = F(); sel = []; for (const a in KINDS) f[a].forEach(o => { if (pickable(o.id)) sel.push(o.id); }); refresh(); }
     else if (k === 's') { e.preventDefault(); saveBrowser(); }
     return;
   }
@@ -4072,6 +4163,7 @@ function archPrims(spec) {
   };
   P.floors.forEach((f, i) => {
     const E = floorElev(i); levels.push({ z: E, name: f.name });
+    f = visFloor(f, true);
     // döşemeler
     const plates = [...slabPolys(f).map(pts => ({ pts, z0: E - 20, z1: E })), ...(f.slabs || []).filter(s => s.pts && s.pts.length > 2).map(s => ({ pts: s.pts, z0: E + (+s.off || 0) - (+s.t || 20), z1: E + (+s.off || 0) }))];
     const voidIv = cut ? (f.voids || []).flatMap(v => lineCutIntervals(v.pts, O, u)) : [];
@@ -4572,6 +4664,7 @@ function init3D() {
     let cur = hits[0].object;
     while (cur && !(cur.userData && (cur.userData.furnId || cur.userData.opId))) cur = cur.parent;
     if (!cur) return;
+    if (!pickable(cur.userData.opId || cur.userData.furnId)) return; // kilitli katman (#32): yörünge serbest
     if (cur.userData.opId) {
       // kapı/pencere (#29): tık = seç (kapıda aç/kapa), sürükle = duvar boyunca kaydır
       const fo = findAnyFloor(cur.userData.opId), wd = fo && fo.kind === 'op' && fo.floor.walls.find(w => w.id === fo.o.wall);
@@ -4683,7 +4776,7 @@ function init3D() {
     while (cur && !cur.userData?.wallId && !cur.userData?.opId) cur = cur.parent;
     let hit3 = false;
     if (cur && cur.userData?.opId) hit3 = true; // açıklıklar pointerdown/pointerup (d3) yolunda işlenir
-    else if (cur && cur.userData?.wallId) {
+    else if (cur && cur.userData?.wallId && findAnyFloor(cur.userData.wallId) && (() => { const l = layerById(findAnyFloor(cur.userData.wallId).o.layer); return !l || !l.lock; })()) {
       const fd = findAnyFloor(cur.userData.wallId);
       if (fd && fd.kind === 'wall' && (e.altKey || (!fd.o.grp && !(Array.isArray(fd.o.angles) && fd.o.angles.length >= 2)))) {
         sel = [fd.o.id]; refresh(); refreshSel3D(); // düz duvar (veya Alt+tık): seç → yan panelde yükseklik/kalınlık/tür/boya (#29)
@@ -5158,7 +5251,8 @@ function build3D(keepCam = false) {
   const furnCtx = { box, cyl, sph, mat, det };
   let elev = 0;
   P.floors.forEach((f, fidx) => {
-    if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return; // kat seçici: yalnızca seçili kat çizilir
+    if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return;
+    f = visFloor(f); // gizli katmanlar 3B'de de yok (#32) // kat seçici: yalnızca seçili kat çizilir
     // zemin plakası: duvarların dış konturunu izleyen poligon — açılı planlarda AABB gibi taşmaz
     const slabCol = lt ? 0xded8cc : (fidx === 0 ? 0x171e29 : 0x232b38);
     // kat döşemesi malzemesi (issue #12): kullanıcı seçtiyse üst yüze doku/renk, yan yüzler düz
@@ -5447,6 +5541,7 @@ function applyLangUI() {
   if ($('#b3dFit')) $('#b3dFit').title = L('Sığdır', 'Fit');
   if ($('#b3dTop')) $('#b3dTop').title = L('Üstten görünüm', 'Top view');
   if ($('#b3dEye')) $('#b3dEye').title = L('Göz hizası (1.6 m)', 'Eye level (1.6 m)');
+  if ($('#lblLayer')) $('#lblLayer').textContent = L('Katman', 'Layer');
   for (const [id, k, tr, en] of [['b3dN', 'north', 'K', 'N'], ['b3dE', 'east', 'D', 'E'], ['b3dS', 'south', 'G', 'S'], ['b3dW', 'west', 'B', 'W']]) if ($('#' + id)) { $('#' + id).textContent = L(tr, en); $('#' + id).title = L(...ELEV_NAMES[k]); }
   if ($('#b3dShot')) $('#b3dShot').title = L('🎬 Render al (PNG) — Shift: hızlı görünüm', '🎬 Render (PNG) — Shift: quick capture');
   syncExportTitles();
@@ -5480,6 +5575,7 @@ $('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && 
 $('#b3dFit').onclick = () => set3DCam('fit');
 $('#b3dTop').onclick = () => set3DCam('top');
 $('#b3dEye').onclick = () => set3DCam('eye');
+$('#sLayer').onchange = e => { if (layerById(e.target.value)) { P.activeLayer = e.target.value; commit(); refresh(); } };
 for (const [id, k] of [['b3dN', 'north'], ['b3dE', 'east'], ['b3dS', 'south'], ['b3dW', 'west']]) $('#' + id).onclick = () => set3DCam(k);
 $('#b3dShot').onclick = e => export3DRender(e && e.shiftKey);
 $('#bLang').onclick = () => setLang(isEN() ? 'tr' : 'en');
