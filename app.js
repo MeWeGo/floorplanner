@@ -517,7 +517,7 @@ function restore(s) {
   fi = clamp(fi, 0, P.floors.length - 1);
   sel = sel.filter(id => find(id));
   $('#pname').value = P.name; syncGridUI();
-  refresh();
+  refresh(); buildLib(); // kütüphane ön ayarları / şekiller de geri alınır (#42)
   if (ui.view3d && T3) schedBuild3D(); // undo/redo sonrası 3B sahnesi tazelensin
 }
 function undo() { if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
@@ -788,6 +788,7 @@ function normalizeProject(P) {
   if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
+  P.lib.presets = (Array.isArray(P.lib.presets) ? P.lib.presets : []).filter(p => p && p.id && (p.kind === 'op' || p.kind === 'furn') && +p.w > 0); // #42
   if (P.bg) P.bg.id = 'bg';
   P.textures = (Array.isArray(P.textures) ? P.textures : []).filter(t => t && /^[\w-]{1,32}$/.test(t.id))
     .map(t => ({ id: t.id, name: String(t.name || t.id).slice(0, 60), w: clamp(+t.w || 60, 1, 5000), h: clamp(+t.h || +t.w || 60, 1, 5000) }));
@@ -807,7 +808,7 @@ function loadProject(obj, msg) {
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
   $('#pname').value = P.name; syncGridUI();
-  setTool('select'); fit(); syncTab(); refresh(); updateUndo(); autosave();
+  setTool('select'); fit(); syncTab(); refresh(); updateUndo(); autosave(); buildLib();
   if (msg) toast(msg);
 }
 /* ---------- Proje sekmeleri (issue #17) ----------
@@ -840,7 +841,7 @@ function activateTab(i) {
   $('#pname').value = P.name; syncGridUI();
   if (t.view) Object.assign(view, t.view); else fit();
   if (tool === 'place') setTool('select');
-  refresh(); updateUndo(); renderTabs(); autosave();
+  refresh(); updateUndo(); renderTabs(); autosave(); buildLib();
   if (ui.view3d && T3) schedBuild3D();
 }
 function switchTab(i) {
@@ -1641,9 +1642,11 @@ function mkWall(a, b) { return { id: uid(), a: { x: a.x, y: a.y }, b: { x: b.x, 
 function opType(id) { return id.startsWith('window') || id === 'wsmall' ? 'window' : id; }
 function mkOp(def, wall, d) {
   const L = wLen(wall); const w = def.w;
-  return { id: uid(), wall: wall.id, d: L >= w ? clamp(d, w / 2, L - w / 2) : L / 2, w, h: def.h, sill: def.sill, type: opType(def.id), flip: 0, side: 1, open: 0 };
+  const o = { id: uid(), wall: wall.id, d: L >= w ? clamp(d, w / 2, L - w / 2) : L / 2, w, h: def.h, sill: def.sill, type: opType(def.id), flip: 0, side: 1, open: 0 };
+  if (def.extra) Object.assign(o, JSON.parse(JSON.stringify(def.extra))); // ön ayar alanları (#42)
+  return o;
 }
-function mkFurn(def, x, y, rot = 0) { const o = { id: uid(), type: def.id, name: itemName(def), icon: def.icon, k: def.k, w: def.w, d: def.d, h: def.h, color: def.color, x, y, rot, label: '' }; if (def.k === 'poly' && def.pts) o.pts = JSON.parse(JSON.stringify(def.pts)); return o; }
+function mkFurn(def, x, y, rot = 0) { const o = { id: uid(), type: def.id, name: itemName(def), icon: def.icon, k: def.k, w: def.w, d: def.d, h: def.h, color: def.color, x, y, rot, label: '' }; if (def.k === 'poly' && def.pts) o.pts = JSON.parse(JSON.stringify(def.pts)); if (def.extra) for (const k in def.extra) if (k !== 'pts') o[k] = JSON.parse(JSON.stringify(def.extra[k])); return o; }
 function mkRoom(pts, name) {
   const n = F().rooms.length;
   return { id: uid(), name: name || L('Oda ', 'Room ') + (n + 1), color: ROOMCOL[n % ROOMCOL.length], floor: 'none', pts };
@@ -2034,7 +2037,7 @@ function updateTools() {
     : ((isEN() ? HINTS_EN : HINTS)[tool] || '');
   $('#hud').style.display = '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
-  document.querySelectorAll('#items .item').forEach(el => el.classList.toggle('on', !!placing && el.dataset.id === placing.def.id));
+  document.querySelectorAll('#items .item').forEach(el => el.classList.toggle('on', !!placing && el.dataset.id === (el.dataset.type === 'pre' ? placing.def.preset : !placing.def.preset && placing.def.id)));
   const bar = $('#shapeBar'), showShape = tool === 'shape' && !ui.view3d, was = bar.dataset.on === '1';
   bar.style.display = showShape ? 'flex' : 'none';
   bar.dataset.on = showShape ? '1' : '0';
@@ -2052,7 +2055,7 @@ function setTool(t) {
   updateTools(); render();
 }
 function startPlace(type, def) {
-  ui.draw = null; placing = { type, def, rot: 0 }; tool = 'place'; ui.btn = type === 'op' ? (def.id.startsWith('w') ? 'window' : 'door') : null;
+  ui.draw = null; placing = { type, def, rot: 0, flip: def.flip || 0 }; tool = 'place'; ui.btn = type === 'op' ? (def.id.startsWith('w') ? 'window' : 'door') : null;
   if (ui.view3d) show3D(false);
   updateTools(); render();
 }
@@ -2568,6 +2571,7 @@ function placeAt(raw) {
   if (placing.type === 'furn') { const o = { ...ui.ghost, id: uid() }; f.furn.push(o); sel = [o.id]; }
   else {
     const g = ui.ghost, o = { ...g, id: uid() }; f.ops.push(o); sel = [o.id];
+    if (!placing.def.preset) ui.opSrc[o.id] = placing.def.id; // son kullanılan ölçü için kaynak (#42)
   }
   commit(); refresh();
 }
@@ -2897,6 +2901,7 @@ function renderProps() {
     }
     if (o.type !== 'arch') h += fld(L('Kasa rengi', 'Frame colour'), 'op', 'frameCol', o.frameCol || '#c3c1bf', { type: 'color' });
     if (o.color || o.frameCol) h += `<div class="row"><button class="btn sm" data-act="opcolreset">${L('↺ Varsayılan renkler', '↺ Default colours')}</button></div>`;
+    if (n === 1) h += `<div class="row"><button class="btn sm" data-act="savepreset" title="${L('Bu ölçüleri kütüphaneye kaydet, tekrar tekrar yerleştir', 'Save these sizes to the library and place them again')}">💾 ${L('Kütüphaneye kaydet', 'Save to library')}</button></div>`;
     if (o.type === 'slide') h += acts(`<button class="btn sm" data-act="opflip">${L('↔ Yön', '↔ Flip')}</button>`);
     else h += acts(`<button class="btn sm" data-act="opflip">${L('↔ Menteşe', '↔ Hinge')}</button><button class="btn sm" data-act="opside">${L('↕ Açılış yönü', '↕ Swing side')}</button>`);
   } else if (k === 'furn') {
@@ -2915,6 +2920,7 @@ function renderProps() {
         + `<div class="stat" title="${L('Blondel kuralı: 2 × rıht + basamak ≈ 63 cm (60–64 rahat)', 'Blondel rule: 2 × riser + tread ≈ 63 cm (60–64 is comfortable)')}"><span>2r + t</span><b style="color:${bc}">${Math.round(bl.v * 10) / 10} cm ${bl.ok ? '✓' : bl.warn ? '≈' : '✗'}</b></div>`
         + `<div class="row"><button class="btn sm" data-act="stairfit">${L('⇕ Kat yüksekliğine eşitle', '⇕ Match storey height')} (${P.wallH + 20} cm)</button></div>`;
     }
+    if (o.type !== 'shape' && n === 1) h += `<div class="row"><button class="btn sm" data-act="savepreset" title="${L('Bu ölçü ve rengi kütüphaneye kaydet, tekrar tekrar yerleştir', 'Save this size and colour to the library and place it again')}">💾 ${L('Kütüphaneye kaydet', 'Save to library')}</button></div>`;
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
     h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: floorOpts() }) + `<div class="row"><button class="btn sm" data-act="texadd">${L('🖼 Doku yükle…', '🖼 Upload texture…')}</button></div>`;
@@ -3085,6 +3091,7 @@ function applyProp(t, final) {
     if (k === 'furn' && p === 'rot') os.forEach(x => moveFurn3D(x.o));
     else if (affects3D(k, p)) schedBuild3D();
   }
+  if (final && k === 'op' && ['w', 'h', 'sill'].includes(p)) os.forEach(x => rememberOpSize(x.o));
   if (final) { commit(); if (['type', 'mat', 'floor', 'len', 'deg', 'pivot', 'stepN', 'stairType', 'railing'].includes(p) || (k === 'furn' && os.some(x => x.o.k === 'stairs') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color')) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
@@ -3094,6 +3101,7 @@ $('#props').addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b) return;
   const a = b.dataset.act, os = selObjs(), f = F();
   if (a === 'del') return deleteSel();
+  if (a === 'savepreset') return savePresetSel();
   if (a === 'opcolreset') { os.forEach(x => { if (x.kind === 'op') { delete x.o.color; delete x.o.frameCol; } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'texadd') return addTextureFlow();
   if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
@@ -3178,7 +3186,7 @@ $('#props').addEventListener('click', e => {
       if (nm) {
         P.lib = P.lib || { shapes: [] }; P.lib.shapes = P.lib.shapes || [];
         P.lib.shapes.push({ id: uid(), name: nm, en: nm, k: o.k, pts: o.pts ? JSON.parse(JSON.stringify(o.pts)) : undefined, w: o.w, d: o.d, h: o.h, color: o.color, icon: o.k === 'round' ? '⬤' : '⬡' });
-        commit(); buildLib(); toast(L(`“${nm}” kütüphaneye eklendi (⬡ Şekillerim)`, `“${nm}” added to the library (⬡ My Shapes)`));
+        commit(); buildLib(); toast(L(`“${nm}” kütüphaneye eklendi (⬡ Kütüphanem)`, `“${nm}” added to the library (⬡ My Library)`));
         return;
       }
     }
@@ -3195,22 +3203,75 @@ $('#props').addEventListener('click', e => {
 });
 
 /* ---------- Kütüphane ---------- */
-const LIBCATS = ['Kapı & Pencere', ...CATS, '⬡ Şekillerim'];
-const LIBCATS_EN = ['Doors & Windows', ...CATS_EN, '⬡ My Shapes'];
+/* ---------- Kütüphane ön ayarları (issue #42) ----------
+   Seçili tek kapı/pencere ya da mobilya, adıyla P.lib.presets'e kopyalanır (kaydedilmiş şekillerle aynı
+   proje kütüphanesi, "⬡ Kütüphanem" sekmesi). Ön ayar yalnızca yerleştirme anında değer kopyalar — bağlı
+   tip değildir. Kapı açılış yönü (side) kaydedilir ama yerleştirirken imlecin tarafını izler (duvar yönü
+   her duvarda farklıdır); S ile çevrilir. #41 alanları (mat, color, frameCol, glass) da taşınır. */
+const PRESET_OP_EXTRA = ['mat', 'color', 'frameCol', 'glass'];
+const PRESET_FURN_EXTRA = ['stepN', 'stairType', 'railing', 'pts'];
+const clonePlain = v => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
+function presetFromObj(kind, o, name) {
+  const p = { id: uid(), name: String(name).slice(0, 60), kind };
+  if (kind === 'op') Object.assign(p, { type: o.type, w: o.w, h: o.h, sill: o.sill || 0, flip: o.flip ? 1 : 0, side: o.side < 0 ? -1 : 1 });
+  else Object.assign(p, { type: o.type, k: o.k, icon: o.icon, w: o.w, d: o.d, h: o.h, color: o.color });
+  const extra = {};
+  for (const f of kind === 'op' ? PRESET_OP_EXTRA : PRESET_FURN_EXTRA) if (o[f] !== undefined && o[f] !== null) extra[f] = clonePlain(o[f]);
+  if (Object.keys(extra).length) p.extra = extra;
+  return p;
+}
+// ön ayar → startPlace() tanımı; mkOp / mkFurn def.extra'yı nesneye kopyalar
+function presetDef(p) {
+  if (p.kind === 'op') {
+    const base = Object.values(OPDEF).find(d => opType(d.id) === p.type) || OPDEF.door;
+    return { id: base.id, name: p.name, en: p.name, icon: base.icon, w: p.w, h: p.h, sill: p.sill || 0, flip: p.flip || 0, extra: p.extra, preset: p.id };
+  }
+  const cat = BYID[p.type];
+  return { id: p.type, name: p.name, en: p.name, icon: p.icon || (cat && cat.icon) || '▭', k: p.k || (cat && cat.k) || 'rect', w: p.w, d: p.d, h: p.h, color: p.color, pts: p.extra && p.extra.pts, extra: p.extra, preset: p.id };
+}
+// kartta görünen ölçü: 85×210 · 100×70 · denizlik 110 · 200×90
+function presetSize(p) {
+  if (p.kind === 'op') return Math.round(p.w) + '×' + Math.round(p.h) + (p.sill > 0 ? ' · ' + L('denizlik', 'sill') + ' ' + Math.round(p.sill) : '');
+  return Math.round(p.w) + '×' + Math.round(p.d);
+}
+function savePresetSel() {
+  const os = selObjs(); if (os.length !== 1 || (os[0].kind !== 'op' && os[0].kind !== 'furn')) return;
+  const { kind, o } = os[0];
+  const def0 = kind === 'op' ? (OPENINGS.find(d => opType(d.id) === o.type) || OPDEF.door) : (BYID[o.type] || o);
+  const sug = kind === 'op' ? itemName(def0) + ' ' + Math.round(o.w) + '×' + Math.round(o.h) : (o.label || o.name || itemName(def0));
+  const nm = (prompt(L('Ön ayar adı:', 'Preset name:'), sug) || '').trim(); if (!nm) return;
+  const p = presetFromObj(kind, o, nm);
+  P.lib.presets = P.lib.presets || []; P.lib.presets.push(p);
+  commit(); ui.cat = LIBCATS.length - 1; ui.q = ''; $('#search').value = ''; buildLib(); refresh();
+  toast(L(`“${nm}” kütüphaneye eklendi (⬡ Kütüphanem)`, `“${nm}” added to the library (⬡ My Library)`));
+}
+// Son kullanılan ölçü (oturumluk): bir kapıyı 85 cm yapınca sonraki kapı da 85 cm gelir.
+// Kaynak tanım, bu oturumda yerleştirilen açıklıklar için ui.opSrc'den; diğerlerinde tipten (pencerede üç
+// farklı hazır ölçü olduğu için tipten tahmin edilmez).
+ui.opLast = {}; ui.opSrc = {};
+const opSrcOf = o => ui.opSrc[o.id] || (o.type !== 'window' && OPDEF[o.type] ? o.type : null);
+function rememberOpSize(o) { const s = opSrcOf(o); if (s) { ui.opLast[s] = { w: o.w, h: o.h, sill: o.sill }; if (ui.cat === 0 || ui.q) buildLib(); } }
+const opDefLast = def => ui.opLast[def.id] ? { ...def, ...ui.opLast[def.id] } : def;
+const LIBCATS = ['Kapı & Pencere', ...CATS, '⬡ Kütüphanem'];
+const LIBCATS_EN = ['Doors & Windows', ...CATS_EN, '⬡ My Library'];
 function buildLib() {
   const cats = isEN() ? LIBCATS_EN : LIBCATS;
   $('#cats').innerHTML = cats.map((c, i) => `<button class="chip ${i === ui.cat && !ui.q ? 'on' : ''}" data-cat="${i}">${c}</button>`).join('');
   const q = ui.q.toLowerCase(); let items = '';
   const card = (type, d, sz) => `<button class="item" data-type="${type}" data-id="${d.id}"><div class="ic">${d.icon || '▭'}</div><div>${itemName(d)}</div><div class="sz">${sz}</div></button>`;
   const shapeCard = d => `<button class="item" data-type="def" data-id="${d.id}"><div class="ic">${d.icon || '⬡'}</div><div>${esc(itemName(d))}</div><div class="sz">${Math.round(d.w)}×${Math.round(d.d)} cm</div><span class="delsh" data-delsh="${d.id}" title="${L('Kütüphaneden sil', 'Remove from library')}">✕</span></button>`;
+  const presetCard = p => { const d = presetDef(p); return `<button class="item" data-type="pre" data-id="${p.id}" title="${esc(p.name)}"><div class="ic">${d.icon || '▭'}</div><div>${esc(p.name)}</div><div class="sz">${presetSize(p)}</div><span class="renpre" data-renpre="${p.id}" title="${L('Yeniden adlandır', 'Rename')}">✎</span><span class="delsh" data-delpre="${p.id}" title="${L('Kütüphaneden sil', 'Remove from library')}">✕</span></button>`; };
   const matches = d => d.name.toLowerCase().includes(q) || (d.en && d.en.toLowerCase().includes(q));
-  const shapes = P && P.lib && P.lib.shapes || [];
+  const shapes = P && P.lib && P.lib.shapes || [], presets = P && P.lib && P.lib.presets || [];
+  const opCard = o => card('op', o, opDefLast(o).w + ' cm'); // son kullanılan ölçü kartta da görünür
   if (q) {
-    items += OPENINGS.filter(matches).map(o => card('op', o, o.w + ' cm')).join('');
+    items += presets.filter(p => p.name.toLowerCase().includes(q)).map(presetCard).join('');
+    items += OPENINGS.filter(matches).map(opCard).join('');
     items += CATALOG.filter(matches).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
     items += shapes.filter(matches).map(shapeCard).join('');
-  } else if (ui.cat === 0) items = OPENINGS.map(o => card('op', o, o.w + ' cm')).join('');
-  else if (ui.cat === LIBCATS.length - 1) items = shapes.map(shapeCard).join('');
+  } else if (ui.cat === 0) items = OPENINGS.map(opCard).join('') + presets.filter(p => p.kind === 'op').map(presetCard).join('');
+  else if (ui.cat === LIBCATS.length - 1) items = presets.map(presetCard).join('') + shapes.map(shapeCard).join('')
+    + (presets.length || shapes.length ? '' : `<p class="muted">${L('Bir kapı, pencere ya da mobilyayı seçip “💾 Kütüphaneye kaydet” ile buraya ekle.', 'Select a door, window or furniture item and use “💾 Save to library” to add it here.')}</p>`);
   else items = CATALOG.filter(c => c.cat === ui.cat - 1).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
   $('#items').innerHTML = items || `<p class="muted">${L('Sonuç yok', 'No results')}</p>`;
   updateTools();
@@ -3224,8 +3285,16 @@ $('#items').addEventListener('click', e => {
     if (i >= 0 && confirm(L(`“${itemName(P.lib.shapes[i])}” kütüphaneden silinsin mi?`, `Delete “${itemName(P.lib.shapes[i])}” from the library?`))) { P.lib.shapes.splice(i, 1); commit(); buildLib(); toast(L('Şekil kütüphaneden silindi', 'Shape removed from library')); }
     return;
   }
+  const dp = e.target.closest('[data-delpre]'), rp = e.target.closest('[data-renpre]');
+  if (dp || rp) {
+    const ps = P.lib.presets || [], i = ps.findIndex(p => p.id === (dp || rp).dataset[dp ? 'delpre' : 'renpre']); if (i < 0) return;
+    if (dp) { if (confirm(L(`“${ps[i].name}” kütüphaneden silinsin mi?`, `Delete “${ps[i].name}” from the library?`))) { ps.splice(i, 1); if (placing && placing.def.preset === dp.dataset.delpre) setTool('select'); commit(); buildLib(); toast(L('Ön ayar silindi (Ctrl+Z ile geri al)', 'Preset removed (Ctrl+Z to undo)')); } }
+    else { const nm = (prompt(L('Yeni ad:', 'New name:'), ps[i].name) || '').trim(); if (nm) { ps[i].name = nm.slice(0, 60); commit(); buildLib(); } }
+    return;
+  }
   const b = e.target.closest('.item'); if (!b) return;
-  let type = b.dataset.type, def = type === 'op' ? OPDEF[b.dataset.id] : type === 'def' ? (P.lib.shapes || []).find(s => s.id === b.dataset.id) : BYID[b.dataset.id];
+  if (b.dataset.type === 'pre') { const p = (P.lib.presets || []).find(x => x.id === b.dataset.id); if (p) startPlace(p.kind, presetDef(p)); return; }
+  let type = b.dataset.type, def = type === 'op' ? opDefLast(OPDEF[b.dataset.id]) : type === 'def' ? (P.lib.shapes || []).find(s => s.id === b.dataset.id) : BYID[b.dataset.id];
   if (type === 'def') { if (!def) return; type = 'furn'; def = { id: 'sh_' + def.id, name: def.name, en: def.en, k: def.k, pts: def.pts, w: def.w, d: def.d, h: def.h, color: def.color, icon: def.icon }; }
   startPlace(type, def);
 });

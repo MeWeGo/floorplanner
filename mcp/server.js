@@ -145,7 +145,7 @@ function newProject(a) {
     wallT: num(a.wallT, 20, 'wallT'),
     wallH: num(a.wallH, 270, 'wallH'),
     bg: null,
-    lib: { shapes: [] },
+    lib: { shapes: [], presets: [] },
     textures: [],
     floors: [newFloor(a.floorName)],
   };
@@ -159,6 +159,8 @@ function normalizeProject(obj) {
   obj.grid = +obj.grid || 10; obj.gridType = obj.gridType || 'square';
   obj.wallT = +obj.wallT || 20; obj.wallH = +obj.wallH || 270;
   obj.lib = Object.assign({ shapes: [] }, obj.lib || {}); obj.lib.shapes = obj.lib.shapes || [];
+  // library presets (#42): saved doors / windows / furniture, kept as-is so get/set/load/save round-trip them
+  obj.lib.presets = (Array.isArray(obj.lib.presets) ? obj.lib.presets : []).filter(p => p && p.id && (p.kind === 'op' || p.kind === 'furn') && +p.w > 0);
   if (obj.bg) obj.bg.id = 'bg';
   // custom texture metadata (#40); texData (exported image payload) is passed through untouched for the browser
   obj.textures = (Array.isArray(obj.textures) ? obj.textures : []).filter(t => t && /^[\w-]{1,32}$/.test(t.id))
