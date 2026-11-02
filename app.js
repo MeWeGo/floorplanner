@@ -4953,11 +4953,64 @@ function sync3DFloors() {
   if (ui.v3dFloor !== 'all' && !fl.some(x => x.id === ui.v3dFloor)) ui.v3dFloor = 'all';
   selEl.value = ui.v3dFloor;
 }
+/* 2B ⇄ 3B kamera hafızası (issue #37). 2B'de aynı yere bakıyorsak kullanıcının
+   bıraktığı 3B kamera korunur; belirgin biçimde başka bir yere kaydıysa ya da
+   yeni bir nesne seçiliyse kamera 2B'de bakılan alana taşınır. */
+const CAM_KEEP_RADIUS = 200; // cm — 2B merkezi bu kadar kayarsa kamera yeniden yönlenir
+
+/** 2B tuvalin merkezindeki dünya koordinatı (cm). */
+function view2DCenter() {
+  const z = Math.max(view.z, 0.01);
+  return { x: (cv.clientWidth / 2 - view.x) / z, y: (cv.clientHeight / 2 - view.y) / z };
+}
+/** 3B kameranın hedefleyeceği nokta: seçim varsa sınırlayıcı kutu, yoksa tuval merkezi. */
+function view3DFocus() {
+  const os = selObjs(), b = os.length ? selectionBounds(os) : null;
+  if (b) return { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, span: Math.max(b.x1 - b.x0, b.y1 - b.y0), sel: true };
+  // span = 2B'de görünen dünyanın yarıçapı: yakınlaştıkça 3B kamera da yaklaşır
+  const c = view2DCenter();
+  return { x: c.x, y: c.y, span: Math.max(cv.clientWidth, cv.clientHeight) / 2 / Math.max(view.z, 0.01), sel: false };
+}
+/** Kamerayı 2B'de bakılan alana yerleştirir (varsayılan uzak tepe noktası yerine). */
+function orient3DFrom2D(fo) {
+  if (!T3 || !T3.cam || !T3.ctl) return;
+  const f = fo || view3DFocus(), fit = T3.fit || {};
+  let tx = f.x, tz = f.y;
+  // 2B'de çok uzağa kaydırılmış olsa bile plan kadrajda kalsın
+  if (fit.x0 != null) {
+    const px = Math.max(200, (fit.x1 - fit.x0) * 0.35), pz = Math.max(200, (fit.z1 - fit.z0) * 0.35);
+    tx = clamp(tx, fit.x0 - px, fit.x1 + px); tz = clamp(tz, fit.z0 - pz, fit.z1 + pz);
+  }
+  // seçili nesne çerçevelenir; seçim yoksa 2B görüş alanı kadar yaklaşılır
+  const span = f.sel ? Math.max(f.span, 240) : clamp(f.span * 0.85, 200, Math.max(300, (fit.sz || 2000) * 2.2));
+  const d = clamp(span * 1.55, 300, 6000);
+  // 2B'de hangi kattaysak 3B'de de o seviyeye bak (kat seçici tek katı zemine indirir)
+  const elev = ui.v3dFloor === 'all' ? fi * (P.wallH + 20) : 0;
+  T3.ctl.target.set(tx, elev + 80, tz);
+  T3.cam.position.set(tx + d * 0.62, elev + 80 + d * 0.92, tz + d * 0.9);
+  T3.ctl.update();
+}
 function show3D(on) {
   if (on && (!window.THREE || !THREE.OrbitControls)) { toast(L('3B için internet bağlantısı gerekli (Three.js yüklenemedi)', 'Internet connection required for 3D (Three.js failed to load)')); return; }
   ui.view3d = on; keys3D.clear(); $('#v3d').style.display = on ? 'block' : 'none'; $('#b2d').classList.toggle('on', !on); $('#b3d').classList.toggle('on', on);
   $('#zoomctl').style.display = on ? 'none' : ''; updateTools(); syncExportTitles();
-  if (on) { init3D(); build3D(); T3.run = true; loop3D(); } else if (T3) T3.run = false;
+  if (on) {
+    init3D();
+    const focus = view3DFocus(), c = view2DCenter(), selKey = sel.slice().sort().join(',');
+    // aynı 2B noktası + aynı seçim => kullanıcının bıraktığı 3B kamera korunur
+    const moved = !T3.center2d || dist(T3.center2d, c) > CAM_KEEP_RADIUS;
+    const keep = !!T3.lastCam && !moved && !(focus.sel && selKey !== (T3.selKey || ''));
+    T3.selKey = selKey;
+    if (keep) { T3.cam.position.copy(T3.lastCam.pos); T3.ctl.target.copy(T3.lastCam.target); }
+    build3D(keep);
+    if (!keep) orient3DFrom2D(focus);
+    T3.center2d = c;
+    T3.run = true; loop3D();
+  } else if (T3) {
+    // 2B'ye dönerken bırakılan kamera: bir sonraki girişte aynen geri gelir
+    T3.lastCam = { pos: T3.cam.position.clone(), target: T3.ctl.target.clone() };
+    T3.run = false;
+  }
 }
 function init3D() {
   if (T3) { resize3D(); return; }
@@ -5919,7 +5972,7 @@ $('#bTheme').onclick = () => {
   d.dataset.theme = d.dataset.theme === 'light' ? '' : 'light';
   localStorage.setItem('fp_theme', d.dataset.theme || '');
   render();
-  if (ui.view3d && T3) build3D();
+  if (ui.view3d && T3) build3D(true); // tema değişimi kamerayı sıfırlamasın
 };
 $('#pname').addEventListener('input', e => { P.name = e.target.value; renderTabs(); autosave(); });
 $('#pname').addEventListener('change', commit);

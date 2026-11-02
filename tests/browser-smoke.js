@@ -725,6 +725,84 @@ check('3D: a real render is produced, and PNG follows the active view', async pa
   return 'render ' + Math.round(info.sizes[0] / 1024) + ' KB · ' + info.names[0];
 });
 
+check('3D: the camera starts on the 2D focus and remembers the orbit', async page => {
+  const info = await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    P = newProject(); loadProject(P);
+    addRectWalls(0, 0, 800, 500); commit(); refresh();
+    if (!window.THREE || !THREE.OrbitControls) {
+      return { three: false, toast: document.getElementById('toast').textContent };
+    }
+    const cvEl = document.getElementById('cv');
+    const place = (p) => { view.z = 1; view.x = cvEl.clientWidth / 2 - p.x; view.y = cvEl.clientHeight / 2 - p.y; applyView(); };
+    // start from a clean slate: earlier checks left a 3D camera behind, and this
+    // check is about the first entry after a fresh plan
+    if (typeof T3 !== 'undefined' && T3) { T3.lastCam = null; T3.center2d = null; }
+    sel = [];
+    place({ x: 700, y: 400 });
+    show3D(true);
+    if (!ui.view3d) return { three: false, toast: document.getElementById('toast').textContent };
+    const focusTarget = { x: T3.ctl.target.x, z: T3.ctl.target.z };
+
+    // orbit somewhere distinctive, then leave
+    T3.ctl.target.set(focusTarget.x, 120, focusTarget.z);
+    T3.cam.position.set(focusTarget.x + 500, 700, focusTarget.z + 400);
+    T3.ctl.update();
+    const orbit = { x: T3.cam.position.x, y: T3.cam.position.y, z: T3.cam.position.z };
+    show3D(false);
+
+    // same 2D place -> the orbit must come back untouched
+    show3D(true);
+    const back = { x: T3.cam.position.x, y: T3.cam.position.y, z: T3.cam.position.z };
+    show3D(false);
+
+    // pan to another corner (> 200 cm) -> the camera follows the 2D view
+    const far = { x: 200, y: 150 };
+    place(far);
+    show3D(true);
+    const followed = { x: T3.ctl.target.x, z: T3.ctl.target.z };
+    show3D(false);
+
+    // a selected wall is framed instead of the viewport centre
+    const w = F().walls[0];
+    sel = [w.id]; render();
+    show3D(true);
+    const selTarget = { x: T3.ctl.target.x, z: T3.ctl.target.z };
+    // and "Fit" still resets the camera to the whole building
+    document.getElementById('b3dFit').click();
+    const fitTarget = { x: T3.ctl.target.x, z: T3.ctl.target.z, cx: T3.fit.cx, cz: T3.fit.cz };
+    show3D(false);
+    sel = []; render();
+
+    return {
+      three: true, spot: { x: 700, y: 400 }, focusTarget, orbit, back, far, followed, selTarget,
+      wallMid: { x: (w.a.x + w.b.x) / 2, z: (w.a.y + w.b.y) / 2 }, fitTarget,
+    };
+  })()`);
+  if (!info.three) return 'skipped: WebGL/Three.js unavailable (' + String(info.toast || '').slice(0, 60) + ')';
+
+  // 1. entering 3D focuses on what the 2D canvas was showing
+  if (Math.abs(info.focusTarget.x - info.spot.x) > 2 || Math.abs(info.focusTarget.z - info.spot.y) > 2) {
+    throw new Error('3D did not focus on the 2D viewport centre: ' + JSON.stringify(info.focusTarget) + ' vs ' + JSON.stringify(info.spot));
+  }
+  // 2. leaving and returning to the same 2D spot keeps the user's orbit
+  const drift = Math.hypot(info.back.x - info.orbit.x, info.back.y - info.orbit.y, info.back.z - info.orbit.z);
+  if (drift > 0.5) throw new Error('3D camera was reset on re-entry (moved ' + drift.toFixed(1) + ' cm)');
+  // 3. panning in 2D to another area moves the camera with it
+  if (Math.hypot(info.followed.x - info.far.x, info.followed.z - info.far.y) > 2) {
+    throw new Error('3D camera did not follow the new 2D area: ' + JSON.stringify(info.followed));
+  }
+  // 4. a selection is framed
+  if (Math.hypot(info.selTarget.x - info.wallMid.x, info.selTarget.z - info.wallMid.z) > 2) {
+    throw new Error('the selected wall was not centred: ' + JSON.stringify({ got: info.selTarget, want: info.wallMid }));
+  }
+  // 5. Fit still frames the whole plan
+  if (Math.hypot(info.fitTarget.x - info.fitTarget.cx, info.fitTarget.z - info.fitTarget.cz) > 1) {
+    throw new Error('Fit no longer aims at the plan centre: ' + JSON.stringify(info.fitTarget));
+  }
+  return 'focus follows 2D, orbit kept across toggles';
+});
+
 /* Dispatch a REAL key event, so the test covers the same path a user hits
    (window keydown handler + preventDefault), not a synthetic call to undo(). */
 const keyBase = ({ key, code, vk, ctrl, shift }) => {
