@@ -513,6 +513,25 @@ check('drawing layers: active layer stamps, hide removes from 2D/3D/export, lock
   return 'stamp, hide (2D/3D/export), lock (Ctrl+A, Delete), footer selector';
 });
 
+check('parametric stairs: 2D and 3D draw the same treads for every type (issue #33)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    ['straight', 'l', 'u', 'spiral'].forEach((t, i) => { const s = mkFurn(BYID.stairs, 150 + i * 300, 200, 0); s.stairType = t; s.w = t === 'straight' ? 100 : t === 'spiral' ? 200 : 220; s.d = t === 'spiral' ? 200 : t === 'straight' ? 300 : 260; F().furn.push(s); });
+    commit(); sel = []; refresh();
+    const out = { types: F().furn.map(s => { const st = stairSteps(s), g = document.querySelector('#gFurn [data-id="' + s.id + '"]'); return { t: s.stairType, n: st.n, poly: g ? g.querySelectorAll('polygon').length : -1, top: Math.round(st.steps[st.steps.length - 1].z) }; }) };
+    sel = [F().furn[0].id]; refresh();
+    out.panel = !!document.querySelector('#props [data-p="stepN"]') && !!document.querySelector('#props [data-act="stairfit"]');
+    document.getElementById('b3d').click();
+    if (ui.view3d) { out.built = T3.scene.children.filter(c => c.userData && c.userData.furnId).length; show3D(false); }
+    sel = []; refresh();
+    return out;
+  })()`);
+  for (const t of info.types) if (t.poly !== t.n || t.top !== 270) throw new Error('stairs ' + t.t + ': 2D treads ' + t.poly + ' vs ' + t.n + ' risers, top ' + t.top);
+  if (!info.panel) throw new Error('the stairs panel has no step count / storey-height controls');
+  if (info.built !== undefined && info.built !== 4) throw new Error('not every stair type built in 3D: ' + info.built);
+  return info.types.map(t => t.t + ' ' + t.n).join(', ') + (info.built ? ' · 3D built' : '');
+});
+
 check('midpoint / centre snap and the floor underlay (issues #25, #26)', async page => {
   const info = await page.evaluate(`(() => {
     const p = newProject(), g = p.floors[0], u = newFloor('1');

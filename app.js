@@ -965,10 +965,14 @@ function furnBody(f) {
   if (f.k === 'round') s += `<ellipse rx="${hw}" ry="${hd}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
   else if (f.k === 'poly') s += `<polygon points="${(f.pts || []).map(p => p.x + ',' + p.y).join(' ')}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
   else if (f.k === 'stairs') {
-    s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
-    const n = Math.max(3, Math.round(f.d / 25)); let l = '';
-    for (let i = 1; i < n; i++) l += `M${-hw} ${-hd + f.d / n * i}H${hw}`;
-    s += `<path d="${l}" stroke="${sk}" stroke-width="1.2" fill="none"/><path d="M0 ${hd - 10}V${-hd + 14}M-8 ${-hd + 26}L0 ${-hd + 12}L8 ${-hd + 26}" stroke="${sk}" stroke-width="2" fill="none"/>`;
+    // parametrik merdiven (#33): 3B ile aynı basamak listesi; ok çıkış yönünü gösterir
+    const st = stairSteps(f), R = Math.min(f.w, f.d) / 2;
+    s += st.type === 'spiral' ? `<circle r="${R}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/><circle r="${R * 0.14}" fill="none" stroke="${sk}" stroke-width="1.5"/>`
+      : `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
+    s += st.steps.map(q => `<polygon points="${stepCorners(q).map(p => p.x + ',' + p.y).join(' ')}" fill="${q.landing ? sk : 'none'}" fill-opacity="${q.landing ? 0.08 : 0}" stroke="${sk}" stroke-width="1.1"/>`).join('');
+    const e = st.steps[st.steps.length - 1], b0 = st.steps[0], ux = e.dx, uy = e.dy;
+    s += `<polyline points="${st.steps.map(q => q.x + ',' + q.y).join(' ')}" fill="none" stroke="${sk}" stroke-width="1.8"/><circle cx="${b0.x}" cy="${b0.y}" r="3" fill="${sk}"/>`
+      + `<path d="M${e.x - ux * 10 - uy * 7} ${e.y - uy * 10 + ux * 7}L${e.x + ux * 4} ${e.y + uy * 4}L${e.x - ux * 10 + uy * 7} ${e.y - uy * 10 - ux * 7}" stroke="${sk}" stroke-width="2" fill="none"/>`;
   } else {
     s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" rx="${Math.min(6, hw / 3)}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
     if (f.k === 'bed') {
@@ -981,6 +985,65 @@ function furnBody(f) {
     }
   }
   return s;
+}
+/* ---------- Parametrik merdiven (issue #33) ----------
+   2B ve 3B aynı basamak listesini kullanır, böylece basamak sayısı her iki görünümde birebir aynıdır.
+   Alanlar (hepsi isteğe bağlı, eski merdivenler varsayılanla açılır): stepN (rıht sayısı), stairType
+   ('straight' | 'l' | 'u' | 'spiral'), railing ('none' | 'left' | 'right' | 'both', varsayılan 'right').
+   Yerel düzlem koordinatları (merkez 0,0; y aşağı); çıkış yönü düz merdivende −y (2B ok ile aynı). */
+const STAIR_TYPES = { straight: ['Düz', 'Straight'], l: ['L (sahanlıklı)', 'L-shaped (landing)'], u: ['U (sahanlıklı)', 'U-shaped (landing)'], spiral: ['Döner', 'Spiral'] };
+const STAIR_RAILS = { none: ['Yok', 'None'], left: ['Sol', 'Left'], right: ['Sağ', 'Right'], both: ['İki yan', 'Both sides'] };
+const stairN = o => clamp(Math.round(+o.stepN || o.h / 17.5) || 2, 2, 60);
+// → { n, riser, tread, steps: [{ x, y, w, d, a, z, dx, dy, across, run, flight, landing }] }
+function stairSteps(o) {
+  const n = stairN(o), r = o.h / n, W = o.w, D = o.d, type = STAIR_TYPES[o.stairType] ? o.stairType : 'straight', steps = [];
+  const push = (x, y, w, d, a, i, dx, dy, across, run, flight, landing = false) => steps.push({ x, y, w, d, a, z: r * (i + 1), dx, dy, across, run, flight, landing });
+  if (type === 'straight') {
+    const td = D / n;
+    for (let i = 0; i < n; i++) push(0, D / 2 - (i + 0.5) * td, W, td, 0, i, 0, -1, W, td, 0);
+  } else if (type === 'l') {
+    const fw = Math.min(W, D) / 2, L1 = D - fw, L2 = W - fw;
+    const n1 = clamp(Math.round((n - 1) * L1 / (L1 + L2)), 1, n - 2), n2 = n - 1 - n1, t1 = L1 / n1, t2 = L2 / n2;
+    for (let i = 0; i < n1; i++) push(-W / 2 + fw / 2, D / 2 - (i + 0.5) * t1, fw, t1, 0, i, 0, -1, fw, t1, 0);
+    push(-W / 2 + fw / 2, -D / 2 + fw / 2, fw, fw, 0, n1, 0, -1, fw, fw, 0, true);
+    for (let j = 0; j < n2; j++) push(-W / 2 + fw + (j + 0.5) * t2, -D / 2 + fw / 2, t2, fw, 0, n1 + 1 + j, 1, 0, fw, t2, 1);
+  } else if (type === 'u') {
+    const fw = W / 2, ld = Math.min(fw, D / 3), Lf = D - ld;
+    const n1 = Math.max(1, Math.floor((n - 1) / 2)), n2 = Math.max(1, n - 1 - n1), t1 = Lf / n1, t2 = Lf / n2;
+    for (let i = 0; i < n1; i++) push(-fw / 2, D / 2 - (i + 0.5) * t1, fw, t1, 0, i, 0, -1, fw, t1, 0);
+    push(0, -D / 2 + ld / 2, W, ld, 0, n1, 0, -1, W, ld, 0, true);
+    for (let j = 0; j < n2; j++) push(fw / 2, -D / 2 + ld + (j + 0.5) * t2, fw, t2, 0, n1 + 1 + j, 0, 1, fw, t2, 1);
+  } else {
+    // döner merdiven: 270° süpürme, orta direk; basamak = radyal kutu (kama yaklaşığı)
+    const R = Math.min(W, D) / 2, r0 = R * 0.14, rm = (R + r0) / 2, sweep = Math.PI * 1.5, da = sweep / n;
+    for (let i = 0; i < n; i++) {
+      const t = Math.PI / 2 - (i + 0.5) * da, cx = Math.cos(t) * rm, cy = Math.sin(t) * rm;
+      push(cx, cy, R - r0, 2 * rm * Math.sin(da / 2) * 1.08, t, i, Math.sin(t), -Math.cos(t), R - r0, 2 * (R * 0.66) * Math.sin(da / 2), 0);
+    }
+  }
+  const s0 = steps.find(s => !s.landing) || steps[0];
+  return { n, riser: r, tread: s0 ? s0.run : 0, type, steps };
+}
+// Blondel konfor kuralı: 2·rıht + basamak ≈ 63 cm (60–64 iyi)
+const blondel = (riser, tread) => { const v = 2 * riser + tread; return { v, ok: v >= 60 && v <= 64, warn: v >= 57 && v <= 67 }; };
+// Bir basamağın yerel köşeleri (döndürülmüş dikdörtgen)
+function stepCorners(s) {
+  const c = Math.cos(s.a), sn = Math.sin(s.a), hw = s.w / 2, hd = s.d / 2;
+  return [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([x, y]) => ({ x: s.x + x * c - y * sn, y: s.y + x * sn + y * c }));
+}
+// Korkuluk noktaları: her kolun her iki yanında, basamak üst kotu + 90 cm (yerel düzlem + z)
+function stairRails(o, st = stairSteps(o)) {
+  const side = o.railing || 'right', sides = side === 'none' ? [] : side === 'both' ? [-1, 1] : [side === 'left' ? -1 : 1], out = [];
+  for (const sg of sides) {
+    let cur = null;
+    for (const s of st.steps) {
+      if (s.landing) { cur = null; continue; }
+      const px = -s.dy * sg, py = s.dx * sg, off = s.across / 2 - 4; // yüzü çıkış yönüne dönük: sağ = (−dy, dx)
+      if (!cur || cur.flight !== s.flight) { cur = { flight: s.flight, pts: [] }; out.push(cur); }
+      cur.pts.push({ x: s.x + px * off, y: s.y + py * off, z: s.z });
+    }
+  }
+  return out.filter(r => r.pts.length >= 1);
 }
 function furnSvg(f, live) {
   const C = pal(), fs = Math.max(12, Math.min(f.w, f.d) * 0.42);
@@ -2504,6 +2567,18 @@ function renderProps() {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button>`);
+    if (o.k === 'stairs' && n === 1) {
+      // merdiven ayarları (#33): rıht sayısı, tür, korkuluk; rıht / basamak ve Blondel konfor kontrolü
+      const st = stairSteps(o), bl = blondel(st.riser, st.tread), bc = bl.ok ? '#16a34a' : bl.warn ? '#d97706' : 'var(--danger)';
+      const opt = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
+      h += `<h4>${L('Merdiven', 'Stairs')}</h4>` + fld(L('Tür', 'Type'), 'furn', 'stairType', st.type, { sel: opt(STAIR_TYPES) })
+        + fld(L('Rıht sayısı', 'Number of risers'), 'furn', 'stepN', st.n, { min: 2, max: 60, step: 1 })
+        + fld(L('Korkuluk', 'Railing'), 'furn', 'railing', o.railing || 'right', { sel: opt(STAIR_RAILS) })
+        + `<div class="stat"><span>${L('Rıht yüksekliği', 'Riser height')}</span><b>${(Math.round(st.riser * 10) / 10)} cm</b></div>`
+        + `<div class="stat"><span>${L('Basamak derinliği', 'Tread depth')}</span><b>${(Math.round(st.tread * 10) / 10)} cm</b></div>`
+        + `<div class="stat" title="${L('Blondel kuralı: 2 × rıht + basamak ≈ 63 cm (60–64 rahat)', 'Blondel rule: 2 × riser + tread ≈ 63 cm (60–64 is comfortable)')}"><span>2r + t</span><b style="color:${bc}">${Math.round(bl.v * 10) / 10} cm ${bl.ok ? '✓' : bl.warn ? '≈' : '✗'}</b></div>`
+        + `<div class="row"><button class="btn sm" data-act="stairfit">${L('⇕ Kat yüksekliğine eşitle', '⇕ Match storey height')} (${P.wallH + 20} cm)</button></div>`;
+    }
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
     h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: getFloors() });
@@ -2669,7 +2744,7 @@ function applyProp(t, final) {
     if (k === 'furn' && p === 'rot') os.forEach(x => moveFurn3D(x.o));
     else if (affects3D(k, p)) schedBuild3D();
   }
-  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot'].includes(p) || ((k === 'wall' || k === 'slab') && p === 'color')) renderProps(); }
+  if (final) { commit(); if (['type', 'floor', 'len', 'deg', 'pivot', 'stepN', 'stairType', 'railing'].includes(p) || (k === 'furn' && os.some(x => x.o.k === 'stairs') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color')) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -2682,6 +2757,7 @@ $('#props').addEventListener('click', e => {
   if (a === 'dup') return paste(true);
   if (a === 'flipH' || a === 'flipV') return flipSel(a === 'flipH' ? 'h' : 'v');
   if (a === 'archview') return archModal('elev:south');
+  if (a === 'stairfit') { for (const { o } of os) if (o.k === 'stairs') { o.h = P.wallH + 20; o.stepN = Math.round(o.h / 17.5); } commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a.startsWith('lyr')) return layerAct(a, b.dataset.lid);
   const sco = os.length === 1 && os[0].kind === 'section' ? os[0].o : null;
   if (sco && a === 'secflip') { sco.dir = -(sco.dir || 1); commit(); refresh(); if (ui.secCut === sco.id) { applySecClip(); lookAtSection(sco); } return; }
@@ -5159,12 +5235,22 @@ function furn3D(g, o, C) {
       break;
     }
     case 'stairs': {
-      const n = Math.max(6, Math.round(h / 18));
-      for (let i = 0; i < n; i++) { const shp = h / n * (i + 1); bb(w, shp, d / n, col, 0, 0, d / n * (n / 2 - i - .5), 0, ed && i === 0); }
-      if (ed) {
-        const rx = w / 2 - 3;
-        for (let i = 0; i < n; i++) { const shp = h / n * (i + 1); bb(3, 92, 3, metal, rx, shp, d / n * (n / 2 - i - .5)); }
-        bb(3.5, 4, d, metal, rx, h + 90, 0);
+      // parametrik merdiven (#33): stairSteps() 2B ile ortak; döner merdivende açık basamak + orta direk
+      const st = stairSteps(o), spiral = st.type === 'spiral';
+      st.steps.forEach((s, i) => {
+        if (spiral) bb(s.w, 5, s.d, col, s.x, s.z - 5, s.y, -s.a, ed && i === 0);
+        else bb(s.w, s.z, s.d, s.landing ? sh(-0.06) : col, s.x, 0, s.y, -s.a, ed && i === 0);
+      });
+      if (spiral) cyl(g, Math.max(3, Math.min(w, d) * 0.07), h + 90, metal, 0, (h + 90) / 2, 0, 16);
+      if (ed) for (const rail of stairRails(o, st)) {
+        // dikmeler her 3 basamakta bir (+ son), aralarında eğimli küpeşte
+        const pts = rail.pts.filter((p, i, a) => i % 3 === 0 || i === a.length - 1);
+        for (const p of pts) bb(3, 92, 3, metal, p.x, p.z, p.y);
+        for (let i = 0; i + 1 < pts.length; i++) {
+          const p = pts[i], q = pts[i + 1], dx = q.x - p.x, dz = q.y - p.y, dy = q.z - p.z, Lh = Math.hypot(dx, dz);
+          const m = box(g, Math.hypot(Lh, dy) + 3, 4, 3.5, metal, (p.x + q.x) / 2, (p.z + q.z) / 2 + 90, (p.y + q.y) / 2, 0, 0, false);
+          m.rotation.order = 'YZX'; m.rotation.y = -Math.atan2(dz, dx); m.rotation.z = Math.atan2(dy, Lh);
+        }
       }
       break;
     }

@@ -71,7 +71,7 @@ Floor = {
   "id": "…", "name": "Zemin Kat", "slabFloor": "none", "slabColor": null,   // 3D slab finish (same kinds as room floors)
   "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain", color?:"#hex" (paint; absent = theme default), pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
   "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1, open?:0|90 } ],   // doors & windows
-  "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label } ],
+  "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label, stepN?, stairType?:"straight|l|u|spiral", railing?:"none|left|right|both" } ],   // stair fields only for k:"stairs" (issue #33)
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone", pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
   "slabs":  [ { id, name, floor:"concrete|…", color:null|"#hex", t:20, off:0, pts:[{x,y},…] } ],   // free slabs: balconies / terraces (issue #22)
   "voids":  [ { id, name, type:"stair|shaft|atrium", pts:[{x,y},…] } ],                     // holes in this floor's slab (issue #23)
@@ -220,6 +220,11 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - 2D (`layerStrings` rooms layer): slabs under rooms, voids over them. Their hit shapes carry `data-low` (void 1, slab 2) so `pickDataId()` only picks them when nothing else is under the cursor — a large balcony must not steal clicks from furniture or room labels.
 - 3D: free slabs are extruded `t` cm down from `elev + off + 0.2` (+0.1 per overlap level) so their top never z-fights the automatic slab; furniture whose centre is on a slab is raised/lowered by that slab's `off`. `voidHoles(voids, pts)` returns the voids that lie inside a polygon (edge-touching counts — stairwells snap to room corners) pulled 0.5 cm inward, and `build3D` adds them as `Shape.holes` to the automatic slab, the free slabs and the room floors of **that floor**. A void on floor N is the hole in floor N's slab, i.e. the ceiling of floor N-1. Voids that straddle a polygon edge are skipped (no CSG).
 - A floor with no walls gets no automatic slab from slabs/voids alone (`slabPolys` ignores them). Guard: `tests/slabs-voids.test.js` + a smoke check.
+
+### Parametric stairs (issue #33)
+- `stairSteps(o)` is the single source of treads for `k: 'stairs'`: `{ n, riser, tread, type, steps: [{ x, y, w, d, a, z, dx, dy, across, run, flight, landing }] }` in local plan coordinates (climbing toward −y on a straight stair, like the 2D arrow). `n = stairN(o)` = `stepN` or `round(h / 17.5)`, clamped 2–60 — legacy stairs without fields open as straight with a right-hand rail. L and U stairs get one landing (one riser); spiral sweeps 270° around a pole.
+- `furnBody` draws every step with `stepCorners()` + a walking line and arrow; `furn3D` extrudes the same steps (open treads on a spiral) and builds railings from `stairRails()` (posts every third step, sloped handrail boxes with Euler order `YZX`). Up to ~45 meshes with rails on both sides.
+- Panel: type, riser count, railing, riser / tread readout, `blondel(riser, tread)` (60–64 cm ✓, 57–67 ≈) and `stairfit` (h = wallH + 20, risers re-derived). Guard: `tests/stairs.test.js` + a smoke check.
 
 ### Drawing layers (issue #32)
 - `P.layers` / `P.activeLayer` are project data (undo, save, tabs). An object's `layer` field is **optional: absent = '0'** so projects without custom layers stay byte-identical. `commit()` calls `stampLayers()`, which stamps objects without a layer with the active layer — only when the active layer is not '0'. Because of that, `layerAct('lyradd')` first stamps every unlayered object '0' (`stampLayers(true)`), and `normalizeProject()` does the same whenever a project has more than one layer.
@@ -375,6 +380,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/edit-3d.test.js` | 3D editing of walls and openings: opening groups carry `opId`, `opDragHit` maths (both wall directions), drag handlers ordered before OrbitControls, Alt / door toggle rules, plain-wall selection, highlight of walls and openings |
 | `tests/section-elevation.test.js` | section / elevation engine on the real functions: line-polygon intervals, void subtraction, section frame direction, cut walls / slabs / openings for a 2-floor building, near side dropped, elevation faces and window holes, tool / kind / 3D clip / facade camera / modal wiring |
 | `tests/drawing-layers.test.js` | custom drawing layers on the real functions: old projects stay unchanged, stamping rules, hidden / non-printing filter, lock / hide picking, and the 2D / 3D / export / selection wiring |
+| `tests/stairs.test.js` | parametric stairs on the real functions: legacy defaults, riser count / landings / final height for all four types, treads inside the footprint, Blondel rule, railing sides, 2D / 3D / panel wiring |
 | `tests/layers.test.js` | layer reordering (front/back/step past overlaps), 3D stack levels that stop coplanar overlaps from z-fighting |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |
