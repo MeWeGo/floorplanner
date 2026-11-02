@@ -65,15 +65,16 @@ P = {
   "bg": null | { "src": "<dataURL>", "x": 0, "y": 0, "w": 1200, "h": 800, "op": 0.5 },
   "layers": [ { "id": "0", "name": "Varsayılan", "color": "#64748b", "vis": true, "lock": false, "print": true }, … ],   // drawing layers (issue #32); "0" = Default, cannot be deleted
   "activeLayer": "0",            // new objects are stamped with it (any object may carry "layer": id; absent = "0")
+  "textures": [ { "id": "…", "name": "…", "w": 60, "h": 60 }, … ],   // custom texture metadata (issue #40); image data lives in IndexedDB
   "floors": [ Floor, ... ]
 }
 
 Floor = {
   "id": "…", "name": "Zemin Kat", "slabFloor": "none", "slabColor": null,   // 3D slab finish (same kinds as room floors)
   "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain", color?:"#hex" (paint; absent = theme default), pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
-  "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1, open?:0|90 } ],   // doors & windows
+  "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1, open?:0|90, mat?:"wood|glass|paneled|metal", color?:"#hex", frameCol?:"#hex", glass?:"clear|frosted" } ],   // doors & windows
   "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label, stepN?, stairType?:"straight|l|u|spiral", railing?:"none|left|right|both" } ],   // stair fields only for k:"stairs" (issue #33)
-  "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone", pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
+  "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone|grass|water|gravel|deck|asphalt|tex:<id>", pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
   "slabs":  [ { id, name, floor:"concrete|…", color:null|"#hex", t:20, off:0, pts:[{x,y},…] } ],   // free slabs: balconies / terraces (issue #22)
   "voids":  [ { id, name, type:"stair|shaft|atrium", pts:[{x,y},…] } ],                     // holes in this floor's slab (issue #23)
   "sections": [ { id, name:"A", a:{x,y}, b:{x,y}, dir:1|-1 } ],                            // section lines (issue #30); view direction = normal of a→b × dir
@@ -260,6 +261,18 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - **Picking:** `idsAt(x, y)` lists every `data-id` under the cursor (top first). `Ctrl+click` (`cycleStackAt`) selects the next one down; it clears `ui.drag.clickedId` so it never toggles a door or cycles a layout. In the select tool, right-click opens `#ctxMenu` (created on demand, not in `index.html`).
 - **3D:** `stackLevels(list, kind)` gives each item 1 + the level of the highest earlier item whose bbox it overlaps. Rooms sit at `elev + 0.6 + level·0.5`, furniture is built inside an inner group lifted by `level·0.5` cm. Without this, coplanar surfaces (overlapping room floors, pools laid end to end) z-fight and flicker, and the 3D stacking ignored the 2D order. Guard: `tests/layers.test.js`.
 
+### Floor finishes & custom textures (issues #39, #40)
+- **Outdoor finishes (issue #39):** `grass`, `water`, `gravel`, `deck`, `asphalt` added to `FLOORS`/`FLOORS_EN` for rooms, free slabs and floor slabs. 2D: hatch patterns in `defsSvg()` styled via `pal()`. 3D: procedural `CanvasTexture`s via `floorTexture()`; `water` creates a translucent shiny `MeshPhongMaterial` (`transparent: true, depthWrite: false`) built as a separate water surface above an opaque `waterBed(col)` to prevent z-fighting; catalogue `pool` furniture is untouched.
+- **Custom textures (issue #40):** `P.textures = [{ id, name, w, h }]` holds metadata only (real-world repeat size `w`/`h` in cm). Image payloads live outside `P` in IndexedDB store `textures` (`DB_VER = 2`) and in the runtime `TEX` map (`blob:` URLs for live canvas, `data:` URLs for exports), keeping undo snapshots (`hist[]`) lightweight.
+- Surfaces use `floor: "tex:<id>"`. `finishKind(kind)` checks builtins or ready custom textures (`texIdOf`, `texMeta`); `finishPat(kind)` maps to SVG pattern ids (`p-tex-<id>`). `floorOpts()` populates `<select>` pickers. Upload via Project panel or room panel downscales images to ≤ 1024 px (`TEX_MAX`) and prompts for name and repeat size (`parseTexSize`).
+- Deleting a texture resets referencing surfaces to solid color (`none`), keeping the image in IndexedDB so undo restores it without re-uploading. `bundleTextures(p)` bundles `texData: { [id]: dataUrl }` for JSON download; `absorbTextures(p)` caches and saves imported textures to IndexedDB and strips `texData` before `normalizeProject()`. MCP tools accept `tex:<id>` for project textures. Guard: `tests/finishes-doors.test.js`.
+
+### Door materials (issue #41)
+- Door leaf material `op.mat` ∈ `wood | glass | paneled | metal` (`DOOR_MATS`). Defaults: `slide` defaults to `glass`, hinged doors to `wood`. `op.glass` ∈ `clear | frosted` (`GLASS_KINDS`) picks a clear (opacity 0.38) or frosted (whiter, 0.72) pane on glass / paneled leaves.
+- Colours: `op.color` overrides leaf colour (`doorLeafCol()`, default `#b08968`), `op.frameCol` overrides the frame/casing colour (3D jambs + head; panel field on doors and windows). Side panel exposes material, glass, leaf colour, frame colour and a **Default colours** reset (`opcolreset`).
+- 2D: `opSvg()` uses `leafLn()` for the leaf: glass = glass-filled line with a thin edge, paneled = heavy line with a glass core, metal = heavier line; sliding glass panels are filled with `pal().glass`.
+- 3D: `doorLeaf3D()` builds the leaf (wood: inset panel + lever; glass: pane + pivot blocks + steel pull bars; paneled: stiles/rails around a pane; metal: grooved slab) inside the existing hinge / slide groups, so `open`/`side`/`flip` are unchanged. Legacy glass sliders keep their original panels. MCP `add_opening` exposes `material`, `glass`, `color` and `frameColor`. Guard: `tests/finishes-doors.test.js`.
+
 ### Room detection (`detectRoom`)
 Rasterises walls to an offscreen canvas (resolution ≥ 2 cm/px, max ≈ 1800 px), flood-fills from the click, returns `'open'` if the fill reaches the border (leak), otherwise traces the outer boundary and simplifies it (Douglas-Peucker, ε≈1.1·res). Doors/windows do **not** open rooms because the walls underneath are rasterised solid.
 
@@ -276,7 +289,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 - `autosave()` (debounced) writes `P` to IndexedDB `state` store key `'auto'`; `beforeunload` also writes. Fallback to `localStorage['fp_auto']` if IndexedDB fails.
 - Named projects live in the `projects` store (`{name, updatedAt, project}`, keyPath `name`). Saving with an existing name **overwrites**.
 - `migrateLegacyStorage()` moves old `localStorage` keys (`fp_projects`, `fp_auto`) into IndexedDB once, then deletes them.
-- Bumping `DB_VER` requires handling in `onupgradeneeded`; currently version 1 with stores `projects`, `state`.
+- Bumping `DB_VER` requires handling in `onupgradeneeded`; currently version 2 with stores `projects`, `state`, and `textures` (keyPath `'id'`, holds uploaded texture images outside `P` and undo history).
 
 ### Adjustable layouts & groups (vars)
 - Groups: members carry `o.grp`; per-floor `groups[]` holds `{ id, vars: [{ label, poses: {id: pose}, base?, draft? }], idx }`. Room variants live on the room itself (`r.vars`, `r.vIdx`). Clicking a room/group on canvas cycles layouts (`switchRoomVarTo` / `switchGroupVarTo`).
@@ -297,7 +310,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
 - Walls are split into boxes around each opening (below-sill, above-head). Every opening gets jambs + head (and a sill board for windows); windows add a translucent pane plus a mullion when wide; doors/double doors get a frame, an inset panel and a handle while keeping the existing `open`/`side`/`flip` rotation; sliding doors get two offset panels + a top track. Solid walls also get **skirting** (both faces, skipping door gaps) and a thin **top cap** — `wt: 'curtain'` walls are skipped.
 - Furniture detail is **parametric on the catalog id** in `furn3D(g, o, ctx)`: `sofa3/sofa2/armchair`, `chair`, `ochair`, `coffee|table*|desk|meet|vanity`, `tableR`, `bed*|bunk|crib`, `wardrobe`, `dresser|night|shelf|bookcase`, `fridge|dish|wm`, `stove`, `sinkK|counter*|island`, `basin*`, `wc|bidet`, `tub|shower`, `plant|tree`, `tv`, `rug`, `car`, `pool`, `column|colSq`, `fireplace`, `printer`, `stairs`. Everything else (custom `poly` library shapes included) falls back to the old `k`-based box/cylinder/extrude. All proportions derive from `o.w/d/h` and shades from `o.color` (`shade()`), so 2D resize/rotate/swap never breaks it. **No new data fields.**
 - `box/cyl/sph` share one unit `BoxGeometry` / `CylinderGeometry` / `SphereGeometry` and scale the mesh — do not allocate geometry per part. `EdgesGeometry` rides along with the unit box and is only added to silhouettes (the `edges` flag). Keep `furn3D` at ≤ ~12 meshes per item (~20 for stairs).
-- Room floors use `r.floor` (`wood|tile|carpet|marble|concrete|stone`) to build small cached `CanvasTexture`s tinted with `r.color` (`floorTexture()`, one texture per kind + colour + theme); `none` keeps the flat fill. The same textures finish the **floor slab** when `Floor.slabFloor` / `Floor.slabColor` are set (project panel → *Floor slab*); such slabs keep their material in the studio render (`userData.slab` is only set on default slabs). Painted walls (`w.color`) drive `wCol` in 3D, so skirting and top cap follow via `shade()`; in 2D `wallPaintSvg()` draws thin paint strips on both faces over the dark poché.
+- Room floors use `r.floor` (`wood|tile|carpet|marble|concrete|stone|grass|water|gravel|deck|asphalt` or custom `tex:<id>`) to build cached `CanvasTexture`s tinted with `r.color` (`floorTexture()`, one texture per kind + colour + theme; `water` uses a translucent `MeshPhongMaterial` over a `waterBed`); `none` keeps the flat fill. The same textures finish the **floor slab** when `Floor.slabFloor` / `Floor.slabColor` are set (project panel → *Floor slab*); such slabs keep their material in the studio render (`userData.slab` is only set on default slabs). Painted walls (`w.color`) drive `wCol` in 3D, so skirting and top cap follow via `shade()`; in 2D `wallPaintSvg()` draws thin paint strips on both faces over the dark poché.
 - Lighting: hemisphere + a shadow-casting directional light fitted to `contentBounds` (1024/2048 shadow map) + a low fill light. The renderer uses `PCFSoftShadowMap`, `outputEncoding = sRGBEncoding` and `ACESFilmicToneMapping` at ~1.05 exposure; ground, slabs and floors receive, large walls/furniture cast.
 - Detail level: `build3D()` estimates the object count and drops part edges / frames / floor textures above ~3000 objects (`det` flag) instead of exposing a user setting.
 - Camera presets: `set3DCam('fit'|'top'|'eye')` backs the three small buttons next to `#s3dFloor` (`#b3dFit/#b3dTop/#b3dEye` in `.ctl3dCam`); `T3.fit` caches `{cx, cz, sz, elev}` during `build3D`. The markup must stay in sync — `applyLangUI()` uses `$()` guards but the bootstrap binds the three ids directly.
@@ -399,6 +412,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/adaptive-grid.test.js` | site-plan zoom + adaptive grid (issue #38): the metric ladder, major grid legible at every zoom, minor hiding, major staying a multiple of `P.grid`, 2 km fitting at `MIN_ZOOM`, footer labels, and `snapToGrid` still following `P.grid` |
 | `tests/shortcuts-3d.test.js` | keyboard parity in 3D: the ctrl layer exists, runs **before** walk-key capture, and undo/redo still route through `restore()` → `schedBuild3D()` |
 | `tests/ai-bridge-ui.test.js` | the request-feedback UI: the pill's pending counter, no timer that hides a queued request, the reconnect probe after a bridge restart, the "go back" list |
+| `tests/finishes-doors.test.js` | outdoor finishes (grass, water, gravel, deck, asphalt) in 2D/3D (#39), custom floor textures (metadata in P, images in IndexedDB, JSON bundle/absorb) (#40), door materials (wood, glass, paneled, metal) and leaf/frame colors (#41) |
 | `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed) |
 
 `browser-smoke.js` opens the app with `?bridge=off`, so it is safe to run while `mcp/bridge.js` is up. It skips itself (exit 0) when no Chromium is found; set `CHROME_BIN` to point at one. In CI it always runs.

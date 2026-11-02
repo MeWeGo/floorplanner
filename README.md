@@ -85,6 +85,7 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 ### 🚪 Objects
 - **7 door / window types** (single, double, sliding, opening, window, wide window, small window) that snap onto walls with hinge-side and swing-direction controls.
 - **Click a door to open / close it (90° / slide)** — works in 2D and in the 3D view; hinged doors swing 90° with a visible dashed arc, sliding doors slide horizontally.
+- **Door materials & colours** — set door leaf material (**wood**, **glass**, **paneled**, **metal**), glass type (**clear**, **frosted**), custom leaf colour, and custom frame colour for any opening; styled leaf lines in 2D and 3D leaves with frames and handles (with a "Default colours" reset).
 - **~48 furniture & structure items** in 6 categories with search (living, bedroom, kitchen, bath, office, structure & outdoor — stairs, columns, trees, pool…).
 - Furniture **magnets to walls** and rotates to face the room.
 - **Group objects** — select 2+ items (walls, rooms, furniture, texts, dimensions) and press **Group** (or `Ctrl+G`); grouped items select, move and rotate together, `Ctrl+Shift+G` ungroups. Drag the group rotation handle or use `[` / `]` to turn the whole layout around its centre without breaking wall corners.
@@ -108,7 +109,8 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 - **Sections & elevations:** draw a section line (`L`) — A–A' balloons and arrows show where you look. From its panel, **✂ 3D cutaway** slices the 3D model along it and turns the camera to face the cut, and **📐 Section drawing** opens a printable 2D section through every floor (cut walls and slabs solid, openings, room names, ±0.00 / +2.90 level datums, scale bar). **Project ▸ Sections & elevations** shows the four facade elevations; all sheets download as SVG or PNG. In 3D, the **N / E / S / W** buttons square the camera to each facade.
 - **Mirror & scale:** flip any selection horizontally / vertically (`Shift+H` / `Shift+V`), mirror it about a two-point axis (`I`, as a copy or a move) or scale it by a factor (`1.5`, `150%`), a target width (`=450`) or a reference length (`300:450`). Doors keep swinging into the room, sofas keep their backs to the wall, text stays readable and wall thickness is kept unless you ask. Panel buttons and the right-click menu offer the same commands.
 - Layering: overlapping objects can be picked with Ctrl+click or the right-click list, and reordered (front / forward / backward / back). 3D follows the 2D order, so overlapping rooms or items (e.g. a river made of pools) no longer flicker.
-- Layer visibility toggles, floor patterns (wood, tile, carpet, marble, concrete, stone), room colors.
+- Layer visibility toggles, floor patterns (`wood`, `tile`, `carpet`, `marble`, `concrete`, `stone`, and outdoor finishes: `grass`, `water`, `gravel`, `deck`, `asphalt`), room colors.
+- **Custom textures** — upload your own floor texture images (scaled to 1024 px, real-world repeat size in cm) from the Project panel or room panel; applies to rooms, free slabs and floor slabs and tiles to scale in 2D and 3D; images stay in the browser (IndexedDB) and travel inside JSON exports.
 - Wall paint: pick a colour or a preset swatch for one or many selected walls (2D paint strips, full colour in 3D).
 - Floor slab material per floor (project panel): areas without a room — balconies, hallways, terraces — get a finish in 3D too.
 - **Slab tool** (`K`): draw a balcony, terrace, porch or deck with no walls around it (click corners or drag a rectangle). In 3D it is a solid slab with its own thickness, finish and level offset, and furniture on it sits on top.
@@ -119,8 +121,8 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 ### 💾 Storage — fully local
 | Layer | Used for |
 | :-- | :-- |
-| **IndexedDB** (`FloorPlannerDB`) | Background autosave + named projects with live SVG thumbnails — hundreds of MB capacity |
-| **JSON files** | Backup, sharing, moving between machines (`⬇ JSON` / `📂 Aç`) |
+| **IndexedDB** (`FloorPlannerDB`) | Background autosave + named projects with live SVG thumbnails, plus custom texture image data (`textures` store) kept outside undo snapshots — hundreds of MB capacity |
+| **JSON files** | Backup, sharing, moving between machines (`⬇ JSON` / `📂 Aç`); exports bundle custom texture data, imports absorb them into IndexedDB |
 | `localStorage` | Theme & language preferences only (legacy data is auto-migrated to IndexedDB) |
 
 ### 📤 Export
@@ -132,7 +134,7 @@ Tools: `new_project` · `load_project` / `save_project` / `get_project` / `set_p
 ### 🧊 3D View & WASD Walk
 One click turns the plan into an interactive 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors. Orbit/zoom with the mouse, or walk around with **`WASD` / Arrow keys** (`Q`/`E` for down/up, `Shift` for faster travel).
 
-**Detail comes from the plan, not from extra settings:** furniture is modelled per catalogue item (sofa cushions, table legs, wardrobe doors and handles, fridge panels, WC bowl and tank, basin and faucet, plant foliage, TV screen, car wheels, stairs with a handrail …) purely from its type, size and colour, so existing plans and saved JSON improve with no migration. Openings get frames, sills and handles, solid walls get skirting boards and a top cap, `wood`/`tile`/`carpet`/`marble`/`concrete`/`stone` room floors and floor slabs become tiled textures tinted with the room colour, and a soft-shadowed sun lights the scene.
+**Detail comes from the plan, not from extra settings:** furniture is modelled per catalogue item (sofa cushions, table legs, wardrobe doors and handles, fridge panels, WC bowl and tank, basin and faucet, plant foliage, TV screen, car wheels, stairs with a handrail …) purely from its type, size and colour, so existing plans and saved JSON improve with no migration. Openings get frames, sills and handles, solid walls get skirting boards and a top cap, `wood`/`tile`/`carpet`/`marble`/`concrete`/`stone` plus outdoor `grass`/`water`/`gravel`/`deck`/`asphalt` (or custom textures) room floors and floor slabs become tiled textures tinted with the room colour (water draws as a translucent shiny surface), and a soft-shadowed sun lights the scene.
 
 **Camera presets:** three small buttons next to the floor selector give **fit**, **top-down** and **eye level (1.6 m)** views. The **🎬** button beside them renders the current view to a high-resolution PNG (the top-bar **🖼 PNG** does the same while you are in 3D; hold **Shift** for a quick capture).
 

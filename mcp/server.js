@@ -98,7 +98,12 @@ const OPENINGS = [
 ];
 const OPDEF = Object.fromEntries(OPENINGS.map(o => [o.id, o]));
 const ROOMCOL = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#e9d5ff', '#fed7aa', '#a5f3fc', '#fbcfe8'];
-const FLOORPATS = ['none', 'wood', 'tile', 'carpet', 'marble', 'concrete', 'stone'];
+const FLOORPATS = ['none', 'wood', 'tile', 'carpet', 'marble', 'concrete', 'stone', 'grass', 'water', 'gravel', 'deck', 'asphalt']; // + 'tex:<id>' custom textures (#40)
+// a finish is a built-in pattern or "tex:<id>" of a texture listed in project.textures (image data lives in the browser)
+const finishOk = v => FLOORPATS.includes(v) || (typeof v === 'string' && /^tex:/.test(v) && ((P && P.textures) || []).some(t => 'tex:' + t.id === v));
+const FINISH_DOC = FLOORPATS.join(' | ') + ' | "tex:<id>" (a custom texture from project.textures)';
+// door material / colours (#41), mirrors DOOR_MATS in app.js
+const DOOR_MATS = ['wood', 'glass', 'paneled', 'metal'];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', dims: 'dim', texts: 'text', sketches: 'sketch' };
 
 /* ---------- Small helpers (mirror app.js) ---------- */
@@ -141,6 +146,7 @@ function newProject(a) {
     wallH: num(a.wallH, 270, 'wallH'),
     bg: null,
     lib: { shapes: [] },
+    textures: [],
     floors: [newFloor(a.floorName)],
   };
 }
@@ -154,6 +160,9 @@ function normalizeProject(obj) {
   obj.wallT = +obj.wallT || 20; obj.wallH = +obj.wallH || 270;
   obj.lib = Object.assign({ shapes: [] }, obj.lib || {}); obj.lib.shapes = obj.lib.shapes || [];
   if (obj.bg) obj.bg.id = 'bg';
+  // custom texture metadata (#40); texData (exported image payload) is passed through untouched for the browser
+  obj.textures = (Array.isArray(obj.textures) ? obj.textures : []).filter(t => t && /^[\w-]{1,32}$/.test(t.id))
+    .map(t => ({ id: t.id, name: String(t.name || t.id), w: +t.w > 0 ? +t.w : 60, h: +t.h > 0 ? +t.h : (+t.w > 0 ? +t.w : 60) }));
   obj.floors.forEach((f, i) => {
     if (!f || typeof f !== 'object') throw new Error('floors[' + i + '] is not an object');
     f.id = f.id || uid();
@@ -214,6 +223,10 @@ function mkOp(f, a) {
     w, h: num(a.h, def.h, 'h'), sill: num(a.sill, def.sill, 'sill'),
     type: opType(def.id), flip: a.flip ? 1 : 0, side: num(a.side, 1, 'side') < 0 ? -1 : 1, open: a.open ? 1 : 0,
   };
+  if (DOOR_MATS.includes(a.material)) o.mat = a.material;
+  if (a.glass === 'frosted' || a.glass === 'clear') o.glass = a.glass;
+  if (typeof a.color === 'string' && a.color) o.color = a.color;
+  if (typeof a.frameColor === 'string' && a.frameColor) o.frameCol = a.frameColor;
   f.ops.push(o);
   return o;
 }
@@ -237,7 +250,7 @@ function mkRoom(f, a) {
     id: uid(),
     name: a.name || ('Room ' + (n + 1)),
     color: a.color || ROOMCOL[n % ROOMCOL.length],
-    floor: FLOORPATS.includes(a.floorPattern) ? a.floorPattern : 'none',
+    floor: finishOk(a.floorPattern) ? a.floorPattern : 'none',
     pts,
   };
   f.rooms.push(r);
@@ -250,7 +263,7 @@ function mkSlab(f, a) {
   const s = {
     id: uid(),
     name: a.name || ('Slab ' + (f.slabs.length + 1)),
-    floor: FLOORPATS.includes(a.floorPattern) ? a.floorPattern : 'concrete',
+    floor: finishOk(a.floorPattern) ? a.floorPattern : 'concrete',
     color: a.color || null,
     t: Math.min(100, Math.max(5, +a.thickness || 20)),
     off: Math.min(200, Math.max(-200, +a.offset || 0)),
@@ -305,7 +318,7 @@ function listCatalog() {
   out.push('Opening presets (opening id — w×h cm, sill cm):');
   for (const o of OPENINGS) out.push('  ' + o.id + ' — ' + o.en + ', ' + o.w + '×' + o.h + ' cm, sill ' + o.sill + ' cm');
   out.push('');
-  out.push('Room floor patterns: ' + FLOORPATS.join(', '));
+  out.push('Room floor patterns: ' + FLOORPATS.join(', ') + ', or tex:<id> for a custom texture');
   return out.join('\n');
 }
 
@@ -573,6 +586,10 @@ tool('add_opening',
     side: { type: 'integer', enum: [1, -1], description: 'Door swing side (+1 default).' },
     flip: { type: 'integer', enum: [0, 1], description: 'Mirror hinge / sliding direction.' },
     open: { type: 'boolean', description: 'Start opened (doors swing 90°, sliding doors slide).' },
+    material: { type: 'string', enum: DOOR_MATS, description: 'Door leaf material (doors only). Default wood; sliding doors default to glass.' },
+    glass: { type: 'string', enum: ['clear', 'frosted'], description: 'Glass type for glass / paneled doors. Default clear.' },
+    color: { type: 'string', description: 'Door leaf #hex colour (not used by full-glass doors).' },
+    frameColor: { type: 'string', description: 'Frame / casing #hex colour.' },
     floorIndex: floorArg,
   },
   ['wallId'],
@@ -607,7 +624,7 @@ tool('add_room',
     pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: '3+ corners in order (clockwise or counter-clockwise).' },
     name: { type: 'string', description: 'Room name, e.g. "Salon" / "Living room".' },
     color: { type: 'string', description: '#hex fill color. Default: next palette color.' },
-    floorPattern: { type: 'string', enum: FLOORPATS, description: FLOORPATS.join(' | ') + '. Default none.' },
+    floorPattern: { type: 'string', description: FINISH_DOC + '. Default none.' },
     floorIndex: floorArg,
   },
   ['pts'],
@@ -621,7 +638,7 @@ tool('add_slab',
   {
     pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: '3+ corners in order (cm, Y down).' },
     name: { type: 'string', description: 'e.g. "Balkon" / "Terrace".' },
-    floorPattern: { type: 'string', enum: FLOORPATS, description: 'Top finish: ' + FLOORPATS.join(' | ') + '. Default concrete.' },
+    floorPattern: { type: 'string', description: 'Top finish: ' + FINISH_DOC + '. Default concrete.' },
     color: { type: 'string', description: '#hex tint. Default: neutral concrete.' },
     thickness: { type: 'number', description: 'cm, 5..100. Default 20.' },
     offset: { type: 'number', description: 'Level offset in cm (negative = lower than the floor, e.g. -3 for a balcony). Default 0.' },
