@@ -552,11 +552,42 @@ check('render studio: every style renders and restores the scene (issue #34)', a
     return out;
   })()`);
   if (info.skipped) return '3D unavailable';
-  if (info.modal !== 'studio' || info.styles !== 4) throw new Error('the render studio did not open with 4 styles: ' + JSON.stringify(info));
+  if (info.modal !== 'studio' || info.styles < 5) throw new Error('the render studio did not open with all 5 styles: ' + JSON.stringify(info));
   for (const [k, v] of Object.entries(info.sizes)) if (!v || +v.split(':')[1] < 1000) throw new Error('style ' + k + ' rendered nothing: ' + v);
   if (!/^data:image\/jpeg/.test(info.sizes.clay)) throw new Error('JPEG format ignored: ' + info.sizes.clay);
   if (!info.lightBack || !info.matsBack) throw new Error('the studio left the scene modified: ' + JSON.stringify(info));
   return '4 styles rendered, JPEG honoured, light + materials restored';
+});
+
+check('sky backdrop and toon style render and leave the 3D scene untouched (issue #45)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); F().ops.push(mkOp(OPDEF.window, F().walls[0], 300)); F().furn.push(mkFurn(BYID.sofa3, 300, 200)); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { skipped: true };
+    const S = T3.scene, snap = () => { const m = []; S.traverse(o => { if (o.material) m.push(o.uuid + ':' + (Array.isArray(o.material) ? o.material.map(x => x.uuid).join('|') : o.material.uuid)); }); return { bg: S.background && S.background.getHex(), fog: S.fog, n: S.children.length, mats: m.join(',') }; };
+    const tg = T3.ctl.target.clone(); T3.cam.position.set(tg.x - 900, 170, tg.z + 1400); T3.ctl.target.set(tg.x, 250, tg.z); T3.ctl.update(); // eye level: sky at the top
+    const before = snap(), out = { sizes: {} };
+    for (const [k, o] of Object.entries({ noonSky: { style: 'realistic', sun: { az: 180, alt: 68 } }, goldenSky: { style: 'realistic', sun: { az: 255, alt: 12 } }, toon: { style: 'toon', sun: { az: 215, alt: 42 } }, toonSky: { style: 'toon', backdrop: 'sky' } })) {
+      const url = await render3DHQ({ ...o, longSide: 400, supersample: 1, frames: 1, format: 'png' });
+      out.sizes[k] = url ? url.length : 0;
+      if (k === 'noonSky' || k === 'goldenSky') {   // top-centre pixel = sky colour
+        const im = new Image(); await new Promise(r => { im.onload = r; im.src = url; });
+        const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+        out[k] = Array.from(g.getImageData(im.width >> 1, 2, 1, 1).data.slice(0, 3));
+      }
+    }
+    const after = snap();
+    out.restored = before.bg === after.bg && before.fog === after.fog && before.n === after.n && before.mats === after.mats;
+    show3D(false);
+    return out;
+  })()`);
+  if (info.skipped) return '3D unavailable';
+  for (const [k, v] of Object.entries(info.sizes)) if (v < 1000) throw new Error(k + ' rendered nothing');
+  const [nr, , nb] = info.noonSky, [gr, , gb] = info.goldenSky;
+  if (!(nb > nr + 30)) throw new Error('the noon sky is not blue: ' + info.noonSky);
+  if (!(gr - gb > nr - nb + 20)) throw new Error('the golden-hour sky is not warmer than noon: ' + info.goldenSky + ' vs ' + info.noonSky);
+  if (!info.restored) throw new Error('a sky / toon render left the 3D scene modified (background, fog, objects or materials)');
+  return 'noon sky ' + info.noonSky + ', golden ' + info.goldenSky + ', toon rendered, scene restored';
 });
 
 check('print opens the plot dialog: paper, true scale, overflow warning, window area (issue #35)', async page => {

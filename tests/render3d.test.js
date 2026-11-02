@@ -144,3 +144,54 @@ test('the top-bar PNG button follows the active view', () => {
   assert.match(js, /\$\('#bPrint'\)\.onclick = exportPrint/, 'the print export changed');
   assert.match(js, /if \(\$\('#b3dShot'\)\) \$\('#b3dShot'\)\.title = L\(/, 'the render button tooltip is not translated');
 });
+
+/* Sky backdrop + toon style (issue #45) */
+test('sky backdrop: realistic defaults to Sky, other styles to Studio, the user choice wins', () => {
+  const hq = sliceFn('render3DHQ');
+  assert.match(hq, /opts\.backdrop === 'sky' \|\| opts\.backdrop === 'studio'\) \? opts\.backdrop : \(style === 'realistic' \? 'sky' : 'studio'\)/);
+  assert.match(js, /const studioBackdrop = \(\) => ui\.studio\.backdrop \|\| \(ui\.studio\.style === 'realistic' \? 'sky' : 'studio'\)/);
+  assert.match(sliceFn('studioHtml'), /data-rs-bg=/, 'the studio has no Studio / Sky choice');
+  assert.match(sliceFn('studioHtml'), /RENDER_BACKDROPS/);
+  assert.match(js, /const studioOpts = \(\) => \(\{[^\n]*backdrop: studioBackdrop\(\)/, 'preview and render must use the chosen backdrop');
+});
+
+test('the sky is an inline shader (no files, no add-ons) whose colours follow the sun', () => {
+  const mk = sliceFn('makeSky');
+  assert.match(mk, /new THREE\.ShaderMaterial\(/);
+  assert.match(mk, /side: THREE\.BackSide/);
+  assert.match(mk, /fog: false/);
+  assert.match(mk, /new THREE\.Fog\(c\.hor/, 'fog must use the sky horizon colour so the ground edge disappears');
+  assert.match(mk, /gl_FragCoord/, 'no dither: the gradient would band');
+  assert.doesNotMatch(js, /EffectComposer|ShaderPass|examples\/js|Sky\.js/, 'no post-processing / example add-ons');
+  assert.doesNotMatch(html, /EffectComposer|postprocessing/i);
+  // colours: evaluate skyColors with a tiny THREE.Color stand-in
+  const src = js.slice(js.indexOf('const lerpHex'), js.indexOf('// render seçeneklerinde güneş verilmediyse'));
+  class C { constructor(h) { this.r = (h >> 16 & 255) / 255; this.g = (h >> 8 & 255) / 255; this.b = (h & 255) / 255; } lerp(o, t) { this.r += (o.r - this.r) * t; this.g += (o.g - this.g) * t; this.b += (o.b - this.b) * t; return this; } multiplyScalar(k) { this.r *= k; this.g *= k; this.b *= k; return this; } }
+  const skyColors = new Function('THREE', 'clamp', src + '\nreturn skyColors;')({ Color: C }, (v, a, b) => Math.max(a, Math.min(b, v)));
+  const noon = skyColors(68), golden = skyColors(12);
+  assert.ok(noon.zen.b > noon.zen.r + 0.2, 'the noon zenith is not blue');
+  assert.ok(golden.hor.r > golden.hor.b + 0.2, 'the golden-hour horizon is not warm');
+  assert.ok(golden.glow.r / golden.glow.b > noon.glow.r / noon.glow.b, 'the low-sun glow must be warmer');
+  assert.ok(golden.glow.r > noon.glow.r, 'the low-sun glow must be stronger');
+});
+
+test('toon style: banded MeshToonMaterial with inked edges, built from the objects\' own colours', () => {
+  const hq = sliceFn('render3DHQ');
+  assert.match(js, /toon: \['🖍 Çizgi film \(toon\)', '🖍 Toon \/ cel'\]/);
+  assert.match(hq, /new THREE\.MeshToonMaterial\(\{ color: m\.color \? m\.color\.clone\(\)/);
+  assert.match(hq, /gradientMap: grad/);
+  assert.match(hq, /NearestFilter/, 'the gradient must be sampled with NearestFilter or the bands smear');
+  assert.match(hq, /inkStyle = style === 'technical' \|\| style === 'sketch' \|\| style === 'toon'/, 'toon needs its outlines');
+});
+
+test('everything the sky / toon render changes is restored in finally', () => {
+  const hq = sliceFn('render3DHQ');
+  const fin = hq.slice(hq.indexOf('} finally {'));
+  assert.match(hq, /const oldFog = scene\.fog;/);
+  assert.match(fin, /scene\.fog = oldFog;/, 'fog is not restored');
+  assert.match(fin, /scene\.remove\(sky\.mesh\); sky\.mesh\.geometry\.dispose\(\); sky\.mesh\.material\.dispose\(\);/, 'the sky mesh is left behind');
+  assert.match(fin, /scene\.background = oldBg/);
+  assert.match(fin, /swapped\[i\]\.m\.material = swapped\[i\]\.mat/, 'toon materials are not swapped back');
+  assert.match(fin, /for \(const m of styleMats\) m\.dispose\(\)/, 'toon materials / gradient are not disposed');
+  assert.match(fin, /T3\.ground\.material = oldGroundMat/);
+});
