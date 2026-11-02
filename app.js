@@ -5104,7 +5104,9 @@ async function render3DHQ(opts) {
   // 1. final image size (what the user gets) and the buffer we render into
   // render stüdyosu (#34): sabit uzun kenar (1080p / 2K / 4K) ya da ekranın 2–3 katı
   const outK = opts.longSide ? opts.longSide / Math.max(w, h) : (opts.scale || shot3DScale(w, h, 2600, 6e6));
-  const style = RENDER_STYLES[opts.style] ? opts.style : 'realistic', inkStyle = style === 'technical' || style === 'sketch';
+  const style = RENDER_STYLES[opts.style] ? opts.style : 'realistic', inkStyle = style === 'technical' || style === 'sketch' || style === 'toon';
+  // arka plan (#45): gerçekçi stil varsayılan olarak gökyüzü, diğerleri beyaz stüdyo — kullanıcı seçimi önceliklidir
+  const backdrop = opts.preset === 'viewport' ? 'viewport' : (opts.backdrop === 'sky' || opts.backdrop === 'studio') ? opts.backdrop : (style === 'realistic' ? 'sky' : 'studio');
   const outW = Math.max(2, Math.round(w * outK)), outH = Math.max(2, Math.round(h * outK));
   const bufK = Math.max(1, Math.min(opts.supersample || 2, 4096 / Math.max(outW, outH)));
   const W = Math.max(2, Math.round(outW * bufK)), H = Math.max(2, Math.round(outH * bufK));
@@ -5130,14 +5132,20 @@ async function render3DHQ(opts) {
   // presentation render instead of a screenshot of the dark viewport. In dark
   // theme the floor slabs are near-black, which would look like a heavy drop
   // shadow on white paper, so those are swapped for the light slab colour too.
-  let oldBg = null, studioGround = null, oldGroundMat = null;
+  let oldBg = null, studioGround = null, oldGroundMat = null, sky = null;
+  const oldFog = scene.fog;
   const slabs = [], studioSlab = new THREE.MeshLambertMaterial({ color: 0xded8cc, side: THREE.DoubleSide });
   if (opts.preset !== 'viewport') {
     oldBg = scene.background;
-    scene.background = new THREE.Color(0xffffff);
+    if (backdrop === 'sky') {
+      // gökyüzü (#45): güneşe göre renk alan gradyan küre + ufka karışan sis; zemin kenarı çizgi olarak görünmez
+      const sv = opts.sun ? sunVector(opts.sun.az, opts.sun.alt) : lightSunVector(lights);
+      sky = makeSky(sv, cam, T3.fit);
+      scene.add(sky.mesh); scene.fog = sky.fog; scene.background = sky.horizon;
+    } else scene.background = new THREE.Color(0xffffff);
     if (T3.ground) {
       oldGroundMat = T3.ground.material;
-      studioGround = new THREE.MeshLambertMaterial({ color: 0xf3f1ec, side: THREE.DoubleSide });
+      studioGround = new THREE.MeshLambertMaterial({ color: backdrop === 'sky' ? 0xa19f8b : 0xf3f1ec, side: THREE.DoubleSide });
       T3.ground.material = studioGround;
     }
     scene.traverse(o => {
@@ -5146,12 +5154,31 @@ async function render3DHQ(opts) {
   }
   // stil (#34): kil / teknik / eskiz tüm yüzeyleri tek mat malzemeye çevirir; teknik ve eskiz kenarları mürekkep rengine
   const swapped = [], styleMats = [];
-  if (style !== 'realistic') {
+  if (style === 'toon') {
+    // toon / cel (#45): nesnenin kendi rengi + dokusu, 3 kademeli düz gölge (MeshToonMaterial + gradientMap), mürekkep kenarlar
+    const grad = new THREE.DataTexture(new Uint8Array([70, 150, 255]), 3, 1, THREE.LuminanceFormat);
+    grad.minFilter = grad.magFilter = THREE.NearestFilter; grad.generateMipmaps = false; grad.needsUpdate = true;
+    styleMats.push(grad);
+    const toonOf = new Map(), toon = m => {
+      if (!m) return m;
+      if (!toonOf.has(m)) {
+        const t = new THREE.MeshToonMaterial({ color: m.color ? m.color.clone() : new THREE.Color(0xdddddd), map: m.map || null, gradientMap: grad, transparent: !!m.transparent, opacity: m.opacity == null ? 1 : m.opacity, side: THREE.DoubleSide, depthWrite: m.depthWrite !== false });
+        toonOf.set(m, t); styleMats.push(t);
+      }
+      return toonOf.get(m);
+    };
+    scene.traverse(o => {
+      if (!o.isMesh || o === T3.ground || (sky && o === sky.mesh)) return;
+      swapped.push({ m: o, mat: o.material }); o.material = Array.isArray(o.material) ? o.material.map(toon) : toon(o.material);
+    });
+    const ink = new THREE.LineBasicMaterial({ color: 0x111827 }); styleMats.push(ink);
+    scene.traverse(o => { if (o.isLineSegments) { swapped.push({ m: o, mat: o.material }); o.material = ink; } });
+  } else if (style !== 'realistic') {
     const solid = new THREE.MeshLambertMaterial({ color: style === 'clay' ? 0xefe9df : 0xfbfbfb, side: THREE.DoubleSide });
     const glassM = new THREE.MeshLambertMaterial({ color: 0xdbe7ef, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
     styleMats.push(solid, glassM);
     scene.traverse(o => {
-      if (!o.isMesh || o === T3.ground) return;
+      if (!o.isMesh || o === T3.ground || (sky && o === sky.mesh)) return;
       const m0 = Array.isArray(o.material) ? o.material[0] : o.material;
       swapped.push({ m: o, mat: o.material }); o.material = m0 && m0.transparent ? glassM : solid;
     });
@@ -5173,6 +5200,7 @@ async function render3DHQ(opts) {
     r.setPixelRatio(1);                               // a device ratio would multiply the target size
     r.setSize(W, H, false);                           // false: the element keeps its CSS size
     cam.aspect = w / h; cam.updateProjectionMatrix();
+    if (sky) sky.mesh.position.copy(cam.position);    // gökyüzü küresi kamerayı ortalar (sonsuz uzaklık gibi)
 
     for (const s of saved) {                          // crisper shadows for this render only
       s.l.shadow.mapSize.set(4096, 4096);
@@ -5234,6 +5262,8 @@ async function render3DHQ(opts) {
     if (r.shadowMap) { r.shadowMap.autoUpdate = true; r.shadowMap.needsUpdate = true; }
     for (const e of edges) e.visible = true;
     if (oldBg !== null) scene.background = oldBg;
+    scene.fog = oldFog;
+    if (sky) { scene.remove(sky.mesh); sky.mesh.geometry.dispose(); sky.mesh.material.dispose(); }
     for (let i = swapped.length - 1; i >= 0; i--) swapped[i].m.material = swapped[i].mat;
     for (const m of styleMats) m.dispose();
     for (const s of sunSaved) { s.l.position.copy(s.pos); s.l.color.copy(s.col); }
@@ -5312,10 +5342,58 @@ function export3DRender(quick, opts) {
 /* ---------- Render stüdyosu (issue #34) ----------
    render3DHQ() üzerine stil, güneş ve çözünürlük seçenekleri: gerçekçi (mevcut stüdyo), teknik (beyaz yüzey +
    siyah kenar), eskiz (teknik + kurşun kalem son işlem), kil (tek renk mat malzeme). Hepsi tarayıcıda, ek kütüphane yok. */
-const RENDER_STYLES = { realistic: ['🌅 Gerçekçi', '🌅 Realistic'], technical: ['📐 Gölgeli teknik', '📐 Shaded technical'], sketch: ['✏️ Kurşun kalem eskiz', '✏️ Pencil sketch'], clay: ['🏺 Beyaz kil', '🏺 White clay'] };
+const RENDER_STYLES = { realistic: ['🌅 Gerçekçi', '🌅 Realistic'], technical: ['📐 Gölgeli teknik', '📐 Shaded technical'], sketch: ['✏️ Kurşun kalem eskiz', '✏️ Pencil sketch'], clay: ['🏺 Beyaz kil', '🏺 White clay'], toon: ['🖍 Çizgi film (toon)', '🖍 Toon / cel'] };
+const RENDER_BACKDROPS = { studio: ['⬜ Stüdyo', '⬜ Studio'], sky: ['🌤 Gökyüzü', '🌤 Sky'] };
+/* ---------- Gökyüzü arka planı (issue #45) ----------
+   Yalnızca render ve önizlemede: kamerayı ortalayan büyük bir küre + satır içi ShaderMaterial (resim dosyası,
+   ek betik, Three.js eklentisi yok). Renkler güneş yüksekliğinden: öğlen mavi, alçak güneşte sıcak ufuk + parıltı.
+   Sis rengi = ufuk rengi. r128'de sis, ton eşleme ve sRGB dönüşümünden SONRA karışır; bu yüzden gökyüzü de
+   renkleri olduğu gibi (sRGB) yazar — ikisi aynı pikseli üretir ve zemin ufukta dikişsiz kaybolur. */
+const lerpHex = (a, b, t) => new THREE.Color(a).lerp(new THREE.Color(b), clamp(t, 0, 1));
+function skyColors(alt) {
+  const t = clamp((alt - 6) / 50, 0, 1);              // 0 = alçak (altın saat), 1 = yüksek (öğle)
+  return {
+    zen: lerpHex(0x3d5a8f, 0x2f78c4, t),
+    hor: lerpHex(0xf2b07a, 0xd6e8f5, Math.pow(t, 0.7)),
+    gnd: lerpHex(0xb9a48c, 0xc7ccc9, t),
+    glow: lerpHex(0xffb766, 0xfff4d6, t).multiplyScalar(0.35 + 0.65 * (1 - t)),
+  };
+}
+// render seçeneklerinde güneş verilmediyse sahnedeki ana ışığın yönü
+function lightSunVector(lights) {
+  const l = lights && lights[0]; if (!l) return { x: 0.4, y: 0.7, z: -0.6 };
+  const v = l.position.clone().sub(l.target.position).normalize(); return { x: v.x, y: v.y, z: v.z };
+}
+function makeSky(sv, cam, fit) {
+  const alt = Math.asin(clamp(sv.y, -1, 1)) * 180 / Math.PI, c = skyColors(alt);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { zen: { value: c.zen }, hor: { value: c.hor }, gnd: { value: c.gnd }, glow: { value: c.glow }, sun: { value: new THREE.Vector3(sv.x, sv.y, sv.z).normalize() } },
+    vertexShader: 'varying vec3 vDir;\nvoid main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: [
+      'uniform vec3 zen; uniform vec3 hor; uniform vec3 gnd; uniform vec3 glow; uniform vec3 sun; varying vec3 vDir;',
+      'float rnd(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }',
+      'void main() {',
+      '  vec3 d = normalize(vDir); float h = d.y;',
+      '  vec3 c = h > 0.0 ? mix(hor, zen, pow(h, 0.55)) : mix(hor, gnd, min(1.0, -h * 5.0));',
+      '  float s = max(dot(d, sun), 0.0);',
+      '  c += glow * (pow(s, 600.0) * 2.0 + pow(s, 24.0) * 0.45 + pow(s, 4.0) * 0.12);',
+      '  gl_FragColor = vec4(c, 1.0);',
+      '  gl_FragColor.rgb += (rnd(gl_FragCoord.xy) - 0.5) / 255.0;   // titreşim: geçişlerde bantlanma olmasın',
+      '}',
+    ].join('\n'),
+    side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false, toneMapped: false,
+  });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(20000, 48, 24), mat);
+  mesh.renderOrder = -1000; mesh.frustumCulled = false; mesh.position.copy(cam.position);
+  // sis: binanın ötesinde başlar, 40 m'lik zeminin kenarından çok önce ufuk rengine ulaşır
+  const sz = (fit && fit.sz) || 1000, d = cam.position.distanceTo(T3.ctl.target);
+  const near = d + sz * 0.8, far = Math.min(17000, near + Math.max(5000, sz * 6));
+  return { mesh, fog: new THREE.Fog(c.hor.clone(), near, Math.max(near + 1000, far)), horizon: c.hor.clone() };
+}
 const SUN_PRESETS = { morning: [['Sabah', 'Morning'], 100, 20], noon: [['Öğle', 'Noon'], 180, 68], golden: [['Altın saat', 'Golden hour'], 255, 12] };
 const RENDER_RES = { view: ['Ekran ×2–3', 'Viewport ×2–3', 0], hd: ['1080p (1920 px)', '1080p (1920 px)', 1920], qhd: ['2K (2560 px)', '2K (2560 px)', 2560], uhd: ['4K (3840 px)', '4K (3840 px)', 3840] };
-ui.studio = { style: 'realistic', az: 215, alt: 42, res: 'view', format: 'png' };
+ui.studio = { style: 'realistic', az: 215, alt: 42, res: 'view', format: 'png', backdrop: null }; // backdrop null = stile göre (#45)
+const studioBackdrop = () => ui.studio.backdrop || (ui.studio.style === 'realistic' ? 'sky' : 'studio');
 // güneş yönü (az: kuzeyden saat yönünde, plan kuzeyi = −y = 3B −z; alt: ufuktan yükseklik)
 function sunVector(az, alt) {
   const a = az * Math.PI / 180, e = clamp(alt, 1, 89) * Math.PI / 180;
@@ -5335,16 +5413,17 @@ function studioHtml(preview) {
   const st = ui.studio, opt = (m, v) => Object.entries(m).map(([k, x]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${L(x[0], x[1])}</option>`).join('');
   return `<h2>🎨 ${L('Render stüdyosu', 'Render studio')} <button class="btn sm" data-close>✕</button></h2>
     <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 10px">${Object.entries(RENDER_STYLES).map(([k, v]) => `<button class="btn sm${k === st.style ? ' primary' : ''}" data-rs-style="${k}">${L(...v)}</button>`).join('')}</div>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 10px;align-items:center"><span>${L('Arka plan', 'Backdrop')}</span>${Object.entries(RENDER_BACKDROPS).map(([k, v]) => `<button class="btn sm${k === studioBackdrop() ? ' primary' : ''}" data-rs-bg="${k}">${L(...v)}</button>`).join('')}</div>
     <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center;margin-bottom:8px">
       <span>☀ ${L('Güneş yönü', 'Sun azimuth')}</span><input type="range" min="0" max="360" step="5" value="${st.az}" data-rs="az"><b>${st.az}°</b>
       <span>⛰ ${L('Güneş yüksekliği', 'Sun altitude')}</span><input type="range" min="10" max="85" step="1" value="${st.alt}" data-rs="alt"><b>${st.alt}°</b>
     </div>
     <div class="row" style="gap:6px;margin-bottom:8px">${Object.entries(SUN_PRESETS).map(([k, v]) => `<button class="btn sm" data-rs-sun="${k}">${L(...v[0])}</button>`).join('')}</div>
     <div class="row" style="gap:10px;margin-bottom:10px;flex-wrap:wrap"><label>${L('Çözünürlük', 'Resolution')} <select data-rs="res">${opt(RENDER_RES, st.res)}</select></label><label>${L('Biçim', 'Format')} <select data-rs="format"><option value="png" ${st.format === 'png' ? 'selected' : ''}>PNG</option><option value="jpeg" ${st.format === 'jpeg' ? 'selected' : ''}>JPEG</option></select></label></div>
-    <div class="rs-prev" style="background:#fff;border-radius:8px;min-height:120px;display:flex;align-items:center;justify-content:center;overflow:hidden">${preview ? `<img src="${preview}" style="max-width:100%;max-height:40vh;display:block">` : `<span class="muted" style="color:#64748b">${L('Önizleme için 👁 Önizle', 'Press 👁 Preview to see it')}</span>`}</div>
+    <div class="rs-prev" style="background:${studioBackdrop() === 'sky' ? '#d6e8f5' : '#fff'};border-radius:8px;min-height:120px;display:flex;align-items:center;justify-content:center;overflow:hidden">${preview ? `<img src="${preview}" style="max-width:100%;max-height:40vh;display:block">` : `<span class="muted" style="color:#64748b">${L('Önizleme için 👁 Önizle', 'Press 👁 Preview to see it')}</span>`}</div>
     <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm" data-rs-go="preview">👁 ${L('Önizle', 'Preview')}</button><button class="btn sm primary" data-rs-go="render">🎬 ${L('Render al ve indir', 'Render & download')}</button></div>`;
 }
-const studioOpts = () => ({ style: ui.studio.style, sun: { az: ui.studio.az, alt: ui.studio.alt }, longSide: RENDER_RES[ui.studio.res][2] || 0, format: ui.studio.format });
+const studioOpts = () => ({ style: ui.studio.style, backdrop: studioBackdrop(), sun: { az: ui.studio.az, alt: ui.studio.alt }, longSide: RENDER_RES[ui.studio.res][2] || 0, format: ui.studio.format });
 function openRenderStudio(preview) {
   if (!ui.view3d) show3D(true);
   if (!ui.view3d) return;
@@ -5359,6 +5438,7 @@ $('#modal').addEventListener('input', e => {
 $('#modal').addEventListener('click', async e => {
   if (ui.modal !== 'studio') return;
   const s = e.target.closest('[data-rs-style]'); if (s) { ui.studio.style = s.dataset.rsStyle; openRenderStudio(); return; }
+  const bg = e.target.closest('[data-rs-bg]'); if (bg) { ui.studio.backdrop = bg.dataset.rsBg; openRenderStudio(); return; }
   const p = e.target.closest('[data-rs-sun]'); if (p) { const v = SUN_PRESETS[p.dataset.rsSun]; ui.studio.az = v[1]; ui.studio.alt = v[2]; openRenderStudio(); return; }
   const g = e.target.closest('[data-rs-go]'); if (!g || ui.shot) return;
   if (g.dataset.rsGo === 'render') { closeModal(); export3DRender(false, studioOpts()); return; }
