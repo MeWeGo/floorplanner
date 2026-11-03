@@ -39,13 +39,19 @@ jobs:
         with:
           enablement: true
 
-      # The site is the repo root (index.html, app.js, style.css), exactly what
-      # the branch deploy used to publish. Agent tooling and tests ship too but
-      # are inert; keep the repo lean if that matters.
+      # Publish only the app itself. Uploading the repo root also served
+      # legacy-index.html (an old prototype search engines could list next to
+      # the real app), AGENTS.md, tests/ and mcp/. If app.js ever loads another
+      # local file, add it here — the smoke test runs from the repo, not _site.
+      - name: Stage the static site
+        run: |
+          mkdir _site
+          cp index.html app.js style.css _site/
+
       - name: Upload the static site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
       - id: deployment
         uses: actions/deploy-pages@v4
