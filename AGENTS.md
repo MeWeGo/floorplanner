@@ -3,7 +3,7 @@
 Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a client-side 2D/3D floor planner.
 
 - **Live app:** <https://mewego.github.io/floorplanner/>
-- **Repo:** <https://github.com/MeWeGo/floorplanner> (branch `main`, GitHub Pages serves the repo root)
+- **Repo:** <https://github.com/MeWeGo/floorplanner> (branch `main`; the deploy publishes only `index.html`, `app.js` and `style.css`)
 
 ---
 
