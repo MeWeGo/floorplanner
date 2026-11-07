@@ -628,6 +628,48 @@ check('glass floor: 2D pattern, slab hole under it and transparent panel in 3D (
   return 'pattern + panel' + (info.glass ? ', 3D glass panel over a slab hole' : '');
 });
 
+check('room slab thickness and room layouts: finish per layout, click body in 2D / floor in 3D cycles (issues #63, #66)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); setTool('select');
+    const r = { id: uid(), name: 'Terrace', color: '#bfdbfe', floor: 'tile', pts: [{ x: 0, y: 0 }, { x: 400, y: 0 }, { x: 400, y: 300 }, { x: 0, y: 300 }] };
+    F().rooms.push(r); commit(); sel = [r.id]; refresh();
+    const out = { field: !!document.querySelector('#props [data-p="slabT"]') };
+    varAction('varInit'); varAction('varNew');
+    r.floor = 'wood'; r.color = '#fde68a'; r.pts[1].x = 500; r.pts[2].x = 500; commit();
+    switchRoomVarTo(r, 0);
+    out.a = { floor: r.floor, color: r.color, x: r.pts[1].x };
+    sel = []; view.z = 1; view.x = 50; view.y = 50; render();
+    // click the room body away from the label / badge (near a corner)
+    const rc = cv.getBoundingClientRect(), s = w2s({ x: 40, y: 40 });
+    const ev = type => cv.dispatchEvent(new PointerEvent(type, { clientX: rc.left + s.x, clientY: rc.top + s.y, bubbles: true, pointerId: 1, button: 0 }));
+    ev('pointerdown'); ev('pointerup');
+    out.b = { floor: r.floor, color: r.color, x: r.pts[1].x, idx: r.vIdx };
+    r.slabT = 30; commit();
+    document.getElementById('b3d').click();
+    if (ui.view3d) {
+      const ms = []; T3.scene.traverse(o => { if (o.isMesh && o.userData.roomId === r.id) ms.push(o); });
+      out.meshes = ms.length; out.depth = (ms.find(m => m.geometry.type === 'ExtrudeGeometry') || { geometry: { parameters: { options: {} } } }).geometry.parameters.options.depth;
+      // click the floor in 3D: project a point inside the room to the screen
+      T3.ctl.target.set(250, 0, 150); T3.cam.position.set(250, 900, 400); T3.ctl.update(); T3.cam.updateMatrixWorld();
+      const p = new THREE.Vector3(60, 0.6, 60).project(T3.cam), cr = T3.r.domElement.getBoundingClientRect();
+      const cx = cr.left + (p.x + 1) / 2 * cr.width, cy = cr.top + (1 - p.y) / 2 * cr.height;
+      const before = r.vIdx ?? 0;
+      T3.r.domElement.dispatchEvent(new PointerEvent('pointerdown', { clientX: cx, clientY: cy, bubbles: true, pointerId: 1, button: 0 }));
+      T3.r.domElement.dispatchEvent(new PointerEvent('pointerup', { clientX: cx, clientY: cy, bubbles: true, pointerId: 1, button: 0 }));
+      out.cycled3d = (r.vIdx ?? 0) !== before;
+      show3D(false);
+    }
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.field) throw new Error('room panel has no slab thickness field: ' + JSON.stringify(info));
+  if (info.a.floor !== 'tile' || info.a.color !== '#bfdbfe' || info.a.x !== 400) throw new Error('layout 1a did not restore finish / colour / shape: ' + JSON.stringify(info));
+  if (info.b.idx !== 1 || info.b.floor !== 'wood' || info.b.x !== 500) throw new Error('clicking the room body did not switch to 1b: ' + JSON.stringify(info));
+  if (info.meshes !== undefined && (info.meshes < 2 || info.depth !== 30)) throw new Error('3D room slab block missing: ' + JSON.stringify(info));
+  if (info.cycled3d === false) throw new Error('clicking the room floor in 3D did not cycle its layout: ' + JSON.stringify(info));
+  return 'finish per layout, 2D body click' + (info.meshes ? ', 30 cm slab, 3D click cycles' : '');
+});
+
 check('per-floor wall heights: apply to all walls, floors stack on their own height (issue #59)', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());

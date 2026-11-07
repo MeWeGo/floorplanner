@@ -115,6 +115,10 @@ const underlay = { floor: 'prev', op: 0.2 };
 // kat bazlı duvar yüksekliği (#59): Floor.wallH yoksa proje varsayılanı; kat aralığı = yükseklik + 20 cm döşeme
 const floorH = f => (f && +f.wallH > 0 ? +f.wallH : P.wallH);
 const curFloorH = () => floorH(P && P.floors ? P.floors[fi] : null);
+// oda döşeme kalınlığı (#63): alan isteğe bağlı, yoksa 20 cm; 0 = eski ince yüzey
+const ROOM_SLAB_T = 20, roomSlabT = r => (r && r.slabT != null && +r.slabT >= 0 ? Math.min(200, +r.slabT) : ROOM_SLAB_T);
+// odanın kendi düzenleri ya da içinde olduğu grubun düzenleri var mı (#66)
+const grpHasVars = (gid, min = 1) => !!gid && ((P.floors[fi] && P.floors[fi].groups) || []).some(g => g.id === gid && (g.vars || []).length >= min);
 const FLOOR_H_MIN = 100, FLOOR_H_MAX = 800; // kat yüksekliği alanı ve MCP add_floor ile aynı aralık
 // { key: [tr, en] } → <select> seçenekleri (merdiven / rampa / cam alanları)
 const biOpts = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
@@ -1038,7 +1042,7 @@ function roomSvg(r, live) {
   const c = polyCentroid(r.pts), area = polyArea(r.pts);
   const fs = clamp(Math.sqrt(area) / 12, 16, 34);
   const hasVars = Array.isArray(r.vars) && r.vars.length > 0;
-  const canHitPoly = live && (sel.includes(r.id) || (hasVars && r.vars.length >= 2));
+  const canHitPoly = live && (sel.includes(r.id) || hasVars || grpHasVars(r.grp)); // düzeni olan oda / grup gövdesinden tıklanır (#66)
   const polyHit = canHitPoly ? `data-id="${r.id}" data-rpoly="1" style="cursor:${sel.includes(r.id) ? 'move' : 'pointer'}"` : `pointer-events="none"`;
   let s = '';
   if (live && hasVars && r.vars.length >= 2) {
@@ -3167,7 +3171,7 @@ function renderProps() {
     if (o.type !== 'shape' && n === 1) h += `<div class="row"><button class="btn sm" data-act="savepreset" title="${L('Bu ölçü ve rengi kütüphaneye kaydet, tekrar tekrar yerleştir', 'Save this size and colour to the library and place it again')}">💾 ${L('Kütüphaneye kaydet', 'Save to library')}</button></div>`;
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
-    h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: floorOpts() }) + glassFld('room', o) + `<div class="row"><button class="btn sm" data-act="texadd">${L('🖼 Doku yükle…', '🖼 Upload texture…')}</button></div>`;
+    h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: floorOpts() }) + glassFld('room', o) + (o.floor === 'glass' ? '' : fld(L('Döşeme kalınlığı (cm)', 'Slab thickness (cm)'), 'room', 'slabT', roomSlabT(o), { min: 0, max: 200, step: 5 })) + `<div class="row"><button class="btn sm" data-act="texadd">${L('🖼 Doku yükle…', '🖼 Upload texture…')}</button></div>`;
     if (n === 1) {
       const rb = bboxOf('room', o);
       if (rb) {
@@ -3285,7 +3289,7 @@ function affects3D(k, p) {
   // yalnızca 3B sahneyi gerçekten etkileyen özellikler yeniden insin
   if (k === 'wall' || k === 'op') return true;
   if (k === 'furn') return p !== 'label';
-  if (k === 'room') return p === 'color' || p === 'floor' || p === 'glass';
+  if (k === 'room') return p === 'color' || p === 'floor' || p === 'glass' || p === 'slabT';
   if (k === 'floor' || k === 'slab' || k === 'void') return p !== 'name';
   if (k === 'sketch') return p === 'w' || p === 'color';
   return false; // dim/text/bg/layer 3B'yi etkilemez
@@ -3310,6 +3314,7 @@ function applyProp(t, final) {
     if (p === 'name') { if (String(v).trim()) tm.name = String(v).trim().slice(0, 60); } else tm[p] = clamp(v, 1, 5000);
     render(); if (p !== 'name' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
   }
+  if (k === 'room' && p === 'slabT') v = clamp(v, 0, 200); // 0 = ince yüzey (eski görünüm) (#63)
   if (k === 'floor' && p === 'wallH') { const n = +v; if (!(n > 0)) return; const hv = clamp(n, FLOOR_H_MIN, FLOOR_H_MAX); if (hv === P.wallH) delete F().wallH; else F().wallH = hv; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
@@ -3701,6 +3706,7 @@ function snapPose(kind, o) {
     if (Array.isArray(o.angles) && o.angles.length) { p.angles = o.angles.slice(); p.posIdx = o.posIdx ?? 0; } // menteşeli duvarın preset durumu da saklanır
     return p;
   }
+  if (kind === 'room') return { pts: o.pts.map(p => ({ ...p })), floor: o.floor || 'none', color: o.color, glass: o.glass || null, slabT: roomSlabT(o) }; // kaplama + renk de düzene ait (#66)
   if (PTS_KINDS.has(kind)) return { pts: o.pts.map(p => ({ ...p })) };
   if (kind === 'dim') return { a: { ...o.a }, b: { ...o.b }, off: o.off };
   if (kind === 'furn') return { x: o.x, y: o.y, rot: o.rot, w: o.w, d: o.d, h: o.h };
@@ -3783,6 +3789,10 @@ function applyVarPoses(poses) {
       F().ops.forEach(op => { if (op.wall === o.id) op.d = clamp(op.d, Math.min(op.w / 2, L / 2), Math.max(L - op.w / 2, L / 2)); });
     } else if (fd.kind === 'room') {
       o.pts = p.pts.map(q => ({ ...q }));
+      if (p.floor != null) o.floor = p.floor; // eski pozlarda yok: dokunulmaz (#66)
+      if (p.color != null) o.color = p.color;
+      if (p.glass !== undefined) { if (p.glass) o.glass = p.glass; else delete o.glass; }
+      if (p.slabT != null) o.slabT = p.slabT;
     } else if (fd.kind === 'dim') {
       o.a = { ...p.a }; o.b = { ...p.b }; o.off = p.off;
     } else if (fd.kind === 'furn') {
@@ -6196,9 +6206,18 @@ function init3D() {
     if (!hits.length) return;
     // en yakın mesh kazanır: örtücünün arkasındaki kapı/duvar tıklanamaz
     let cur = hits[0].object;
-    while (cur && !cur.userData?.wallId && !cur.userData?.opId) cur = cur.parent;
+    while (cur && !cur.userData?.wallId && !cur.userData?.opId && !cur.userData?.roomId) cur = cur.parent;
     let hit3 = false;
     if (cur && cur.userData?.opId) hit3 = true; // açıklıklar pointerdown/pointerup (d3) yolunda işlenir
+    else if (cur && cur.userData?.roomId) {
+      // oda zemini (#66): düzeni olan oda / grup tıkla → sıradaki düzen; Alt+tık → odayı seç; düzensiz oda boş zemin gibi davranır
+      const fd = findAnyFloor(cur.userData.roomId);
+      if (fd && fd.kind === 'room' && fd.floorIdx === fi && pickable(fd.o.id)) {
+        if (e.altKey) { sel = [fd.o.id]; refresh(); refreshSel3D(); hit3 = true; }
+        else if (fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) { sel = groupMemberIds(fd.o.grp); build3D(true); hit3 = true; }
+        else if (cycleRoomVars(fd.o)) { sel = [fd.o.id]; build3D(true); hit3 = true; }
+      }
+    }
     else if (cur && cur.userData?.wallId && findAnyFloor(cur.userData.wallId) && (() => { const l = layerById(findAnyFloor(cur.userData.wallId).o.layer); return !l || !l.lock; })()) {
       const fd = findAnyFloor(cur.userData.wallId);
       if (fd && fd.kind === 'wall' && (e.altKey || grpEditing(fd.o) || (!fd.o.grp && !(Array.isArray(fd.o.angles) && fd.o.angles.length >= 2)))) {
@@ -6989,7 +7008,7 @@ function build3D(keepCam = false) {
     const roomLv = stackLevels(f.rooms, 'room'), furnLv = stackLevels(f.furn, 'furn');
     f.rooms.forEach((r, ri) => {
       if (!r.pts || r.pts.length < 3) return;
-      if (glassRooms.includes(r)) { glassFloor(r.pts, elev + 0.6 + roomLv[ri] * 0.5, 4, r.glass === 'frosted', voidHoles(f.voids, r.pts)); return; } // cam döşeme (#57)
+      if (glassRooms.includes(r)) { glassFloor(r.pts, elev + 0.6 + roomLv[ri] * 0.5, 4, r.glass === 'frosted', voidHoles(f.voids, r.pts)).userData.roomId = r.id; return; } // cam döşeme (#57)
       const shp = withHoles(new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x, p.y))), r.pts, r);
       const geo = new THREE.ShapeGeometry(shp);
       let m;
@@ -7005,7 +7024,14 @@ function build3D(keepCam = false) {
         m = new THREE.Mesh(geo, mat(r.color, lt ? undefined : 0.78));
       }
       // çakışan odalar: 2B'deki sıraya göre kademeli yükseklik → titreme yok, üstteki üstte
-      m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6 + roomLv[ri] * 0.5; m.receiveShadow = true; S.add(m);
+      m.rotation.x = Math.PI / 2; m.position.y = elev + 0.6 + roomLv[ri] * 0.5; m.receiveShadow = true; m.userData.roomId = r.id; S.add(m);
+      // döşeme kalınlığı (#63): kaplamanın 0.3 cm altında, aşağı doğru dolu plaka; yanları kat döşemesi renginde (balkon / teras alnı)
+      const st = roomSlabT(r);
+      if (st > 0) {
+        const sg = new THREE.ExtrudeGeometry(shp, { depth: st, bevelEnabled: false }); sg.rotateX(Math.PI / 2);
+        const sm = new THREE.Mesh(sg, mat(f.slabColor ? shade(f.slabColor, -0.25) : slabCol));
+        sm.position.y = m.position.y - 0.3; sm.receiveShadow = true; sm.castShadow = true; sm.userData.roomId = r.id; S.add(sm);
+      }
     });
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
