@@ -20,6 +20,8 @@
   --ok: #10b981;
   --warn: #f59e0b;
   --danger: #f43f5e;
+  --ok: #22c55e;
+  --warn: #f59e0b;
   --stage-bg: #080b0f;
   --cv-bg: #0b0f14;
   --hud-bg: rgba(17, 22, 30, 0.92);
@@ -28,6 +30,8 @@
 }
 
 [data-theme=light] {
+  --ok: #15803d;
+  --warn: #b45309;
   --bg: #ebe7df;
   --panel: #f4f1ea;
   --panel2: #e8e3d9;
@@ -1389,3 +1393,25 @@ kbd {
 .cmdpal .cmdfoot {
   border-top: 1px solid var(--line);
 }
+
+/* ---------- Parts editor (multi-part furniture builder) ---------- */
+.pb-hint { margin: -6px 0 12px; font-size: 12.5px; line-height: 1.45; }
+.pb { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 16px; }
+.pb h4 { margin: 12px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.pb-views { display: grid; gap: 8px; }
+.pb-views figure { margin: 0; background: var(--cv-bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+.pb-views figcaption { font-size: 11px; color: var(--muted); margin: 0 0 4px 2px; }
+.pb-views svg { display: block; width: 100%; height: 170px; }
+.pb-views [data-pi] { cursor: pointer; }
+.pb-msg { font-size: 12px; padding: 4px 8px; border-radius: 6px; margin-top: 4px; }
+.pb-msg.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.pb-msg.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); cursor: pointer; }
+.pb-msg.err { color: var(--danger); background: rgba(220, 38, 38, 0.1); cursor: pointer; }
+.pb-list { display: flex; flex-direction: column; gap: 3px; max-height: 190px; overflow: auto; margin: 6px 0 4px; }
+.pb-item { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.pb-item.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.pb-item i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.25); }
+.pb-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pb-item small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pb-foot { justify-content: flex-end; margin-top: 14px; }
+@media (max-width: 720px) { .pb { grid-template-columns: 1fr; } }

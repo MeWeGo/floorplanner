@@ -89,7 +89,66 @@ function fatalBindings(js, html) {
   return out;
 }
 
+/** Source of `function name(...) {...}` cut out of src; skips braces inside strings, comments and template literals. */
+function fnSrcOf(src, name) {
+  const start = src.indexOf('function ' + name + '(');
+  if (start < 0) throw new Error(name + '() missing');
+  let i = src.indexOf('{', start);
+  if (i < 0) throw new Error('no opening brace for ' + name);
+  let depth = 0;
+  const stack = ['code'];
+  const exprDepths = [];
+  while (i < src.length) {
+    const c = src[i];
+    const next = src[i + 1];
+    const top = stack[stack.length - 1];
+    if (top === 'code' || top === 'template-expr') {
+      if (c === '/' && next === '/') { stack.push('comment'); i++; }
+      else if (c === '/' && next === '*') { stack.push('block-comment'); i++; }
+      else if (c === "'") stack.push('single');
+      else if (c === '"') stack.push('double');
+      else if (c === '`') stack.push('template');
+      else if (c === '{') {
+        if (top === 'code') depth++;
+        else exprDepths[exprDepths.length - 1]++;
+      } else if (c === '}') {
+        if (top === 'code') {
+          depth--;
+          if (depth === 0) return src.slice(start, i + 1);
+        } else {
+          exprDepths[exprDepths.length - 1]--;
+          if (exprDepths[exprDepths.length - 1] === 0) {
+            exprDepths.pop();
+            stack.pop();
+          }
+        }
+      }
+    } else if (top === 'comment') {
+      if (c === '\n') stack.pop();
+    } else if (top === 'block-comment') {
+      if (c === '*' && next === '/') { stack.pop(); i++; }
+    } else if (top === 'single') {
+      if (c === '\\') i++;
+      else if (c === "'") stack.pop();
+    } else if (top === 'double') {
+      if (c === '\\') i++;
+      else if (c === '"') stack.pop();
+    } else if (top === 'template') {
+      if (c === '\\') i++;
+      else if (c === '$' && next === '{') {
+        stack.push('template-expr');
+        exprDepths.push(1);
+        i++;
+      } else if (c === '`') {
+        stack.pop();
+      }
+    }
+    i++;
+  }
+  throw new Error('Unterminated function ' + name);
+}
+
 module.exports = {
-  ROOT, read, exists, parseJsonc,
+  ROOT, read, exists, parseJsonc, fnSrcOf,
   htmlIds, runtimeIds, domLookups, domContractViolations, fatalBindings,
 };
