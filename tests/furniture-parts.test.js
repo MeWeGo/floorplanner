@@ -202,6 +202,10 @@ test('MCP: a billiards table is built as ONE furniture item from components', as
   assert.match(tpl.text, /30 parts[\s\S]*✓ valid/);
   const cat = await c.tool('add_furniture', { catalogId: 'billiard', x: 0, y: 900 });
   assert.ok(!cat.err, cat.text);
+  for (const k of ['chair', 'bookcase', 'sofa']) {
+    const r2 = await c.tool('create_furniture', { name: k, w: 100, d: 60, h: 90, x: 0, y: 0, template: k });
+    assert.ok(!r2.err && /✓ valid/.test(r2.text), k + ' template: ' + r2.text.slice(0, 300));
+  }
   const tiny = await c.tool('create_furniture', { name: 'Tiny', w: 120, d: 60, h: 25, x: 0, y: 0, template: 'billiards' });
   assert.ok(tiny.err && /billiards template part/.test(tiny.text), 'a template that does not fit is rejected up front');
 
