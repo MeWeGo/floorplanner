@@ -171,5 +171,5 @@ test('(7) wiring in app.js: furnBody, furn3D, renderProps, stairfit', () => {
   assert.match(rp, /['"]railing['"]/, 'renderProps must include railing');
   assert.match(rp, /data-act="stairfit"/, 'renderProps must include stairfit button');
 
-  assert.match(src, /if\s*\(a === 'stairfit'\)[\s\S]*?o\.h\s*=\s*P\.wallH\s*\+\s*20/, 'stairfit handler must set o.h = P.wallH + 20');
+  assert.match(src, /if\s*\(a === 'stairfit'\)[\s\S]*?o\.h\s*=\s*(P\.wallH|curFloorH\(\))\s*\+\s*20/, 'stairfit handler must set o.h to the storey height (floor wall height + 20)');
 });
