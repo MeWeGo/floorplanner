@@ -1494,6 +1494,407 @@ function billiardParts(w = 280, d = 155, h = 85) {
   add('cue', 'cyl', -w * 0.06, d / 2 - rail - 16, felt, Math.min(147, w - 2 * rail - 20), 2.6, 2.6, '#d9b48a', { axis: 'x', rot: 4 });
   return out;
 }
+// starting points for the furniture studio and create_furniture { template }: parts(w, d, h) fits any size (checked at 0.8× / 1× / 1.3×)
+const FURN_TEMPLATES = {
+  table: {
+    tr: "Yemek Masası",
+    en: "Dining Table",
+    icon: "🍽️",
+    w: 140,
+    d: 80,
+    h: 75,
+    color: "#c9a87c",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 3.5, legW = 5, legD = 5, legH = h - topT, apH = 7, apT = 2;
+      const inX = Math.min(6, w * 0.05), inY = Math.min(6, d * 0.05);
+      const lx = w / 2 - inX - legW / 2, ly = d / 2 - inY - legD / 2;
+      const wood = "#c9a87c", woodD = "#a88457", woodL = "#d8b98d";
+      const out = [];
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          out.push(add("leg", "box", sx * lx, sy * ly, 0, legW, legD, legH, woodD));
+        }
+      }
+      for (const sy of [-1, 1]) {
+        out.push(add("apron", "box", 0, sy * ly, legH - apH, 2 * lx + legW, apT, apH, wood));
+      }
+      for (const sx of [-1, 1]) {
+        out.push(add("apron", "box", sx * lx, 0, legH - apH, apT, 2 * ly, apH, wood));
+      }
+      out.push(add("top", "box", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+
+  desk: {
+    tr: "Çalışma Masası",
+    en: "Desk",
+    icon: "🖥️",
+    w: 120,
+    d: 60,
+    h: 75,
+    color: "#c2a382",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 3, legW = 4.5, legD = 4.5, legH = h - topT;
+      const wood = "#c2a382", woodD = "#9a7753", woodL = "#d8be9f", metal = "#94a3b8";
+      const out = [];
+      const lx = -w / 2 + 5, inY = 5, ly = d / 2 - inY - legD / 2;
+      out.push(add("leg", "box", lx, -ly, 0, legW, legD, legH, woodD));
+      out.push(add("leg", "box", lx, ly, 0, legW, legD, legH, woodD));
+      const pedW = Math.max(26, w * 0.32);
+      const rOuterX = w / 2 - 1.5;
+      const rInnerX = w / 2 - pedW;
+      const pedD = d - 4;
+      out.push(add("side panel", "box", rOuterX, 0, 0, 3, pedD, legH, wood));
+      out.push(add("side panel", "box", rInnerX, 0, 0, 3, pedD, legH, wood));
+      const dwCenter = (rOuterX + rInnerX) / 2;
+      const dwWidth = (rOuterX - rInnerX) + 2;
+      out.push(add("shelf", "box", dwCenter, 0, 10, dwWidth, pedD - 2, 2.5, woodD));
+      const drBottomZ = legH - 18;
+      const drFrontH = 15;
+      const drFrontZ = drBottomZ + 0.5;
+      const drFrontY = d / 2 - 2;
+      out.push(add("drawer bottom", "box", dwCenter, (drFrontY - 2) / 2, drBottomZ, dwWidth, drFrontY + 2, 2, woodD));
+      out.push(add("drawer front", "box", dwCenter, drFrontY, drFrontZ, pedW - 2, 2, drFrontH, woodL));
+      out.push(add("handle", "box", dwCenter, drFrontY + 1.2, drFrontZ + drFrontH / 2 - 1, 8, 0.8, 2, metal, { mat: "metal" }));
+      const modW = rInnerX - lx;
+      const modX = (rInnerX + lx) / 2;
+      out.push(add("backrest", "box", modX, -ly, 25, modW + 2, 2, legH - 28, wood));
+      out.push(add("top", "box", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+
+  chair: {
+    tr: "Sandalye",
+    en: "Chair",
+    icon: "🪑",
+    w: 45,
+    d: 50,
+    h: 90,
+    color: "#a4794e",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const legW = 3.5, legD = 3.5;
+      const seatH = 42, seatT = 3;
+      const wood = "#a4794e", woodD = "#7f5933", fabric = "#475569";
+      const out = [];
+      const lx = w / 2 - 3.5, fy = d / 2 - 3.5, by = -d / 2 + 3.5;
+      out.push(add("leg", "box", -lx, fy, 0, legW, legD, seatH, woodD));
+      out.push(add("leg", "box", lx, fy, 0, legW, legD, seatH, woodD));
+      out.push(add("leg", "box", -lx, by, 0, legW, legD, h, woodD));
+      out.push(add("leg", "box", lx, by, 0, legW, legD, h, woodD));
+      out.push(add("stretcher", "box", -lx, 0, 12, legW * 0.8, d - 6, 2.5, wood));
+      out.push(add("stretcher", "box", lx, 0, 12, legW * 0.8, d - 6, 2.5, wood));
+      out.push(add("seat", "box", 0, 0.5, seatH, w - 1, d - 4, seatT, fabric));
+      out.push(add("backrest", "box", 0, by, h - 10, w - 2, 2.5, 8, wood));
+      out.push(add("backrest", "box", 0, by, h - 25, w - 2, 2.5, 6, wood));
+      return out;
+    }
+  },
+
+  stool: {
+    tr: "Tabure",
+    en: "Stool",
+    icon: "🪑",
+    w: 35,
+    d: 35,
+    h: 65,
+    color: "#966f45",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 3.5, legR = 3.2, legH = h - topT;
+      const wood = "#966f45", woodD = "#75502b", woodL = "#b58d63";
+      const out = [];
+      const rad = w / 2 - 4.5;
+      out.push(add("leg", "cyl", rad, 0, 0, legR, legR, legH, woodD));
+      out.push(add("leg", "cyl", -rad, 0, 0, legR, legR, legH, woodD));
+      out.push(add("leg", "cyl", 0, rad, 0, legR, legR, legH, woodD));
+      out.push(add("leg", "cyl", 0, -rad, 0, legR, legR, legH, woodD));
+      out.push(add("stretcher", "box", 0, 0, 18, 2 * rad + 2, 2.5, 2.5, wood));
+      out.push(add("stretcher", "box", 0, 0, 21, 2.5, 2 * rad + 2, 2.5, wood));
+      out.push(add("stretcher", "box", 0, 0, 38, 2 * rad + 2, 2.5, 2.5, wood));
+      out.push(add("stretcher", "box", 0, 0, 41, 2.5, 2 * rad + 2, 2.5, wood));
+      out.push(add("seat", "cyl", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+
+  bed: {
+    tr: "Çift Kişilik Yatak",
+    en: "Double Bed",
+    icon: "🛏️",
+    w: 160,
+    d: 200,
+    h: 100,
+    color: "#dcd3c5",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const headT = 8, sideW = 6, sideH = 34, footH = 40;
+      const wood = "#785338", fabric = "#dcd3c5", sheet = "#f1f5f9", blanket = "#94a3b8";
+      const out = [];
+      out.push(add("headboard", "box", 0, -d / 2 + headT / 2, 0, w, headT, h, wood));
+      const railD = d - headT - 4;
+      const railY = (-d / 2 + headT + d / 2 - 4) / 2;
+      out.push(add("side rail", "box", -w / 2 + sideW / 2, railY, 0, sideW, railD, sideH, wood));
+      out.push(add("side rail", "box", w / 2 - sideW / 2, railY, 0, sideW, railD, sideH, wood));
+      out.push(add("footboard", "box", 0, d / 2 - 2, 0, w, 4, footH, wood));
+      const baseZ = 24;
+      out.push(add("slat base", "box", 0, railY, baseZ, w - 8, railD, 4, "#5c3d26"));
+      const matZ = baseZ + 4;
+      const matH = 22;
+      const matD = railD - 2;
+      out.push(add("mattress", "box", 0, railY, matZ, w - 10, matD, matH, fabric));
+      const pilZ = matZ + matH;
+      const pilW = (w - 24) / 2;
+      const pilD = 36;
+      const pilY = -d / 2 + headT + pilD / 2 + 4;
+      out.push(add("pillow", "box", -pilW / 2 - 2, pilY, pilZ, pilW, pilD, 8, sheet));
+      out.push(add("pillow", "box", pilW / 2 + 2, pilY, pilZ, pilW, pilD, 8, sheet));
+      const duvD = matD * 0.65;
+      const duvY = railY + (matD - duvD) / 2;
+      out.push(add("cushion", "box", 0, duvY, pilZ, w - 8, duvD, 3, blanket));
+      return out;
+    }
+  },
+
+  bookcase: {
+    tr: "Kitaplık",
+    en: "Bookcase",
+    icon: "📚",
+    w: 80,
+    d: 30,
+    h: 180,
+    color: "#996d47",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const sideW = 2.5, backD = 1.5, topH = 3, plinthH = 7;
+      const wood = "#996d47", woodD = "#7a5332", woodL = "#b5875d";
+      const out = [];
+      out.push(add("back panel", "box", 0, -d / 2 + backD / 2, 0, w, backD, h, woodD));
+      out.push(add("side panel", "box", -w / 2 + sideW / 2, 0, 0, sideW, d, h, wood));
+      out.push(add("side panel", "box", w / 2 - sideW / 2, 0, 0, sideW, d, h, wood));
+      out.push(add("plinth", "box", 0, d / 2 - 2, 0, w - 2 * sideW, 3, plinthH, woodD));
+      out.push(add("top", "box", 0, 0, h - topH, w, d, topH, wood));
+      const shT = 2.2;
+      const shW = w - sideW;
+      const shD = d - backD + 0.5;
+      const shY = (-d / 2 + backD - 0.5 + d / 2) / 2;
+      const usableH = (h - topH) - plinthH;
+      for (let i = 0; i < 4; i++) {
+        const shZ = plinthH + (usableH - shT) * (i / 4);
+        out.push(add("shelf", "box", 0, shY, shZ, shW, shD, shT, woodL));
+      }
+      return out;
+    }
+  },
+
+  cabinet: {
+    tr: "Dolap",
+    en: "Cabinet",
+    icon: "🗄️",
+    w: 80,
+    d: 40,
+    h: 90,
+    color: "#8c6239",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const plinthH = 7, topH = 3, sideW = 2.5, backD = 1.5;
+      const wood = "#8c6239", woodD = "#6b4724", woodL = "#aa7d4f", metal = "#e2e8f0";
+      const out = [];
+      out.push(add("plinth", "box", 0, 0, 0, w, d, plinthH, woodD));
+      const bodyH = h - plinthH - topH;
+      out.push(add("back panel", "box", 0, -d / 2 + backD / 2, plinthH, w, backD, bodyH, woodD));
+      out.push(add("side panel", "box", -w / 2 + sideW / 2, 0, plinthH, sideW, d, bodyH, wood));
+      out.push(add("side panel", "box", w / 2 - sideW / 2, 0, plinthH, sideW, d, bodyH, wood));
+      out.push(add("shelf", "box", 0, 0, plinthH + bodyH * 0.48, w - sideW, d - 4, 2, woodL));
+      out.push(add("top", "box", 0, 0, h - topH, w, d, topH, wood));
+      const dw = (w - 1) / 2;
+      const doorH = bodyH - 1;
+      const doorZ = plinthH + 0.5;
+      const doorY = d / 2 - 2;
+      out.push(add("door", "box", -dw / 2, doorY, doorZ, dw - 0.5, 2, doorH, woodL));
+      out.push(add("door", "box", dw / 2, doorY, doorZ, dw - 0.5, 2, doorH, woodL));
+      const hH = 8, hZ = doorZ + doorH * 0.55;
+      const hY = doorY + 1.2;
+      out.push(add("handle", "box", -3, hY, hZ, 1.5, 0.8, hH, metal, { mat: "metal" }));
+      out.push(add("handle", "box", 3, hY, hZ, 1.5, 0.8, hH, metal, { mat: "metal" }));
+      return out;
+    }
+  },
+
+  sofa: {
+    tr: "Koltuk",
+    en: "Sofa",
+    icon: "🛋️",
+    w: 200,
+    d: 90,
+    h: 85,
+    color: "#5b6b7a",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const baseH = 22, armW = Math.min(22, w * 0.12), armH = 40;
+      const backD = Math.min(24, d * 0.25);
+      const fabric = "#5b6b7a", fabricD = "#455360", fabricL = "#718394", cushionC = "#8395a6";
+      const out = [];
+      out.push(add("base", "box", 0, 0, 0, w, d, baseH, fabricD));
+      out.push(add("backrest", "box", 0, -d / 2 + backD / 2, baseH, w, backD, h - baseH, fabric));
+      const armD = d - 4;
+      out.push(add("armrest", "box", -w / 2 + armW / 2, 2, baseH, armW, armD, armH, fabric));
+      out.push(add("armrest", "box", w / 2 - armW / 2, 2, baseH, armW, armD, armH, fabric));
+      const seatW = w - 2 * armW;
+      const cw = seatW / 3;
+      const seatD = d - backD;
+      const seatY = (-d / 2 + backD + d / 2) / 2;
+      const seatH = 15;
+      for (let i = 0; i < 3; i++) {
+        const cx = -seatW / 2 + cw * (i + 0.5);
+        out.push(add("cushion", "box", cx, seatY, baseH, cw - 1, seatD - 2, seatH, fabricL));
+      }
+      const bCushH = h - baseH - seatH;
+      const bCushD = 12;
+      const bCushY = -d / 2 + backD + bCushD / 2;
+      for (let i = 0; i < 3; i++) {
+        const cx = -seatW / 2 + cw * (i + 0.5);
+        out.push(add("cushion", "box", cx, bCushY, baseH + seatH, cw - 1, bCushD, bCushH, cushionC));
+      }
+      return out;
+    }
+  },
+
+  coffee: {
+    tr: "Orta Sehpa",
+    en: "Coffee Table",
+    icon: "☕",
+    w: 100,
+    d: 55,
+    h: 40,
+    color: "#ba9266",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 3, legW = 4, legD = 4, legH = h - topT;
+      const wood = "#ba9266", woodD = "#946f45", woodL = "#d4ad80";
+      const out = [];
+      const inX = Math.min(5, w * 0.06), inY = Math.min(5, d * 0.08);
+      const lx = w / 2 - inX - legW / 2, ly = d / 2 - inY - legD / 2;
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          out.push(add("leg", "box", sx * lx, sy * ly, 0, legW, legD, legH, woodD));
+        }
+      }
+      const shZ = 10;
+      out.push(add("shelf", "box", 0, 0, shZ, 2 * lx + legW, 2 * ly + legD, 2, wood));
+      const apH = 4, apZ = legH - apH;
+      for (const sy of [-1, 1]) {
+        out.push(add("apron", "box", 0, sy * ly, apZ, 2 * lx + legW, 2, apH, wood));
+      }
+      for (const sx of [-1, 1]) {
+        out.push(add("apron", "box", sx * lx, 0, apZ, 2, 2 * ly, apH, wood));
+      }
+      out.push(add("top", "box", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+
+  wardrobe: {
+    tr: "Gardırop",
+    en: "Wardrobe",
+    icon: "🚪",
+    w: 120,
+    d: 60,
+    h: 200,
+    color: "#6b4728",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const plinthH = 10, topH = 4, sideW = 3, backD = 2;
+      const wood = "#6b4728", woodD = "#50331a", woodL = "#875b34", metal = "#e2e8f0";
+      const out = [];
+      out.push(add("plinth", "box", 0, 0, 0, w, d, plinthH, woodD));
+      const bodyH = h - plinthH - topH;
+      out.push(add("back panel", "box", 0, -d / 2 + backD / 2, plinthH, w, backD, bodyH, woodD));
+      out.push(add("side panel", "box", -w / 2 + sideW / 2, 0, plinthH, sideW, d, bodyH, wood));
+      out.push(add("side panel", "box", w / 2 - sideW / 2, 0, plinthH, sideW, d, bodyH, wood));
+      const shZ = h - topH - 35;
+      out.push(add("shelf", "box", 0, 0, shZ, w - sideW, d - 4, 2.5, woodL));
+      out.push(add("shelf", "cyl", 0, -1, shZ - 6, w - sideW, 3, 3, metal, { axis: "x", mat: "metal" }));
+      out.push(add("top", "box", 0, 0, h - topH, w, d, topH, wood));
+      const dw = (w - 1) / 2;
+      const doorH = bodyH - 1;
+      const doorZ = plinthH + 0.5;
+      const doorY = d / 2 - 2;
+      out.push(add("door", "box", -dw / 2, doorY, doorZ, dw - 0.5, 2, doorH, woodL));
+      out.push(add("door", "box", dw / 2, doorY, doorZ, dw - 0.5, 2, doorH, woodL));
+      const hH = 16, hZ = doorZ + doorH * 0.5;
+      const hY = doorY + 1.2;
+      out.push(add("handle", "box", -3.5, hY, hZ, 1.5, 0.8, hH, metal, { mat: "metal" }));
+      out.push(add("handle", "box", 3.5, hY, hZ, 1.5, 0.8, hH, metal, { mat: "metal" }));
+      return out;
+    }
+  },
+
+  nightstand: {
+    tr: "Komodin",
+    en: "Nightstand",
+    icon: "▫",
+    w: 45,
+    d: 40,
+    h: 55,
+    color: "#9e774f",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 2.5, legW = 3.5, legD = 3.5, legH = h - topT;
+      const wood = "#9e774f", woodD = "#7c5a35", woodL = "#bd9469", metal = "#e2e8f0";
+      const out = [];
+      const inX = 3, inY = 3;
+      const lx = w / 2 - inX - legW / 2, ly = d / 2 - inY - legD / 2;
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          out.push(add("leg", "box", sx * lx, sy * ly, 0, legW, legD, legH, woodD));
+        }
+      }
+      out.push(add("shelf", "box", 0, 0, 10, 2 * lx + legW, 2 * ly + legD, 2, wood));
+      const boxH = 18;
+      const boxZ = legH - boxH;
+      out.push(add("side panel", "box", -lx, 0, boxZ, legW, 2 * ly + legD, boxH, wood));
+      out.push(add("side panel", "box", lx, 0, boxZ, legW, 2 * ly + legD, boxH, wood));
+      out.push(add("back panel", "box", 0, -ly, boxZ, 2 * lx + legW, legD, boxH, woodD));
+      const drBottomZ = boxZ + 0.5;
+      const drFrontH = boxH - 2;
+      const drFrontZ = boxZ + 1;
+      const drFrontY = d / 2 - 2;
+      out.push(add("drawer bottom", "box", 0, (drFrontY - ly) / 2, drBottomZ, 2 * lx, drFrontY + ly + 1, 1.5, wood));
+      out.push(add("drawer front", "box", 0, drFrontY, drFrontZ, 2 * lx, 2, drFrontH, woodL));
+      out.push(add("handle", "box", 0, drFrontY + 1.2, drFrontZ + drFrontH / 2 - 0.75, 8, 0.8, 1.5, metal, { mat: "metal" }));
+      out.push(add("top", "box", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+  billiards: { tr: "Bilardo Masası", en: "Billiards Table", icon: "🎱", w: 280, d: 155, h: 85, color: "#5b3a24", parts: billiardParts }
+};
 /* PARTS-ENGINE:END */
 // Çok parçalı mobilya 2B: parçaların üstten görünüşü — yüksekte olan üstte çizilir, grup tek katman olarak saydamlaşır
 function partsSvg(f) {
@@ -3167,7 +3568,7 @@ function renderProps() {
       const v = validateParts(o);
       h += `<div class="stat" title="${L('Bu mobilya parçalardan oluşur; ölçüleri değiştirince parçalar birlikte ölçeklenir', 'This item is built from parts; resizing it scales the parts with it')}"><span>🧩 ${L('Parçalar', 'Parts')}</span><b style="color:${v.ok ? '#16a34a' : 'var(--danger)'}">${v.count}${v.ok ? '' : ' ⚠'}</b></div>`;
     }
-    if (o.k !== 'stairs' && n === 1) h += `<div class="row"><button class="btn sm" data-act="parts" title="${L('Mobilyayı kutu, silindir ve kürelerden kurun: ayaklar, tabla, raflar…', 'Build the item from boxes, cylinders and spheres: legs, top, shelves…')}">🧩 ${Array.isArray(o.parts) && o.parts.length ? L('Parçaları düzenle', 'Edit parts') : L('Parçalardan kur', 'Build from parts')}</button></div>`;
+    if (o.k !== 'stairs' && n === 1) h += `<div class="row"><button class="btn sm" data-act="parts" title="${L('Mobilyayı kutu, silindir ve kürelerden kurun: ayaklar, tabla, raflar…', 'Build the item from boxes, cylinders and spheres: legs, top, shelves…')}">🧩 ${Array.isArray(o.parts) && o.parts.length ? L('Parçaları düzenle', 'Edit parts') : L('Parçalardan kur', 'Build from parts')} · ${L('stüdyo', 'studio')}</button></div>`;
     if (o.type !== 'shape' && n === 1) h += `<div class="row"><button class="btn sm" data-act="savepreset" title="${L('Bu ölçü ve rengi kütüphaneye kaydet, tekrar tekrar yerleştir', 'Save this size and colour to the library and place it again')}">💾 ${L('Kütüphaneye kaydet', 'Save to library')}</button></div>`;
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
@@ -3560,7 +3961,7 @@ function buildLib() {
     items += CATALOG.filter(matches).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
     items += shapes.filter(matches).map(shapeCard).join('');
   } else if (ui.cat === 0) items = OPENINGS.map(opCard).join('') + presets.filter(p => p.kind === 'op').map(presetCard).join('');
-  else if (ui.cat === LIBCATS.length - 1) items = presets.map(presetCard).join('') + shapes.map(shapeCard).join('')
+  else if (ui.cat === LIBCATS.length - 1) items = `<button class="item fs-new" data-fsnew="1" title="${L('Kendi mobilyanı parçalardan tasarla', 'Design your own furniture from parts')}"><div class="ic">🧩</div><div>${L('Mobilya oluştur', 'Create furniture')}</div><div class="sz">${L('stüdyo', 'studio')}</div></button>` + presets.map(presetCard).join('') + shapes.map(shapeCard).join('')
     + (presets.length || shapes.length ? '' : `<p class="muted">${L('Bir kapı, pencere ya da mobilyayı seçip “💾 Kütüphaneye kaydet” ile buraya ekle.', 'Select a door, window or furniture item and use “💾 Save to library” to add it here.')}</p>`);
   else items = CATALOG.filter(c => c.cat === ui.cat - 1).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
   $('#items').innerHTML = items || `<p class="muted">${L('Sonuç yok', 'No results')}</p>`;
@@ -3569,6 +3970,7 @@ function buildLib() {
 $('#cats').addEventListener('click', e => { const b = e.target.closest('[data-cat]'); if (b) { ui.cat = +b.dataset.cat; ui.q = ''; $('#search').value = ''; buildLib(); } });
 $('#search').addEventListener('input', e => { ui.q = e.target.value; buildLib(); });
 $('#items').addEventListener('click', e => {
+  if (e.target.closest('[data-fsnew]')) { fsNew(); return; }
   const x = e.target.closest('[data-delsh]');
   if (x) {
     const i = (P.lib.shapes || []).findIndex(s => s.id === x.dataset.delsh);
@@ -4041,6 +4443,7 @@ function cmdList() {
     act('json', '⬇', 'JSON indir', 'Download JSON', '', () => downloadJson(P), true, 'export backup yedek'),
     act('open', '📂', 'Dosya aç', 'Open file', '', () => $('#fileOpen').click(), true),
     act('new', '＋', 'Yeni proje', 'New project', '', templatesModal, true, 'template şablon'),
+    act('furnstudio', '🧩', 'Mobilya stüdyosu: yeni mobilya', 'Furniture studio: new furniture', '', () => fsNew(), false, 'create furniture builder editor parts mobilya oluştur parça'),
     act('flipH', '⇋', 'Yatay aynala', 'Flip horizontal', 'Shift+H', () => flipSel('h'), false, 'mirror ayna'),
     act('flipV', '⇵', 'Dikey aynala', 'Flip vertical', 'Shift+V', () => flipSel('v'), false, 'mirror ayna'),
     act('scale', '⤡', 'Ölçekle', 'Scale', '', scaleSelPrompt, false, 'resize boyutlandır'),
@@ -4111,7 +4514,7 @@ window.addEventListener('keydown', e => {
   if (typing) { if (e.key === 'Escape') e.target.blur(); return; }
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
   if (e.key === 'Escape' && document.getElementById('ctxMenu')) { closeCtxMenu(); return; }
-  if (ui.modal === 'parts') { if (e.key === 'Escape') closeModal(); return; } // parça düzenleyici açıkken Delete / Ctrl+Z arkadaki plana gitmesin
+  if (ui.modal === 'parts') { fsKey(e); return; } // mobilya stüdyosu açıkken tuşlar stüdyonun: Delete / Ctrl+Z arkadaki plana gitmez
   // komut satırı (#43): ":" — 2B'de de 3B'de de; açık bir pencere (modal) varken değil
   if (e.key === ':' && !ctrl && !e.altKey && $('#modalbg').style.display !== 'flex') { e.preventDefault(); keys3D.clear(); openCmdPalette(); return; }
   if (ui.view3d) {
@@ -4213,8 +4616,8 @@ $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8)
 
 /* ---------- Modal ---------- */
 function openModal(html, kind = null) { ui.modal = kind; $('#modal').innerHTML = html; $('#modalbg').style.display = 'flex'; }
-function closeModal() { ui.modal = null; $('#modalbg').style.display = 'none'; }
-$('#modalbg').addEventListener('mousedown', e => { if (e.target.id !== 'modalbg') return; if (ui.modal === 'parts' && ui.pb && JSON.stringify(ui.pb.d) !== ui.pb.orig && !confirm(L('Uygulanmamış parça değişiklikleri silinsin mi?', 'Discard the parts changes you have not applied?'))) return; closeModal(); });
+function closeModal() { if (ui.modal === 'parts') fsClose(); ui.modal = null; $('#modalbg').style.display = 'none'; }
+$('#modalbg').addEventListener('mousedown', e => { if (e.target.id === 'modalbg') closeModal(); });
 $('#modal').addEventListener('click', e => { if (e.target.closest('[data-close]')) closeModal(); });
 /* ---------- AI (MCP) help: copy-ready prompt for the user's agent ---------- */
 function copyText(text) {
@@ -5806,15 +6209,39 @@ $('#modal').addEventListener('click', async e => {
   try { const url = await render3DHQ({ ...studioOpts(), longSide: 720, supersample: 1, frames: 1, format: 'jpeg' }); if (ui.modal === 'studio') openRenderStudio(url || null); }
   finally { ui.shot = false; }
 });
-/* ---------- Parça düzenleyici (çok parçalı mobilya, görsel) ----------
-   Seçili mobilyanın parçaları bir TASLAK (ui.pb.d) üzerinde düzenlenir; ✓ Uygula tek commit() ile yazar, yani tek
-   geri-al adımıdır, İptal hiçbir şeyi değiştirmez. Önizleme: üstten + önden görünüş; parçaya tıklamak onu seçer.
-   Taslak, öğenin tasarım kutusu (pbase) ölçeğindedir; öğe yeniden boyutlandırılmışsa Uygula o ölçeği korur. */
+/* ---------- Mobilya stüdyosu (çok parçalı mobilya oluşturucu / düzenleyici) ----------
+   Tam ekran çalışma alanı: solda yapı taşları (sürükle-bırak), ortada 3B + üstten / önden / yandan görünüşler
+   (parçayı sürükle = taşı, tutamaç = boyutlandır / döndür, mıknatıslı hizalama), sağda parça listesi ve alanlar.
+   Her şey bir TASLAK (ui.pb.d) üzerinde olur; stüdyonun kendi geri-al yığını vardır (ui.pb.hist). ✓ Uygula / Plana
+   yerleştir tek commit() ile yazar (planın tek geri-al adımı); İptal hiçbir şeyi değiştirmez.
+   Taslak öğenin tasarım kutusu (pbase) ölçeğindedir; öğe yeniden boyutlandırılmışsa Uygula o ölçeği korur. */
 const PB_TYPES = { box: ['Kutu', 'Box'], cyl: ['Silindir', 'Cylinder'], sphere: ['Küre', 'Sphere'], extrude: ['Profil', 'Outline'] };
 const PB_MATS = { matte: ['Mat', 'Matte'], gloss: ['Parlak', 'Gloss'], metal: ['Metal', 'Metal'], glass: ['Cam', 'Glass'] };
 const PB_AXES = { z: ['Dik', 'Upright'], x: ['Yatık (X)', 'Lying (X)'], y: ['Yatık (Y)', 'Lying (Y)'] };
 const hex6 = c => { const s = String(c || '').replace('#', ''); return /^[0-9a-f]{6}$/i.test(s) ? '#' + s : /^[0-9a-f]{3}$/i.test(s) ? '#' + s.split('').map(x => x + x).join('') : '#b08968'; };
-const pbItem = () => { const D = ui.pb.d; return { w: D.w, d: D.d, h: D.h, k: 'rect', parts: D.parts, pbase: { w: D.w, d: D.d, h: D.h } }; };
+const pbItem = () => { const D = ui.pb.d; return { w: D.w, d: D.d, h: D.h, k: 'rect', color: D.color, parts: D.parts, pbase: { w: D.w, d: D.d, h: D.h } }; };
+// yapı taşları: varsayılan ölçüler o anki kutudan türetilir; [anahtar, ikon, TR, EN, D => parça]
+const FS_BLOCKS = [
+  ['box', '▭', 'Kutu', 'Box', D => ({ type: 'box', w: Math.min(30, D.w), d: Math.min(30, D.d), h: Math.min(30, D.h) })],
+  ['cyl', '◯', 'Silindir', 'Cylinder', D => ({ type: 'cyl', w: Math.min(20, D.w), d: Math.min(20, D.d), h: Math.min(30, D.h) })],
+  ['sphere', '●', 'Küre', 'Sphere', D => { const s = Math.min(20, D.w, D.d, D.h); return { type: 'sphere', w: s, d: s, h: s }; }],
+  ['rod', '━', 'Çubuk', 'Rod', D => ({ type: 'cyl', axis: 'x', w: Math.max(5, D.w * 0.8), d: 3, h: 3 })],
+  ['leg', '▮', 'Ayak', 'Leg', D => ({ type: 'box', w: 5, d: 5, h: Math.max(5, D.h - 3), z: 0 })],
+  ['rleg', '┃', 'Yuvarlak ayak', 'Round leg', D => ({ type: 'cyl', w: 5, d: 5, h: Math.max(5, D.h - 3), z: 0 })],
+  ['top', '▬', 'Tabla', 'Top', D => ({ type: 'box', w: D.w, d: D.d, h: 3, z: Math.max(0, D.h - 3) })],
+  ['shelf', '☰', 'Raf', 'Shelf', D => ({ type: 'box', w: Math.max(5, D.w - 4), d: Math.max(5, D.d - 2), h: 2 })],
+  ['side', '▯', 'Yan panel', 'Side panel', D => ({ type: 'box', w: 2, d: D.d, h: D.h, x: -D.w / 2 + 1, z: 0 })],
+  ['back', '▤', 'Arka panel', 'Back panel', D => ({ type: 'box', w: D.w, d: 1.5, h: D.h, y: -D.d / 2 + 0.75, z: 0 })],
+  ['door', '🚪', 'Kapak', 'Door', D => ({ type: 'box', w: Math.max(5, D.w / 2 - 1), d: 2, h: Math.max(5, D.h * 0.8), y: D.d / 2 - 1, z: 0 })],
+  ['drawer', '🗄', 'Çekmece önü', 'Drawer front', D => ({ type: 'box', w: Math.max(5, D.w - 4), d: 2, h: Math.min(15, D.h), y: D.d / 2 - 1 })],
+  ['handle', '╍', 'Kulp', 'Handle', D => ({ type: 'cyl', axis: 'x', w: Math.min(12, D.w), d: 1.5, h: 1.5, mat: 'metal', color: '#9aa4b0' })],
+  ['cushion', '🛋', 'Minder', 'Cushion', D => ({ type: 'box', w: Math.max(5, D.w * 0.9), d: Math.max(5, D.d * 0.8), h: Math.min(12, D.h), color: '#94a3b8' })],
+  ['glass', '◇', 'Cam', 'Glass pane', D => ({ type: 'box', w: Math.max(5, D.w - 4), d: 1, h: Math.max(5, D.h * 0.6), mat: 'glass', color: '#a5d8f3' })],
+];
+const fsBlock = key => FS_BLOCKS.find(b => b[0] === key);
+const fsDirty = () => ui.pb && (JSON.stringify(ui.pb.d) !== ui.pb.orig || (ui.pb.name || '') !== (ui.pb.name0 || ''));
+const fsRound = v => ui.pb && ui.pb.snap ? Math.round(v) : partR(v);
+
 // seçili mobilyadan taslak: parçası yoksa tek parçalık başlangıç (kutu / silindir / şeklin kendi profili)
 function pbStart(o) {
   const has = Array.isArray(o.parts) && o.parts.length;
@@ -5823,9 +6250,30 @@ function pbStart(o) {
   else if (o.k === 'poly' && o.pts && o.pts.length >= 3) parts = [Object.assign(cleanPart({ type: 'extrude', pts: o.pts, h: o.h }), { name: L('gövde', 'body'), color: o.color })];
   else parts = [cleanPart({ name: L('gövde', 'body'), type: o.k === 'round' ? 'cyl' : 'box', w: o.w, d: o.d, h: o.h, color: partHex(o.color) ? o.color : undefined })];
   const b = has && o.pbase ? o.pbase : { w: o.w, d: o.d, h: o.h };
-  ui.pb = { id: o.id, sel: 0, d: { w: partR(b.w), d: partR(b.d), h: partR(b.h), color: partHex(o.color) ? o.color : '#b08968', parts } };
-  ui.pb.orig = JSON.stringify(ui.pb.d); // arka plana tıklayınca değişiklik varsa sorulur
-  openPartsBuilder();
+  fsInit(o.id, o.label || o.name || '', { w: partR(b.w), d: partR(b.d), h: partR(b.h), color: partHex(o.color) ? o.color : '#b08968', parts });
+}
+// yeni mobilya: boş kutu ya da hazır şablon (FURN_TEMPLATES)
+function fsNew(tpl) {
+  const t = FURN_TEMPLATES[tpl];
+  const d = t ? { w: t.w, d: t.d, h: t.h, color: t.color, parts: t.parts(t.w, t.d, t.h).map(cleanPart) } : { w: 100, d: 60, h: 75, color: '#b08968', parts: [] };
+  fsInit(null, t ? L(t.tr, t.en) : L('Yeni mobilya', 'New furniture'), d);
+}
+function fsInit(id, name, d) {
+  const prevSnap = ui.pb ? ui.pb.snap : true;
+  ui.pb = { id, name, name0: name, sel: d.parts.length ? 0 : -1, d, snap: prevSnap !== false, hist: [JSON.stringify(d)], hi: 0 };
+  ui.pb.orig = ui.pb.hist[0];
+  openStudio();
+}
+// stüdyo geçmişi: tamamlanmış her eylemden sonra (sürükleme bitti, alan değişti, düğme) bir anlık görüntü
+function fsPush() {
+  const P2 = ui.pb, j = JSON.stringify(P2.d);
+  if (j === P2.hist[P2.hi]) return;
+  P2.hist = P2.hist.slice(0, P2.hi + 1); P2.hist.push(j); if (P2.hist.length > 200) P2.hist.shift(); P2.hi = P2.hist.length - 1;
+  fsSyncTop();
+}
+function fsUndo(dir) {
+  const P2 = ui.pb, i = P2.hi + dir; if (i < 0 || i >= P2.hist.length) return;
+  P2.hi = i; P2.d = JSON.parse(P2.hist[i]); P2.sel = Math.min(P2.sel, P2.d.parts.length - 1); pbRedraw();
 }
 // sorunlar, iki dilde: kutudan taşma, tabanın altı, öğe yüksekliğinin üstü, havada duran parça
 function pbIssues() {
@@ -5844,31 +6292,9 @@ function pbIssues() {
 }
 function pbMsgs() {
   const is = pbIssues(), n = ui.pb.d.parts.length;
-  if (!n) return `<div class="pb-msg warn">${L('Parça yok: Uygula öğeyi düz kutuya döndürür', 'No parts: Apply turns the item back into a plain box')}</div>`;
+  if (!n) return `<div class="pb-msg warn">${L('Henüz parça yok: soldan bir yapı taşı sürükleyin ya da tıklayın', 'No parts yet: drag or click a building block on the left')}</div>`;
   if (!is.length) return `<div class="pb-msg ok">✓ ${L(`Her şey yerinde · ${n} parça`, `All parts fit · ${n} part${n > 1 ? 's' : ''}`)}</div>`;
   return is.map(x => `<div class="pb-msg ${x.err ? 'err' : 'warn'}"${x.i >= 0 ? ` data-pbsel="${x.i}"` : ''}>${x.err ? '⚠' : '•'} ${x.t}</div>`).join('');
-}
-// iki önizleme: üstten (plan) ve önden (x yatay, yükseklik dikey); seçili parça vurgulu çizgiyle en üste
-function pbPreview() {
-  const D = ui.pb.d, C = pal(), s = ui.pb.sel, m = Math.max(D.w, D.d, D.h) * 0.05 + 3;
-  const line = `stroke="${C.furnStroke}" stroke-width="1" vector-effect="non-scaling-stroke"`, hl = `stroke="${C.accent}" stroke-width="2.5" vector-effect="non-scaling-stroke"`;
-  const box = (x, y, w, h) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${C.sub}" stroke-dasharray="4 3" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
-  const order = D.parts.map((p, i) => ({ p, i, b: partBounds(p) })); // sınırlar bir kez hesaplanır
-  let top = box(-D.w / 2, -D.d / 2, D.w, D.d);
-  for (const { p, i } of order.slice().sort((a, b) => (a.p.z + a.p.h) - (b.p.z + b.p.h) || a.i - b.i)) top += `<g data-pi="${i}">${partShapeSvg(p, p.color || D.color, line)}</g>`;
-  if (D.parts[s]) top += partShapeSvg(D.parts[s], 'none', hl);
-  // önden: bakan +y tarafında, uzaktaki (küçük y) önce çizilir
-  const fShape = (p, col, attrs, b = partBounds(p)) => {
-    const cx = (b.x0 + b.x1) / 2, w = b.x1 - b.x0, h = p.h;
-    if (p.type === 'sphere' || (p.type === 'cyl' && p.axis === 'y')) return `<ellipse cx="${cx}" cy="${-(p.z + h / 2)}" rx="${w / 2}" ry="${h / 2}" fill="${col}" ${attrs}/>`;
-    return `<rect x="${b.x0}" y="${-(p.z + h)}" width="${w}" height="${h}" rx="${p.type === 'cyl' && p.axis === 'x' ? h / 2 : 0}" fill="${col}" ${attrs}/>`;
-  };
-  let front = box(-D.w / 2, -D.h, D.w, D.h) + `<line x1="${-D.w / 2 - m}" x2="${D.w / 2 + m}" y1="0" y2="0" stroke="${C.stroke}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
-  for (const { p, i, b } of order.slice().sort((a, b) => a.b.y1 - b.b.y1 || a.i - b.i)) front += `<g data-pi="${i}">${fShape(p, p.color || D.color, line, b)}</g>`;
-  if (D.parts[s]) front += fShape(D.parts[s], 'none', hl, order[s].b);
-  const vb = (x, y, w, h) => `viewBox="${x - m} ${y - m} ${w + 2 * m} ${h + 2 * m}"`;
-  return `<figure><figcaption>${L('Üstten', 'Top')} · ${partR(D.w)} × ${partR(D.d)} cm</figcaption><svg ${vb(-D.w / 2, -D.d / 2, D.w, D.d)} preserveAspectRatio="xMidYMid meet">${top}</svg></figure>`
-    + `<figure><figcaption>${L('Önden', 'Front')} · ${L('yükseklik', 'height')} ${partR(D.h)} cm</figcaption><svg ${vb(-D.w / 2, -D.h, D.w, D.h)} preserveAspectRatio="xMidYMid meet">${front}</svg></figure>`;
 }
 function pbList() {
   const D = ui.pb.d;
@@ -5877,7 +6303,7 @@ function pbList() {
 }
 function pbFields() {
   const D = ui.pb.d, p = D.parts[ui.pb.sel];
-  if (!p) return `<p class="muted">${L('Yukarıdan bir parça ekleyin.', 'Add a part above.')}</p>`;
+  if (!p) return `<p class="muted">${L('Bir parça seçin ya da soldan ekleyin.', 'Select a part, or add one from the left.')}</p>`;
   const num = (lbl, k, v, o = {}) => `<label class="f"><span>${lbl}</span><input type="number" data-pf="${k}" value="${partR(v || 0)}" step="${o.step || 1}"${o.min !== undefined ? ` min="${o.min}"` : ''}></label>`;
   const pick = (lbl, k, v, map) => `<label class="f"><span>${lbl}</span><select data-pf="${k}">${Object.entries(map).map(([kk, x]) => `<option value="${kk}"${kk === v ? ' selected' : ''}>${L(...x)}</option>`).join('')}</select></label>`;
   const types = p.type === 'extrude' ? PB_TYPES : { box: PB_TYPES.box, cyl: PB_TYPES.cyl, sphere: PB_TYPES.sphere };
@@ -5889,101 +6315,411 @@ function pbFields() {
     + `<h4>${L('Konum (cm)', 'Position (cm)')}</h4>` + num(L('Sağa / sola (X)', 'Left / right (X)'), 'x', p.x) + num(L('İleri / geri (Y)', 'Back / front (Y)'), 'y', p.y)
     + num(L('Yerden yükseklik', 'Height above floor'), 'z', p.z, { min: 0 })
     + `<div class="row"><button type="button" class="btn sm" data-pbact="ontop" title="${L('Altındaki en yüksek parçanın üstüne koyar', 'Puts it on the highest part under it')}">⬆ ${L('Üstüne oturt', 'Sit on top')}</button><button type="button" class="btn sm" data-pbact="floor">⤓ ${L('Yere indir', 'Put on floor')}</button></div>`
+    + `<div class="row"><button type="button" class="btn sm" data-pbact="cx" title="${L('Sağ-sol ortaya al', 'Centre left / right')}">↔ ${L('Ortala', 'Centre')}</button><button type="button" class="btn sm" data-pbact="mirror" title="${L('Karşı tarafa aynalı bir kopya ekler (ör. ikinci ayak)', 'Adds a mirrored copy on the other side (e.g. the second leg)')}">⇋ ${L('Aynala kopyala', 'Mirror copy')}</button></div>`
     + `<h4>${L('Ölçü (cm)', 'Size (cm)')}</h4>`
     + (p.type === 'extrude' ? '' : num(L('Genişlik', 'Width'), 'w', p.w, { min: 0.1 }) + num(L('Derinlik', 'Depth'), 'd', p.d, { min: 0.1 }))
     + num(L('Yükseklik', 'Height'), 'h', p.h, { min: 0.1 }) + num(L('Döndür (°)', 'Rotate (°)'), 'rot', p.rot, { step: 15 })
     + `<div class="row"><button type="button" class="btn sm" data-pbact="dup">⧉ ${L('Çoğalt', 'Duplicate')}</button><button type="button" class="btn sm" data-pbact="del">🗑 ${L('Parçayı sil', 'Delete part')}</button></div>`;
 }
-function openPartsBuilder() {
-  const D = ui.pb.d, f = find(ui.pb.id), name = f ? (f.o.label || f.o.name || '') : '';
-  const bf = (lbl, k) => `<label class="f"><span>${lbl}</span><input type="number" data-pbox="${k}" value="${partR(D[k])}" min="1" step="1"></label>`;
-  openModal(`<h2>🧩 ${L('Parça düzenleyici', 'Parts editor')}${name ? ' — ' + esc(name) : ''} <button class="btn sm" data-close>✕</button></h2>
-    <p class="muted pb-hint">${L('Mobilyayı basit parçalardan kurun. Bir parçayı resimde ya da listede seçin. <b>Yerden yükseklik</b> parçanın başladığı yerdir: 72 cm ayakların üstündeki tabla 72’den başlar.', 'Build the item from simple parts. Pick a part in the pictures or the list. <b>Height above floor</b> is where the part starts: a top on 72 cm legs starts at 72.')}</p>
-    <div class="pb">
-      <div class="pb-left">
-        <div id="pbPrev" class="pb-views">${pbPreview()}</div>
-        <div id="pbMsg">${pbMsgs()}</div>
-        <h4>📦 ${L('Öğe kutusu (cm)', 'Item box (cm)')}</h4>
-        <div>${bf(L('Genişlik', 'Width'), 'w')}${bf(L('Derinlik', 'Depth'), 'd')}${bf(L('Yükseklik', 'Height'), 'h')}</div>
-        <div class="row"><button type="button" class="btn sm" data-pbact="fit" title="${L('Kutuyu tüm parçaları alacak kadar büyütür / küçültür', 'Grows or shrinks the box to hold every part')}">📦 ${L('Kutuyu parçalara uydur', 'Fit box to parts')}</button></div>
-      </div>
-      <div class="pb-right">
-        <div class="row">${['box', 'cyl', 'sphere'].map(t => `<button type="button" class="btn sm" data-pbadd="${t}">＋ ${L(...PB_TYPES[t])}</button>`).join('')}</div>
-        <div id="pbList" class="pb-list">${pbList()}</div>
-        <div id="pbFields">${pbFields()}</div>
-      </div>
-    </div>
-    <div class="row pb-foot"><button type="button" class="btn sm" data-close>${L('İptal', 'Cancel')}</button><button type="button" class="btn sm primary" data-pbact="apply">✓ ${L('Uygula', 'Apply')}</button></div>`, 'parts');
+
+/* --- 2B görünüşler: üstten (x, y), önden (x, −z), yandan (−y, −z); SVG birimi = cm --- */
+const FS_VIEWS = ['top', 'front', 'side'];
+const fsUV = (view, x, y, z) => view === 'top' ? [x, y] : view === 'front' ? [x, -z] : [-y, -z];
+// görünüş düzleminde bir parçanın izdüşümü { a0, a1, b0, b1, round }
+function fsProj(p, view, b = partBounds(p)) {
+  if (view === 'front') return { a0: b.x0, a1: b.x1, b0: -b.z1, b1: -b.z0, round: p.type === 'sphere' || (p.type === 'cyl' && p.axis === 'y') };
+  return { a0: -b.y1, a1: -b.y0, b0: -b.z1, b1: -b.z0, round: p.type === 'sphere' || (p.type === 'cyl' && p.axis === 'x') };
 }
-const pbLive = () => { $('#pbPrev').innerHTML = pbPreview(); $('#pbList').innerHTML = pbList(); $('#pbMsg').innerHTML = pbMsgs(); };
-const pbRedraw = () => { pbLive(); $('#pbFields').innerHTML = pbFields(); };
-function pbApply() {
-  const D = ui.pb.d, f = find(ui.pb.id);
-  if (!f) { closeModal(); return; }
+// görünüşün yatay ekseni parçanın hangi yerel ölçüsüne denk geliyor (döndürülmüşse w ↔ d)
+const fsHorizKey = (p, view) => { const a = (p.rot || 0) * Math.PI / 180, wx = Math.abs(Math.cos(a)) >= Math.abs(Math.sin(a)); return view === 'front' ? (wx ? 'w' : 'd') : (wx ? 'd' : 'w'); };
+function fsViewBox(view) {
+  const D = ui.pb.d, m = Math.max(D.w, D.d, D.h) * 0.14 + 12;
+  const [x, y, w, h] = view === 'top' ? [-D.w / 2, -D.d / 2, D.w, D.d] : view === 'front' ? [-D.w / 2, -D.h, D.w, D.h] : [-D.d / 2, -D.h, D.d, D.h];
+  return [x - m, y - m, w + 2 * m, h + 2 * m];
+}
+function fsViewSvg(view, svg) {
+  const D = ui.pb.d, C = pal(), s = ui.pb.sel, sp = D.parts[s], vb = fsViewBox(view);
+  const k = svg && svg.clientWidth ? Math.min(svg.clientWidth / vb[2], svg.clientHeight / vb[3]) : 2; // px / cm
+  const px = n => n / k, ns = 'vector-effect="non-scaling-stroke"';
+  const line = `stroke="${C.furnStroke}" stroke-width="1" ${ns}`, hl = `fill="none" stroke="${C.accent}" stroke-width="2.5" ${ns}`;
+  const bs = D.parts.map(p => partBounds(p));
+  let o = `<defs><pattern id="fsg-${view}" width="10" height="10" patternUnits="userSpaceOnUse" x="0" y="0"><path d="M10 0H0V10" fill="none" stroke="${C.gMin}" stroke-width="1" ${ns}/></pattern></defs>`
+    + `<rect x="${vb[0] - vb[2] * 5}" y="${vb[1] - vb[3] * 5}" width="${vb[2] * 11}" height="${vb[3] * 11}" fill="url(#fsg-${view})" data-bg="1"/>`; // ızgara, görünüşün tamamını doldurur
+  const [bx, by, bw, bh] = view === 'top' ? [-D.w / 2, -D.d / 2, D.w, D.d] : view === 'front' ? [-D.w / 2, -D.h, D.w, D.h] : [-D.d / 2, -D.h, D.d, D.h];
+  o += `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="none" stroke="${C.sub}" stroke-dasharray="6 4" stroke-width="1" ${ns} pointer-events="none"/>`;
+  if (view !== 'top') o += `<line x1="${vb[0]}" x2="${vb[0] + vb[2]}" y1="0" y2="0" stroke="${C.stroke}" stroke-width="2" ${ns} pointer-events="none"/>`;
+  const shape = (p, i, col, attrs) => {
+    if (view === 'top') return partShapeSvg(p, col, attrs);
+    const q = fsProj(p, view, bs[i]);
+    if (q.round) return `<ellipse cx="${(q.a0 + q.a1) / 2}" cy="${(q.b0 + q.b1) / 2}" rx="${(q.a1 - q.a0) / 2}" ry="${(q.b1 - q.b0) / 2}" fill="${col}" ${attrs}/>`;
+    const r = p.type === 'cyl' && !p.axis ? 0 : p.type === 'cyl' ? Math.min(q.a1 - q.a0, q.b1 - q.b0) / 2 : 0;
+    return `<rect x="${q.a0}" y="${q.b0}" width="${q.a1 - q.a0}" height="${q.b1 - q.b0}" rx="${r}" fill="${col}" ${attrs}/>`;
+  };
+  // uzaktan yakına: üstten = alçaktan yükseğe, önden = arkadan öne (y), yandan = soldan sağa (x)
+  const key = view === 'top' ? i => bs[i].z1 : view === 'front' ? i => bs[i].y1 : i => bs[i].x1;
+  D.parts.map((p, i) => i).sort((a, b) => key(a) - key(b) || a - b)
+    .forEach(i => { o += `<g data-pi="${i}" style="cursor:move">${shape(D.parts[i], i, D.parts[i].color || D.color, line)}</g>`; });
+  if (sp) {
+    o += shape(sp, s, 'none', hl).replace(/fill="none" fill="none"/, 'fill="none"').replace('/>', ' pointer-events="none"/>');
+    o += fsHandles(view, sp, bs[s], px(6), C);
+  }
+  if (ui.pb.guide && ui.pb.guide.views.includes(view)) {
+    const g = ui.pb.guide, [u, v] = fsUV(view, g.axis === 'x' ? g.v : 0, g.axis === 'y' ? g.v : 0, g.axis === 'z' ? g.v : 0);
+    const vert = (view === 'top' && g.axis === 'x') || (view === 'front' && g.axis === 'x') || (view === 'side' && g.axis === 'y');
+    o += vert ? `<line x1="${u}" x2="${u}" y1="${vb[1]}" y2="${vb[1] + vb[3]}" stroke="${C.accent}" stroke-dasharray="5 4" stroke-width="1" ${ns} pointer-events="none"/>`
+      : `<line x1="${vb[0]}" x2="${vb[0] + vb[2]}" y1="${v}" y2="${v}" stroke="${C.accent}" stroke-dasharray="5 4" stroke-width="1" ${ns} pointer-events="none"/>`;
+  }
+  return o;
+}
+// tutamaçlar: üstten = yerel eksenlerde 4 kenar + döndürme; önden / yandan = yatay iki kenar + üst / alt
+function fsHandles(view, p, b, r, C) {
+  const dot = (x, y, h, cur) => `<circle cx="${x}" cy="${y}" r="${r}" data-h="${h}" fill="${C.accent}" stroke="#fff" stroke-width="1.5" vector-effect="non-scaling-stroke" style="cursor:${cur}"/>`;
+  let o = '';
+  if (view === 'top') {
+    const a = (p.rot || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a), at = (lx, ly) => [p.x + lx * c - ly * s, p.y + lx * s + ly * c];
+    if (p.type !== 'extrude') for (const [h, lx, ly] of [['w+', p.w / 2, 0], ['w-', -p.w / 2, 0], ['d+', 0, p.d / 2], ['d-', 0, -p.d / 2]]) { const [x, y] = at(lx, ly); o += dot(x, y, h, 'pointer'); }
+    const [rx, ry] = at(0, -p.d / 2 - r * 5), [ex, ey] = at(0, -p.d / 2);
+    o += `<line x1="${ex}" y1="${ey}" x2="${rx}" y2="${ry}" stroke="${C.accent}" stroke-width="1" vector-effect="non-scaling-stroke" pointer-events="none"/>` + dot(rx, ry, 'rot', 'grab');
+    return o;
+  }
+  const q = fsProj(p, view, b), mid = (q.b0 + q.b1) / 2, am = (q.a0 + q.a1) / 2;
+  if (p.type !== 'extrude') o += dot(q.a1, mid, 'a+', 'ew-resize') + dot(q.a0, mid, 'a-', 'ew-resize');
+  return o + dot(am, q.b0, 'top', 'ns-resize') + dot(am, q.b1, 'bot', 'ns-resize');
+}
+function fsDrawViews() {
+  for (const v of FS_VIEWS) {
+    const svg = document.getElementById('fsv-' + v); if (!svg) continue;
+    svg.setAttribute('viewBox', fsViewBox(v).join(' '));
+    svg.innerHTML = fsViewSvg(v, svg);
+  }
+}
+// ekran → görünüş (cm) koordinatı
+function fsPt(svg, e) {
+  const m = svg.getScreenCTM(); if (!m) return [0, 0];
+  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const r = pt.matrixTransform(m.inverse());
+  return [r.x, r.y];
+}
+const fsCmPerPx = svg => { const m = svg.getScreenCTM(); return m && m.a ? 1 / m.a : 1; };
+// mıknatıs: taşınan parçanın kenarlarını / ortasını diğer parçaların kenarlarına, kutuya ve zemine çeker
+function fsMagnet(p, axis, tol, skip) {
+  const D = ui.pb.d, b = partBounds(p), lo = axis === 'x' ? b.x0 : axis === 'y' ? b.y0 : b.z0, hi = axis === 'x' ? b.x1 : axis === 'y' ? b.y1 : b.z1;
+  const half = axis === 'x' ? D.w / 2 : axis === 'y' ? D.d / 2 : 0, T = axis === 'z' ? [0, D.h] : [-half, 0, half];
+  D.parts.forEach((q, i) => { if (i === skip) return; const c = partBounds(q); if (axis === 'z') T.push(c.z1, c.z0); else { const a0 = axis === 'x' ? c.x0 : c.y0, a1 = axis === 'x' ? c.x1 : c.y1; T.push(a0, a1, (a0 + a1) / 2); } });
+  const edges = axis === 'z' ? [lo, hi] : [lo, hi, (lo + hi) / 2];
+  let best = null;
+  for (const t of T) for (const e of edges) { const dd = t - e; if (Math.abs(dd) <= tol && (!best || Math.abs(dd) < Math.abs(best.d))) best = { d: dd, v: t }; }
+  return best;
+}
+// bir eksende taşı: önce mıknatıs, yoksa ızgara (1 cm); kılavuz çizgisi ui.pb.guide'a yazılır
+function fsMoveAxis(p, axis, val, tol, skip, guides) {
+  p[axis] = val;
+  const m = ui.pb.snap ? fsMagnet(p, axis, tol, skip) : null;
+  if (m) { p[axis] = partR(p[axis] + m.d); guides.push({ axis, v: m.v, views: axis === 'x' ? ['top', 'front'] : axis === 'y' ? ['top', 'side'] : ['front', 'side'] }); }
+  else p[axis] = fsRound(p[axis]);
+  if (axis === 'z' && p.z < 0) p.z = 0;
+}
+const FS_AX = { top: ['x', 'y', 1, 1], front: ['x', 'z', 1, -1], side: ['y', 'z', -1, -1] };
+function fsStartDrag(e, svg, view) {
+  const D = ui.pb.d, h = e.target.closest('[data-h]'), g = e.target.closest('[data-pi]');
+  if (!h && !g) return;
+  if (g && !h) { const i = +g.dataset.pi; if (i !== ui.pb.sel) { ui.pb.sel = i; pbRedraw(); } }
+  const i = ui.pb.sel, p = D.parts[i]; if (!p) return;
+  e.preventDefault(); try { svg.setPointerCapture(e.pointerId); } catch (er) { /* sentetik olay */ }
+  const st = { view, svg, h: h && h.dataset.h, p0: clonePlain(p), pt0: fsPt(svg, e), tol: fsCmPerPx(svg) * 8, moved: false };
+  const mv = ev => {
+    const [u, v] = fsPt(svg, ev), du = u - st.pt0[0], dv = v - st.pt0[1];
+    if (!st.moved && Math.hypot(du, dv) < fsCmPerPx(svg) * 2) return;
+    st.moved = true;
+    const q = D.parts[i]; if (!q) return;
+    Object.assign(q, clonePlain(st.p0)); const guides = [];
+    const [ax, bx, sa, sb] = FS_AX[view];
+    if (!st.h) { fsMoveAxis(q, ax, st.p0[ax] + du * sa, st.tol, i, guides); fsMoveAxis(q, bx, st.p0[bx] + dv * sb, st.tol, i, guides); }
+    else if (st.h === 'rot') { let a = Math.atan2(v - q.y, u - q.x) * 180 / Math.PI + 90; if (ui.pb.snap && !ev.shiftKey) a = Math.round(a / 15) * 15; a = ((a % 360) + 360) % 360; if (a) q.rot = partR(a); else delete q.rot; }
+    else if (view === 'top') {
+      // yerel eksen boyunca boyutlandır: karşı kenar yerinde kalır
+      const lk = st.h[0], sg = st.h[1] === '+' ? 1 : -1, a = (q.rot || 0) * Math.PI / 180, ux = lk === 'w' ? Math.cos(a) : -Math.sin(a), uy = lk === 'w' ? Math.sin(a) : Math.cos(a);
+      const proj = du * ux + dv * uy, size = Math.max(0.5, fsRound(st.p0[lk] + sg * proj)), dl = (size - st.p0[lk]) * sg;
+      q[lk] = size; q.x = partR(st.p0.x + ux * dl / 2); q.y = partR(st.p0.y + uy * dl / 2);
+    } else if (st.h === 'a+' || st.h === 'a-') {
+      const lk = fsHorizKey(q, view), sg = st.h === 'a+' ? 1 : -1, size = Math.max(0.5, fsRound(st.p0[lk] + sg * du)), dl = (size - st.p0[lk]) * sg;
+      q[lk] = size; q[ax] = partR(st.p0[ax] + sa * dl / 2);
+    } else if (st.h === 'top') { q.h = Math.max(0.5, fsRound(st.p0.h - dv)); const m = ui.pb.snap ? fsMagnet(Object.assign({}, q, { z: q.z + q.h, h: 0 }), 'z', st.tol, i) : null; if (m) { q.h = partR(q.h + m.d); guides.push({ axis: 'z', v: m.v, views: ['front', 'side'] }); } }
+    else if (st.h === 'bot') { const top = st.p0.z + st.p0.h; q.z = Math.max(0, Math.min(top - 0.5, fsRound(st.p0.z - dv))); q.h = partR(top - q.z); }
+    ui.pb.guide = guides[guides.length - 1] || null;
+    pbLive();
+  };
+  const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); ui.pb.guide = null; if (st.moved) { fsPush(); pbRedraw(); } else pbLive(); };
+  window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+}
+// yeni parça: bir yapı taşından, verilen noktaya (yoksa ortaya) — altındaki en yüksek parçanın üstüne oturur
+function fsAddBlock(key, at) {
+  const D = ui.pb.d, blk = fsBlock(key); if (!blk) return;
+  if (D.parts.length >= PARTS_MAX) { toast(L(`En çok ${PARTS_MAX} parça`, `At most ${PARTS_MAX} parts`)); return; }
+  const def = blk[4](D), q = cleanPart(Object.assign({ name: L(blk[2], blk[3]).toLowerCase(), color: D.color }, def));
+  if (at) for (const k of ['x', 'y', 'z']) if (at[k] !== undefined) q[k] = fsRound(at[k]);
+  if ((!at || at.z === undefined) && def.z === undefined) fsSitOnTop(q, D.parts); // ayak / panel zeminden, tabla kutunun üstünden başlar
+  D.parts.push(q); ui.pb.sel = D.parts.length - 1; fsPush(); pbRedraw();
+}
+// yalnızca parçanın ALTINDA kalanlar sayılır (üstü parçanın tabanına kadar): ayak tablaya, isteka topa çıkmasın
+function fsSitOnTop(p, parts, below = Infinity) {
+  const b = partBounds(p); let z = 0;
+  parts.forEach(q => { if (q === p) return; const c = partBounds(q); if (c.z1 <= below + 0.5 && c.x0 < b.x1 && c.x1 > b.x0 && c.y0 < b.y1 && c.y1 > b.y0) z = Math.max(z, c.z1); });
+  p.z = partR(z);
+}
+function fsDrop(view, svg, e, key) {
+  const [u, v] = fsPt(svg, e), [ax, bx, sa, sb] = FS_AX[view], at = {};
+  at[ax] = u * sa; at[bx] = v * sb;
+  if (at.z !== undefined) { const D = ui.pb.d, blk = fsBlock(key); const h = blk ? cleanPart(blk[4](D)).h : 10; at.z = Math.max(0, at.z - h / 2); }
+  fsAddBlock(key, at);
+}
+
+/* --- 3B görünüş: yörünge, parçaya tıkla = seç, sürükle = yatay taşı (Shift = yukarı / aşağı) --- */
+function fs3DInit() {
+  const host = document.getElementById('fs3d'); if (!host) return;
+  if (typeof THREE === 'undefined' || !THREE.OrbitControls) { host.innerHTML = `<p class="muted fs-no3d">${L('3B kitaplığı yüklenemedi; 2B görünüşleri kullanın.', '3D library unavailable; use the 2D views.')}</p>`; return; }
+  const r = new THREE.WebGLRenderer({ antialias: true }); r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  r.outputEncoding = THREE.sRGBEncoding; host.appendChild(r.domElement);
+  const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(38, 1, 1, 20000);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f99, 0.75));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(300, 600, 400); scene.add(sun);
+  const fill = new THREE.DirectionalLight(0xdbeafe, 0.25); fill.position.set(-400, 200, -300); scene.add(fill);
+  const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = false; ctl.maxPolarAngle = Math.PI * 0.495;
+  const unit = { box: new THREE.BoxGeometry(1, 1, 1), cyl: new THREE.CylinderGeometry(1, 1, 1, 32), sph: new THREE.SphereGeometry(1, 24, 16) };
+  const F3 = ui.pb.f3 = { r, scene, cam, ctl, unit, sun, host, mats: [], root: null, help: null, ro: null, raf: 0 };
+  const D = ui.pb.d, R = Math.max(D.w, D.d, D.h);
+  cam.position.set(R * 1.25, R * 1.0 + D.h * 0.4, R * 1.6); ctl.target.set(0, D.h / 2, 0); ctl.update();
+  ctl.addEventListener('change', fs3DRender);
+  F3.ro = new ResizeObserver(() => { const w = host.clientWidth, h = host.clientHeight; if (!w || !h) return; r.setSize(w, h); cam.aspect = w / h; cam.updateProjectionMatrix(); fs3DRender(); });
+  F3.ro.observe(host);
+  // seç / sürükle
+  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), setNdc = e => { const b = r.domElement.getBoundingClientRect(); ndc.set((e.clientX - b.left) / b.width * 2 - 1, -(e.clientY - b.top) / b.height * 2 + 1); ray.setFromCamera(ndc, cam); };
+  r.domElement.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || !F3.root) return;
+    setNdc(e);
+    const hit = ray.intersectObjects(F3.root.children, false)[0]; if (!hit) return;
+    const i = F3.root.children.indexOf(hit.object); if (i < 0) return;
+    if (i !== ui.pb.sel) { ui.pb.sel = i; pbRedraw(); }
+    const p = ui.pb.d.parts[i], p0 = clonePlain(p); ctl.enabled = false;
+    const vert = e.shiftKey, n = vert ? new THREE.Vector3(cam.position.x - p.x, 0, cam.position.z - p.y).normalize() : new THREE.Vector3(0, 1, 0);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, hit.point), start = hit.point.clone(), tmp = new THREE.Vector3();
+    let moved = false;
+    const mv = ev => {
+      setNdc(ev); if (!ray.ray.intersectPlane(plane, tmp)) return;
+      const q = ui.pb.d.parts[i]; if (!q) return;
+      Object.assign(q, clonePlain(p0)); const guides = [], tol = Math.max(ui.pb.d.w, ui.pb.d.d) * 0.02 + 1;
+      if (vert) fsMoveAxis(q, 'z', p0.z + tmp.y - start.y, tol, i, guides);
+      else { fsMoveAxis(q, 'x', p0.x + tmp.x - start.x, tol, i, guides); fsMoveAxis(q, 'y', p0.y + tmp.z - start.z, tol, i, guides); }
+      moved = true; ui.pb.guide = guides[guides.length - 1] || null; pbLive();
+    };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); ctl.enabled = true; ui.pb.guide = null; if (moved) fsPush(); pbRedraw(); };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  });
+  fs3DBuild();
+}
+function fs3DBuild() {
+  const F3 = ui.pb && ui.pb.f3; if (!F3) return;
+  const { scene, unit } = F3;
+  if (F3.holder) { scene.remove(F3.holder); F3.holder.traverse(o => { if (o.geometry && !Object.values(unit).includes(o.geometry)) o.geometry.dispose(); }); }
+  for (const m of F3.mats) m.dispose(); F3.mats = [];
+  if (F3.help) { scene.remove(F3.help); F3.help.geometry.dispose(); F3.help.material.dispose(); F3.help = null; }
+  const D = ui.pb.d, lt = isLight(), cache = {};
+  scene.background = new THREE.Color(lt ? 0xf3f1ec : 0x111821);
+  const mat = (c, op) => { const k = c + '|' + (op || ''); if (!cache[k]) { cache[k] = new THREE.MeshLambertMaterial({ color: c, ...(op ? { transparent: true, opacity: op } : {}), side: THREE.DoubleSide }); F3.mats.push(cache[k]); } return cache[k]; };
+  const pmat = (c, kind) => { if (!kind || kind === 'matte') return mat(c); if (kind === 'glass') return mat(c, 0.35); const k = c + '|' + kind; if (!cache[k]) { cache[k] = new THREE.MeshPhongMaterial({ color: c, shininess: kind === 'metal' ? 90 : 45, specular: kind === 'metal' ? 0x9aa4b0 : 0x2a2a2a, side: THREE.DoubleSide }); F3.mats.push(cache[k]); } return cache[k]; };
+  const holder = new THREE.Group(); F3.holder = holder; scene.add(holder);
+  // zemin + 10 cm ızgara + öğe kutusu
+  const R = Math.max(D.w, D.d) * 1.6 + 40, gm = mat(lt ? '#e7e2d8' : '#1a2330');
+  const ground = new THREE.Mesh(unit.box, gm); ground.scale.set(R * 2, 0.5, R * 2); ground.position.y = -0.26; holder.add(ground);
+  const grid = new THREE.GridHelper(R * 2, Math.round(R * 2 / 10), lt ? 0xcfc8ba : 0x243244, lt ? 0xdcd6ca : 0x1b2635); grid.position.y = 0.02; holder.add(grid);
+  F3.mats.push(grid.material);
+  const bg0 = new THREE.BoxGeometry(D.w, D.h, D.d), boxE = new THREE.LineSegments(new THREE.EdgesGeometry(bg0), new THREE.LineBasicMaterial({ color: lt ? 0x94a3b8 : 0x475569 })); bg0.dispose();
+  boxE.position.y = D.h / 2; holder.add(boxE); F3.mats.push(boxE.material);
+  const g = new THREE.Group(); holder.add(g);
+  if (D.parts.length) parts3D(g, { w: D.w, d: D.d, h: D.h, color: D.color, parts: D.parts, pbase: { w: D.w, d: D.d, h: D.h } }, { pmat, unit });
+  F3.root = g.children[0] || null;
+  const sel = F3.root && F3.root.children[ui.pb.sel];
+  if (sel) { F3.help = new THREE.BoxHelper(sel, pal().accent); scene.add(F3.help); }
+  fs3DRender();
+}
+function fs3DRender() { const F3 = ui.pb && ui.pb.f3; if (F3 && F3.r.domElement.width) F3.r.render(F3.scene, F3.cam); }
+function fs3DDispose() {
+  const F3 = ui.pb && ui.pb.f3; if (!F3) return;
+  F3.ro && F3.ro.disconnect(); F3.ctl.dispose();
+  if (F3.holder) F3.holder.traverse(o => { if (o.geometry && !Object.values(F3.unit).includes(o.geometry)) o.geometry.dispose(); });
+  for (const m of F3.mats) m.dispose(); for (const gg of Object.values(F3.unit)) gg.dispose();
+  if (F3.help) { F3.help.geometry.dispose(); F3.help.material.dispose(); }
+  F3.r.dispose(); ui.pb.f3 = null;
+}
+
+/* --- yerleşim, yeniden çizim, olaylar --- */
+function openStudio() {
+  document.getElementById('fstudio')?.remove();
+  ui.modal = 'parts'; document.body.classList.add('fs-open');
+  const D = ui.pb.d, isNew = !ui.pb.id;
+  const tplOpts = Object.entries(FURN_TEMPLATES).map(([k, t]) => `<option value="${k}">${t.icon} ${L(t.tr, t.en)}</option>`).join('');
+  const blocks = FS_BLOCKS.map(([k, ic, tr, en]) => `<button type="button" class="fs-blk" draggable="true" data-blk="${k}" title="${L('Sürükleyip bir görünüşe bırakın ya da tıklayın', 'Drag onto a view, or click')}"><span>${ic}</span>${L(tr, en)}</button>`).join('');
+  const bf = (lbl, k) => `<label class="f"><span>${lbl}</span><input type="number" data-pbox="${k}" value="${partR(D[k])}" min="1" step="1"></label>`;
+  const view = (v, cap) => `<div class="fs-v" data-view="${v}"><div class="fs-cap">${cap}</div><svg id="fsv-${v}" preserveAspectRatio="xMidYMid meet"></svg></div>`;
+  const root = document.createElement('div'); root.id = 'fstudio'; root.className = 'fs';
+  root.innerHTML = `<header class="fs-top">
+      <b class="fs-title">🧩 ${L('Mobilya stüdyosu', 'Furniture studio')}</b>
+      <input id="fsName" maxlength="60" value="${esc(ui.pb.name)}" placeholder="${L('Mobilya adı', 'Furniture name')}">
+      <button type="button" class="btn sm" data-fs="undo" title="${L('Geri al (Ctrl+Z)', 'Undo (Ctrl+Z)')}">↶</button><button type="button" class="btn sm" data-fs="redo" title="${L('Yinele (Ctrl+Y)', 'Redo (Ctrl+Y)')}">↷</button>
+      <select id="fsTpl" title="${L('Hazır bir mobilyadan başla', 'Start from a ready-made piece')}"><option value="">📐 ${L('Şablondan başla…', 'Start from a template…')}</option><option value="__empty">▢ ${L('Boş', 'Empty')}</option>${tplOpts}</select>
+      <label class="chk-pill"><input type="checkbox" id="fsSnap"${ui.pb.snap ? ' checked' : ''}> ${L('Yakala', 'Snap')}</label>
+      <span class="spacer"></span>
+      <button type="button" class="btn sm" data-fs="cancel">${L('İptal', 'Cancel')}</button>
+      <button type="button" class="btn sm" data-fs="savelib" title="${L('Uygular ve ⬡ Kütüphanem’e ekler', 'Applies and adds it to ⬡ My Library')}">💾 ${L('Kütüphaneye kaydet', 'Save to library')}</button>
+      <button type="button" class="btn sm primary" data-fs="apply">✓ ${isNew ? L('Plana yerleştir', 'Place in plan') : L('Uygula', 'Apply')}</button>
+    </header>
+    <aside class="fs-pal"><h4>${L('Yapı taşları', 'Building blocks')}</h4>${blocks}
+      <p class="muted fs-tip">${L('Sürükle: parçayı taşı. Mavi noktalar: boyut / döndür. Kenarlar yakındaki parçalara yapışır. Ok tuşları: 1 cm (Shift 10). Del: sil. Ctrl+D: çoğalt.', 'Drag a part to move it. Blue dots resize / rotate. Edges stick to nearby parts. Arrow keys: 1 cm (Shift 10). Del: delete. Ctrl+D: duplicate.')}</p></aside>
+    <main class="fs-views">
+      <div class="fs-v fs-3dv" data-view="3d"><div class="fs-cap">3B · ${L('döndür: boşluğu sürükle · parçayı sürükle: taşı (Shift: yukarı)', 'orbit: drag empty space · drag a part to move it (Shift: up / down)')}</div><div id="fs3d"></div></div>
+      ${view('top', L('Üstten', 'Top'))}${view('front', L('Önden', 'Front'))}${view('side', L('Yandan (ön ◀ ▶ arka)', 'Side (front ◀ ▶ back)'))}
+    </main>
+    <aside class="fs-side">
+      <h4>📦 ${L('Öğe kutusu (cm)', 'Item box (cm)')}</h4>
+      ${bf(L('Genişlik', 'Width'), 'w')}${bf(L('Derinlik', 'Depth'), 'd')}${bf(L('Yükseklik', 'Height'), 'h')}
+      <div class="row"><button type="button" class="btn sm" data-pbact="fit" title="${L('Kutuyu tüm parçaları alacak kadar büyütür / küçültür', 'Grows or shrinks the box to hold every part')}">📦 ${L('Kutuyu parçalara uydur', 'Fit box to parts')}</button></div>
+      <div id="pbMsg"></div>
+      <h4>🧩 ${L('Parçalar', 'Parts')}</h4><div id="pbList" class="pb-list"></div>
+      <div id="pbFields"></div>
+    </aside>`;
+  document.body.appendChild(root);
+  fsWire(root);
+  fs3DInit();
+  pbRedraw();
+  requestAnimationFrame(() => { if (ui.modal === 'parts') fsDrawViews(); }); // ilk düzenden sonra tutamaç boyları doğru olsun
+}
+function fsSyncTop() {
+  const P2 = ui.pb, u = document.querySelector('#fstudio [data-fs="undo"]'), r = document.querySelector('#fstudio [data-fs="redo"]');
+  if (u) u.disabled = P2.hi <= 0; if (r) r.disabled = P2.hi >= P2.hist.length - 1;
+}
+const pbLive = () => { if (ui.modal !== 'parts') return; fsDrawViews(); $('#pbList').innerHTML = pbList(); $('#pbMsg').innerHTML = pbMsgs(); fs3DBuild(); };
+const pbRedraw = () => {
+  if (ui.modal !== 'parts') return; pbLive(); $('#pbFields').innerHTML = pbFields(); fsSyncTop();
+  for (const k of ['w', 'd', 'h']) { const el = document.querySelector(`#fstudio [data-pbox="${k}"]`); if (el && document.activeElement !== el) el.value = partR(ui.pb.d[k]); }
+};
+function fsClose() {
+  fs3DDispose(); document.getElementById('fstudio')?.remove(); document.body.classList.remove('fs-open');
+}
+function fsCancel() {
+  if (fsDirty() && !confirm(L('Uygulanmamış değişiklikler silinsin mi?', 'Discard the changes you have not applied?'))) return;
+  closeModal();
+}
+// taslağı plana yazar: var olan öğe güncellenir, yeni mobilya görünümün ortasına yerleşir; toLib = kütüphaneye de ekle
+function pbApply(toLib) {
+  const D = ui.pb.d, name = (ui.pb.name || '').trim().slice(0, 60);
   if (pbIssues().some(x => x.err)) { toast(L('Önce ⚠ işaretli sorunları düzeltin (ya da 📦 Kutuyu parçalara uydur)', 'Fix the ⚠ problems first (or 📦 Fit box to parts)')); return; }
-  const o = f.o, old = Array.isArray(o.parts) && o.parts.length && o.pbase ? o.pbase : { w: o.w, d: o.d, h: o.h };
-  for (const k of ['w', 'd', 'h']) o[k] = partR(D[k] * (+o[k] > 0 && +old[k] > 0 ? o[k] / old[k] : 1)); // öğe büyütülmüşse aynı ölçek kalır
+  let o;
+  if (ui.pb.id) {
+    const f = find(ui.pb.id); if (!f) { closeModal(); return; }
+    o = f.o; const old = Array.isArray(o.parts) && o.parts.length && o.pbase ? o.pbase : { w: o.w, d: o.d, h: o.h };
+    for (const k of ['w', 'd', 'h']) o[k] = partR(D[k] * (+o[k] > 0 && +old[k] > 0 ? o[k] / old[k] : 1)); // öğe büyütülmüşse aynı ölçek kalır
+    if (name && name !== ui.pb.name0) { if (o.label) o.label = name; else o.name = name; }
+  } else {
+    if (!D.parts.length) { toast(L('Önce birkaç parça ekleyin', 'Add a few parts first')); return; }
+    const c = view2DCenter();
+    o = { id: uid(), type: 'custom', name: name || L('Mobilya', 'Furniture'), icon: '🧩', k: 'rect', w: D.w, d: D.d, h: D.h, color: D.color, x: Math.round(c.x), y: Math.round(c.y), rot: 0, label: '' };
+    F().furn.push(o);
+  }
   if (D.parts.length) { o.parts = D.parts.map(cleanPart); o.pbase = { w: D.w, d: D.d, h: D.h }; o.partsV = PARTS_V; }
   else { delete o.parts; delete o.pbase; delete o.partsV; }
-  closeModal(); commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
-  toast(L('Parçalar uygulandı (Ctrl+Z geri alır)', 'Parts applied (Ctrl+Z undoes)'));
+  const isNew = !ui.pb.id;
+  if (toLib || isNew) { P.lib.presets = P.lib.presets || []; P.lib.presets.push(presetFromObj('furn', o, name || o.name)); }
+  closeModal(); sel = [o.id]; commit(); refresh(); buildLib(); if (ui.view3d && T3) schedBuild3D();
+  toast(isNew ? L('Plana yerleştirildi ve ⬡ Kütüphanem’e eklendi', 'Placed in the plan and added to ⬡ My Library')
+    : toLib ? L('Uygulandı ve ⬡ Kütüphanem’e eklendi', 'Applied and added to ⬡ My Library') : L('Parçalar uygulandı (Ctrl+Z geri alır)', 'Parts applied (Ctrl+Z undoes)'));
 }
-$('#modal').addEventListener('input', e => {
-  if (ui.modal !== 'parts') return;
-  const t = e.target, D = ui.pb.d;
-  if (t.dataset.pbox) { const v = +t.value; if (t.value !== '' && v > 0) { D[t.dataset.pbox] = partR(v); pbLive(); } return; }
-  const k = t.dataset.pf, p = D.parts[ui.pb.sel]; if (!k || !p || t.tagName === 'SELECT') return;
-  if (k === 'name') { if (t.value.trim()) p.name = t.value.slice(0, 40); else delete p.name; }
-  else if (k === 'color') p.color = t.value;
-  else {
-    const v = +t.value; if (t.value === '' || !Number.isFinite(v)) return;
-    if ((k === 'w' || k === 'd' || k === 'h') && !(v > 0)) return;
-    if (k === 'rot') { if (v) p.rot = v; else delete p.rot; } else p[k] = v;
-  }
-  pbLive();
-});
-$('#modal').addEventListener('change', e => {
-  if (ui.modal !== 'parts') return;
-  const t = e.target, p = ui.pb.d.parts[ui.pb.sel]; if (t.tagName !== 'SELECT' || !p) return;
-  const k = t.dataset.pf, v = t.value;
-  if (k === 'type') { p.type = v; if (v !== 'cyl') delete p.axis; if (v !== 'extrude') delete p.pts; }
-  else if (k === 'axis') { if (v === 'z') delete p.axis; else p.axis = v; }
-  else if (k === 'mat') { if (v === 'matte') delete p.mat; else p.mat = v; }
-  pbRedraw();
-});
-$('#modal').addEventListener('click', e => {
-  if (ui.modal !== 'parts') return;
+function fsAct(act) {
   const D = ui.pb.d, p = D.parts[ui.pb.sel];
-  const pick = e.target.closest('[data-pi],[data-pbsel]');
-  if (pick) { ui.pb.sel = +(pick.dataset.pi ?? pick.dataset.pbsel); pbRedraw(); return; }
-  const add = e.target.closest('[data-pbadd]');
-  if (add) {
-    if (D.parts.length >= PARTS_MAX) { toast(L(`En çok ${PARTS_MAX} parça`, `At most ${PARTS_MAX} parts`)); return; }
-    const s = Math.max(5, Math.round(Math.min(D.w, D.d) / 4)), q = cleanPart({ type: add.dataset.pbadd, w: s, d: s, h: add.dataset.pbadd === 'sphere' ? s : Math.min(s, D.h), color: D.color });
-    D.parts.push(q); ui.pb.sel = D.parts.length - 1; pbRedraw(); return;
-  }
-  const a = e.target.closest('[data-pbact]'); if (!a) return;
-  const act = a.dataset.pbact;
-  if (act === 'apply') return pbApply();
   if (act === 'fit') {
     let w = 1, d = 1, h = 1;
     for (const q of D.parts) { const b = partBounds(q); w = Math.max(w, 2 * Math.abs(b.x0), 2 * Math.abs(b.x1)); d = Math.max(d, 2 * Math.abs(b.y0), 2 * Math.abs(b.y1)); h = Math.max(h, b.z1); }
-    Object.assign(D, { w: Math.ceil(w), d: Math.ceil(d), h: Math.ceil(h) });
-    for (const k of ['w', 'd', 'h']) { const el = $(`#modal [data-pbox="${k}"]`); if (el) el.value = D[k]; }
-    pbLive(); return;
+    Object.assign(D, { w: Math.ceil(w), d: Math.ceil(d), h: Math.ceil(h) }); fsPush(); pbRedraw(); return;
   }
   if (!p) return;
-  if (act === 'dup') { if (D.parts.length >= PARTS_MAX) { toast(L(`En çok ${PARTS_MAX} parça`, `At most ${PARTS_MAX} parts`)); return; } const q = clonePlain(p); q.x = partR(q.x + Math.min(10, p.w)); D.parts.splice(ui.pb.sel + 1, 0, q); ui.pb.sel++; }
-  else if (act === 'del') { D.parts.splice(ui.pb.sel, 1); ui.pb.sel = Math.min(ui.pb.sel, D.parts.length - 1); }
+  if (act === 'dup' || act === 'mirror') {
+    if (D.parts.length >= PARTS_MAX) { toast(L(`En çok ${PARTS_MAX} parça`, `At most ${PARTS_MAX} parts`)); return; }
+    const q = clonePlain(p);
+    if (act === 'mirror') { q.x = partR(-p.x); if (q.rot) q.rot = partR((360 - q.rot) % 360); if (q.pts) q.pts = q.pts.map(t => ({ x: -t.x, y: t.y })).reverse(); if (Math.abs(q.x - p.x) < 0.5) q.y = partR(-p.y); }
+    else q.x = partR(q.x + Math.min(10, p.w));
+    D.parts.splice(ui.pb.sel + 1, 0, q); ui.pb.sel++;
+  } else if (act === 'del') { D.parts.splice(ui.pb.sel, 1); ui.pb.sel = Math.min(ui.pb.sel, D.parts.length - 1); }
   else if (act === 'floor') p.z = 0;
-  else if (act === 'ontop') {
-    const b = partBounds(p); let z = 0;
-    // yalnızca parçanın ALTINDA kalanlar sayılır (üstü parçanın tabanına kadar): ayak tablaya, isteka topa çıkmasın
-    D.parts.forEach(q => { if (q === p) return; const c = partBounds(q); if (c.z1 <= b.z0 + 0.5 && c.x0 < b.x1 && c.x1 > b.x0 && c.y0 < b.y1 && c.y1 > b.y0) z = Math.max(z, c.z1); });
-    p.z = partR(z);
+  else if (act === 'cx') p.x = 0;
+  else if (act === 'ontop') fsSitOnTop(p, D.parts, partBounds(p).z0);
+  fsPush(); pbRedraw();
+}
+function fsWire(root) {
+  root.addEventListener('input', e => {
+    const t = e.target, D = ui.pb.d;
+    if (t.id === 'fsName') { ui.pb.name = t.value; return; }
+    if (t.dataset.pbox) { const v = +t.value; if (t.value !== '' && v > 0) { D[t.dataset.pbox] = partR(v); pbLive(); } return; }
+    const k = t.dataset.pf, p = D.parts[ui.pb.sel]; if (!k || !p || t.tagName === 'SELECT') return;
+    if (k === 'name') { if (t.value.trim()) p.name = t.value.slice(0, 40); else delete p.name; }
+    else if (k === 'color') p.color = t.value;
+    else {
+      const v = +t.value; if (t.value === '' || !Number.isFinite(v)) return;
+      if ((k === 'w' || k === 'd' || k === 'h') && !(v > 0)) return;
+      if (k === 'rot') { if (v) p.rot = v; else delete p.rot; } else p[k] = v;
+    }
+    pbLive();
+  });
+  root.addEventListener('change', e => {
+    const t = e.target;
+    if (t.id === 'fsSnap') { ui.pb.snap = t.checked; return; }
+    if (t.id === 'fsTpl') {
+      const k = t.value; t.value = ''; if (!k) return;
+      if (ui.pb.d.parts.length && !confirm(L('Şablon, şu anki parçaların yerini alsın mı? (Geri al ile dönebilirsiniz)', 'Replace the current parts with this template? (Undo brings them back)'))) return;
+      const tp = FURN_TEMPLATES[k];
+      ui.pb.d = tp ? { w: tp.w, d: tp.d, h: tp.h, color: tp.color, parts: tp.parts(tp.w, tp.d, tp.h).map(cleanPart) } : { w: ui.pb.d.w, d: ui.pb.d.d, h: ui.pb.d.h, color: ui.pb.d.color, parts: [] };
+      if (tp && !ui.pb.id && (!ui.pb.name || ui.pb.name === ui.pb.name0)) { ui.pb.name = ui.pb.name0 = L(tp.tr, tp.en); const n = root.querySelector('#fsName'); if (n) n.value = ui.pb.name; }
+      ui.pb.sel = ui.pb.d.parts.length ? 0 : -1; fsPush(); pbRedraw(); return;
+    }
+    const D = ui.pb.d, p = D.parts[ui.pb.sel];
+    if (t.tagName === 'SELECT' && t.dataset.pf && p) {
+      const k = t.dataset.pf, v = t.value;
+      if (k === 'type') { p.type = v; if (v !== 'cyl') delete p.axis; if (v !== 'extrude') delete p.pts; }
+      else if (k === 'axis') { if (v === 'z') delete p.axis; else p.axis = v; }
+      else if (k === 'mat') { if (v === 'matte') delete p.mat; else p.mat = v; }
+      fsPush(); pbRedraw(); return;
+    }
+    if (t.dataset.pf || t.dataset.pbox) { fsPush(); pbRedraw(); } // sayı / renk / ad alanı bitti → tek geçmiş adımı
+  });
+  root.addEventListener('click', e => {
+    const fsb = e.target.closest('[data-fs]');
+    if (fsb) { const a = fsb.dataset.fs; if (a === 'undo') fsUndo(-1); else if (a === 'redo') fsUndo(1); else if (a === 'cancel') fsCancel(); else if (a === 'apply') pbApply(false); else if (a === 'savelib') pbApply(true); return; }
+    const blk = e.target.closest('[data-blk]'); if (blk) { fsAddBlock(blk.dataset.blk); return; }
+    const pick = e.target.closest('#pbList [data-pbsel], #pbMsg [data-pbsel]'); if (pick) { ui.pb.sel = +pick.dataset.pbsel; pbRedraw(); return; }
+    const a = e.target.closest('[data-pbact]'); if (a) fsAct(a.dataset.pbact);
+  });
+  root.addEventListener('dragstart', e => { const b = e.target.closest('[data-blk]'); if (b) { e.dataTransfer.setData('text/plain', 'fsblk:' + b.dataset.blk); e.dataTransfer.effectAllowed = 'copy'; } });
+  for (const v of FS_VIEWS) {
+    const svg = root.querySelector('#fsv-' + v), box = svg.parentElement;
+    svg.addEventListener('pointerdown', e => { if (e.button === 0) fsStartDrag(e, svg, v); });
+    box.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; box.classList.add('drop'); });
+    box.addEventListener('dragleave', () => box.classList.remove('drop'));
+    box.addEventListener('drop', e => { e.preventDefault(); box.classList.remove('drop'); const s = e.dataTransfer.getData('text/plain'); if (s.startsWith('fsblk:')) fsDrop(v, svg, e, s.slice(6)); });
   }
-  pbRedraw();
-});
+  const b3 = root.querySelector('.fs-3dv');
+  b3.addEventListener('dragover', e => { e.preventDefault(); b3.classList.add('drop'); });
+  b3.addEventListener('dragleave', () => b3.classList.remove('drop'));
+  b3.addEventListener('drop', e => { e.preventDefault(); b3.classList.remove('drop'); const s = e.dataTransfer.getData('text/plain'); if (s.startsWith('fsblk:')) fsAddBlock(s.slice(6)); });
+}
+// stüdyo açıkken klavye (yazı alanı dışında): Esc, Delete, Ctrl+Z / Y, Ctrl+D, oklar, PageUp / PageDown
+function fsKey(e) {
+  const D = ui.pb.d, p = D.parts[ui.pb.sel], ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+  if (e.key === 'Escape') { fsCancel(); return; }
+  if (ctrl && k === 'z') { e.preventDefault(); fsUndo(e.shiftKey ? 1 : -1); return; }
+  if (ctrl && k === 'y') { e.preventDefault(); fsUndo(1); return; }
+  if (ctrl && k === 'd') { e.preventDefault(); fsAct('dup'); return; }
+  if (!p) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); fsAct('del'); return; }
+  const st = e.shiftKey ? 10 : 1, mv = { ArrowLeft: ['x', -st], ArrowRight: ['x', st], ArrowUp: ['y', -st], ArrowDown: ['y', st], PageUp: ['z', st], PageDown: ['z', -st] }[e.key];
+  if (mv) { e.preventDefault(); p[mv[0]] = partR(Math.max(mv[0] === 'z' ? 0 : -Infinity, p[mv[0]] + mv[1])); fsPush(); pbRedraw(); }
+}
 /** The top-bar PNG button is context-aware, so say what it will do. */
 function syncExportTitles() {
   const b = $('#bPng');

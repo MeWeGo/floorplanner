@@ -272,6 +272,407 @@ function billiardParts(w = 280, d = 155, h = 85) {
   add('cue', 'cyl', -w * 0.06, d / 2 - rail - 16, felt, Math.min(147, w - 2 * rail - 20), 2.6, 2.6, '#d9b48a', { axis: 'x', rot: 4 });
   return out;
 }
+// starting points for the furniture studio and create_furniture { template }: parts(w, d, h) fits any size (checked at 0.8× / 1× / 1.3×)
+const FURN_TEMPLATES = {
+  table: {
+    tr: "Yemek Masası",
+    en: "Dining Table",
+    icon: "🍽️",
+    w: 140,
+    d: 80,
+    h: 75,
+    color: "#c9a87c",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 3.5, legW = 5, legD = 5, legH = h - topT, apH = 7, apT = 2;
+      const inX = Math.min(6, w * 0.05), inY = Math.min(6, d * 0.05);
+      const lx = w / 2 - inX - legW / 2, ly = d / 2 - inY - legD / 2;
+      const wood = "#c9a87c", woodD = "#a88457", woodL = "#d8b98d";
+      const out = [];
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          out.push(add("leg", "box", sx * lx, sy * ly, 0, legW, legD, legH, woodD));
+        }
+      }
+      for (const sy of [-1, 1]) {
+        out.push(add("apron", "box", 0, sy * ly, legH - apH, 2 * lx + legW, apT, apH, wood));
+      }
+      for (const sx of [-1, 1]) {
+        out.push(add("apron", "box", sx * lx, 0, legH - apH, apT, 2 * ly, apH, wood));
+      }
+      out.push(add("top", "box", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+
+  desk: {
+    tr: "Çalışma Masası",
+    en: "Desk",
+    icon: "🖥️",
+    w: 120,
+    d: 60,
+    h: 75,
+    color: "#c2a382",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 3, legW = 4.5, legD = 4.5, legH = h - topT;
+      const wood = "#c2a382", woodD = "#9a7753", woodL = "#d8be9f", metal = "#94a3b8";
+      const out = [];
+      const lx = -w / 2 + 5, inY = 5, ly = d / 2 - inY - legD / 2;
+      out.push(add("leg", "box", lx, -ly, 0, legW, legD, legH, woodD));
+      out.push(add("leg", "box", lx, ly, 0, legW, legD, legH, woodD));
+      const pedW = Math.max(26, w * 0.32);
+      const rOuterX = w / 2 - 1.5;
+      const rInnerX = w / 2 - pedW;
+      const pedD = d - 4;
+      out.push(add("side panel", "box", rOuterX, 0, 0, 3, pedD, legH, wood));
+      out.push(add("side panel", "box", rInnerX, 0, 0, 3, pedD, legH, wood));
+      const dwCenter = (rOuterX + rInnerX) / 2;
+      const dwWidth = (rOuterX - rInnerX) + 2;
+      out.push(add("shelf", "box", dwCenter, 0, 10, dwWidth, pedD - 2, 2.5, woodD));
+      const drBottomZ = legH - 18;
+      const drFrontH = 15;
+      const drFrontZ = drBottomZ + 0.5;
+      const drFrontY = d / 2 - 2;
+      out.push(add("drawer bottom", "box", dwCenter, (drFrontY - 2) / 2, drBottomZ, dwWidth, drFrontY + 2, 2, woodD));
+      out.push(add("drawer front", "box", dwCenter, drFrontY, drFrontZ, pedW - 2, 2, drFrontH, woodL));
+      out.push(add("handle", "box", dwCenter, drFrontY + 1.2, drFrontZ + drFrontH / 2 - 1, 8, 0.8, 2, metal, { mat: "metal" }));
+      const modW = rInnerX - lx;
+      const modX = (rInnerX + lx) / 2;
+      out.push(add("backrest", "box", modX, -ly, 25, modW + 2, 2, legH - 28, wood));
+      out.push(add("top", "box", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+
+  chair: {
+    tr: "Sandalye",
+    en: "Chair",
+    icon: "🪑",
+    w: 45,
+    d: 50,
+    h: 90,
+    color: "#a4794e",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const legW = 3.5, legD = 3.5;
+      const seatH = 42, seatT = 3;
+      const wood = "#a4794e", woodD = "#7f5933", fabric = "#475569";
+      const out = [];
+      const lx = w / 2 - 3.5, fy = d / 2 - 3.5, by = -d / 2 + 3.5;
+      out.push(add("leg", "box", -lx, fy, 0, legW, legD, seatH, woodD));
+      out.push(add("leg", "box", lx, fy, 0, legW, legD, seatH, woodD));
+      out.push(add("leg", "box", -lx, by, 0, legW, legD, h, woodD));
+      out.push(add("leg", "box", lx, by, 0, legW, legD, h, woodD));
+      out.push(add("stretcher", "box", -lx, 0, 12, legW * 0.8, d - 6, 2.5, wood));
+      out.push(add("stretcher", "box", lx, 0, 12, legW * 0.8, d - 6, 2.5, wood));
+      out.push(add("seat", "box", 0, 0.5, seatH, w - 1, d - 4, seatT, fabric));
+      out.push(add("backrest", "box", 0, by, h - 10, w - 2, 2.5, 8, wood));
+      out.push(add("backrest", "box", 0, by, h - 25, w - 2, 2.5, 6, wood));
+      return out;
+    }
+  },
+
+  stool: {
+    tr: "Tabure",
+    en: "Stool",
+    icon: "🪑",
+    w: 35,
+    d: 35,
+    h: 65,
+    color: "#966f45",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 3.5, legR = 3.2, legH = h - topT;
+      const wood = "#966f45", woodD = "#75502b", woodL = "#b58d63";
+      const out = [];
+      const rad = w / 2 - 4.5;
+      out.push(add("leg", "cyl", rad, 0, 0, legR, legR, legH, woodD));
+      out.push(add("leg", "cyl", -rad, 0, 0, legR, legR, legH, woodD));
+      out.push(add("leg", "cyl", 0, rad, 0, legR, legR, legH, woodD));
+      out.push(add("leg", "cyl", 0, -rad, 0, legR, legR, legH, woodD));
+      out.push(add("stretcher", "box", 0, 0, 18, 2 * rad + 2, 2.5, 2.5, wood));
+      out.push(add("stretcher", "box", 0, 0, 21, 2.5, 2 * rad + 2, 2.5, wood));
+      out.push(add("stretcher", "box", 0, 0, 38, 2 * rad + 2, 2.5, 2.5, wood));
+      out.push(add("stretcher", "box", 0, 0, 41, 2.5, 2 * rad + 2, 2.5, wood));
+      out.push(add("seat", "cyl", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+
+  bed: {
+    tr: "Çift Kişilik Yatak",
+    en: "Double Bed",
+    icon: "🛏️",
+    w: 160,
+    d: 200,
+    h: 100,
+    color: "#dcd3c5",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const headT = 8, sideW = 6, sideH = 34, footH = 40;
+      const wood = "#785338", fabric = "#dcd3c5", sheet = "#f1f5f9", blanket = "#94a3b8";
+      const out = [];
+      out.push(add("headboard", "box", 0, -d / 2 + headT / 2, 0, w, headT, h, wood));
+      const railD = d - headT - 4;
+      const railY = (-d / 2 + headT + d / 2 - 4) / 2;
+      out.push(add("side rail", "box", -w / 2 + sideW / 2, railY, 0, sideW, railD, sideH, wood));
+      out.push(add("side rail", "box", w / 2 - sideW / 2, railY, 0, sideW, railD, sideH, wood));
+      out.push(add("footboard", "box", 0, d / 2 - 2, 0, w, 4, footH, wood));
+      const baseZ = 24;
+      out.push(add("slat base", "box", 0, railY, baseZ, w - 8, railD, 4, "#5c3d26"));
+      const matZ = baseZ + 4;
+      const matH = 22;
+      const matD = railD - 2;
+      out.push(add("mattress", "box", 0, railY, matZ, w - 10, matD, matH, fabric));
+      const pilZ = matZ + matH;
+      const pilW = (w - 24) / 2;
+      const pilD = 36;
+      const pilY = -d / 2 + headT + pilD / 2 + 4;
+      out.push(add("pillow", "box", -pilW / 2 - 2, pilY, pilZ, pilW, pilD, 8, sheet));
+      out.push(add("pillow", "box", pilW / 2 + 2, pilY, pilZ, pilW, pilD, 8, sheet));
+      const duvD = matD * 0.65;
+      const duvY = railY + (matD - duvD) / 2;
+      out.push(add("cushion", "box", 0, duvY, pilZ, w - 8, duvD, 3, blanket));
+      return out;
+    }
+  },
+
+  bookcase: {
+    tr: "Kitaplık",
+    en: "Bookcase",
+    icon: "📚",
+    w: 80,
+    d: 30,
+    h: 180,
+    color: "#996d47",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const sideW = 2.5, backD = 1.5, topH = 3, plinthH = 7;
+      const wood = "#996d47", woodD = "#7a5332", woodL = "#b5875d";
+      const out = [];
+      out.push(add("back panel", "box", 0, -d / 2 + backD / 2, 0, w, backD, h, woodD));
+      out.push(add("side panel", "box", -w / 2 + sideW / 2, 0, 0, sideW, d, h, wood));
+      out.push(add("side panel", "box", w / 2 - sideW / 2, 0, 0, sideW, d, h, wood));
+      out.push(add("plinth", "box", 0, d / 2 - 2, 0, w - 2 * sideW, 3, plinthH, woodD));
+      out.push(add("top", "box", 0, 0, h - topH, w, d, topH, wood));
+      const shT = 2.2;
+      const shW = w - sideW;
+      const shD = d - backD + 0.5;
+      const shY = (-d / 2 + backD - 0.5 + d / 2) / 2;
+      const usableH = (h - topH) - plinthH;
+      for (let i = 0; i < 4; i++) {
+        const shZ = plinthH + (usableH - shT) * (i / 4);
+        out.push(add("shelf", "box", 0, shY, shZ, shW, shD, shT, woodL));
+      }
+      return out;
+    }
+  },
+
+  cabinet: {
+    tr: "Dolap",
+    en: "Cabinet",
+    icon: "🗄️",
+    w: 80,
+    d: 40,
+    h: 90,
+    color: "#8c6239",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const plinthH = 7, topH = 3, sideW = 2.5, backD = 1.5;
+      const wood = "#8c6239", woodD = "#6b4724", woodL = "#aa7d4f", metal = "#e2e8f0";
+      const out = [];
+      out.push(add("plinth", "box", 0, 0, 0, w, d, plinthH, woodD));
+      const bodyH = h - plinthH - topH;
+      out.push(add("back panel", "box", 0, -d / 2 + backD / 2, plinthH, w, backD, bodyH, woodD));
+      out.push(add("side panel", "box", -w / 2 + sideW / 2, 0, plinthH, sideW, d, bodyH, wood));
+      out.push(add("side panel", "box", w / 2 - sideW / 2, 0, plinthH, sideW, d, bodyH, wood));
+      out.push(add("shelf", "box", 0, 0, plinthH + bodyH * 0.48, w - sideW, d - 4, 2, woodL));
+      out.push(add("top", "box", 0, 0, h - topH, w, d, topH, wood));
+      const dw = (w - 1) / 2;
+      const doorH = bodyH - 1;
+      const doorZ = plinthH + 0.5;
+      const doorY = d / 2 - 2;
+      out.push(add("door", "box", -dw / 2, doorY, doorZ, dw - 0.5, 2, doorH, woodL));
+      out.push(add("door", "box", dw / 2, doorY, doorZ, dw - 0.5, 2, doorH, woodL));
+      const hH = 8, hZ = doorZ + doorH * 0.55;
+      const hY = doorY + 1.2;
+      out.push(add("handle", "box", -3, hY, hZ, 1.5, 0.8, hH, metal, { mat: "metal" }));
+      out.push(add("handle", "box", 3, hY, hZ, 1.5, 0.8, hH, metal, { mat: "metal" }));
+      return out;
+    }
+  },
+
+  sofa: {
+    tr: "Koltuk",
+    en: "Sofa",
+    icon: "🛋️",
+    w: 200,
+    d: 90,
+    h: 85,
+    color: "#5b6b7a",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const baseH = 22, armW = Math.min(22, w * 0.12), armH = 40;
+      const backD = Math.min(24, d * 0.25);
+      const fabric = "#5b6b7a", fabricD = "#455360", fabricL = "#718394", cushionC = "#8395a6";
+      const out = [];
+      out.push(add("base", "box", 0, 0, 0, w, d, baseH, fabricD));
+      out.push(add("backrest", "box", 0, -d / 2 + backD / 2, baseH, w, backD, h - baseH, fabric));
+      const armD = d - 4;
+      out.push(add("armrest", "box", -w / 2 + armW / 2, 2, baseH, armW, armD, armH, fabric));
+      out.push(add("armrest", "box", w / 2 - armW / 2, 2, baseH, armW, armD, armH, fabric));
+      const seatW = w - 2 * armW;
+      const cw = seatW / 3;
+      const seatD = d - backD;
+      const seatY = (-d / 2 + backD + d / 2) / 2;
+      const seatH = 15;
+      for (let i = 0; i < 3; i++) {
+        const cx = -seatW / 2 + cw * (i + 0.5);
+        out.push(add("cushion", "box", cx, seatY, baseH, cw - 1, seatD - 2, seatH, fabricL));
+      }
+      const bCushH = h - baseH - seatH;
+      const bCushD = 12;
+      const bCushY = -d / 2 + backD + bCushD / 2;
+      for (let i = 0; i < 3; i++) {
+        const cx = -seatW / 2 + cw * (i + 0.5);
+        out.push(add("cushion", "box", cx, bCushY, baseH + seatH, cw - 1, bCushD, bCushH, cushionC));
+      }
+      return out;
+    }
+  },
+
+  coffee: {
+    tr: "Orta Sehpa",
+    en: "Coffee Table",
+    icon: "☕",
+    w: 100,
+    d: 55,
+    h: 40,
+    color: "#ba9266",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 3, legW = 4, legD = 4, legH = h - topT;
+      const wood = "#ba9266", woodD = "#946f45", woodL = "#d4ad80";
+      const out = [];
+      const inX = Math.min(5, w * 0.06), inY = Math.min(5, d * 0.08);
+      const lx = w / 2 - inX - legW / 2, ly = d / 2 - inY - legD / 2;
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          out.push(add("leg", "box", sx * lx, sy * ly, 0, legW, legD, legH, woodD));
+        }
+      }
+      const shZ = 10;
+      out.push(add("shelf", "box", 0, 0, shZ, 2 * lx + legW, 2 * ly + legD, 2, wood));
+      const apH = 4, apZ = legH - apH;
+      for (const sy of [-1, 1]) {
+        out.push(add("apron", "box", 0, sy * ly, apZ, 2 * lx + legW, 2, apH, wood));
+      }
+      for (const sx of [-1, 1]) {
+        out.push(add("apron", "box", sx * lx, 0, apZ, 2, 2 * ly, apH, wood));
+      }
+      out.push(add("top", "box", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+
+  wardrobe: {
+    tr: "Gardırop",
+    en: "Wardrobe",
+    icon: "🚪",
+    w: 120,
+    d: 60,
+    h: 200,
+    color: "#6b4728",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const plinthH = 10, topH = 4, sideW = 3, backD = 2;
+      const wood = "#6b4728", woodD = "#50331a", woodL = "#875b34", metal = "#e2e8f0";
+      const out = [];
+      out.push(add("plinth", "box", 0, 0, 0, w, d, plinthH, woodD));
+      const bodyH = h - plinthH - topH;
+      out.push(add("back panel", "box", 0, -d / 2 + backD / 2, plinthH, w, backD, bodyH, woodD));
+      out.push(add("side panel", "box", -w / 2 + sideW / 2, 0, plinthH, sideW, d, bodyH, wood));
+      out.push(add("side panel", "box", w / 2 - sideW / 2, 0, plinthH, sideW, d, bodyH, wood));
+      const shZ = h - topH - 35;
+      out.push(add("shelf", "box", 0, 0, shZ, w - sideW, d - 4, 2.5, woodL));
+      out.push(add("shelf", "cyl", 0, -1, shZ - 6, w - sideW, 3, 3, metal, { axis: "x", mat: "metal" }));
+      out.push(add("top", "box", 0, 0, h - topH, w, d, topH, wood));
+      const dw = (w - 1) / 2;
+      const doorH = bodyH - 1;
+      const doorZ = plinthH + 0.5;
+      const doorY = d / 2 - 2;
+      out.push(add("door", "box", -dw / 2, doorY, doorZ, dw - 0.5, 2, doorH, woodL));
+      out.push(add("door", "box", dw / 2, doorY, doorZ, dw - 0.5, 2, doorH, woodL));
+      const hH = 16, hZ = doorZ + doorH * 0.5;
+      const hY = doorY + 1.2;
+      out.push(add("handle", "box", -3.5, hY, hZ, 1.5, 0.8, hH, metal, { mat: "metal" }));
+      out.push(add("handle", "box", 3.5, hY, hZ, 1.5, 0.8, hH, metal, { mat: "metal" }));
+      return out;
+    }
+  },
+
+  nightstand: {
+    tr: "Komodin",
+    en: "Nightstand",
+    icon: "▫",
+    w: 45,
+    d: 40,
+    h: 55,
+    color: "#9e774f",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      const add = (name, type, x, y, z, pw, pd, ph, color, extra) =>
+        Object.assign({ name, type, x: r(x), y: r(y), z: r(z), w: r(pw), d: r(pd), h: r(ph), color }, extra || {});
+      const topT = 2.5, legW = 3.5, legD = 3.5, legH = h - topT;
+      const wood = "#9e774f", woodD = "#7c5a35", woodL = "#bd9469", metal = "#e2e8f0";
+      const out = [];
+      const inX = 3, inY = 3;
+      const lx = w / 2 - inX - legW / 2, ly = d / 2 - inY - legD / 2;
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          out.push(add("leg", "box", sx * lx, sy * ly, 0, legW, legD, legH, woodD));
+        }
+      }
+      out.push(add("shelf", "box", 0, 0, 10, 2 * lx + legW, 2 * ly + legD, 2, wood));
+      const boxH = 18;
+      const boxZ = legH - boxH;
+      out.push(add("side panel", "box", -lx, 0, boxZ, legW, 2 * ly + legD, boxH, wood));
+      out.push(add("side panel", "box", lx, 0, boxZ, legW, 2 * ly + legD, boxH, wood));
+      out.push(add("back panel", "box", 0, -ly, boxZ, 2 * lx + legW, legD, boxH, woodD));
+      const drBottomZ = boxZ + 0.5;
+      const drFrontH = boxH - 2;
+      const drFrontZ = boxZ + 1;
+      const drFrontY = d / 2 - 2;
+      out.push(add("drawer bottom", "box", 0, (drFrontY - ly) / 2, drBottomZ, 2 * lx, drFrontY + ly + 1, 1.5, wood));
+      out.push(add("drawer front", "box", 0, drFrontY, drFrontZ, 2 * lx, 2, drFrontH, woodL));
+      out.push(add("handle", "box", 0, drFrontY + 1.2, drFrontZ + drFrontH / 2 - 0.75, 8, 0.8, 1.5, metal, { mat: "metal" }));
+      out.push(add("top", "box", 0, 0, legH, w, d, topT, woodL));
+      return out;
+    }
+  },
+  billiards: { tr: "Bilardo Masası", en: "Billiards Table", icon: "🎱", w: 280, d: 155, h: 85, color: "#5b3a24", parts: billiardParts }
+};
 /* PARTS-ENGINE:END */
 const CAT_PARTS = { billiard: billiardParts }; // mirror of CAT_PARTS in app.js
 
@@ -994,19 +1395,19 @@ tool('create_furniture',
     rot: { type: 'number', description: 'Rotation, degrees clockwise. Default 0.' },
     color: { type: 'string', description: 'Default #hex for parts without a colour (also the 2D fallback).' },
     icon: { type: 'string', description: 'Emoji shown in 2D. Default ▭.' },
-    template: { type: 'string', enum: ['empty', 'billiards'], description: '"billiards" starts from the reference billiards table (rails, felt, pockets, legs, balls, cue) fitted to w × d × h. Default empty.' },
+    template: { type: 'string', enum: ['empty', ...Object.keys(FURN_TEMPLATES)], description: 'Start from a ready-made piece fitted to w × d × h, then adjust it with update_component: ' + Object.entries(FURN_TEMPLATES).map(([k, t]) => k + ' (' + t.en + ', ' + t.w + '×' + t.d + '×' + t.h + ')').join(', ') + '. Default empty.' },
     parts: { type: 'array', items: { type: 'object' }, description: 'Optional components to add right away (same fields as add_component).' },
     floorIndex: floorArg,
   },
   ['name', 'w', 'd', 'h', 'x', 'y'],
   a => {
-    const f = floorOf(a), tpl = a.template === 'billiards';
+    const f = floorOf(a), T = FURN_TEMPLATES[a.template], tpl = !!T;
     const w = num(a.w, undefined, 'w'), d = num(a.d, undefined, 'd'), h = num(a.h, undefined, 'h');
     if (!(w > 0 && d > 0 && h > 0)) throw new Error('w, d and h must be > 0');
-    const o = { id: uid(), type: 'custom', name: String(a.name).slice(0, 60), icon: a.icon || (tpl ? '🎱' : '▭'), k: 'rect', w, d, h,
-      color: partHex(a.color) ? a.color : (tpl ? '#5b3a24' : '#b08968'), x: num(a.x, undefined, 'x'), y: num(a.y, undefined, 'y'), rot: num(a.rot, 0, 'rot'), label: '',
+    const o = { id: uid(), type: 'custom', name: String(a.name).slice(0, 60), icon: a.icon || (tpl ? T.icon : '▭'), k: 'rect', w, d, h,
+      color: partHex(a.color) ? a.color : (tpl ? T.color : '#b08968'), x: num(a.x, undefined, 'x'), y: num(a.y, undefined, 'y'), rot: num(a.rot, 0, 'rot'), label: '',
       parts: [], pbase: { w, d, h }, partsV: PARTS_V };
-    if (tpl) o.parts = billiardParts(w, d, h).map((p, i) => strictPart(p, o, 'billiards template part ' + i + ' "' + p.name + '" (try about 280 × 155 × 85 cm)'));
+    if (tpl) o.parts = T.parts(w, d, h).map((p, i) => strictPart(p, o, a.template + ' template part ' + i + ' "' + p.name + '" (try about ' + T.w + ' × ' + T.d + ' × ' + T.h + ' cm)'));
     if (Array.isArray(a.parts)) o.parts.push(...a.parts.map((p, i) => strictPart(partArg(p), o, 'parts[' + i + ']')));
     if (o.parts.length > PARTS_MAX) throw new Error('at most ' + PARTS_MAX + ' parts');
     f.furn.push(o);
