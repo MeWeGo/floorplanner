@@ -617,6 +617,49 @@ check('multi-part furniture: the billiards table is one item, drawn from its par
   return info.parts + ' parts, ' + info.shapes2d + ' 2D shapes' + (info.meshes ? ', felt at ' + info.feltTop + ' cm in 3D' : '');
 });
 
+check('parts editor: build a plain table from parts, refuse problems, apply once, undo, Esc', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const t = mkFurn(BYID.table4, 300, 200, 0); F().furn.push(t); commit(); sel = [t.id]; refresh();
+    const out = {};
+    const btn = document.querySelector('#props [data-act="parts"]'); out.label = btn ? btn.textContent.trim() : '';
+    btn.click(); out.modal = ui.modal; out.start = ui.pb.d.parts.length;
+    const set = (sel, v) => { const el = document.querySelector('#modal ' + sel); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };
+    document.querySelector('#modal [data-pbadd="cyl"]').click();
+    out.added = ui.pb.d.parts.length; out.selected = ui.pb.sel;
+    set('[data-pf="z"]', 500);
+    out.views = [...document.querySelectorAll('#pbPrev svg')].map(s => s.querySelectorAll('[data-pi]').length);
+    out.errShown = !!document.querySelector('#pbMsg .pb-msg.err');
+    // keys go nowhere while the editor is open: Delete must not delete the table behind it
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    out.stillThere = !!F().furn.find(o => o.id === t.id);
+    const h0 = hist.length;
+    document.querySelector('#modal [data-pbact="apply"]').click();
+    out.refused = ui.modal === 'parts' && !F().furn.find(o => o.id === t.id).parts && hist.length === h0;
+    document.querySelector('#modal [data-pbact="ontop"]').click(); out.ontopZ = ui.pb.d.parts[1].z;
+    set('[data-pf="z"]', 120); document.querySelector('#modal [data-pbact="fit"]').click(); out.fitH = ui.pb.d.h;
+    document.querySelector('#modal [data-pbact="apply"]').click();
+    const o = F().furn.find(x => x.id === t.id);
+    out.applied = ui.modal !== 'parts' && Array.isArray(o.parts) && o.parts.length === 2 && o.h === out.fitH && hist.length === h0 + 1;
+    out.drawn = document.querySelectorAll('#gFurn [data-id="' + t.id + '"] rect, #gFurn [data-id="' + t.id + '"] ellipse').length;
+    out.relabel = (document.querySelector('#props [data-act="parts"]') || {}).textContent;
+    undo(); out.undone = !F().furn.find(x => x.id === t.id).parts;
+    sel = [t.id]; refresh(); document.querySelector('#props [data-act="parts"]').click();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); out.escClosed = ui.modal !== 'parts';
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!/Build from parts|Parçalardan kur/.test(info.label) || info.modal !== 'parts' || info.start !== 1) throw new Error('editor did not open with a starter part: ' + JSON.stringify(info));
+  if (info.added !== 2 || info.selected !== 1 || info.views.join() !== '2,2') throw new Error('adding a part / preview failed: ' + JSON.stringify(info));
+  if (!info.errShown || !info.refused) throw new Error('a part above the item was not refused: ' + JSON.stringify(info));
+  if (!info.stillThere) throw new Error('Delete reached the plan behind the parts editor');
+  if (info.ontopZ !== 75) throw new Error('Sit on top put the part at ' + info.ontopZ + ' instead of the table top (75)');
+  if (!info.applied || info.drawn < 3) throw new Error('Apply did not write the parts in one undo step: ' + JSON.stringify(info));
+  if (!/Edit parts|Parçaları düzenle/.test(info.relabel || '')) throw new Error('panel button did not switch to Edit parts');
+  if (!info.undone || !info.escClosed) throw new Error('undo / Esc failed: ' + JSON.stringify(info));
+  return 'starter part, add, refuse, sit on top 75 cm, fit box ' + info.fitH + ' cm, one undo step, Esc';
+});
+
 check('render studio: every style renders and restores the scene (issue #34)', async page => {
   const info = await page.evaluate(`(async () => {
     loadProject(newProject()); addRectWalls(0, 0, 600, 400); F().ops.push(mkOp(OPDEF.window, F().walls[0], 300)); commit(); sel = []; refresh();
