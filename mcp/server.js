@@ -1310,6 +1310,43 @@ function ifcToProject(text, opts = {}) {
       fl(pc.s).furn.push(elevOf(o, pc.z0, pc.s)); stats.columns++;
     }
   }
+  // bileşenin ayrı katıları (eşlenen öğeler açılır; montajın parçaları dahil): her biri { pts (plan, cm), st (stil) }
+  const leavesOf = pid => {
+    const out = [];
+    const one = id => {
+      const a = A(id), M = place(R(a[5]));
+      const go = (it, m, d, sty) => {
+        if (!it || d > 5) return; const st0 = itemStyle.get(it) || sty;
+        if (T(it) === 'IFCMAPPEDITEM') { const ia = A(it), src = A(R(ia[0])), mm = mul(mul(m, place(R(ia[1]))), place(R(src[0]))); for (const x of A(R(src[1]))[3] || []) go(R(x), mm, d + 1, st0); return; }
+        const pts = []; solid(it, m, pts, null); if (pts.length >= 3) out.push({ pts: pts.map(toPlan), st: st0 || null });
+      };
+      for (const rv of R(a[6]) ? A(R(a[6]))[2] || [] : []) { const ra = A(R(rv)), ident = String(ra[1] || '').toLowerCase(); if (ident && ident !== 'body' && ident !== 'facetation' && ident !== 'mappedrepresentation') continue; for (const it of ra[3] || []) go(R(it), M, 0, null); }
+      for (const c of kids.get(id) || []) one(c);
+    };
+    one(pid); return out;
+  };
+  // birden çok katı → tek öğe, katı başına bir parça (kutu; dikdörtgen olmayan taban → extrude): ayrı katlardaki bantlar tek dev blok olmaz
+  const partsItem = (lv, base, st) => {
+    const all = lv.flatMap(l => l.pts), rc = ifcRect(all.map(p => [p[0], p[1]])); if (!rc) return null;
+    const [z0, z1] = zr(all), th = rc.rot * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th);
+    const loc = (x, y) => { const dx = x - rc.cx, dy = y - rc.cy; return { x: dx * c + dy * sn, y: -dx * sn + dy * c }; };
+    const parts = [];
+    for (const l of lv) {
+      const lr = ifcRect(l.pts.map(p => [p[0], p[1]])); if (!lr) continue;
+      const [lz0, lz1] = zr(l.pts), hl = ifcHull(l.pts), ar = Math.abs(ifcArea(hl)), q = { type: 'box', z: r1(lz0 - z0), h: Math.max(0.5, r1(lz1 - lz0)) };
+      if (lr.w * lr.d < 1e-6 || ar / (lr.w * lr.d) > 0.9) { const lc = loc(lr.cx, lr.cy); Object.assign(q, { x: r1(lc.x), y: r1(lc.y), w: Math.max(0.5, r1(lr.w)), d: Math.max(0.5, r1(lr.d)) }); const rr = r1((((lr.rot - rc.rot) % 360) + 360) % 360); if (rr) q.rot = rr; }
+      else { // dikdörtgen olmayan: dış zarf yükseltilir
+        const lp = hl.map(p => loc(p[0], p[1])); let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of lp) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2; Object.assign(q, { type: 'extrude', x: r1(cx), y: r1(cy), w: r1(x1 - x0), d: r1(y1 - y0), pts: lp.map(p => ({ x: r1(p.x - cx), y: r1(p.y - cy) })) });
+      }
+      if (l.st && l.st.col) q.color = l.st.col;
+      if (l.st && l.st.tr >= 0.5) q.mat = 'glass';
+      parts.push(q);
+    }
+    if (parts.length < 2) return null;
+    const w = Math.max(1, r1(rc.w)), d = Math.max(1, r1(rc.d)), h = Math.max(1, Math.round(z1 - z0));
+    return elevOf(Object.assign(base, { k: 'rect', w, d, h, x: r1(rc.cx), y: r1(rc.cy), rot: r1(((rc.rot % 360) + 360) % 360), parts, pbase: { w, d, h }, partsV: 1 }), z0, st); // partsV = PARTS_V
+  };
   const compIds = ids(IFC_COMPONENTS), compSet = new Set(compIds);
   for (const id of compIds) {
     let up = false; for (let p = parent.get(id), k = 0; p && k < 30; p = parent.get(p), k++) if (compSet.has(p)) { up = true; break; }
@@ -1320,7 +1357,8 @@ function ifcToProject(text, opts = {}) {
     const [z0, z1] = zr(g.body), st = storeyOf(id, z0), t = T(id), furnish = t !== 'IFCBUILDINGELEMENTPROXY' && t !== 'IFCELEMENTASSEMBLY';
     const nm = nameOf(id);
     const base = { id: uid(), type: 'shape', name: (nm || tr('Bileşen', 'Component')).slice(0, 80), icon: '⬡', h: Math.max(1, Math.min(5000, Math.round(z1 - z0))), color: looksDeep(id).col || (furnish ? '#bcaaa4' : '#94a3b8'), label: '' };
-    fl(st).furn.push(elevOf(polyItem(ft, base), z0, st)); stats.components++;
+    const lv = leavesOf(id), multi = lv.length >= 2 && lv.length <= 64 ? partsItem(lv, base, st) : null; // en çok PARTS_MAX parça
+    fl(st).furn.push(multi || elevOf(polyItem(ft, base), z0, st)); stats.components++;
   }
 
   /* --- Çatılar: IfcRoof (+ parçaları) ve ROOF tipli döşemeler → yüzleriyle 'roof' öğesi --- */

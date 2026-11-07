@@ -559,3 +559,27 @@ test('18: stair railings land on the right side and the railing tool / styles ar
   assert.strictEqual(env({ k: 'stairs', rs: 'cable' }), 'cable');
   assert.strictEqual(env({ k: 'ramp', rs: 'nope' }), 'bars');
 });
+
+test('19: a component made of separate solids imports as one multi-part item, not one tall block', () => {
+  // Revit "kompozit": two 60 cm box-profile bands, one at z 0..60 (600 long), one at z 300..360 (200 long)
+  const ifc = [
+    'ISO-10303-21;', 'HEADER;', "FILE_SCHEMA(('IFC4'));", 'ENDSEC;', 'DATA;',
+    "#1=IFCPROJECT('p1',$,'P',$,$,$,$,(#20),#10);", '#10=IFCUNITASSIGNMENT((#11));', '#11=IFCSIUNIT(*,.LENGTHUNIT.,.CENTI.,.METRE.);',
+    "#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#21,$);", '#21=IFCAXIS2PLACEMENT3D(#30,$,$);', '#30=IFCCARTESIANPOINT((0.,0.,0.));', '#31=IFCDIRECTION((0.,0.,1.));',
+    "#50=IFCBUILDINGSTOREY('s1',$,'Ground',$,$,#51,$,$,.ELEMENT.,0.);", '#51=IFCLOCALPLACEMENT($,#21);',
+    "#60=IFCRELCONTAINEDINSPATIALSTRUCTURE('r1',$,$,$,(#100),#50);",
+    "#100=IFCBUILDINGELEMENTPROXY('x1',$,'kompozit:kompozit:1',$,$,#51,#101,$,$);", '#101=IFCPRODUCTDEFINITIONSHAPE($,$,(#102));', "#102=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#103,#113));",
+    '#103=IFCEXTRUDEDAREASOLID(#104,#21,#31,60.);', '#104=IFCRECTANGLEPROFILEDEF(.AREA.,$,#105,600.,50.);', '#105=IFCAXIS2PLACEMENT2D(#106,$);', '#106=IFCCARTESIANPOINT((300.,0.));',
+    '#113=IFCEXTRUDEDAREASOLID(#114,#117,#31,60.);', '#114=IFCRECTANGLEPROFILEDEF(.AREA.,$,#115,200.,50.);', '#115=IFCAXIS2PLACEMENT2D(#116,$);', '#116=IFCCARTESIANPOINT((100.,0.));',
+    '#117=IFCAXIS2PLACEMENT3D(#118,$,$);', '#118=IFCCARTESIANPOINT((0.,0.,300.));',
+    'ENDSEC;', 'END-ISO-10303-21;'].join('\n');
+  const o = ifcToProject(ifc).project.floors[0].furn.find(x => x.name === 'kompozit:kompozit');
+  assert.ok(o, 'component imported');
+  assert.strictEqual(o.parts.length, 2, 'one part per solid');
+  assert.deepStrictEqual(o.pbase, { w: o.w, d: o.d, h: o.h }, 'parts drawn at their own scale');
+  assert.strictEqual(o.partsV, 1);
+  assert.deepStrictEqual([o.w, o.d, o.h], [600, 50, 360]);
+  const byZ = o.parts.slice().sort((a, b) => a.z - b.z);
+  assert.deepStrictEqual(byZ.map(p => [p.type, p.z, p.h, p.w, p.d]), [['box', 0, 60, 600, 50], ['box', 300, 60, 200, 50]], 'each band keeps its own height and length');
+  assert.strictEqual(byZ[1].x, -200, 'the short band sits at its own place (x 0..200 of 0..600)');
+});
