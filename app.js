@@ -480,6 +480,7 @@ async function migrateLegacyStorage() {
 /* ---------- Geçmiş & kayıt ---------- */
 let saveTimer = null;
 function commit() {
+  if (typeof grpEditAbsorb === 'function') grpEditAbsorb(); // grup düzenleme modunda yeni çizilenler gruba katılır
   if (typeof syncActiveVars === 'function') syncActiveVars();
   stampLayers(); // yeni nesneler etkin katmana (#32)
   const s = JSON.stringify(P);
@@ -1377,7 +1378,8 @@ function groupVarsSvg(f, live) {
     const pad = 6 / view.z;
     s += `<rect x="${bb.x0 - pad}" y="${bb.y0 - pad}" width="${bb.x1 - bb.x0 + pad * 2}" height="${bb.y1 - bb.y0 + pad * 2}" rx="${4 / view.z}" fill="none" stroke="${C.accent}" stroke-opacity="0.45" stroke-width="${1.4 / view.z}" stroke-dasharray="${5 / view.z} ${4 / view.z}" pointer-events="none"/>`;
     const bfs = clamp(11.5 / view.z, 9, 20);
-    const btxt = rec.vars.length >= 2
+    const btxt = ui.grpEdit && ui.grpEdit.id === rec.id ? `✏️ ${cur.label} (${curIdx + 1}/${rec.vars.length}) • ${L('Düzenleniyor', 'Editing')}`
+      : rec.vars.length >= 2
       ? `👆 ${cur.label} (${curIdx + 1}/${rec.vars.length}) • ${L('Tıkla', 'Click me')}`
       : `🔄 ${cur.label} (1/1)`;
     const bbw = Math.max(btxt.length * bfs * 0.56 + bfs * 1.1, bfs * 4.5), bbh = bfs * 1.65;
@@ -2389,7 +2391,7 @@ cv.addEventListener('pointerdown', e => {
         const id = t.dataset.id;
         const badgeType = t.dataset.varBadge || null, badgeGrp = t.dataset.grp || null;
         if (e.shiftKey) { sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]; }
-        else if (e.altKey) { sel = [id]; }
+        else if (e.altKey || (!badgeType && grpEditing(find(id)?.o))) { sel = [id]; } // Alt veya grup düzenleme: tek üye
         else if (!sel.includes(id) || badgeType) {
           const fd = find(id);
           // gruplu nesneye tıklayınca tüm grup seçilir (duvar + mobilya karışık dahil)
@@ -2657,7 +2659,7 @@ cv.addEventListener('pointerup', e => {
         toast(L('2. düzeni eklemek için sağ panelden ➕ Yeni düğmesine basın', 'Press ➕ New in the right panel to add a 2nd layout'));
         return;
       }
-      if (fd && fd.o.grp && cycleGroupVars(fd.o.grp)) return;
+      if (fd && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; // düzenleme modunda tık düzen değiştirmez
       if (fd && fd.kind === 'room' && cycleRoomVars(fd.o)) return;
     }
     if (d.moved) commit();
@@ -3147,6 +3149,8 @@ $('#props').addEventListener('click', e => {
   }
   if (a === 'group') return groupSel();
   if (a === 'ungroup') return ungroupSel();
+  if (a === 'grpJoin') { const c = varContainer(); if (c && c.type === 'join') { joinGroup(c.rec, c.os); sel = groupMemberIds(c.rec.id); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L('Gruba eklendi – düzenler korundu', 'Added to the group – layouts kept')); } return; }
+  if (a === 'grpEdit') { const c = varContainer(); if (ui.grpEdit && (!c || c.type !== 'group' || c.rec.id === ui.grpEdit.id)) stopGrpEdit(); else if (c && c.type === 'group') startGrpEdit(c.rec); refresh(); return; }
   if (a === 'varInit' || a === 'varSave' || a === 'varNew' || a === 'varDel' || a === 'varGo' || a === 'varNext') return varAction(a, b.dataset.idx != null ? +b.dataset.idx : null);
   for (const { kind, o } of os) {
     if (kind === 'wall') {
@@ -3322,12 +3326,60 @@ function groupSel() {
   if (gs.length < 2) { toast(L('Gruplamak için en az 2 nesne seçin', 'Select at least 2 objects to group')); return; }
   const grps = [...new Set(gs.map(x => x.o.grp).filter(Boolean))];
   const g = grps.length === 1 ? grps[0] : uid(); // tek grup seçiliyse onu genişlet (düzenler korunur)
-  gs.forEach(({ o }) => o.grp = g);
   const f = F(); f.groups = f.groups || [];
+  const old = grps.length === 1 && f.groups.find(x => x.id === g);
+  if (old) joinGroup(old, gs.filter(x => !x.o.grp)); // yeni üyeler diğer düzenlere de mevcut konumlarıyla girer
+  gs.forEach(({ o }) => o.grp = g);
   if (!f.groups.some(x => x.id === g)) f.groups.push({ id: g, vars: [], idx: 0 });
   pruneGroups();
   commit(); refresh();
   toast(L('Seçili nesneler gruplandı – birlikte taşınırlar', 'Selected objects grouped – they move together'));
+}
+/* ---------- Grup üyelerini düzenleme (gruba duvar/nesne ekle, düzene göre tek tek konumla) ---------- */
+function joinGroup(rec, objs) {
+  // var olan gruba nesne ekle: her düzen yeni üyenin mevcut pozunu alır, sonra düzen başına ayrı konumlanabilir
+  objs = objs.filter(x => GROUPABLE[x.kind]); if (!objs.length) return 0;
+  dropPoseOrphans(objs.map(x => x.o.id)); // başka grubun kaydında kalmasın (ilk-gelen sahiplik)
+  for (const { kind, o } of objs) {
+    o.grp = rec.id;
+    const p = snapPose(kind, o);
+    for (const v of rec.vars || []) {
+      if (v.poses && !v.poses[o.id]) v.poses[o.id] = clonePoses(p);
+      if (v.base && !v.base[o.id]) v.base[o.id] = clonePoses(p);
+    }
+  }
+  return objs.length;
+}
+function grpEditing(o) {
+  const g = ui.grpEdit;
+  return !!(o && o.grp && g && g.id === o.grp && F() && g.fl === F().id);
+}
+function floorIds() { const f = F(), s = new Set(); for (const arr in KINDS) for (const o of f[arr] || []) s.add(o.id); return s; }
+function startGrpEdit(rec) {
+  ui.grpEdit = { id: rec.id, fl: F().id, known: floorIds() };
+  toast(L('Grup düzenleme: üyeye tıklayıp tek başına taşıyın; çizdiğiniz yeni duvar/nesneler bu gruba katılır. Bitirmek için ✓ veya Esc.', 'Editing group: click a member to move it on its own; new walls/objects you draw join this group. Press ✓ Done or Esc to finish.'));
+}
+function stopGrpEdit() {
+  const g = ui.grpEdit; if (!g) return;
+  ui.grpEdit = null;
+  const mids = F() && F().id === g.fl ? groupMemberIds(g.id) : [];
+  if (mids.length) sel = mids;
+}
+function grpEditAbsorb() {
+  const g = ui.grpEdit; if (!g || _switchingVar || !P) return;
+  const f = F(); if (!f || f.id !== g.fl) return;
+  const rec = (f.groups || []).find(x => x.id === g.id);
+  if (!rec || !groupMemberIds(g.id).length) { ui.grpEdit = null; return; }
+  const fresh = [];
+  for (const arr in KINDS) {
+    const kind = KINDS[arr];
+    for (const o of f[arr] || []) {
+      if (g.known.has(o.id)) continue;
+      g.known.add(o.id);
+      if (GROUPABLE[kind] && !o.grp) fresh.push({ kind, o });
+    }
+  }
+  if (joinGroup(rec, fresh)) toast(L(`${fresh.length} yeni nesne gruba eklendi`, `${fresh.length} new object(s) added to the group`));
 }
 function ungroupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind] && x.o.grp);
@@ -3540,11 +3592,15 @@ function varContainer() {
     if (adjRoom) return { type: 'room', o: adjRoom };
   }
   const groupable = os.filter(x => GROUPABLE[x.kind]);
+  if (gs.length === 1 && groupable.every(x => !x.o.grp || x.o.grp === gs[0]) && groupable.some(x => !x.o.grp)) {
+    const rec = (F().groups || []).find(g => g.id === gs[0]);
+    if (rec) return { type: 'join', rec, os: groupable.filter(x => !x.o.grp) }; // grup + gruplanmamış nesneler: gruba ekle
+  }
   if (groupable.length >= 1) return { type: 'potential', os: groupable };
   return null;
 }
 function varAction(a, targetIdx) {
-  let c = varContainer(); if (!c) return;
+  let c = varContainer(); if (!c || c.type === 'join') return;
   if (c.type === 'potential') {
     if (a !== 'varInit') return;
     const g = uid(), f = F(); f.groups = f.groups || [];
@@ -3621,14 +3677,23 @@ function varAction(a, targetIdx) {
   refresh(); renderProps();
   if (ui.view3d && T3) schedBuild3D();
 }
+function grpEditHtml(c) {
+  if (!c || c.type !== 'group') return '';
+  const on = ui.grpEdit && ui.grpEdit.id === c.rec.id && ui.grpEdit.fl === F().id;
+  return on
+    ? `<div class="row"><button class="btn sm primary" data-act="grpEdit">✓ ${L('Düzenlemeyi bitir', 'Done editing')}</button></div><p class="muted" style="margin:0 0 6px">✏️ ${L('Üyeye tıklayın: tek başına seçilir, taşınır, boyutlanır (aktif düzene kaydedilir). Yeni çizdiğiniz duvar ve nesneler bu gruba katılır. Düzen değiştirmek için aşağıdaki düğmeleri kullanın.', 'Click a member to select, move or resize it on its own (saved to the active layout). New walls and objects you draw join this group. Switch layouts with the buttons below.')}</p>`
+    : `<div class="row"><button class="btn sm" data-act="grpEdit" title="${L('Gruba duvar/nesne ekleyin veya üyeleri düzen başına tek tek konumlayın', 'Add walls/objects to the group, or place members one by one per layout')}">✏️ ${L('Üyeleri düzenle', 'Edit members')}</button></div>`;
+}
 function variantUIHtml() {
   const c = varContainer(); if (!c) return '';
+  if (c.type === 'join') return `<div class="row"><button class="btn sm primary" data-act="grpJoin">➕ ${L('Gruba ekle', 'Add to group')} (${c.os.length})</button></div><p class="muted" style="margin:0 0 6px">${L('Seçili nesneler mevcut gruba katılır; kayıtlı düzenler korunur.', 'The selected objects join the existing group; saved layouts are kept.')}</p>`;
+  if (c.type === 'group' && !(c.rec.vars || []).length) return grpEditHtml(c) + `<div class="row"><button class="btn sm primary" data-act="varInit">🔄 ${L('Ayarlanabilir Yap', 'Make Adjustable')}</button></div><p class="muted" style="margin:0 0 6px">${L('Mevcut düzeni 1a olarak kaydeder; sonraki düzenleri ➕ ile ekleyin, kanvasta tıklayarak geçin.', 'Saves the current layout as 1a; add more with ➕, cycle by clicking on canvas.')}</p>`;
   const vars = c.type === 'room' ? (c.o.vars || []) : c.type === 'group' ? (c.rec.vars || []) : [];
   if (!vars.length) return `<div class="row"><button class="btn sm primary" data-act="varInit">🔄 ${L('Ayarlanabilir Yap', 'Make Adjustable')}</button></div><p class="muted" style="margin:0 0 6px">${L('Mevcut düzeni 1a olarak kaydeder; sonraki düzenleri ➕ ile ekleyin, kanvasta tıklayarak geçin.', 'Saves the current layout as 1a; add more with ➕, cycle by clicking on canvas.')}</p>`;
   const idx = clamp(c.type === 'room' ? (c.o.vIdx ?? 0) : (c.rec.idx ?? 0), 0, vars.length - 1);
   const cur = vars[idx];
   const chips = vars.map((v, i) => `<button class="btn sm ${i === idx ? 'primary' : ''}" data-act="varGo" data-idx="${i}" title="${L('Bu düzene geç', 'Switch to this layout')}">${i === idx ? '● ' : '○ '}${esc(v.label)}</button>`).join('');
-  return `<p style="margin:8px 0 4px"><b>🔄 ${L('Düzenler', 'Layouts')}</b> <span class="muted">— ${esc(cur.label)} (${idx + 1}/${vars.length})</span></p>
+  return grpEditHtml(c) + `<p style="margin:8px 0 4px"><b>🔄 ${L('Düzenler', 'Layouts')}</b> <span class="muted">— ${esc(cur.label)} (${idx + 1}/${vars.length})</span></p>
   <div class="row" style="flex-wrap:wrap;gap:4px;margin-bottom:6px">${chips}</div>
   <div class="row"><button class="btn sm" data-act="varSave" title="${L('Mevcut konumu/boyutu bu düzene kaydet', 'Save current position/size to this layout')}">💾 ${L('Kaydet', 'Save')}</button><button class="btn sm primary" data-act="varNew">➕ ${L('Yeni', 'New')}</button>${vars.length >= 2 ? `<button class="btn sm" data-act="varNext" title="${L('Sıradaki düzene geç', 'Cycle to next layout')}">↻</button>` : ''}<button class="btn sm" data-act="varDel" style="color:var(--danger)" title="${L('Bu düzeni sil', 'Delete this layout')}">🗑</button></div>
   <p class="muted" style="margin:4px 0 6px">${L('Aktif düzendeki konum ve boyut değişiklikleri otomatik kaydedilir. Tuvalde "👆 Tıkla" göstergesine tıklayarak düzenler arasında geçin.', 'Position & size changes in the active layout are auto-saved. Click the "👆 Click me" badge on canvas to cycle layouts.')}</p>`;
@@ -3821,7 +3886,7 @@ window.addEventListener('keydown', e => {
   if (POLY_TOOLS.has(tool) && e.key === 'Enter') { finishPoly(); return; }
   if (e.key === 'Escape') {
     if (ui.draw || ui.polyPts || ui.dimStart || ui.calib || ui.pen || ui.mAxis || ui.secStart) { ui.draw = null; ui.polyPts = null; ui.dimStart = null; ui.calib = null; ui.pen = null; ui.mAxis = null; ui.secStart = null; ui.typed = ''; render(); }
-    else if (tool !== 'select') setTool('select'); else { sel = []; refresh(); }
+    else if (tool !== 'select') setTool('select'); else if (ui.grpEdit) { stopGrpEdit(); refresh(); } else { sel = []; refresh(); }
     return;
   }
   if (e.key === 'Delete' || e.key === 'Backspace') { deleteSel(); return; }
@@ -5578,7 +5643,7 @@ function init3D() {
     const o = fd.o, elev = cur.userData.elev || 0, p0 = new THREE.Vector3();
     if (!rc.ray.intersectPlane(floorPlane(elev), p0)) return;
     e.stopImmediatePropagation(); // orbit başlamasın
-    sel = o.grp ? groupMemberIdsAny(o.grp) : [o.id];
+    sel = o.grp && !grpEditing(o) ? groupMemberIdsAny(o.grp) : [o.id];
     d3 = { id: o.id, elev, sx: e.clientX, sy: e.clientY, moved: false, offX: p0.x - o.x, offZ: p0.z - o.y,
       orig: new Map(sel.map(sid => { const fo = findAnyFloor(sid)?.o; return [sid, fo ? JSON.parse(JSON.stringify(fo)) : null]; })),
       members: sel.slice(), conn: [], pins: [] };
@@ -5654,7 +5719,7 @@ function init3D() {
       if (sel.length === 1 && fd.floorIdx === fi) magnet(fd.o); // 2B ile aynı: yakın duvara yapış (yalnızca kendi katında)
       commit(); refresh();
       schedBuild3D(); // tutkal/rotasyon/pin değişimi olabilir -> sahne tazelensin
-    } else { if (fd.floorIdx === fi && fd.o.grp && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
+    } else { if (fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
   });
   const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = ORBIT_MAX_POLAR;
   let downPt = null;
@@ -5676,7 +5741,7 @@ function init3D() {
     if (cur && cur.userData?.opId) hit3 = true; // açıklıklar pointerdown/pointerup (d3) yolunda işlenir
     else if (cur && cur.userData?.wallId && findAnyFloor(cur.userData.wallId) && (() => { const l = layerById(findAnyFloor(cur.userData.wallId).o.layer); return !l || !l.lock; })()) {
       const fd = findAnyFloor(cur.userData.wallId);
-      if (fd && fd.kind === 'wall' && (e.altKey || (!fd.o.grp && !(Array.isArray(fd.o.angles) && fd.o.angles.length >= 2)))) {
+      if (fd && fd.kind === 'wall' && (e.altKey || grpEditing(fd.o) || (!fd.o.grp && !(Array.isArray(fd.o.angles) && fd.o.angles.length >= 2)))) {
         sel = [fd.o.id]; refresh(); refreshSel3D(); // düz duvar (veya Alt+tık): seç → yan panelde yükseklik/kalınlık/tür/boya (#29)
       } else if (fd && fd.kind === 'wall' && fd.o.grp) {
         if (fd.floorIdx === fi && cycleGroupVars(fd.o.grp)) { sel = groupMemberIds(fd.o.grp); build3D(true); }

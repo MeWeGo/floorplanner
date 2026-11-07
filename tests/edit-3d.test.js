@@ -83,7 +83,7 @@ test('(f) click handler resets downPt before checking distance and selects plain
 
   assert.ok(clickBlock.includes('const dp = downPt; downPt = null;'), 'must reset downPt before checking distance');
   assert.ok(clickBlock.includes('sel = [fd.o.id]'), 'must select plain wall with sel = [fd.o.id]');
-  assert.match(clickBlock, /e\.altKey\s*\|\|\s*\(!fd\.o\.grp\s*&&\s*!\(Array\.isArray\(fd\.o\.angles\)\s*&&\s*fd\.o\.angles\.length\s*>=\s*2\)\)/, 'must select wall if altKey or wall is not grouped and not hinged');
+  assert.match(clickBlock, /e\.altKey\s*\|\|\s*(grpEditing\(fd\.o\)\s*\|\|\s*)?\(!fd\.o\.grp\s*&&\s*!\(Array\.isArray\(fd\.o\.angles\)\s*&&\s*fd\.o\.angles\.length\s*>=\s*2\)\)/, 'must select wall if altKey or wall is not grouped and not hinged');
 });
 
 test('(g) refreshSel3D highlights furnId, wallId groups (not meshes) and opId children with BoxHelper', () => {
