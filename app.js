@@ -210,6 +210,9 @@ const WALL_TYPES = ['solid', 'curtain', 'railing', 'fence'];
 const MUL_DEF = 120;                                   // cam cephe dikme modülü (cm), alan yoksa
 const LOW_WALL = { railing: { h: 100, t: 6, post: 120, bar: 12 }, fence: { h: 110, t: 8, post: 200, bar: 15 } };
 function isLowWall(w) { return !!LOW_WALL[w && w.wt]; }
+// korkuluk stili (rs): dikmeli (varsayılan) / cam panel / yatay çubuk-halat / dolu parapet; çit kendi çıtalı görünümünü korur
+const RAIL_STYLES = { bars: ['Dikmeli', 'Vertical bars'], glass: ['Cam panel', 'Glass panel'], cable: ['Yatay çubuk / halat', 'Horizontal bars / cable'], solid: ['Dolu parapet', 'Solid parapet'] };
+function railStyle(w) { return w && (w.wt === 'railing' || w.k === 'stairs' || w.k === 'ramp') && RAIL_STYLES[w.rs] ? w.rs : 'bars'; } // korkuluk duvarı, merdiven ve rampa
 function isSolidWall(w) { return !w.wt || w.wt === 'solid'; }
 // cam cephe bölme sayısı: mulN (ara dikme adedi) varsa o + 1, yoksa uzunluk / modül (#71)
 function curtainBays(w) {
@@ -1224,11 +1227,13 @@ function lowWallSvg(w, C, f) {
       const step = Math.max(LOW_WALL.fence.bar, (e0 - s0) / 300);
       for (let d = s0 + step / 2; d < e0; d += step) { const c = at(d), k = w.t * 0.35; s += `<line x1="${c.x - nx * k}" y1="${c.y - ny * k}" x2="${c.x + nx * k}" y2="${c.y + ny * k}" stroke="${col}" stroke-width="${sw * 0.6}" pointer-events="none"/>`; }
     } else {
-      s += `<line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" stroke="${C.bg}" stroke-opacity=".55" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
-      s += ln(p, q, w.t / 2 - sw / 2, sw) + ln(p, q, -(w.t / 2 - sw / 2), sw);
+      const st = railStyle(w), band = st === 'solid' ? col : st === 'glass' ? C.glass : C.bg, bop = st === 'solid' ? 1 : st === 'glass' ? 0.8 : 0.55;
+      s += `<line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" stroke="${band}" stroke-opacity="${bop}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
+      if (st !== 'solid') s += ln(p, q, w.t / 2 - sw / 2, sw) + ln(p, q, -(w.t / 2 - sw / 2), sw);
+      if (st === 'cable') s += ln(p, q, 0, sw * 0.5).replace('stroke-linecap="butt"', `stroke-linecap="butt" stroke-dasharray="${w.t * 1.5} ${w.t}"`);
     }
   }
-  for (const d of lowWallPosts(w, L, ops)) { const c = at(d); s += `<rect x="${c.x - ps / 2}" y="${c.y - ps / 2}" width="${ps}" height="${ps}" fill="${col}" transform="rotate(${Math.atan2(uy, ux) * 180 / Math.PI} ${c.x} ${c.y})" pointer-events="none"/>`; }
+  if (railStyle(w) !== 'solid') for (const d of lowWallPosts(w, L, ops)) { const c = at(d); s += `<rect x="${c.x - ps / 2}" y="${c.y - ps / 2}" width="${ps}" height="${ps}" fill="${col}" transform="rotate(${Math.atan2(uy, ux) * 180 / Math.PI} ${c.x} ${c.y})" pointer-events="none"/>`; }
   return s;
 }
 // Duvar boyası 2B: koyu duvar dolgusu korunur, iki yüzeyde ince boya şeridi (dışa aktarımda da okunur)
@@ -2012,6 +2017,8 @@ const ifcWords = s => String(s || '').toLowerCase().split(/[^a-z0-9çğıöşü]
 const ifcPick = (table, names) => { for (const w of ifcWords(names)) for (const [rx, v] of table) if (rx.test(w)) return v; return null; }; // ilk eşleşen sözcük (üst katman) kazanır
 // gri / beyaz (doygunluk yok) → duvarda boya sayılmaz: Revit'in varsayılan malzemeleri planı gri şeritlerle doldurmasın
 const ifcNeutral = hex => { const n = parseInt(String(hex).slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255; return Math.max(r, g, b) - Math.min(r, g, b) < 14; };
+// korkuluk stili (rs) adı / malzemesinden: cam panel, yatay çubuk / halat, dolu parapet; yoksa dikmeli
+const IFC_RAIL_STYLE = [[/^(glass|glazed|glazing|cam|camli|camlı)$/, 'glass'], [/^(cable|wire|kablo|halat|horizontal|yatay|rod)$/, 'cable'], [/^(parapet|solid|dolu|concrete|beton|betonarme|masonry|duvar|brick|tugla|tuğla)$/, 'solid']];
 const IFC_ROOF_MAX_FACES = 600; // çatı yüzü sınırı: üstü taban izinden düz çatıya düşer (proje / geri al hafif kalsın)
 const IFC_COMPONENTS = new Set(['IFCBUILDINGELEMENTPROXY', 'IFCFURNISHINGELEMENT', 'IFCFURNITURE', 'IFCSYSTEMFURNITUREELEMENT', 'IFCSANITARYTERMINAL', 'IFCELEMENTASSEMBLY']);
 // STEP metnini varlıklara böler; parametreler ilk erişimde (ifcArgs) ayrıştırılır, büyük dosyalar hızlı açılır
@@ -2209,7 +2216,10 @@ function ifcToProject(text, opts = {}) {
     if (t === 'IFCARBITRARYCLOSEDPROFILEDEF' || t === 'IFCARBITRARYPROFILEDEFWITHVOIDS') return curve(R(a[2]));
     if (t === 'IFCDERIVEDPROFILEDEF') { const m = place(R(a[3])); return profile(R(a[2]), depth + 1).map(p => app(m, p)); }
     if (t === 'IFCCOMPOSITEPROFILEDEF') { const out = []; for (const v of a[2] || []) out.push(...profile(R(v), depth + 1)); return out; }
-    if (/PROFILEDEF$/.test(t) && a[2] && R(a[2])) { const m = M(); return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(p => app(m, p)); } // I/L/T/U kesitleri: yalnızca konum
+    if (/PROFILEDEF$/.test(t) && a[2] && R(a[2])) { // I / T / L / U / C / Z kesitleri: dış dikdörtgen (I: genişlik a[3], derinlik a[4]; diğerleri: derinlik a[3], genişlik a[4])
+      const ish = /ISHAPE/.test(t), x = (+(ish ? a[3] : a[4]) || 2) / 2, y = (+(ish ? a[4] : a[3]) || 2) / 2, m = M();
+      return [[-x, -y], [x, -y], [x, y], [-x, y]].map(p => app(m, p));
+    }
     return [];
   };
   const loopPts = id => { const a = A(id); return T(id) === 'IFCPOLYLOOP' ? (a[0] || []).map(pt) : []; };
@@ -2282,6 +2292,41 @@ function ifcToProject(text, opts = {}) {
       for (const it of ra[3] || []) solid(R(it), M, tmp, null, 0, fc);
     }
     return fc.map(f => f.map(toPlan));
+  };
+
+  // korkuluğun gerçek izi: yüzlerin plandaki uzun kenarları doğrultu + konuma göre kümelenir; aynı çizgideki kenarlar (şeridin iki
+  // yüzü, cam + küpeşte) tek bir kol olur, kolun orta çizgisi bir parça. Tek parça L / kırık breplerde de çalışır. → { segs, t } | null
+  const railSegs = pid => {
+    const edges = [];
+    for (const f of facesOf(pid)) for (let i = 0; i < f.length; i++) {
+      const p = f[i], q = f[(i + 1) % f.length], L = Math.hypot(q[0] - p[0], q[1] - p[1]); if (L < 20) continue;
+      let ang = Math.atan2(q[1] - p[1], q[0] - p[0]); if (ang < 0) ang += Math.PI; if (ang >= Math.PI - 1e-9) ang -= Math.PI;
+      edges.push({ p, q, L, ang });
+    }
+    if (!edges.length) return null;
+    edges.sort((x, y) => y.L - x.L);
+    const groups = [];
+    for (const e of edges) {
+      let g = null;
+      for (const c of groups) {
+        let da = Math.abs(e.ang - c.ang); da = Math.min(da, Math.PI - da); if (da > 0.035) continue;
+        const o1 = (e.p[0] - c.o[0]) * -c.u[1] + (e.p[1] - c.o[1]) * c.u[0], o2 = (e.q[0] - c.o[0]) * -c.u[1] + (e.q[1] - c.o[1]) * c.u[0];
+        if (Math.abs(o1) > 15 || Math.abs(o2) > 15) continue;
+        const s1 = (e.p[0] - c.o[0]) * c.u[0] + (e.p[1] - c.o[1]) * c.u[1], s2 = (e.q[0] - c.o[0]) * c.u[0] + (e.q[1] - c.o[1]) * c.u[1];
+        if (Math.min(s1, s2) > c.s1 + 5 || Math.max(s1, s2) < c.s0 - 5) continue; // aynı çizgide ama ayrı kol
+        g = c; g.s0 = Math.min(g.s0, s1, s2); g.s1 = Math.max(g.s1, s1, s2); g.f0 = Math.min(g.f0, o1, o2); g.f1 = Math.max(g.f1, o1, o2); break;
+      }
+      if (!g) { const u = [(e.q[0] - e.p[0]) / e.L, (e.q[1] - e.p[1]) / e.L]; groups.push({ ang: e.ang, u, o: e.p, s0: 0, s1: e.L, f0: 0, f1: 0 }); }
+    }
+    const segs = [], ts = [];
+    for (const c of groups) {
+      if (c.s1 - c.s0 < 30) continue;
+      const m = (c.f0 + c.f1) / 2, ox = c.o[0] - c.u[1] * m, oy = c.o[1] + c.u[0] * m;
+      segs.push([{ x: ox + c.u[0] * c.s0, y: oy + c.u[1] * c.s0 }, { x: ox + c.u[0] * c.s1, y: oy + c.u[1] * c.s1 }]); ts.push(c.f1 - c.f0);
+    }
+    if (!segs.length) return null;
+    ts.sort((x, y) => x - y);
+    return { segs, t: ts[ts.length >> 1] || 6 };
   };
 
   /* --- İlişkiler --- */
@@ -2391,10 +2436,10 @@ function ifcToProject(text, opts = {}) {
 
   /* --- Duvarlar --- */
   const wallsOf = new Map(); // IFC duvar id → plan duvarları
-  const railsOfStair = new Map(); // merdiven id → korkuluk sayısı (merdivenin kendi korkuluğu olur)
+  const railsOfStair = new Map(); // merdiven / rampa id → içindeki korkuluk id'leri (merdivenin kendi korkuluğu olur)
   for (const id of [...ids(new Set([...IFC_WALLS, ...IFC_RAILINGS])), ...railProxy]) {
     const t = T(id); let g = geom(id);
-    if ((IFC_RAILINGS.has(t) || railProxy.has(id)) && under(id, STAIRISH)) { const st = under(id, STAIRISH); railsOfStair.set(st, (railsOfStair.get(st) || 0) + 1); continue; }
+    if ((IFC_RAILINGS.has(t) || railProxy.has(id)) && under(id, STAIRISH)) { const st = under(id, STAIRISH); railsOfStair.set(st, (railsOfStair.get(st) || []).concat(id)); continue; }
     const rail = IFC_RAILINGS.has(t) || railProxy.has(id) ? (/fence|[çc]it\b|garden|bah[çc]e|parmakl/i.test(nameOf(id) + ' ' + typeName(id)) ? 'fence' : 'railing') : '';
     if (!g.body.length && !g.axis.length) {
       const ch = kids.get(id) || [];
@@ -2427,11 +2472,18 @@ function ifcToProject(text, opts = {}) {
     if (!th) th = curtain ? 10 : rail ? 6 : 20;
     th = rail ? Math.max(2, Math.min(10, Math.round(th * 2) / 2)) : Math.max(curtain ? 2 : 5, Math.min(300, Math.round(th * 2) / 2));
     const segs = [], look = looksDeep(id);
+    let pairs = axis.slice(1).map((b0, k) => [axis[k], b0]);
+    let rstyle = null;
+    if (rail) { // korkuluk: gerçek iz (L / kırık) ve stil
+      const rsg = railSegs(id); if (rsg && rsg.segs.length) { pairs = rsg.segs.map(([p, q]) => [p, q]); th = Math.max(2, Math.min(10, Math.round(rsg.t * 2) / 2)); }
+      if (rail === 'railing') rstyle = ifcPick(IFC_RAIL_STYLE, nameOf(id) + ' ' + typeName(id) + ' ' + look.names) || (look.glass ? 'glass' : null);
+    }
     for (const pc of rail ? [{ s: storeyOf(id, z0), z0, h }] : spanOf(id, z0, z1, h)) {
       const b = fl(pc.s);
-      for (let k = 0; k + 1 < axis.length; k++) {
-        const a0 = axis[k], b0 = axis[k + 1]; if (Math.hypot(b0.x - a0.x, b0.y - a0.y) < 1) continue;
+      for (const [a0, b0] of pairs) {
+        if (Math.hypot(b0.x - a0.x, b0.y - a0.y) < 1) continue;
         const w = { id: uid(), a: { x: r1(a0.x), y: r1(a0.y) }, b: { x: r1(b0.x), y: r1(b0.y) }, t: th, h: pc.h, wt: rail || (curtain ? 'curtain' : 'solid') };
+        if (rstyle && rstyle !== 'bars') w.rs = rstyle;
         if (look.col && (rail || (!curtain && !ifcNeutral(look.col)))) w.color = look.col; // boya: gri / beyaz duvar varsayılan kalır
         Object.defineProperty(w, '_z0', { value: pc.z0, enumerable: false, writable: true });
         b.walls.push(w); segs.push(w);
@@ -2457,10 +2509,28 @@ function ifcToProject(text, opts = {}) {
     return width >= 150 ? 'double' : 'door';
   };
   const filled = new Set(fillOf.values());
+  // Revit pencere / kapı ailelerini çoğu zaman IfcBuildingElementProxy olarak, IfcRelFillsElement olmadan verir: gövde merkezi
+  // dolgusuz bir açıklığın içinde kalan proxy o açıklığın penceresi / kapısı olur (ayrıca şekil olarak eklenmez)
+  const proxyFill = new Map(), usedProxy = new Set();
+  {
+    const cen = b => { let x = 0, y = 0, z = 0; for (const p of b) { x += p[0]; y += p[1]; z += p[2]; } return [x / b.length, y / b.length, z / b.length]; };
+    const prox = (db.byType.get('IFCBUILDINGELEMENTPROXY') || []).filter(id => !railProxy.has(id) && geom(id).body.length).map(id => ({ id, c: cen(geom(id).body) }));
+    for (const oid of ids(IFC_OPENINGS)) {
+      if (filled.has(oid) || !prox.length) continue; const b = geom(oid).body; if (!b.length) continue;
+      const [z0, z1] = zr(b); let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const p of b) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+      const oc = cen(b); let best = 0, bd = Infinity;
+      for (const q of prox) {
+        const c = q.c; if (usedProxy.has(q.id) || c[0] < x0 - 10 || c[0] > x1 + 10 || c[1] < y0 - 10 || c[1] > y1 + 10 || c[2] < z0 - 10 || c[2] > z1 + 10) continue;
+        const dd = Math.hypot(c[0] - oc[0], c[1] - oc[1], c[2] - oc[2]); if (dd < bd) { bd = dd; best = q.id; }
+      }
+      if (best) { proxyFill.set(oid, best); usedProxy.add(best); }
+    }
+  }
   const jobs = [];
   for (const fid of ids(new Set([...IFC_DOORS, ...IFC_WINDOWS]))) jobs.push({ fid, oid: fillOf.get(fid) || 0 });
-  for (const oid of ids(IFC_OPENINGS)) if (!filled.has(oid)) jobs.push({ fid: 0, oid });
-  for (const { fid, oid } of jobs) {
+  for (const oid of ids(IFC_OPENINGS)) if (!filled.has(oid)) jobs.push({ fid: 0, oid, px: proxyFill.get(oid) || 0 });
+  for (const { fid, oid, px = 0 } of jobs) {
     const host = oid ? voidHost.get(oid) : 0;
     if (oid && host && IFC_SLABS.has(T(host))) continue; // döşeme boşluğu: aşağıda
     let pts = oid ? geom(oid).body : []; if (!pts.length && fid) pts = geom(fid).body;
@@ -2481,12 +2551,13 @@ function ifcToProject(text, opts = {}) {
     ow = Math.max(10, Math.min(L, Math.round(ow))); oh = Math.max(10, Math.min(w.h, Math.round(oh)));
     let sill = Math.round(z0 - (w._z0 == null ? z0 : w._z0)); if (sill < 5) sill = 0;
     sill = Math.max(0, Math.min(w.h - oh, sill));
-    const type = fid ? opTypeOf(fid, ow) : sill > 5 ? 'window' : 'arch';
+    const pxName = px ? nameOf(px) + ' ' + typeName(px) : '', pxDoor = /door|kap[ıi]/i.test(pxName), pxWin = /window|pencere/i.test(pxName);
+    const type = fid ? opTypeOf(fid, ow) : px ? (pxDoor || (!pxWin && sill <= 5) ? (ow >= 150 ? 'double' : 'door') : 'window') : sill > 5 ? 'window' : 'arch';
     const d = Math.max(ow / 2, Math.min(L - ow / 2, (mn + mx) / 2));
     const st = storeyOf(fid || oid, z0), bk = [...bucket.values()].find(b => b.walls.includes(w)) || fl(st);
     const op = { id: uid(), wall: w.id, d: r1(d), w: ow, h: oh, sill, type, flip: 0, side: 1, open: 0 };
-    if (fid) { // kapı / pencere malzemesi ve renkleri (#41 alanları)
-      const lk = looksOf(fid);
+    if (fid || px) { // kapı / pencere malzemesi ve renkleri (#41 alanları)
+      const lk = looksOf(fid || px);
       if (type !== 'window' && type !== 'arch') { const m = ifcPick(IFC_DOOR_MAT, lk.names) || (lk.glass && !lk.col ? 'glass' : null); if (m) op.mat = m; if (lk.col && m !== 'glass') op.color = lk.col; }
       else if (lk.col) op.frameCol = lk.col;
     }
@@ -2522,11 +2593,20 @@ function ifcToProject(text, opts = {}) {
   }
 
   /* --- Kolonlar (yapı iskeleti) ve özel bileşenler / mobilyalar --- */
-  const footOf = g => { const pts = polyOf(g); if (!pts || pts.length < 3) return null; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } return { pts, x0, y0, x1, y1, ar: Math.abs(ifcArea(pts.map(p => [p.x, p.y]))) }; };
-  const polyItem = (ft, base) => { const cx = r1((ft.x0 + ft.x1) / 2), cy = r1((ft.y0 + ft.y1) / 2); return Object.assign(base, { k: 'poly', w: Math.max(1, r1(ft.x1 - ft.x0)), d: Math.max(1, r1(ft.y1 - ft.y0)), x: cx, y: cy, rot: 0, pts: ft.pts.map(p => ({ x: r1(p.x - cx), y: r1(p.y - cy) })) }); };
+  const footOf = g => { // ince kesit (2 mm cidarlı T profil) temizlikte çökerse gövdenin dış zarfı
+    let pts = polyOf(g); if ((!pts || pts.length < 3 || Math.abs(ifcArea(pts.map(p => [p.x, p.y]))) < 0.5) && g.body.length >= 3) pts = ifcHull(g.body).map(p => ({ x: r1(p[0]), y: r1(p[1]) }));
+    if (!pts || pts.length < 3) return null; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } return { pts, x0, y0, x1, y1, ar: Math.abs(ifcArea(pts.map(p => [p.x, p.y]))) }; };
+  // çokgen öğe: en küçük dikdörtgenin doğrultusunda (döndürülmüş eleman doğru en / boy / açı alır); pts yerel, merkez 0,0
+  const polyItem = (ft, base) => {
+    const rc = ifcRect(ft.pts.map(p => [p.x, p.y]));
+    if (!rc) { const cx = r1((ft.x0 + ft.x1) / 2), cy = r1((ft.y0 + ft.y1) / 2); return Object.assign(base, { k: 'poly', w: Math.max(1, r1(ft.x1 - ft.x0)), d: Math.max(1, r1(ft.y1 - ft.y0)), x: cx, y: cy, rot: 0, pts: ft.pts.map(p => ({ x: r1(p.x - cx), y: r1(p.y - cy) })) }); }
+    const th = rc.rot * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th);
+    return Object.assign(base, { k: 'poly', w: Math.max(1, r1(rc.w)), d: Math.max(1, r1(rc.d)), x: r1(rc.cx), y: r1(rc.cy), rot: r1(((rc.rot % 360) + 360) % 360),
+      pts: ft.pts.map(p => { const dx = p.x - rc.cx, dy = p.y - rc.cy; return { x: r1(dx * c + dy * sn), y: r1(-dx * sn + dy * c) }; }) });
+  };
   const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (el >= 3) o.elev = Math.min(500, el); return o; }; // 0..500 = FURN_ELEV_MAX (#61)
   for (const id of ids(IFC_COLUMNS)) {
-    const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 4) { stats.skipped++; continue; }
+    const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 0.5) { stats.skipped++; continue; }
     const [z0, z1] = zr(g.body), h0 = Math.max(10, Math.min(5000, Math.round(z1 - z0)));
     const rc = ifcRect(ft.pts.map(p => [p.x, p.y])), nm = nameOf(id).slice(0, 80);
     const round = !!rc && ft.pts.length >= 8 && Math.abs(rc.w - rc.d) <= Math.max(1, rc.w * 0.04) && ft.ar / (Math.PI * rc.w * rc.d / 4) > 0.9;
@@ -2540,10 +2620,10 @@ function ifcToProject(text, opts = {}) {
   const compIds = ids(IFC_COMPONENTS), compSet = new Set(compIds);
   for (const id of compIds) {
     let up = false; for (let p = parent.get(id), k = 0; p && k < 30; p = parent.get(p), k++) if (compSet.has(p)) { up = true; break; }
-    if (up || railProxy.has(id) || under(id, STAIRISH) || under(id, ROOFISH)) continue; // montajın parçası (montaj tek şekil gelir) ya da korkuluk (duvar olarak geldi)
+    if (up || railProxy.has(id) || usedProxy.has(id) || under(id, STAIRISH) || under(id, ROOFISH)) continue; // usedProxy: açıklığın penceresi / kapısı oldu // montajın parçası (montaj tek şekil gelir) ya da korkuluk (duvar olarak geldi)
     let g = geom(id);
     if (!g.body.length) { const body = [], foot = []; for (const c of kids.get(id) || []) { const cg = geom(c); body.push(...cg.body); foot.push(...cg.foot); } g = { body, foot, axis: [] }; }
-    const ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 4 || ft.ar > 4e6) { stats.skipped++; continue; }
+    const ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 0.5 || ft.ar > 4e6) { stats.skipped++; continue; } // ince profiller (5 cm T) de gelir
     const [z0, z1] = zr(g.body), st = storeyOf(id, z0), t = T(id), furnish = t !== 'IFCBUILDINGELEMENTPROXY' && t !== 'IFCELEMENTASSEMBLY';
     const nm = nameOf(id);
     const base = { id: uid(), type: 'shape', name: (nm || tr('Bileşen', 'Component')).slice(0, 80), icon: '⬡', h: Math.max(1, Math.min(5000, Math.round(z1 - z0))), color: looksDeep(id).col || (furnish ? '#bcaaa4' : '#94a3b8'), label: '' };
@@ -2585,7 +2665,18 @@ function ifcToProject(text, opts = {}) {
     const ex = { x: -u.y, y: u.x }, ey = { x: -u.x, y: -u.y }; let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
     for (const p of body) { const s1 = p[0] * ex.x + p[1] * ex.y, s2 = p[0] * ey.x + p[1] * ey.y; a0 = Math.min(a0, s1); a1 = Math.max(a1, s1); b0 = Math.min(b0, s2); b1 = Math.max(b1, s2); }
     const sm = (a0 + a1) / 2, tm = (b0 + b1) / 2, rot = Math.atan2(u.x, -u.y) * 180 / Math.PI;
-    return { ey, b0, b1, w: a1 - a0, d: b1 - b0, x: r1(sm * ex.x + tm * ey.x), y: r1(sm * ex.y + tm * ey.y), rot: r1(((rot % 360) + 360) % 360) };
+    return { ex, ey, b0, b1, w: a1 - a0, d: b1 - b0, x: r1(sm * ex.x + tm * ey.x), y: r1(sm * ex.y + tm * ey.y), rot: r1(((rot % 360) + 360) % 360) };
+  };
+  // merdiven / rampa korkulukları: çıkış yönüne göre hangi yanda (sağ = yerel +x) ve stil (cam / halat / parapet)
+  const railInfo = (sid, fr) => {
+    const rails = railsOfStair.get(sid) || []; let L = false, Rr = false; const names = [];
+    for (const rid of rails) {
+      const b = geom(rid).body; if (!b.length) continue; let cx = 0, cy = 0; for (const p of b) { cx += p[0]; cy += p[1]; } cx /= b.length; cy /= b.length;
+      const lx = (cx - fr.x) * fr.ex.x + (cy - fr.y) * fr.ex.y; if (lx >= 0) Rr = true; else L = true;
+      names.push(nameOf(rid), typeName(rid), looksDeep(rid).names, looksDeep(rid).glass ? 'glass' : '');
+    }
+    const side = L && Rr ? 'both' : Rr ? 'right' : L ? 'left' : 'none', rs = rails.length ? ifcPick(IFC_RAIL_STYLE, names.join(' ')) : null;
+    return { side, rs: rs && rs !== 'bars' ? rs : null };
   };
   const stairIds = ids(new Set(['IFCSTAIR'])).filter(id => !under(id, STAIRISH));
   for (const id of ids(new Set(['IFCSTAIRFLIGHT']))) if (!under(id, STAIRISH)) stairIds.push(id);
@@ -2604,10 +2695,10 @@ function ifcToProject(text, opts = {}) {
     if (!type) type = 'straight';
     const fr = frameOf(body, u); // −y = ilk kolun çıkış yönü
     let risers = 0; for (const c of flights) { const n = +A(c)[8]; if (n > 0) risers += n; }
-    const nr = railsOfStair.get(id) || 0;
     const o = { id: uid(), type: 'stairs', name: (nameOf(id) || tr('Merdiven', 'Stairs')).slice(0, 80), icon: '🪜', k: 'stairs', w: Math.max(40, r1(fr.w)), d: Math.max(40, r1(fr.d)), h: H, color: looksDeep(id).col || '#e2e8f0',
       x: fr.x, y: fr.y, rot: fr.rot, label: '',
-      stepN: Math.max(2, Math.min(60, risers || Math.round(H / 17.5))), stairType: type, railing: nr >= 2 ? 'both' : nr === 1 ? 'right' : 'none' };
+      stepN: Math.max(2, Math.min(60, risers || Math.round(H / 17.5))), stairType: type, railing: 'none' };
+    { const ri = railInfo(id, fr); o.railing = ri.side; if (ri.rs) o.rs = ri.rs; }
     if (type === 'spiral') { o.w = o.d = Math.max(o.w, o.d); }
     fl(st).furn.push(elevOf(o, z0, st)); stats.stairs++;
   }
@@ -2618,7 +2709,7 @@ function ifcToProject(text, opts = {}) {
   for (const id of rampIds) {
     const fls = T(id) === 'IFCRAMP' ? allKids(id).filter(c => T(c) === 'IFCRAMPFLIGHT') : [];
     const runs = fls.length ? fls.map(c => ({ c, body: geom(c).body })) : [{ c: id, body: [id, ...allKids(id)].flatMap(c => geom(c).body) }];
-    const nm = nameOf(id), nr = railsOfStair.get(id) || 0;
+    const nm = nameOf(id);
     for (const { c, body } of runs) {
       if (body.length < 3) { stats.skipped++; continue; }
       const fr = frameOf(body, climb(body) || { x: 0, y: -1 }), { ey, b0, b1 } = fr;
@@ -2630,7 +2721,8 @@ function ifcToProject(text, opts = {}) {
       const label = nm + ' ' + (c !== id ? nameOf(c) : '') + ' ' + typeName(id);
       const o = { id: uid(), type: 'ramp', name: (nameOf(c) || nm || tr('Rampa', 'Ramp')).slice(0, 80), icon: '♿', k: 'ramp', w, d: Math.max(50, r1(L)), h: Math.max(1, Math.round(zHi - zLo)), color: looksDeep(c).col || looksDeep(id).col || '#d6d3d1',
         x: fr.x, y: fr.y, rot: fr.rot, label: '',
-        rampType: ifcWords(label).some(x => /^(car|cars|vehicle|garage|garaj|parking|otopark|araç|arac)$/.test(x)) || w >= 250 ? 'vehicle' : 'accessible', railing: nr ? 'both' : 'none' };
+        rampType: ifcWords(label).some(x => /^(car|cars|vehicle|garage|garaj|parking|otopark|araç|arac)$/.test(x)) || w >= 250 ? 'vehicle' : 'accessible', railing: 'none' };
+      { const ri = railInfo(id, fr); o.railing = ri.side; if (ri.rs) o.rs = ri.rs; }
       fl(st).furn.push(elevOf(o, zLo, st)); stats.ramps++;
     }
   }
@@ -3146,7 +3238,10 @@ function setWallType(w, v) {
   }
   else if (was) { if (w.h < 150) w.h = curFloorH(); if (w.t < 10) w.t = v === 'curtain' ? 10 : P.wallT; }
   if (v !== 'curtain') { delete w.mul; delete w.mulN; }
+  if (v !== 'railing') delete w.rs;
 }
+// çizim aracından yeni duvar: korkuluk aracında korkuluk (son seçilen stil korunur)
+function toolWall(a, b) { const w = mkWall(a, b); if (ui.btn === 'railing') { setWallType(w, 'railing'); if (ui.railRs && ui.railRs !== 'bars') w.rs = ui.railRs; } return w; }
 function mkWall(a, b) { return { id: uid(), a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y }, t: P.wallT, h: curFloorH(), wt: 'solid' }; }
 function opType(id) { return id.startsWith('window') || id === 'wsmall' ? 'window' : id; }
 function mkOp(def, wall, d) {
@@ -3247,7 +3342,7 @@ const wallPt = (w, s) => { const L = wLen(w) || 1; return { x: w.a.x + (w.b.x - 
 // Duvarı a ucundan s cm'de ikiye böler; s'nin ötesindeki açıklıklar yeni parçaya geçer
 function splitWallAt(w, s, f = F()) {
   const m = wallPt(w, s), nw = mkWall(m, w.b);
-  for (const k of ['t', 'h', 'wt', 'color', 'mul', 'mulN']) if (w[k] != null) nw[k] = w[k];
+  for (const k of ['t', 'h', 'wt', 'color', 'mul', 'mulN', 'rs']) if (w[k] != null) nw[k] = w[k];
   w.b = m; f.walls.push(nw);
   f.ops.forEach(op => { if (op.wall === w.id && op.d > s) { op.wall = nw.id; op.d -= s; } });
   return nw;
@@ -3473,7 +3568,7 @@ function slabPolys(f) {
 const POLY_TOOLS = new Set(['poly', 'slab', 'void']);
 const TOOLS = [
   ['select', '↖', 'Seç', 'V', 'Select'], ['pan', '✋', 'Kaydır', 'H', 'Pan'], null,
-  ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['slab', '🔲', 'Döşeme', 'K', 'Slab'], ['void', '🕳️', 'Boşluk', 'Y', 'Void'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
+  ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['railing', '🛡', 'Korkuluk', 'Q', 'Railing'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['slab', '🔲', 'Döşeme', 'K', 'Slab'], ['void', '🕳️', 'Boşluk', 'Y', 'Void'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
   ['door', '🚪', 'Kapı', 'D', 'Door'], ['window', '🪟', 'Pencere', 'N', 'Window'], ['furn', '🛋️', 'Mobilya', 'F', 'Furniture'], null,
   ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['mirror', '🪞', 'Aynala', 'I', 'Mirror'], ['section', '🔪', 'Kesit', 'L', 'Section'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
@@ -3481,6 +3576,7 @@ const HINTS = {
   select: 'Seç: duvar seçiliyken rakam yaz + Enter: yeni uzunluk • ölçü yazısına tıkla: uzunluğu düzenle • tıkla / kutu çiz • Shift: çoklu seçim • Ctrl+tık: alttaki nesne • sağ tık: buradaki nesneler & katman • sürükle: taşı • Del: sil',
   pan: 'Kaydır: sürükle • Tekerlek: yakınlaştır',
   wall: 'Duvar: tıkla ile başla, devam ettikçe zincir • rakam yaz + Enter: tam uzunluk • çift tık / Esc: bitir • Shift: yakalamayı kapat',
+  railing: 'Korkuluk: duvar gibi çiz (tıkla, zincirle, rakam + Enter) • balkon / teras / merdiven boşluğu • stil ve yükseklik sağ panelden',
   rect: 'Dikdörtgen oda: köşeden köşeye sürükle (4 duvar + oda oluşturur)',
   room: 'Kapalı bir alanın içine tıkla: oda otomatik algılanır (alan ve ölçüler hesaplanır)',
   poly: 'Oda çiz: köşelere tıkla • ilk noktaya tıkla / Enter: tamamla • Esc: iptal',
@@ -3502,6 +3598,7 @@ const HINTS_EN = {
   select: 'Select: with a wall selected type a number + Enter: new length • click a length label: edit it • click / drag box • Shift: multi-select • Ctrl+click: object underneath • right-click: objects here & layers • drag: move • Del: delete',
   pan: 'Pan: drag • Wheel: zoom in/out',
   wall: 'Wall: click to start & chain • type number + Enter: exact length (cm) • double-click / Esc: finish • Shift: disable snap',
+  railing: 'Railing: draw like a wall (click, chain, number + Enter) • balconies, terraces, stair openings • style and height in the right panel',
   rect: 'Rect Room: drag corner to corner (creates 4 walls + room)',
   room: 'Click inside an enclosed area to auto-detect room & area',
   poly: 'Draw Room: click corners • click first point / Enter: finish • Esc: cancel',
@@ -3543,7 +3640,7 @@ function updateTools() {
   document.querySelectorAll('.tool').forEach(b => b.classList.toggle('on', b.dataset.tool === ui.btn));
   $('#hud').textContent = ui.view3d
     ? L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Ctrl+Z: Geri al • Del: Sil • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Ctrl+Z: Undo • Del: Delete • Esc: 2D')
-    : ((isEN() ? HINTS_EN : HINTS)[tool] || '');
+    : ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '');
   $('#hud').style.display = '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
   document.querySelectorAll('#items .item').forEach(el => el.classList.toggle('on', !!placing && el.dataset.id === (el.dataset.type === 'pre' ? placing.def.preset : !placing.def.preset && placing.def.id)));
@@ -3559,6 +3656,7 @@ function setTool(t) {
   if (t === 'door') { placing = { type: 'op', def: OPDEF.door, rot: 0 }; tool = 'place'; }
   else if (t === 'window') { placing = { type: 'op', def: OPDEF.window, rot: 0 }; tool = 'place'; }
   else if (t === 'furn') { ui.cat = ui.cat === 0 ? 1 : ui.cat; buildLib(); $('#search').focus(); tool = 'select'; ui.btn = 'select'; toast(L('Soldaki listeden bir mobilya seç', 'Select a furniture item from the left panel')); }
+  else if (t === 'railing') tool = 'wall'; // korkuluk aracı = duvar aracı (aynı yakalama / uzunluk yazma), yeni parçalar korkuluk olur
   else tool = t;
   if (ui.view3d) show3D(false);
   updateTools(); render();
@@ -3920,7 +4018,7 @@ cv.addEventListener('pointerdown', e => {
       else {
         const a = ui.draw.start;
         if (dist(a, cur) < 5) { ui.draw = null; ui.typed = ''; }
-        else { f.walls.push(mkWall(a, cur)); commit(); ui.draw = { start: { x: cur.x, y: cur.y } }; ui.typed = ''; if (cur.hit === 'end' && closesLoop(cur)) { ui.draw = null; toast(L('Döngü kapandı – “Oda algıla” aracı ile oda ekleyebilirsin', 'Loop closed – use “Auto Room” tool to detect the room')); } }
+        else { f.walls.push(toolWall(a, cur)); commit(); ui.draw = { start: { x: cur.x, y: cur.y } }; ui.typed = ''; if (cur.hit === 'end' && closesLoop(cur)) { ui.draw = null; toast(L('Döngü kapandı – “Oda algıla” aracı ile oda ekleyebilirsin', 'Loop closed – use “Auto Room” tool to detect the room')); } }
       }
       render(); renderProps(); return;
     }
@@ -4359,6 +4457,7 @@ function renderProps() {
     h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 });
     if (F().walls.length > 1 && os.every(x => x.o.h === o.h)) h += `<div class="row"><button class="btn sm" data-act="wallhfloor" title="${L('Bu yüksekliği kattaki tüm duvarlara ve katın varsayılanına uygula', 'Apply this height to every wall on the floor and make it the floor default')}">⬆ ${L('Kattaki tüm duvarlara uygula', 'Apply to all walls on floor')}</button></div>`;
     h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall'), railing: L('🛡 Korkuluk', '🛡 Railing / Balustrade'), fence: L('🌿 Bahçe çiti', '🌿 Garden Fence') } });
+    if (os.every(x => x.o.wt === 'railing')) h += fld(L('Korkuluk stili', 'Railing style'), 'wall', 'rs', railStyle(o), { sel: Object.fromEntries(Object.entries(RAIL_STYLES).map(([k, v]) => [k, L(...v)])) });
     if (os.every(x => x.o.wt === 'curtain')) {
       // dikme modülü + ara dikme adedi (#71): adet girilirse eşit bölmeler, modül girilirse adet yeniden hesaplanır
       const bays = curtainBays(o), fixed = o.mulN != null;
@@ -4430,6 +4529,7 @@ function renderProps() {
       const sl = rampSlope(o), [cc, ctr, cen] = RAMP_CLS[sl.cls];
       h += `<h4>${L('Rampa', 'Ramp')}</h4>` + fld(L('Tür', 'Type'), 'furn', 'rampType', rampType(o), { sel: biOpts(RAMP_TYPES) })
         + fld(L('Korkuluk', 'Railing'), 'furn', 'railing', rampRail(o), { sel: biOpts(STAIR_RAILS) })
+        + (rampRail(o) !== 'none' ? fld(L('Korkuluk stili', 'Railing style'), 'furn', 'rs', railStyle(o), { sel: Object.fromEntries(Object.entries(RAIL_STYLES).map(([k, v]) => [k, L(...v)])) }) : '')
         + `<p class="muted" style="margin:0 0 6px">${L('Genişlik = G, uzunluk = D (yatay), kot farkı = Y alanları.', 'Width = W, length = D (horizontal), rise = H fields.')}</p>`
         + `<div class="stat"><span>${L('Eğim', 'Slope')}</span><b>${pctTxt(sl.pct)} · 1:${isFinite(sl.ratio) ? Math.round(sl.ratio * 10) / 10 : '∞'} · ${Math.round(sl.deg * 10) / 10}°</b></div>`
         + `<div class="stat"><span>${L('Uygunluk', 'Compliance')}</span><b style="color:${cc}">${L(ctr, cen)}</b></div>`
@@ -4441,6 +4541,7 @@ function renderProps() {
       h += `<h4>${L('Merdiven', 'Stairs')}</h4>` + fld(L('Tür', 'Type'), 'furn', 'stairType', st.type, { sel: biOpts(STAIR_TYPES) })
         + fld(L('Rıht sayısı', 'Number of risers'), 'furn', 'stepN', st.n, { min: 2, max: 60, step: 1 })
         + fld(L('Korkuluk', 'Railing'), 'furn', 'railing', o.railing || 'right', { sel: biOpts(STAIR_RAILS) })
+        + ((o.railing || 'right') !== 'none' ? fld(L('Korkuluk stili', 'Railing style'), 'furn', 'rs', railStyle(o), { sel: Object.fromEntries(Object.entries(RAIL_STYLES).map(([k, v]) => [k, L(...v)])) }) : '')
         + `<div class="stat"><span>${L('Rıht yüksekliği', 'Riser height')}</span><b>${(Math.round(st.riser * 10) / 10)} cm</b></div>`
         + `<div class="stat"><span>${L('Basamak derinliği', 'Tread depth')}</span><b>${(Math.round(st.tread * 10) / 10)} cm</b></div>`
         + `<div class="stat" title="${L('Blondel kuralı: 2 × rıht + basamak ≈ 63 cm (60–64 rahat)', 'Blondel rule: 2 × riser + tread ≈ 63 cm (60–64 is comfortable)')}"><span>2r + t</span><b style="color:${bc}">${Math.round(bl.v * 10) / 10} cm ${bl.ok ? '✓' : bl.warn ? '≈' : '✗'}</b></div>`
@@ -4640,6 +4741,7 @@ function applyProp(t, final) {
     else if (k === 'wall' && p === 'mul') { if (!final) continue; const m = clamp(Math.round(v), 20, 1000); delete o.mulN; if (m === MUL_DEF) delete o.mul; else o.mul = m; }
     else if (k === 'wall' && p === 'mulN') { if (!final) continue; o.mulN = clamp(Math.round(v), 0, 200); }
     else if (k === 'wall' && p === 'wt') { setWallType(o, v); }
+    else if (k === 'wall' && p === 'rs') { if (v === 'bars' || !RAIL_STYLES[v]) delete o.rs; else o.rs = v; ui.railRs = v; }
     else if (k === 'op' && p === 'open') { o.open = v ? 90 : 0; }
     else if (k === 'op' && p === 'type') { o[p] = v; if (v === 'window' && o.sill === 0) { o.sill = 90; o.h = 120; } if (v !== 'window' && o.sill > 0) { o.sill = 0; o.h = 210; } }
     else o[p] = v;
@@ -4772,7 +4874,7 @@ $('#props').addEventListener('click', e => {
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
     if (a === 'redetect' && kind === 'room') { const c = polyCentroid(o.pts); const r = detectRoom(pointInPoly(c, o.pts) ? c : o.pts[0]); if (Array.isArray(r)) o.pts = r; else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
     if (a === 'split' && kind === 'wall') {
-      const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; if (o.color) nw.color = o.color; if (o.mul) nw.mul = o.mul; const L = wLen(o), old = o.b;
+      const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; if (o.color) nw.color = o.color; if (o.mul) nw.mul = o.mul; if (o.rs) nw.rs = o.rs; const L = wLen(o), old = o.b;
       o.b = m; f.walls.push(nw);
       f.ops.forEach(op => { if (op.wall === o.id && op.d > L / 2) { op.wall = nw.id; op.d -= L / 2; } });
     }
@@ -4787,7 +4889,7 @@ $('#props').addEventListener('click', e => {
    tip değildir. Kapı açılış yönü (side) kaydedilir ama yerleştirirken imlecin tarafını izler (duvar yönü
    her duvarda farklıdır); S ile çevrilir. #41 alanları (mat, color, frameCol, glass) da taşınır. */
 const PRESET_OP_EXTRA = ['mat', 'color', 'frameCol', 'glass'];
-const PRESET_FURN_EXTRA = ['stepN', 'stairType', 'railing', 'rampType', 'pts', 'faces', 'fbase', 'parts', 'pbase', 'partsV', 'elev'];
+const PRESET_FURN_EXTRA = ['stepN', 'stairType', 'railing', 'rs', 'rampType', 'pts', 'faces', 'fbase', 'parts', 'pbase', 'partsV', 'elev'];
 const clonePlain = v => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
 function presetFromObj(kind, o, name) {
   const p = { id: uid(), name: String(name).slice(0, 60), kind };
@@ -5462,7 +5564,7 @@ window.addEventListener('keydown', e => {
     if (/^[0-9.]$/.test(e.key)) { ui.typed += e.key; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Backspace') { ui.typed = ui.typed.slice(0, -1); if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Enter') {
-      if (ui.typed && ui.cur && dist(ui.draw.start, ui.cur) > 1) { F().walls.push(mkWall(ui.draw.start, ui.cur)); ui.draw = { start: { x: ui.cur.x, y: ui.cur.y } }; ui.typed = ''; commit(); render(); renderProps(); }
+      if (ui.typed && ui.cur && dist(ui.draw.start, ui.cur) > 1) { F().walls.push(toolWall(ui.draw.start, ui.cur)); ui.draw = { start: { x: ui.cur.x, y: ui.cur.y } }; ui.typed = ''; commit(); render(); renderProps(); }
       else { ui.draw = null; ui.typed = ''; render(); }
       return;
     }
@@ -5493,7 +5595,7 @@ window.addEventListener('keydown', e => {
     selObjs().forEach(({ kind, o }) => { if (AB_KINDS.has(kind)) { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (PTS_KINDS.has(kind)) o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
     commit(); render(); if (sel.includes('bg')) renderProps(); if (ui.view3d && T3) schedBuild3D(); return;
   }
-  const map = { v: 'select', h: 'pan', w: 'wall', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen', k: 'slab', y: 'void', i: 'mirror', l: 'section' };
+  const map = { v: 'select', h: 'pan', w: 'wall', q: 'railing', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen', k: 'slab', y: 'void', i: 'mirror', l: 'section' };
   if (e.shiftKey && (k === 'h' || k === 'v') && sel.length) { flipSel(k); return; } // Shift+H / Shift+V: aynala (#28)
   if (map[k]) { setTool(map[k]); return; }
   if (k === 'g') { $('#cSnap').click(); return; }
@@ -5539,6 +5641,7 @@ function helpModal() {
     [':', 'Command line: run any tool or action by name (English or Turkish), shortcut keys shown'],
     ['V / H', 'Select / Pan (hold Space for temporary pan)'],
     ['W', 'Draw wall (type number + Enter: exact length in cm)'],
+    ['Q', 'Draw railing (balcony, terrace, stair opening; style in the panel)'],
     ['R', 'Rect room (draws 4 walls + room)'],
     ['O', 'Auto-detect room inside enclosed walls'],
     ['P', 'Draw custom polygon room'],
@@ -5589,6 +5692,7 @@ function helpModal() {
     [':', 'Komut satırı: araç ya da eylemi adıyla çalıştır (Türkçe veya İngilizce), kısayolları gösterir'],
     ['V / H', 'Seç / Kaydır (Boşluk basılı: geçici kaydır)'],
     ['W', 'Duvar çiz (rakam + Enter: tam uzunluk)'],
+    ['Q', 'Korkuluk çiz (balkon, teras, merdiven boşluğu; stil panelden)'],
     ['R', 'Oda (dikdörtgen duvar)'],
     ['O', 'Kapalı alandan oda algıla'],
     ['P', 'Çokgen oda çiz'],
@@ -6434,7 +6538,7 @@ function archPrims(spec) {
           const q0 = pr(at(clamp((o.d - o.w / 2) / L, t0, t1))), q1 = pr(at(clamp((o.d + o.w / 2) / L, t0, t1)));
           return { s0: Math.min(q0.s, q1.s), s1: Math.max(q0.s, q1.s), z0: E + (+o.sill || 0), z1: E + (+o.sill || 0) + (+o.h || 0), type: o.type };
         }).filter(hh => hh.s1 - hh.s0 > 1);
-        face(corners, E, E + H, rail ? { rail } : { holes, curtain });
+        face(corners, E, E + H, rail ? { rail, rs: railStyle(w) } : { holes, curtain });
       };
       if (cut && (A.d > 0) !== (B.d > 0)) {
         const t = A.d / (A.d - B.d), sc = A.s + (B.s - A.s) * t, sin = Math.abs(B.d - A.d) / L, cw = w.t / Math.max(sin, 0.2);
@@ -6469,7 +6573,16 @@ function archPrims(spec) {
 }
 // Görünüş / kesitte korkuluk ve çit (#73): üst ray, alt ray, dikmeler ve çubuk / çıtalar; arkası görünür kalır
 function railElevSvg(p, X, Y, st) {
-  const spec = LOW_WALL[p.rail] || LOW_WALL.railing, x0 = X(p.s0), x1 = X(p.s1), yt = Y(p.z1), yb = Y(p.z0), wd = x1 - x0;
+  const spec = LOW_WALL[p.rail] || LOW_WALL.railing, x0 = X(p.s0), x1 = X(p.s1), yt = Y(p.z1), yb = Y(p.z0), wd = x1 - x0, C = pal(true);
+  if (p.rail === 'railing' && p.rs === 'solid') return `<rect x="${x0}" y="${yt}" width="${wd}" height="${yb - yt}" fill="${C.bg}" stroke="${st}" stroke-width="1.6"/>`;
+  if (p.rail === 'railing' && (p.rs === 'glass' || p.rs === 'cable')) {
+    let s = p.rs === 'glass' ? `<rect x="${x0}" y="${yt + 4}" width="${wd}" height="${yb - yt - 8}" fill="${C.glass}" stroke="${st}" stroke-width="0.8"/>` : '';
+    s += `<path d="M${x0} ${yt}H${x1}" stroke="${st}" stroke-width="2.6" fill="none"/>`;
+    if (p.rs === 'cable') { let d = ''; for (let i = 0; i < 4; i++) { const y = Y(p.z0 + 10 + (p.z1 - p.z0 - 18) * i / 3); d += `M${x0} ${y}H${x1}`; } s += `<path d="${d}" stroke="${st}" stroke-width="0.8" fill="none"/>`; }
+    const nP = Math.max(1, Math.round(wd / spec.post));
+    for (let i = 0; i <= nP; i++) { const x = x0 + wd * i / nP; s += `<line x1="${x}" y1="${yt}" x2="${x}" y2="${yb}" stroke="${st}" stroke-width="2.6"/>`; }
+    return s;
+  }
   let s = `<path d="M${x0} ${yt}H${x1}M${x0} ${Y(p.z0 + 10)}H${x1}" stroke="${st}" stroke-width="${p.rail === 'fence' ? 2.2 : 2.6}" fill="none"/>`;
   if (p.rail === 'fence') s += `<path d="M${x0} ${Y(p.z0 + (p.z1 - p.z0) * 0.75)}H${x1}" stroke="${st}" stroke-width="2" fill="none"/>`;
   const nP = Math.max(1, Math.round(wd / spec.post)), step = Math.max(spec.bar, wd / 200);
@@ -8596,10 +8709,14 @@ function furn3D(g, o, C) {
       const sides = rampRailSides(o);
       if (sides.length) {
         const heights = type === 'accessible' ? [90, 70] : [90], nP = clamp(Math.round(d / 150), 1, 12);
+        const rs = railStyle(o);
         for (const k of sides) {
           const x = k * (w / 2 - 6);
+          if (rs === 'solid') { slope(8, 92, x, 46, sh(-0.08)); slope(10, 4, x, 92, sh(-0.2)); continue; } // dolu parapet + kapak
           for (let i = 0; i <= nP; i++) { const y = d / 2 - i * d / nP, z = H * (d / 2 - y) / d; bb(3, 92, 3, metal, x, z, y); }
           for (const hh of heights) slope(3.5, 4, x, hh, metal);
+          if (rs === 'glass') { const m = slope(1.6, 78, x, 48, 0x9fd3ee); m.material = C.mat(0x9fd3ee, 0.35); }
+          if (rs === 'cable') for (const hh of [20, 40, 60]) slope(1.2, 1.2, x, hh, metal);
         }
       }
       break;
@@ -8614,12 +8731,20 @@ function furn3D(g, o, C) {
       if (spiral) cyl(g, Math.max(3, Math.min(w, d) * 0.07), h + 90, metal, 0, (h + 90) / 2, 0, 16);
       if (ed) for (const rail of stairRails(o, st)) {
         // dikmeler her 3 basamakta bir (+ son), aralarında eğimli küpeşte
-        const pts = rail.pts.filter((p, i, a) => i % 3 === 0 || i === a.length - 1);
-        for (const p of pts) bb(3, 92, 3, metal, p.x, p.z, p.y);
+        const pts = rail.pts.filter((p, i, a) => i % 3 === 0 || i === a.length - 1), rs = railStyle(o);
+        // eğimli parça: küpeşte, cam panel, halat ya da dolu parapet (lift = basamaktan yükseklik, bh = parça yüksekliği)
+        const piece = (p, q, lift, bh, bd, c, op) => {
+          const dx = q.x - p.x, dz = q.y - p.y, dy = q.z - p.z, Lh = Math.hypot(dx, dz);
+          const m = box(g, Math.hypot(Lh, dy) + 3, bh, bd, c, (p.x + q.x) / 2, (p.z + q.z) / 2 + lift, (p.y + q.y) / 2, 0, op || 0, false);
+          m.rotation.order = 'YZX'; m.rotation.y = -Math.atan2(dz, dx); m.rotation.z = Math.atan2(dy, Lh); return m;
+        };
+        if (rs !== 'solid') for (const p of pts) bb(3, 92, 3, metal, p.x, p.z, p.y);
         for (let i = 0; i + 1 < pts.length; i++) {
-          const p = pts[i], q = pts[i + 1], dx = q.x - p.x, dz = q.y - p.y, dy = q.z - p.z, Lh = Math.hypot(dx, dz);
-          const m = box(g, Math.hypot(Lh, dy) + 3, 4, 3.5, metal, (p.x + q.x) / 2, (p.z + q.z) / 2 + 90, (p.y + q.y) / 2, 0, 0, false);
-          m.rotation.order = 'YZX'; m.rotation.y = -Math.atan2(dz, dx); m.rotation.z = Math.atan2(dy, Lh);
+          const p = pts[i], q = pts[i + 1];
+          if (rs === 'solid') { piece(p, q, 46, 92, 8, sh(-0.08)); continue; }
+          piece(p, q, 90, 4, 3.5, metal);
+          if (rs === 'glass') piece(p, q, 48, 78, 1.6, 0x9fd3ee, 0.35);
+          if (rs === 'cable') for (const hh of [25, 45, 65]) piece(p, q, hh, 1.2, 1.2, metal);
         }
       }
       break;
@@ -8642,15 +8767,25 @@ function furn3D(g, o, C) {
 // Korkuluk / bahçe çiti 3B (#73): açık dikme + ray geometrisi, süpürgelik / üst kapak yok. g = duvar grubu (orta noktada, duvar yönünde)
 function lowWall3D(g, w, L, H, ops, box, det, lt) {
   const fence = w.wt === 'fence', spec = LOW_WALL[w.wt], X = x => x - L / 2;
-  const col = w.color || (fence ? (lt ? '#a47148' : '#8b5e3c') : (lt ? '#6b7280' : '#9ca3af'));
+  const col = w.color || (fence ? (lt ? '#a47148' : '#8b5e3c') : railStyle(w) === 'solid' ? (lt ? '#faf8f5' : '#e2e8f0') : (lt ? '#6b7280' : '#9ca3af'));
   const t = Math.max(2, +w.t || spec.t), ps = fence ? Math.max(8, t) : Math.max(4, Math.min(t, 6));
-  for (const x of lowWallPosts(w, L, ops)) box(g, ps, H, ps, col, X(x), H / 2, 0, 0, undefined, det, true);
+  if (railStyle(w) !== 'solid') for (const x of lowWallPosts(w, L, ops)) box(g, ps, H, ps, col, X(x), H / 2, 0, 0, undefined, det, true);
   for (const [s0, e0] of lowWallSolid(L, ops)) {
     const len = e0 - s0, xm = X((s0 + e0) / 2);
     if (fence) {
       for (const y of [H * 0.25, H * 0.75]) box(g, len, 8, t * 0.5, col, xm, y, -t * 0.15, 0, undefined, det, true);
       const step = Math.max(spec.bar, len / 150);
       for (let x = s0 + step / 2; x < e0 - 1; x += step) box(g, step * 0.6, H - 8, 2, shade(col, 0.06), X(x), (H - 8) / 2 + 4, t * 0.2, 0, undefined, false, false);
+    } else if (railStyle(w) === 'solid') { // dolu parapet: duvar gibi gövde + kapak, dikme yok
+      box(g, len, H - 4, t, col, xm, (H - 4) / 2, 0, 0, undefined, det, true);
+      box(g, len, 4, t * 1.15, shade(col, -0.12), xm, H - 2, 0, 0, undefined, det, false);
+    } else if (railStyle(w) === 'glass') { // cam panel: alt pabuç + cam + küpeşte
+      box(g, len, 5, Math.max(t, 6), shade(col, -0.1), xm, H - 2.5, 0, 0, undefined, det, true);
+      box(g, len, 6, Math.max(3, t * 0.6), shade(col, -0.2), xm, 3, 0, 0, undefined, det, false);
+      box(g, Math.max(1, len - 4), H - 13, 1.6, 0x9fd3ee, xm, 6 + (H - 13) / 2, 0, 0, lt ? 0.38 : 0.30, false, false);
+    } else if (railStyle(w) === 'cable') { // yatay çubuk / halat: küpeşte + 4 ince yatay
+      box(g, len, 5, Math.max(t, 6), shade(col, -0.1), xm, H - 2.5, 0, 0, undefined, det, true);
+      for (let i = 1; i <= 4; i++) box(g, len, 1.2, 1.2, col, xm, 10 + (H - 18) * (i - 1) / 3, 0, 0, undefined, false, false);
     } else {
       box(g, len, 5, Math.max(t, 6), shade(col, -0.1), xm, H - 2.5, 0, 0, undefined, det, true);   // küpeşte
       box(g, len, 3, t * 0.6, col, xm, 10, 0, 0, undefined, det, false);                             // alt ray
