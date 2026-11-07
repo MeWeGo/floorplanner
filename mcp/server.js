@@ -12,7 +12,7 @@
 
    Conventions (mirrors app.js — keep in sync!):
    - All units are CENTIMETRES; the Y axis points DOWN (screen convention).
-   - Wall { id, a:{x,y}, b:{x,y}, t, h, wt:'solid'|'curtain'|'railing'|'fence', mul?:cm, mulN?:n (curtain mullions), color?:'#hex' }.
+   - Wall { id, a:{x,y}, b:{x,y}, t, h, wt:'solid'|'curtain'|'railing'|'fence', mul?:cm, mulN?:n (curtain mullions), rs?:'bars'|'glass'|'cable'|'solid' (railing style), color?:'#hex' }.
    - Openings are parametric on a wall: d = distance from the wall's "a" end
      to the opening CENTRE (cm). Deleting a wall deletes its openings.
    - Furniture comes from the catalogue (see CATALOG below).
@@ -710,6 +710,8 @@ const ifcWords = s => String(s || '').toLowerCase().split(/[^a-z0-9çğıöşü]
 const ifcPick = (table, names) => { for (const w of ifcWords(names)) for (const [rx, v] of table) if (rx.test(w)) return v; return null; }; // ilk eşleşen sözcük (üst katman) kazanır
 // gri / beyaz (doygunluk yok) → duvarda boya sayılmaz: Revit'in varsayılan malzemeleri planı gri şeritlerle doldurmasın
 const ifcNeutral = hex => { const n = parseInt(String(hex).slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255; return Math.max(r, g, b) - Math.min(r, g, b) < 14; };
+// korkuluk stili (rs) adı / malzemesinden: cam panel, yatay çubuk / halat, dolu parapet; yoksa dikmeli
+const IFC_RAIL_STYLE = [[/^(glass|glazed|glazing|cam|camli|camlı)$/, 'glass'], [/^(cable|wire|kablo|halat|horizontal|yatay|rod)$/, 'cable'], [/^(parapet|solid|dolu|concrete|beton|betonarme|masonry|duvar|brick|tugla|tuğla)$/, 'solid']];
 const IFC_ROOF_MAX_FACES = 600; // çatı yüzü sınırı: üstü taban izinden düz çatıya düşer (proje / geri al hafif kalsın)
 const IFC_COMPONENTS = new Set(['IFCBUILDINGELEMENTPROXY', 'IFCFURNISHINGELEMENT', 'IFCFURNITURE', 'IFCSYSTEMFURNITUREELEMENT', 'IFCSANITARYTERMINAL', 'IFCELEMENTASSEMBLY']);
 // STEP metnini varlıklara böler; parametreler ilk erişimde (ifcArgs) ayrıştırılır, büyük dosyalar hızlı açılır
@@ -985,6 +987,41 @@ function ifcToProject(text, opts = {}) {
     return fc.map(f => f.map(toPlan));
   };
 
+  // korkuluğun gerçek izi: yüzlerin plandaki uzun kenarları doğrultu + konuma göre kümelenir; aynı çizgideki kenarlar (şeridin iki
+  // yüzü, cam + küpeşte) tek bir kol olur, kolun orta çizgisi bir parça. Tek parça L / kırık breplerde de çalışır. → { segs, t } | null
+  const railSegs = pid => {
+    const edges = [];
+    for (const f of facesOf(pid)) for (let i = 0; i < f.length; i++) {
+      const p = f[i], q = f[(i + 1) % f.length], L = Math.hypot(q[0] - p[0], q[1] - p[1]); if (L < 20) continue;
+      let ang = Math.atan2(q[1] - p[1], q[0] - p[0]); if (ang < 0) ang += Math.PI; if (ang >= Math.PI - 1e-9) ang -= Math.PI;
+      edges.push({ p, q, L, ang });
+    }
+    if (!edges.length) return null;
+    edges.sort((x, y) => y.L - x.L);
+    const groups = [];
+    for (const e of edges) {
+      let g = null;
+      for (const c of groups) {
+        let da = Math.abs(e.ang - c.ang); da = Math.min(da, Math.PI - da); if (da > 0.035) continue;
+        const o1 = (e.p[0] - c.o[0]) * -c.u[1] + (e.p[1] - c.o[1]) * c.u[0], o2 = (e.q[0] - c.o[0]) * -c.u[1] + (e.q[1] - c.o[1]) * c.u[0];
+        if (Math.abs(o1) > 15 || Math.abs(o2) > 15) continue;
+        const s1 = (e.p[0] - c.o[0]) * c.u[0] + (e.p[1] - c.o[1]) * c.u[1], s2 = (e.q[0] - c.o[0]) * c.u[0] + (e.q[1] - c.o[1]) * c.u[1];
+        if (Math.min(s1, s2) > c.s1 + 5 || Math.max(s1, s2) < c.s0 - 5) continue; // aynı çizgide ama ayrı kol
+        g = c; g.s0 = Math.min(g.s0, s1, s2); g.s1 = Math.max(g.s1, s1, s2); g.f0 = Math.min(g.f0, o1, o2); g.f1 = Math.max(g.f1, o1, o2); break;
+      }
+      if (!g) { const u = [(e.q[0] - e.p[0]) / e.L, (e.q[1] - e.p[1]) / e.L]; groups.push({ ang: e.ang, u, o: e.p, s0: 0, s1: e.L, f0: 0, f1: 0 }); }
+    }
+    const segs = [], ts = [];
+    for (const c of groups) {
+      if (c.s1 - c.s0 < 30) continue;
+      const m = (c.f0 + c.f1) / 2, ox = c.o[0] - c.u[1] * m, oy = c.o[1] + c.u[0] * m;
+      segs.push([{ x: ox + c.u[0] * c.s0, y: oy + c.u[1] * c.s0 }, { x: ox + c.u[0] * c.s1, y: oy + c.u[1] * c.s1 }]); ts.push(c.f1 - c.f0);
+    }
+    if (!segs.length) return null;
+    ts.sort((x, y) => x - y);
+    return { segs, t: ts[ts.length >> 1] || 6 };
+  };
+
   /* --- İlişkiler --- */
   const parent = new Map(), kids = new Map(), voidHost = new Map(), fillOf = new Map(), matOf = new Map(), typeOf = new Map();
   for (const r of db.byType.get('IFCRELCONTAINEDINSPATIALSTRUCTURE') || []) { const a = A(r); for (const e of a[4] || []) parent.set(R(e), R(a[5])); }
@@ -1092,10 +1129,10 @@ function ifcToProject(text, opts = {}) {
 
   /* --- Duvarlar --- */
   const wallsOf = new Map(); // IFC duvar id → plan duvarları
-  const railsOfStair = new Map(); // merdiven id → korkuluk sayısı (merdivenin kendi korkuluğu olur)
+  const railsOfStair = new Map(); // merdiven / rampa id → içindeki korkuluk id'leri (merdivenin kendi korkuluğu olur)
   for (const id of [...ids(new Set([...IFC_WALLS, ...IFC_RAILINGS])), ...railProxy]) {
     const t = T(id); let g = geom(id);
-    if ((IFC_RAILINGS.has(t) || railProxy.has(id)) && under(id, STAIRISH)) { const st = under(id, STAIRISH); railsOfStair.set(st, (railsOfStair.get(st) || 0) + 1); continue; }
+    if ((IFC_RAILINGS.has(t) || railProxy.has(id)) && under(id, STAIRISH)) { const st = under(id, STAIRISH); railsOfStair.set(st, (railsOfStair.get(st) || []).concat(id)); continue; }
     const rail = IFC_RAILINGS.has(t) || railProxy.has(id) ? (/fence|[çc]it\b|garden|bah[çc]e|parmakl/i.test(nameOf(id) + ' ' + typeName(id)) ? 'fence' : 'railing') : '';
     if (!g.body.length && !g.axis.length) {
       const ch = kids.get(id) || [];
@@ -1128,11 +1165,18 @@ function ifcToProject(text, opts = {}) {
     if (!th) th = curtain ? 10 : rail ? 6 : 20;
     th = rail ? Math.max(2, Math.min(10, Math.round(th * 2) / 2)) : Math.max(curtain ? 2 : 5, Math.min(300, Math.round(th * 2) / 2));
     const segs = [], look = looksDeep(id);
+    let pairs = axis.slice(1).map((b0, k) => [axis[k], b0]);
+    let rstyle = null;
+    if (rail) { // korkuluk: gerçek iz (L / kırık) ve stil
+      const rsg = railSegs(id); if (rsg && rsg.segs.length) { pairs = rsg.segs.map(([p, q]) => [p, q]); th = Math.max(2, Math.min(10, Math.round(rsg.t * 2) / 2)); }
+      if (rail === 'railing') rstyle = ifcPick(IFC_RAIL_STYLE, nameOf(id) + ' ' + typeName(id) + ' ' + look.names) || (look.glass ? 'glass' : null);
+    }
     for (const pc of rail ? [{ s: storeyOf(id, z0), z0, h }] : spanOf(id, z0, z1, h)) {
       const b = fl(pc.s);
-      for (let k = 0; k + 1 < axis.length; k++) {
-        const a0 = axis[k], b0 = axis[k + 1]; if (Math.hypot(b0.x - a0.x, b0.y - a0.y) < 1) continue;
+      for (const [a0, b0] of pairs) {
+        if (Math.hypot(b0.x - a0.x, b0.y - a0.y) < 1) continue;
         const w = { id: uid(), a: { x: r1(a0.x), y: r1(a0.y) }, b: { x: r1(b0.x), y: r1(b0.y) }, t: th, h: pc.h, wt: rail || (curtain ? 'curtain' : 'solid') };
+        if (rstyle && rstyle !== 'bars') w.rs = rstyle;
         if (look.col && (rail || (!curtain && !ifcNeutral(look.col)))) w.color = look.col; // boya: gri / beyaz duvar varsayılan kalır
         Object.defineProperty(w, '_z0', { value: pc.z0, enumerable: false, writable: true });
         b.walls.push(w); segs.push(w);
@@ -1314,7 +1358,18 @@ function ifcToProject(text, opts = {}) {
     const ex = { x: -u.y, y: u.x }, ey = { x: -u.x, y: -u.y }; let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
     for (const p of body) { const s1 = p[0] * ex.x + p[1] * ex.y, s2 = p[0] * ey.x + p[1] * ey.y; a0 = Math.min(a0, s1); a1 = Math.max(a1, s1); b0 = Math.min(b0, s2); b1 = Math.max(b1, s2); }
     const sm = (a0 + a1) / 2, tm = (b0 + b1) / 2, rot = Math.atan2(u.x, -u.y) * 180 / Math.PI;
-    return { ey, b0, b1, w: a1 - a0, d: b1 - b0, x: r1(sm * ex.x + tm * ey.x), y: r1(sm * ex.y + tm * ey.y), rot: r1(((rot % 360) + 360) % 360) };
+    return { ex, ey, b0, b1, w: a1 - a0, d: b1 - b0, x: r1(sm * ex.x + tm * ey.x), y: r1(sm * ex.y + tm * ey.y), rot: r1(((rot % 360) + 360) % 360) };
+  };
+  // merdiven / rampa korkulukları: çıkış yönüne göre hangi yanda (sağ = yerel +x) ve stil (cam / halat / parapet)
+  const railInfo = (sid, fr) => {
+    const rails = railsOfStair.get(sid) || []; let L = false, Rr = false; const names = [];
+    for (const rid of rails) {
+      const b = geom(rid).body; if (!b.length) continue; let cx = 0, cy = 0; for (const p of b) { cx += p[0]; cy += p[1]; } cx /= b.length; cy /= b.length;
+      const lx = (cx - fr.x) * fr.ex.x + (cy - fr.y) * fr.ex.y; if (lx >= 0) Rr = true; else L = true;
+      names.push(nameOf(rid), typeName(rid), looksDeep(rid).names, looksDeep(rid).glass ? 'glass' : '');
+    }
+    const side = L && Rr ? 'both' : Rr ? 'right' : L ? 'left' : 'none', rs = rails.length ? ifcPick(IFC_RAIL_STYLE, names.join(' ')) : null;
+    return { side, rs: rs && rs !== 'bars' ? rs : null };
   };
   const stairIds = ids(new Set(['IFCSTAIR'])).filter(id => !under(id, STAIRISH));
   for (const id of ids(new Set(['IFCSTAIRFLIGHT']))) if (!under(id, STAIRISH)) stairIds.push(id);
@@ -1333,10 +1388,10 @@ function ifcToProject(text, opts = {}) {
     if (!type) type = 'straight';
     const fr = frameOf(body, u); // −y = ilk kolun çıkış yönü
     let risers = 0; for (const c of flights) { const n = +A(c)[8]; if (n > 0) risers += n; }
-    const nr = railsOfStair.get(id) || 0;
     const o = { id: uid(), type: 'stairs', name: (nameOf(id) || tr('Merdiven', 'Stairs')).slice(0, 80), icon: '🪜', k: 'stairs', w: Math.max(40, r1(fr.w)), d: Math.max(40, r1(fr.d)), h: H, color: looksDeep(id).col || '#e2e8f0',
       x: fr.x, y: fr.y, rot: fr.rot, label: '',
-      stepN: Math.max(2, Math.min(60, risers || Math.round(H / 17.5))), stairType: type, railing: nr >= 2 ? 'both' : nr === 1 ? 'right' : 'none' };
+      stepN: Math.max(2, Math.min(60, risers || Math.round(H / 17.5))), stairType: type, railing: 'none' };
+    { const ri = railInfo(id, fr); o.railing = ri.side; if (ri.rs) o.rs = ri.rs; }
     if (type === 'spiral') { o.w = o.d = Math.max(o.w, o.d); }
     fl(st).furn.push(elevOf(o, z0, st)); stats.stairs++;
   }
@@ -1347,7 +1402,7 @@ function ifcToProject(text, opts = {}) {
   for (const id of rampIds) {
     const fls = T(id) === 'IFCRAMP' ? allKids(id).filter(c => T(c) === 'IFCRAMPFLIGHT') : [];
     const runs = fls.length ? fls.map(c => ({ c, body: geom(c).body })) : [{ c: id, body: [id, ...allKids(id)].flatMap(c => geom(c).body) }];
-    const nm = nameOf(id), nr = railsOfStair.get(id) || 0;
+    const nm = nameOf(id);
     for (const { c, body } of runs) {
       if (body.length < 3) { stats.skipped++; continue; }
       const fr = frameOf(body, climb(body) || { x: 0, y: -1 }), { ey, b0, b1 } = fr;
@@ -1359,7 +1414,8 @@ function ifcToProject(text, opts = {}) {
       const label = nm + ' ' + (c !== id ? nameOf(c) : '') + ' ' + typeName(id);
       const o = { id: uid(), type: 'ramp', name: (nameOf(c) || nm || tr('Rampa', 'Ramp')).slice(0, 80), icon: '♿', k: 'ramp', w, d: Math.max(50, r1(L)), h: Math.max(1, Math.round(zHi - zLo)), color: looksDeep(c).col || looksDeep(id).col || '#d6d3d1',
         x: fr.x, y: fr.y, rot: fr.rot, label: '',
-        rampType: ifcWords(label).some(x => /^(car|cars|vehicle|garage|garaj|parking|otopark|araç|arac)$/.test(x)) || w >= 250 ? 'vehicle' : 'accessible', railing: nr ? 'both' : 'none' };
+        rampType: ifcWords(label).some(x => /^(car|cars|vehicle|garage|garaj|parking|otopark|araç|arac)$/.test(x)) || w >= 250 ? 'vehicle' : 'accessible', railing: 'none' };
+      { const ri = railInfo(id, fr); o.railing = ri.side; if (ri.rs) o.rs = ri.rs; }
       fl(st).furn.push(elevOf(o, zLo, st)); stats.ramps++;
     }
   }
@@ -1559,7 +1615,11 @@ function findObj(f, id) {
 const WALL_TYPES = ['solid', 'curtain', 'railing', 'fence'];
 const LOW_WALL = { railing: { h: 100, t: 6 }, fence: { h: 110, t: 8 } };
 // curtain-wall mullions (#71): mul = target module in cm (default 120), mulN = intermediate mullion count (overrides mul)
+const RAIL_STYLES = ['bars', 'glass', 'cable', 'solid'];
 function cleanMullions(w, a = w) {
+  // railing style (mirror railStyle in app.js): absent = bars
+  if (w.wt !== 'railing') delete w.rs;
+  else if (a.rs != null) { if (!RAIL_STYLES.includes(a.rs)) throw new Error('rs must be one of ' + RAIL_STYLES.join(', ')); if (a.rs === 'bars') delete w.rs; else w.rs = a.rs; }
   if (w.wt !== 'curtain') { delete w.mul; delete w.mulN; return; }
   if (a.mulN != null) { const n = Math.round(+a.mulN); if (!(n >= 0 && n <= 200)) throw new Error('mulN must be an integer 0..200'); w.mulN = n; delete w.mul; }
   else if (a.mul != null) { const m = Math.round(+a.mul); if (!(m >= 20 && m <= 1000)) throw new Error('mul must be 20..1000 cm'); delete w.mulN; if (m === 120) delete w.mul; else w.mul = m; }
@@ -1940,6 +2000,7 @@ tool('add_wall',
     wt: { type: 'string', enum: ['solid', 'curtain', 'railing', 'fence'], description: 'Wall type: "solid" (default), "curtain" (glass facade), "railing" (balustrade, default h 100 / t 6) or "fence" (garden fence, default h 110 / t 8).' },
     mul: { type: 'number', description: 'Curtain walls only: vertical mullion spacing in cm (20..1000, default 120).' },
     mulN: { type: 'integer', description: 'Curtain walls only: number of intermediate vertical mullions (0 = one uninterrupted pane; overrides mul).' },
+    rs: { type: 'string', enum: ['bars', 'glass', 'cable', 'solid'], description: 'Railings only: style - "bars" (vertical balusters, default), "glass" (glass panel), "cable" (horizontal bars / cable) or "solid" (parapet).' },
     color: { type: 'string', description: 'Optional wall paint colour (#hex). Omit for the default wall colour.' },
     floorIndex: floorArg,
   },

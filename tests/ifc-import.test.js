@@ -520,3 +520,42 @@ test('16: proxy windows fill unfilled openings; rotated / slim components keep t
   const t = f.furn.find(o => o.name === 'T PROFIL8:T PROFIL');
   assert.ok(t && t.w >= 4.9 && t.d >= 4.7 && t.h === 400, 'slim T section kept at its outer size');
 });
+
+test('17: an L-shaped glass railing in one solid imports as two joined glass railing segments', () => {
+  const ifc = [
+    'ISO-10303-21;', 'HEADER;', "FILE_SCHEMA(('IFC4'));", 'ENDSEC;', 'DATA;',
+    "#1=IFCPROJECT('p1',$,'P',$,$,$,$,(#20),#10);", '#10=IFCUNITASSIGNMENT((#11));', '#11=IFCSIUNIT(*,.LENGTHUNIT.,.CENTI.,.METRE.);',
+    "#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#21,$);", '#21=IFCAXIS2PLACEMENT3D(#30,$,$);', '#30=IFCCARTESIANPOINT((0.,0.,0.));', '#31=IFCDIRECTION((0.,0.,1.));',
+    "#50=IFCBUILDINGSTOREY('s1',$,'Ground',$,$,#51,$,$,.ELEMENT.,0.);", '#51=IFCLOCALPLACEMENT($,#21);',
+    "#60=IFCRELCONTAINEDINSPATIALSTRUCTURE('r1',$,$,$,(#100),#50);",
+    // L footprint 2 cm thick: leg 1 along X (0..350), leg 2 along Y (0..150), outer corner at the origin
+    "#100=IFCBUILDINGELEMENTPROXY('x1',$,'Railing:02_KORK_CAM',$,$,#51,#101,$,$);", '#101=IFCPRODUCTDEFINITIONSHAPE($,$,(#102));', "#102=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#103));",
+    '#103=IFCEXTRUDEDAREASOLID(#104,#21,#31,110.);', "#104=IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,'L',#105);", '#105=IFCPOLYLINE((#110,#111,#112,#113,#114,#115,#110));',
+    '#110=IFCCARTESIANPOINT((0.,0.));', '#111=IFCCARTESIANPOINT((350.,0.));', '#112=IFCCARTESIANPOINT((350.,2.));', '#113=IFCCARTESIANPOINT((2.,2.));', '#114=IFCCARTESIANPOINT((2.,150.));', '#115=IFCCARTESIANPOINT((0.,150.));',
+    'ENDSEC;', 'END-ISO-10303-21;'].join('\n');
+  const { project, stats } = ifcToProject(ifc);
+  const rails = project.floors[0].walls.filter(w => w.wt === 'railing');
+  assert.strictEqual(stats.railings, 2, 'two legs, not one diagonal');
+  assert.strictEqual(rails.length, 2);
+  assert.ok(rails.every(w => w.rs === 'glass'), 'CAM in the name → glass style');
+  assert.ok(rails.every(w => w.h === 110 && w.t >= 2 && w.t <= 3), 'height and thin glass thickness');
+  const lens = rails.map(w => Math.round(Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y))).sort((a, b) => a - b);
+  assert.ok(Math.abs(lens[0] - 150) <= 2 && Math.abs(lens[1] - 350) <= 2, 'leg lengths ' + lens);
+  const ends = rails.flatMap(w => [w.a, w.b]);
+  assert.ok(ends.some((p, i) => ends.some((q, j) => i !== j && Math.hypot(p.x - q.x, p.y - q.y) < 2)), 'the two legs meet at the corner');
+});
+
+test('18: stair railings land on the right side and the railing tool / styles are wired', () => {
+  const st = ifcToProject(read('tests/fixtures/roof-stairs.ifc')).project.floors[0].furn.find(o => o.k === 'stairs');
+  assert.strictEqual(st.railing, 'right', 'the railing beside the first flight is on its right-hand side');
+  assert.match(appJs, /\['railing', '🛡', 'Korkuluk', 'Q', 'Railing'\]/, 'toolbar entry with shortcut Q');
+  assert.match(appJs, /q: 'railing'/, 'keyboard map');
+  assert.match(appJs, /else if \(t === 'railing'\) tool = 'wall';/, 'the railing tool reuses the wall tool');
+  assert.match(appJs, /function toolWall\(a, b\)[^\n]*setWallType\(w, 'railing'\)/, 'new pieces become railings');
+  const env = new Function(appJs.match(/const RAIL_STYLES = [^\n]*/)[0] + '\n' + appJs.match(/function railStyle\(w\) [^\n]*/)[0] + '\nreturn railStyle;')();
+  assert.strictEqual(env({ wt: 'railing' }), 'bars');
+  assert.strictEqual(env({ wt: 'railing', rs: 'glass' }), 'glass');
+  assert.strictEqual(env({ wt: 'solid', rs: 'glass' }), 'bars', 'only railings, stairs and ramps have a style');
+  assert.strictEqual(env({ k: 'stairs', rs: 'cable' }), 'cable');
+  assert.strictEqual(env({ k: 'ramp', rs: 'nope' }), 'bars');
+});
