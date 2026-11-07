@@ -401,6 +401,11 @@ function mkRoom(f, a) {
     floor: finishOk(a.floorPattern) ? a.floorPattern : 'none',
     pts,
   };
+  if (a.slabThickness != null) {
+    const t = num(a.slabThickness, undefined, 'slabThickness');
+    if (t < 0 || t > 200) throw new Error('slabThickness must be between 0 and 200 cm (got ' + t + ')');
+    r.slabT = t;
+  }
   f.rooms.push(r);
   return r;
 }
@@ -779,6 +784,7 @@ tool('add_room',
     name: { type: 'string', description: 'Room name, e.g. "Salon" / "Living room".' },
     color: { type: 'string', description: '#hex fill color. Default: next palette color.' },
     floorPattern: { type: 'string', description: FINISH_DOC + '. Default none.' },
+    slabThickness: { type: 'number', description: 'Slab thickness under the room in 3D, cm 0..200 (0 = flat surface). Default 20 — useful for balconies / terraces drawn outside the walls.' },
     floorIndex: floorArg,
   },
   ['pts'],
