@@ -39,6 +39,8 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 
 ## 2. Golden Rules (read first)
 
+> **Product principle:** the app is made for **ease of use** by non-experts and is **optimised as far as possible while preserving every feature**. Prefer sensible defaults and automatic behaviour over new dialogs, modes and settings; keep pro-only extras behind advanced options. Keep hot paths cheap (render, mouse-move, 3D build): no per-frame allocation, do work lazily. Never remove an existing feature to simplify — streamline or tuck it away instead.
+
 1. **No dependencies, no build.** Do not introduce npm, bundlers, frameworks or TypeScript. The app must work by double-clicking `index.html`. The only exception is the optional `mcp/` tooling, which is also zero-dependency Node and must never be loaded by `app.js`.
 2. **Keep all UI text bilingual (`tr` / `en`)** using `L('Türkçe', 'English')` (labels, toasts, prompts, modal text, catalog items). Code identifiers and comments may be English or Turkish — match the surrounding code.
 3. **State is the single source of truth.** Mutate `P` (project) → call `commit()` → call `refresh()`/`render()`. Never read geometry back from the DOM.
