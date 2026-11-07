@@ -41,6 +41,8 @@ function makeEnv(floors = []) {
     ${constLine('floorElev')}
     ${constLine('fmtLevel')}
     ${constLine('ELEV_DIRS')}
+    ${constLine('LOW_WALL')}
+    ${src.slice(src.indexOf('function isLowWall'), src.indexOf('\n', src.indexOf('function isLowWall')))}
     ${fnSrc('lineCutIntervals')}
     ${fnSrc('subIntervals')}
     ${fnSrc('sectionFrame')}
