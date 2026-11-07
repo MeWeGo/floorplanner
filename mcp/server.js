@@ -434,7 +434,7 @@ function summarize() {
   out.push('Project "' + p.name + '" — schema v' + p.v + ', grid ' + p.grid + ' cm (' + p.gridType + '), default wall ' + p.wallT + ' cm × ' + p.wallH + ' cm high, ' + p.floors.length + ' floor(s)');
   p.floors.forEach((f, i) => {
     out.push('');
-    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts');
+    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts');
     for (const w of f.walls)
       out.push('  wall ' + w.id + ': (' + w.a.x + ',' + w.a.y + ') → (' + w.b.x + ',' + w.b.y + ')  length ' + Math.round(wLen(w)) + ' cm, t=' + w.t + ', h=' + w.h + (w.wt !== 'solid' ? ', ' + w.wt : ''));
     for (const o of f.ops)
@@ -670,11 +670,15 @@ tool('ack_user_requests',
 tool('add_floor',
   'Add a new empty floor on top of the existing ones and return its index.',
   { name: { type: 'string', description: 'Floor name, e.g. "1. Kat" / "First Floor".' },
-    wallH: { type: 'number', description: 'Optional wall height of this floor in cm (default: project wallH). New walls on it get this height and the floors above stack on it in 3D.' } },
+    wallH: { type: 'number', description: 'Optional wall height of this floor in cm, 100–800 (default: project wallH). New walls on it get this height and the floors above stack on it in 3D.' } },
   [],
   a => {
     const f = newFloor(a.name || ('Floor ' + P.floors.length));
-    if (a.wallH != null) f.wallH = num(a.wallH, undefined, 'wallH');
+    if (a.wallH != null) {
+      const h = num(a.wallH, undefined, 'wallH');
+      if (h < 100 || h > 800) throw new Error('wallH must be between 100 and 800 cm (got ' + h + ')');
+      f.wallH = h;
+    }
     proj().floors.push(f);
     return 'Added floor ' + (P.floors.length - 1) + ' "' + f.name + '" (id ' + f.id + '). Pass floorIndex=' + (P.floors.length - 1) + ' to the other tools to draw on it.';
   });

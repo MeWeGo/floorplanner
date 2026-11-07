@@ -261,8 +261,8 @@ test('(9) evaluate doorMat/doorLeafCol/isDoorOp: legacy door -> wood with #b0896
 
   assert.match(fnSrc('opSvg'), /const\s+leafLn\s*=\s*\(/);
   const rp = fnSrc('renderProps');
-  assert.match(rp, /optL\(DOOR_MATS\)/);
-  assert.match(rp, /optL\(GLASS_KINDS\)/);
+  assert.match(rp, /(optL|biOpts)\(DOOR_MATS\)/);
+  assert.match(rp, /(optL|biOpts)\(GLASS_KINDS\)/);
   assert.match(rp, /data-act="opcolreset"/);
 });
 

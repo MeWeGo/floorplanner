@@ -577,11 +577,11 @@ check('ramp: slope badge, 2D arrow + label, 3D wedge with rails (issue #58)', as
     loadProject(newProject());
     const r = mkFurn(BYID.ramp, 300, 300, 0); r.d = 600; r.h = 40; F().furn.push(r); commit(); sel = [r.id]; refresh();
     const g = document.querySelector('#gFurn [data-id="' + r.id + '"]');
-    const out = { pct: Math.round(rampSlope(r).pct * 10) / 10, cls: rampSlope(r).cls, label: g ? g.textContent.includes('%6.7') : false,
+    const out = { pct: Math.round(rampSlope(r).pct * 10) / 10, cls: rampSlope(r).cls, label: g ? g.textContent.includes(pctTxt(6.7)) : false,
       badge: (document.querySelector('#props') || {}).textContent.includes('6.7'), type: !!document.querySelector('#props [data-p="rampType"]') };
     r.h = 70; commit(); refresh(); out.fit = !!document.querySelector('#props [data-act="rampfit"]');
     document.querySelector('#props [data-act="rampfit"]').click(); out.fitD = r.d;
-    out.svg = exportSvg().svg.includes('%8.0');
+    out.svg = exportSvg().svg.includes(pctTxt(8));
     document.getElementById('b3d').click();
     if (ui.view3d) {
       const grp = T3.scene.children.find(c => c.userData && c.userData.furnId === r.id), box = new THREE.Box3().setFromObject(grp);
@@ -605,6 +605,7 @@ check('glass floor: 2D pattern, slab hole under it and transparent panel in 3D (
     addRectWalls(0, 0, 600, 400);
     P.floors.push(newFloor('1')); fi = 1; addRectWalls(0, 0, 600, 400);
     F().rooms.push({ id: uid(), name: 'Bridge', color: '#cbd5e1', floor: 'glass', pts: [{ x: 200, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }, { x: 200, y: 300 }] });
+    F().slabs.push({ id: uid(), name: 'Glass bridge', floor: 'glass', color: null, t: 20, off: 0, pts: [{ x: 450, y: 100 }, { x: 550, y: 100 }, { x: 550, y: 300 }, { x: 450, y: 300 }] });
     commit(); sel = [F().rooms[0].id]; refresh();
     const out = { pat: !!document.querySelector('#defs pattern#p-glass') || defsSvg().includes('id="p-glass"'), used: document.querySelector('#gRooms').innerHTML.includes('url(#p-glass)'),
       field: !!document.querySelector('#props [data-p="glass"]'), opt: !!document.querySelector('#props [data-p="floor"] option[value="glass"]') };
@@ -623,7 +624,7 @@ check('glass floor: 2D pattern, slab hole under it and transparent panel in 3D (
   })()`);
   if (!info.pat || !info.used) throw new Error('2D glass pattern missing: ' + JSON.stringify(info));
   if (!info.field || !info.opt) throw new Error('room panel lacks the glass options: ' + JSON.stringify(info));
-  if (info.glass !== undefined && (info.glass !== 1 || !info.transparent || info.holes < 1)) throw new Error('3D glass floor wrong: ' + JSON.stringify(info));
+  if (info.glass !== undefined && (info.glass !== 2 || !info.transparent || info.holes < 2)) throw new Error('3D glass floor wrong: ' + JSON.stringify(info));
   return 'pattern + panel' + (info.glass ? ', 3D glass panel over a slab hole' : '');
 });
 
@@ -631,9 +632,14 @@ check('per-floor wall heights: apply to all walls, floors stack on their own hei
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
     addRectWalls(0, 0, 400, 300); commit();
-    const w = F().walls[0]; w.h = 350; sel = [w.id]; commit(); refresh();
+    const w = F().walls[0]; F().ops.push(mkOp(OPDEF.window, w, 200)); commit();
+    const w2 = F().walls[1]; w2.h = 180; sel = [w2.id]; commit(); refresh();
     document.querySelector('#props [data-act="wallhfloor"]').click();
-    const out = { all: F().walls.every(x => x.h === 350), floorH: F().wallH };
+    const op = F().ops[0], fitted = op.sill + op.h <= 175;
+    undo(); undo();
+    const w1 = F().walls[0]; w1.h = 350; sel = [w1.id]; commit(); refresh();
+    document.querySelector('#props [data-act="wallhfloor"]').click();
+    const out = { fitted, all: F().walls.every(x => x.h === 350), floorH: F().wallH };
     undo(); out.undone = F().walls.filter(x => x.h === 350).length;
     redo();
     P.floors.push(newFloor('1')); fi = 1; addRectWalls(0, 0, 400, 300); commit();
@@ -643,6 +649,7 @@ check('per-floor wall heights: apply to all walls, floors stack on their own hei
     out.reset = P.floors.every(f => !f.wallH && f.walls.every(x => x.h === P.wallH));
     return out;
   })()`);
+  if (!info.fitted) throw new Error('a window stuck out above the lowered walls: ' + JSON.stringify(info));
   if (!info.all || info.floorH !== 350) throw new Error('apply to floor failed: ' + JSON.stringify(info));
   if (info.undone !== 1) throw new Error('undo did not restore the other walls: ' + JSON.stringify(info));
   if (info.newWall !== 270 || info.e1 !== 370) throw new Error('floor stacking / new wall height wrong: ' + JSON.stringify(info));

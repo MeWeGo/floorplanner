@@ -115,6 +115,9 @@ const underlay = { floor: 'prev', op: 0.2 };
 // kat bazlı duvar yüksekliği (#59): Floor.wallH yoksa proje varsayılanı; kat aralığı = yükseklik + 20 cm döşeme
 const floorH = f => (f && +f.wallH > 0 ? +f.wallH : P.wallH);
 const curFloorH = () => floorH(P && P.floors ? P.floors[fi] : null);
+const FLOOR_H_MIN = 100, FLOOR_H_MAX = 800; // kat yüksekliği alanı ve MCP add_floor ile aynı aralık
+// { key: [tr, en] } → <select> seçenekleri (merdiven / rampa / cam alanları)
+const biOpts = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
 const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null });
 const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, textures: [], floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
 const F = () => P.floors[fi];
@@ -1253,7 +1256,7 @@ function furnBody(f) {
     const aw = Math.min(10, hw * 0.4);
     s += `<line x1="0" y1="${y0}" x2="0" y2="${y1}" stroke="${sk}" stroke-width="1.8"/><circle cx="0" cy="${y0}" r="3" fill="${sk}"/>`
       + `<path d="M${-aw} ${y1 + aw * 1.4}L0 ${y1}L${aw} ${y1 + aw * 1.4}" stroke="${sk}" stroke-width="2" fill="none"/>`;
-    if (f.w >= 40 && f.d >= 80) s += `<text x="${tx}" y="0" font-size="${fs}" text-anchor="middle" dominant-baseline="central" fill="${C.text}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" transform="rotate(-90 ${tx} 0)">%${fmtPct(sl.pct)} · ↑${Math.round(f.h)}</text>`;
+    if (f.w >= 40 && f.d >= 80) s += `<text x="${tx}" y="0" font-size="${fs}" text-anchor="middle" dominant-baseline="central" fill="${C.text}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" transform="rotate(-90 ${tx} 0)">${pctTxt(sl.pct)} · ↑${Math.round(f.h)}</text>`;
   } else {
     s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" rx="${Math.min(6, hw / 3)}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
     if (f.k === 'bed') {
@@ -1328,6 +1331,7 @@ const RAMP_CLS = {
   steep: ['#dc2626', '⚠ Çok dik – yönetmelik dışı (> %15)', '⚠ Too steep – outside regulations (> 15%)'],
 };
 const fmtPct = v => (Math.round(v * 10) / 10).toFixed(1);
+const pctTxt = v => L('%' + fmtPct(v), fmtPct(v) + '%'); // Türkçe %7,0 sırası; İngilizce 7.0%
 // Bir basamağın yerel köşeleri (döndürülmüş dikdörtgen)
 function stepCorners(s) {
   const c = Math.cos(s.a), sn = Math.sin(s.a), hw = s.w / 2, hd = s.d / 2;
@@ -3074,7 +3078,7 @@ function renderProps() {
   if (k === 'wall') {
     if (n === 1) h += fld(L('Uzunluk (cm)', 'Length (cm)'), 'wall', 'len', wLen(o), { step: 1, min: 1 });
     h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 });
-    if (F().walls.length > 1) h += `<div class="row"><button class="btn sm" data-act="wallhfloor" title="${L('Bu yüksekliği kattaki tüm duvarlara ve katın varsayılanına uygula', 'Apply this height to every wall on the floor and make it the floor default')}">⬆ ${L('Kattaki tüm duvarlara uygula', 'Apply to all walls on floor')}</button></div>`;
+    if (F().walls.length > 1 && os.every(x => x.o.h === o.h)) h += `<div class="row"><button class="btn sm" data-act="wallhfloor" title="${L('Bu yüksekliği kattaki tüm duvarlara ve katın varsayılanına uygula', 'Apply this height to every wall on the floor and make it the floor default')}">⬆ ${L('Kattaki tüm duvarlara uygula', 'Apply to all walls on floor')}</button></div>`;
     h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall') } });
     h += fld(L('🎨 Duvar boyası', '🎨 Wall paint'), 'wall', 'color', o.color || '#f5f1e8', { type: 'color' });
     h += `<div class="row swatches">${PAINTS.map(([c, tr, en]) => `<button class="btn sm swatch${o.color === c ? ' on' : ''}" data-act="paint" data-c="${c}" title="${L(tr, en)}" style="background:${c}"></button>`).join('')}<button class="btn sm" data-act="paint" data-c="" title="${L('Varsayılan renk', 'Default colour')}">${L('↺ Varsayılan', '↺ Default')}</button></div>`;
@@ -3119,11 +3123,10 @@ function renderProps() {
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'op', 'w', o.w, { min: 20, max: 500 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'op', 'h', o.h, { min: 20, max: 400 }) + fld(L('Denizlik (cm)', 'Sill height (cm)'), 'op', 'sill', o.sill, { min: 0, max: 300 });
     if (o.type === 'door' || o.type === 'double') h += `<label class="f"><span>${L('Açık (90°)', 'Open (90°)')}</span><input type="checkbox" data-k="op" data-p="open" ${o.open ? 'checked' : ''}></label>`;
     else if (o.type === 'slide') h += `<label class="f"><span>${L('Açık', 'Open')}</span><input type="checkbox" data-k="op" data-p="open" ${o.open ? 'checked' : ''}></label>`;
-    const optL = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
     if (isDoorOp(o)) {
       const dm = doorMat(o);
-      h += fld(L('Malzeme', 'Material'), 'op', 'mat', dm, { sel: optL(DOOR_MATS) });
-      if (dm === 'glass' || dm === 'paneled') h += fld(L('Cam', 'Glass'), 'op', 'glass', o.glass === 'frosted' ? 'frosted' : 'clear', { sel: optL(GLASS_KINDS) });
+      h += fld(L('Malzeme', 'Material'), 'op', 'mat', dm, { sel: biOpts(DOOR_MATS) });
+      if (dm === 'glass' || dm === 'paneled') h += fld(L('Cam', 'Glass'), 'op', 'glass', o.glass === 'frosted' ? 'frosted' : 'clear', { sel: biOpts(GLASS_KINDS) });
       if (dm !== 'glass') h += fld(L('Kanat rengi', 'Leaf colour'), 'op', 'color', doorLeafCol(o), { type: 'color' });
     }
     if (o.type !== 'arch') h += fld(L('Kasa rengi', 'Frame colour'), 'op', 'frameCol', o.frameCol || '#c3c1bf', { type: 'color' });
@@ -3138,21 +3141,19 @@ function renderProps() {
     if (o.k === 'ramp' && n === 1) {
       // rampa ayarları (#58): tür, korkuluk; canlı eğim (% ve 1:X) + yönetmelik rozeti
       const sl = rampSlope(o), [cc, ctr, cen] = RAMP_CLS[sl.cls];
-      const opt = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
-      h += `<h4>${L('Rampa', 'Ramp')}</h4>` + fld(L('Tür', 'Type'), 'furn', 'rampType', rampType(o), { sel: opt(RAMP_TYPES) })
-        + fld(L('Korkuluk', 'Railing'), 'furn', 'railing', rampRail(o), { sel: opt(STAIR_RAILS) })
+      h += `<h4>${L('Rampa', 'Ramp')}</h4>` + fld(L('Tür', 'Type'), 'furn', 'rampType', rampType(o), { sel: biOpts(RAMP_TYPES) })
+        + fld(L('Korkuluk', 'Railing'), 'furn', 'railing', rampRail(o), { sel: biOpts(STAIR_RAILS) })
         + `<p class="muted" style="margin:0 0 6px">${L('Genişlik = G, uzunluk = D (yatay), kot farkı = Y alanları.', 'Width = W, length = D (horizontal), rise = H fields.')}</p>`
-        + `<div class="stat"><span>${L('Eğim', 'Slope')}</span><b>%${fmtPct(sl.pct)} · 1:${isFinite(sl.ratio) ? Math.round(sl.ratio * 10) / 10 : '∞'} · ${Math.round(sl.deg * 10) / 10}°</b></div>`
+        + `<div class="stat"><span>${L('Eğim', 'Slope')}</span><b>${pctTxt(sl.pct)} · 1:${isFinite(sl.ratio) ? Math.round(sl.ratio * 10) / 10 : '∞'} · ${Math.round(sl.deg * 10) / 10}°</b></div>`
         + `<div class="stat"><span>${L('Uygunluk', 'Compliance')}</span><b style="color:${cc}">${L(ctr, cen)}</b></div>`
         + (sl.pct > 8 && rampType(o) === 'accessible' ? `<div class="row"><button class="btn sm" data-act="rampfit" title="${L('Kot farkını koruyup uzunluğu %8 eğime göre ayarla', 'Keep the rise and lengthen the ramp to an 8% slope')}">↔ ${L('%8 için uzat', 'Lengthen to 8%')} (${Math.ceil(o.h / 0.08)} cm)</button></div>` : '');
     }
     if (o.k === 'stairs' && n === 1) {
       // merdiven ayarları (#33): rıht sayısı, tür, korkuluk; rıht / basamak ve Blondel konfor kontrolü
       const st = stairSteps(o), bl = blondel(st.riser, st.tread), bc = bl.ok ? '#16a34a' : bl.warn ? '#d97706' : 'var(--danger)';
-      const opt = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
-      h += `<h4>${L('Merdiven', 'Stairs')}</h4>` + fld(L('Tür', 'Type'), 'furn', 'stairType', st.type, { sel: opt(STAIR_TYPES) })
+      h += `<h4>${L('Merdiven', 'Stairs')}</h4>` + fld(L('Tür', 'Type'), 'furn', 'stairType', st.type, { sel: biOpts(STAIR_TYPES) })
         + fld(L('Rıht sayısı', 'Number of risers'), 'furn', 'stepN', st.n, { min: 2, max: 60, step: 1 })
-        + fld(L('Korkuluk', 'Railing'), 'furn', 'railing', o.railing || 'right', { sel: opt(STAIR_RAILS) })
+        + fld(L('Korkuluk', 'Railing'), 'furn', 'railing', o.railing || 'right', { sel: biOpts(STAIR_RAILS) })
         + `<div class="stat"><span>${L('Rıht yüksekliği', 'Riser height')}</span><b>${(Math.round(st.riser * 10) / 10)} cm</b></div>`
         + `<div class="stat"><span>${L('Basamak derinliği', 'Tread depth')}</span><b>${(Math.round(st.tread * 10) / 10)} cm</b></div>`
         + `<div class="stat" title="${L('Blondel kuralı: 2 × rıht + basamak ≈ 63 cm (60–64 rahat)', 'Blondel rule: 2 × riser + tread ≈ 63 cm (60–64 is comfortable)')}"><span>2r + t</span><b style="color:${bc}">${Math.round(bl.v * 10) / 10} cm ${bl.ok ? '✓' : bl.warn ? '≈' : '✗'}</b></div>`
@@ -3223,9 +3224,21 @@ function renderProps() {
   el.innerHTML = h;
 }
 // cam döşeme (#57): şeffaf / buzlu seçimi yalnızca zemin 'glass' iken görünür
+// duvar alçalınca kapı / pencere duvarın üstünden taşmasın (#59): önce yükseklik, gerekirse denizlik düşer
+function fitOpsToWall(f, w, top = 5) {
+  let n = 0;
+  for (const o of f.ops || []) {
+    if (o.wall !== w.id || (+o.sill || 0) + o.h <= w.h - (o.type === 'window' ? top : 0)) continue;
+    const room = w.h - (o.type === 'window' ? top : 0);
+    o.h = Math.max(20, room - (+o.sill || 0));
+    if ((+o.sill || 0) + o.h > room) o.sill = Math.max(0, room - o.h);
+    n++;
+  }
+  return n;
+}
 function glassFld(k, o) {
   if (k !== 'floor' && o.floor !== 'glass') return '';
-  return fld(L('Cam', 'Glass'), k, 'glass', o.glass === 'frosted' ? 'frosted' : 'clear', { sel: Object.fromEntries(Object.entries(GLASS_KINDS).map(([kk, v]) => [kk, L(...v)])) });
+  return fld(L('Cam', 'Glass'), k, 'glass', o.glass === 'frosted' ? 'frosted' : 'clear', { sel: biOpts(GLASS_KINDS) });
 }
 function projectPanel() {
   const f = F(); let h = `<h3>⚙️ ${L('Proje', 'Project')}</h3>`;
@@ -3247,7 +3260,7 @@ function projectPanel() {
   if (P.bg) h += bgFields(false);
   else h += `<p class="muted" style="margin:0 0 6px">${L('Kroki / mevcut plan görselini altlık olarak ekleyip üzerinden çizebilirsin.', 'Import a blueprint or floor plan image as an underlay to trace over.')}</p><div class="row"><button class="btn sm" data-act="bgadd">${L('🖼 Görsel ekle', '🖼 Add image')}</button></div>`;
   h += `<h4>${L('Kesit & görünüş', 'Sections & elevations')}</h4><div class="row"><button class="btn sm" data-act="archview">${L('📐 Görünüşler ve kesitler', '📐 Elevations & sections')}</button></div><p class="muted" style="margin:0 0 6px">${L('Dört cephe görünüşü kat kotlarıyla; kesit eklemek için 🔪 Kesit aracı (L).', 'Four facade elevations with floor levels; add a section with the 🔪 Section tool (L).')}</p>`;
-  h += `<h4>${L('Kat yüksekliği', 'Floor height')} – ${esc(f.name)}</h4>` + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'floor', 'wallH', floorH(f), { min: 100, max: 800 })
+  h += `<h4>${L('Kat yüksekliği', 'Floor height')} – ${esc(f.name)}</h4>` + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'floor', 'wallH', floorH(f), { min: FLOOR_H_MIN, max: FLOOR_H_MAX })
     + `<div class="row"><button class="btn sm" data-act="wallhfloor">⬆ ${L('Bu kattaki duvarlara uygula', 'Apply to walls on this floor')}</button>${f.wallH ? `<button class="btn sm" data-act="floorhreset" title="${L('Proje varsayılanına dön', 'Back to the project default')}">↺ ${P.wallH} cm</button>` : ''}</div>`
     + `<p class="muted" style="margin:0 0 6px">${L('Yeni duvarlar bu yüksekliği alır; 3B’de üst katlar bu yüksekliğe göre dizilir.', 'New walls get this height; in 3D the floors above stack on it.')}</p>`;
   h += `<h4>${L('Kat döşemesi', 'Floor slab')} – ${esc(f.name)}</h4>`;
@@ -3296,7 +3309,7 @@ function applyProp(t, final) {
     if (p === 'name') { if (String(v).trim()) tm.name = String(v).trim().slice(0, 60); } else tm[p] = clamp(v, 1, 5000);
     render(); if (p !== 'name' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
   }
-  if (k === 'floor' && p === 'wallH') { const n = +v; if (!(n > 0)) return; F().wallH = clamp(n, 50, 1000); if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
+  if (k === 'floor' && p === 'wallH') { const n = +v; if (!(n > 0)) return; const hv = clamp(n, FLOOR_H_MIN, FLOOR_H_MAX); if (hv === P.wallH) delete F().wallH; else F().wallH = hv; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
   if (k === 'bg' && P.bg) { P.bg[p] = v; if (p === 'lock' && v) sel = sel.filter(x => x !== 'bg'); render(); if (final) { commit(); if (p === 'lock') renderProps(); } return; }
@@ -3368,10 +3381,11 @@ $('#props').addEventListener('click', e => {
     const H = a === 'wallhall' ? P.wallH : (w ? +w.h : floorH(fl)) || P.wallH;
     const floors = a === 'wallhall' ? P.floors : [fl];
     let n = 0;
-    for (const x of floors) { for (const ww of x.walls) { if (ww.h !== H) n++; ww.h = H; } if (a === 'wallhall') delete x.wallH; }
+    let nOp = 0;
+    for (const x of floors) { for (const ww of x.walls) { if (ww.h !== H) n++; ww.h = H; nOp += fitOpsToWall(x, ww); } if (a === 'wallhall') delete x.wallH; }
     if (a === 'wallhfloor') { if (H === P.wallH) delete fl.wallH; else fl.wallH = H; }
     commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
-    toast(L(`${n} duvarın yüksekliği ${H} cm yapıldı`, `Updated the height of ${n} wall(s) to ${H} cm`));
+    toast(L(`${n} duvarın yüksekliği ${H} cm yapıldı`, `Updated the height of ${n} wall(s) to ${H} cm`) + (nOp ? L(` · ${nOp} açıklık sığdırıldı`, ` · ${nOp} opening(s) fitted`) : ''));
     return;
   }
   if (a === 'rampfit') { for (const { o } of os) if (o.k === 'ramp' && o.h > 0) o.d = Math.ceil(o.h / 0.08); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
@@ -6359,7 +6373,7 @@ function furn3D(g, o, C) {
   // b: merkez y; bb: taban y
   const b = (bw, bh, bd, c, x, y, z, ry = 0, op, e) => box(g, bw, bh, bd, c, x, y, z, ry, op, e === undefined ? 0 : e);
   const bb = (bw, bh, bd, c, x, y0, z, ry = 0, e) => b(bw, bh, bd, c, x, y0 + bh / 2, z, ry, 0, e);
-  switch (o.type) {
+  switch (o.k === 'ramp' ? 'ramp' : o.type) { // rampa 2B gibi k ile seçilir (#58)
     case 'sofa3': case 'sofa2': case 'armchair': {
       const n = Math.max(1, Math.round(w / 75));
       bb(w * 0.98, h * 0.1, d * 0.98, sh(-0.18), 0, 0, 0, 0, ed);
@@ -6735,6 +6749,7 @@ function build3D(keepCam = false) {
     // döşeme boşlukları (issue #23): tamamen içinde kaldıkları plakada / oda zemininde Shape.holes ile gerçek delik
     // cam döşeme (#57): cam odalar alttaki plakayı (ve onu içeren odaları) boşluk gibi deler; cam panel + çerçeve + 100 cm derzler
     const glassRooms = f.rooms.filter(r => r.pts && r.pts.length >= 3 && finishKind(r.floor) === 'glass');
+    const glassCuts = [...glassRooms, ...(f.slabs || []).filter(s => s.pts && s.pts.length >= 3 && finishKind(s.floor) === 'glass')];
     const glassMat = fr => { const m = new THREE.MeshPhongMaterial({ color: fr ? 0xe8f2f7 : 0x9fd3ee, transparent: true, opacity: fr ? 0.65 : 0.35, shininess: 90, specular: 0xffffff, depthWrite: false, side: THREE.DoubleSide }); extraMats.push(m); return m; };
     const glassFloor = (pts, top, th, fr, holes) => {
       const shp = new THREE.Shape(pts.map(p => new THREE.Vector2(p.x, p.y)));
@@ -6755,7 +6770,7 @@ function build3D(keepCam = false) {
       return m;
     };
     const withHoles = (shp, pts, self) => {
-      for (const h of voidHoles([...(f.voids || []), ...glassRooms.filter(r => r !== self)], pts)) shp.holes.push(new THREE.Path(h.map(q => new THREE.Vector2(q.x, q.y))));
+      for (const h of voidHoles([...(f.voids || []), ...glassCuts.filter(r => r !== self)], pts)) shp.holes.push(new THREE.Path(h.map(q => new THREE.Vector2(q.x, q.y))));
       return shp;
     };
     for (const pts of slabPolys(f)) {
