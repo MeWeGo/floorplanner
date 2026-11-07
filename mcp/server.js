@@ -87,8 +87,17 @@ const CATALOG = [
   { id: 'tree', cat: 5, name: 'Ağaç', en: 'Tree', w: 200, d: 200, h: 400, icon: '🌳', k: 'round', color: '#86efac' },
   { id: 'pool', cat: 5, name: 'Havuz', en: 'Swimming Pool', w: 400, d: 800, h: 5, icon: '🏊', k: 'rect', color: '#7dd3fc' },
   { id: 'fireplace', cat: 5, name: 'Şömine', en: 'Fireplace', w: 120, d: 40, h: 120, icon: '🔥', k: 'rect', color: '#94a3b8' },
+  { id: 'tvw', cat: 0, name: 'Duvar TV', en: 'Wall TV', w: 140, d: 6, h: 80, icon: '📺', k: 'rect', color: '#111827' },
+  { id: 'art', cat: 0, name: 'Tablo', en: 'Wall Art', w: 80, d: 3, h: 60, icon: '🖼️', k: 'rect', color: '#8a6a4f' },
+  { id: 'shelfW', cat: 0, name: 'Duvar Rafı', en: 'Wall Shelf', w: 100, d: 25, h: 4, icon: '▭', k: 'rect', color: '#b08968' },
+  { id: 'ac', cat: 0, name: 'Klima', en: 'Air Conditioner', w: 90, d: 25, h: 30, icon: '❄️', k: 'rect', color: '#f8fafc' },
+  { id: 'cabU', cat: 2, name: 'Üst Dolap', en: 'Wall Cabinet', w: 80, d: 35, h: 70, icon: '🗄️', k: 'rect', color: '#e2e8f0' },
+  { id: 'wmirror', cat: 3, name: 'Ayna', en: 'Mirror', w: 60, d: 3, h: 90, icon: '🪞', k: 'rect', color: '#cbd5e1' },
 ];
 const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
+// height above the floor (cm) that wall-mounted catalogue items get by default — mirror of app.js CAT_ELEV (#61)
+const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110 };
+const FURN_ELEV_MAX = 500;
 const OPENINGS = [
   { id: 'door', name: 'Kapı', en: 'Door', w: 90, h: 210, sill: 0 },
   { id: 'double', name: 'Çift Kanatlı Kapı', en: 'Double Door', w: 160, h: 210, sill: 0 },
@@ -1213,7 +1222,7 @@ function ifcToProject(text, opts = {}) {
   /* --- Kolonlar (yapı iskeleti) ve özel bileşenler / mobilyalar --- */
   const footOf = g => { const pts = polyOf(g); if (!pts || pts.length < 3) return null; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } return { pts, x0, y0, x1, y1, ar: Math.abs(ifcArea(pts.map(p => [p.x, p.y]))) }; };
   const polyItem = (ft, base) => { const cx = r1((ft.x0 + ft.x1) / 2), cy = r1((ft.y0 + ft.y1) / 2); return Object.assign(base, { k: 'poly', w: Math.max(1, r1(ft.x1 - ft.x0)), d: Math.max(1, r1(ft.y1 - ft.y0)), x: cx, y: cy, rot: 0, pts: ft.pts.map(p => ({ x: r1(p.x - cx), y: r1(p.y - cy) })) }); };
-  const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (Math.abs(el) >= 3) o.elev = Math.max(-1000, Math.min(2000, el)); return o; };
+  const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (el >= 3) o.elev = Math.min(500, el); return o; }; // 0..500 = FURN_ELEV_MAX (#61)
   for (const id of ids(IFC_COLUMNS)) {
     const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 4) { stats.skipped++; continue; }
     const [z0, z1] = zr(g.body), h0 = Math.max(10, Math.min(5000, Math.round(z1 - z0)));
@@ -1570,6 +1579,11 @@ function mkFurn(f, a) {
     x: num(a.x, undefined, 'x'), y: num(a.y, undefined, 'y'), rot: num(a.rot, 0, 'rot'),
     label: a.label || '',
   };
+  const e = a.elev != null ? num(a.elev, 0, 'elev') : CAT_ELEV[def.id];
+  if (e != null) {
+    if (e < 0 || e > FURN_ELEV_MAX) throw new Error('elev must be between 0 and ' + FURN_ELEV_MAX + ' cm (got ' + e + ')');
+    if (e > 0 || a.elev != null) o.elev = e;
+  }
   if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } // multi-part catalogue item
   f.furn.push(o);
   return o;
@@ -1634,7 +1648,7 @@ function summarize() {
     for (const v of f.voids || [])
       out.push('  void ' + v.id + ': ' + v.type + (v.name ? ' "' + v.name + '"' : '') + ' ' + fmtArea(polyArea(v.pts)));
     for (const t of f.furn)
-      out.push('  furn ' + t.id + ': ' + t.name + ' ' + t.w + '×' + t.d + ' cm at (' + t.x + ',' + t.y + ') rot=' + t.rot + '°' + (Array.isArray(t.parts) ? ', ' + t.parts.length + ' parts' : ''));
+      out.push('  furn ' + t.id + ': ' + t.name + ' ' + t.w + '×' + t.d + ' cm at (' + t.x + ',' + t.y + ') rot=' + t.rot + '°' + (t.elev > 0 ? ', ' + t.elev + ' cm above floor' : '') + (Array.isArray(t.parts) ? ', ' + t.parts.length + ' parts' : ''));
     for (const t of f.texts)
       out.push('  text ' + t.id + ': "' + t.text + '" at (' + t.x + ',' + t.y + ')');
   });
@@ -1648,7 +1662,7 @@ function listCatalog() {
     out.push('');
     out.push('[' + cat + ']');
     for (const c of CATALOG.filter(c => c.cat === ci))
-      out.push('  ' + c.id + ' — ' + (c.en || c.name) + ', ' + c.w + '×' + c.d + '×' + c.h + ' cm, ' + c.k);
+      out.push('  ' + c.id + ' — ' + (c.en || c.name) + ', ' + c.w + '×' + c.d + '×' + c.h + ' cm, ' + c.k + (CAT_ELEV[c.id] ? ', wall-mounted at ' + CAT_ELEV[c.id] + ' cm' : ''));
   });
   out.push('');
   out.push('Opening presets (opening id — w×h cm, sill cm):');
@@ -1968,12 +1982,13 @@ tool('add_furniture',
     d: { type: 'number', description: 'Override depth (cm).' },
     h: { type: 'number', description: 'Override height (cm, 3D).' },
     color: { type: 'string', description: 'Override color (#hex).' },
+    elev: { type: 'number', description: 'Height above the floor in cm (0..500), for wall-mounted items (TV, cabinet, mirror, shelf). Wall items (tvw, art, shelfW, ac, cabU, wmirror) default to a typical height; everything else defaults to 0.' },
     floorIndex: floorArg,
   },
   ['catalogId', 'x', 'y'],
   a => {
     const o = mkFurn(floorOf(a), a);
-    return 'Added ' + o.name + ' ' + o.id + ' (' + o.w + '×' + o.d + ' cm) at (' + o.x + ',' + o.y + ') rot=' + o.rot + '°.';
+    return 'Added ' + o.name + ' ' + o.id + ' (' + o.w + '×' + o.d + ' cm) at (' + o.x + ',' + o.y + ') rot=' + o.rot + '°' + (o.elev > 0 ? ', ' + o.elev + ' cm above the floor' : '') + '.';
   });
 
 tool('add_room',

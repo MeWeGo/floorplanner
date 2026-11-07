@@ -599,6 +599,38 @@ check('ramp: slope badge, 2D arrow + label, 3D wedge with rails (issue #58)', as
   return '6.7% accessible, lengthened to 875 cm' + (info.meshes ? ', 3D ' + info.meshes + ' meshes' : '');
 });
 
+check('height above floor: wall items hang, dashed + tagged in 2D, panel edit and undo, TV unit model (issue #61)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F(); f.walls.push(mkWall({ x: 0, y: 0 }, { x: 400, y: 0 }));
+    const tvw = mkFurn(BYID.tvw, 150, 10, 0), tv = mkFurn(BYID.tv, 150, 120, 0), sofa = mkFurn(BYID.sofa3, 150, 300, 0);
+    f.furn.push(tvw, tv, sofa); magnet(tvw); commit(); sel = [tvw.id]; refresh();
+    const g = document.querySelector('#gFurn [data-id="' + tvw.id + '"]');
+    const out = { elev: tvw.elev, tvElev: tv.elev, sofaElev: sofa.elev, tag: g ? g.textContent.includes('▲ +80') : false, dashed: g ? !!g.querySelector('[stroke-dasharray]') : false };
+    const inp = document.querySelector('#props [data-k="furn"][data-p="elev"]'); out.field = !!inp;
+    if (inp) { inp.value = '900'; inp.dispatchEvent(new Event('change', { bubbles: true })); }
+    out.clamped = F().furn.find(o => o.id === tvw.id).elev;
+    undo(); out.undone = F().furn.find(o => o.id === tvw.id).elev;
+    out.svg = exportSvg().svg.includes('▲ +80');
+    document.getElementById('b3d').click();
+    if (ui.view3d) {
+      const bot = id => { const grp = T3.scene.children.find(c => c.userData && c.userData.furnId === id); return grp ? Math.round(new THREE.Box3().setFromObject(grp).min.y) : null; };
+      out.tvwBottom = bot(tvw.id); out.sofaBottom = bot(sofa.id);
+      const grp = T3.scene.children.find(c => c.userData && c.userData.furnId === tv.id), box = new THREE.Box3().setFromObject(grp);
+      out.tvTop = Math.round(box.max.y); out.tvMeshes = 0; grp.traverse(o => { if (o.isMesh) out.tvMeshes++; });
+      show3D(false);
+    }
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (info.elev !== 80 || info.tvElev !== undefined || info.sofaElev !== undefined) throw new Error('catalogue defaults: ' + JSON.stringify(info));
+  if (!info.tag || !info.dashed || !info.svg) throw new Error('2D tag / dashed outline / export missing: ' + JSON.stringify(info));
+  if (!info.field || info.clamped !== 500 || info.undone !== 80) throw new Error('panel field / clamp / undo: ' + JSON.stringify(info));
+  if (info.tvwBottom !== undefined && (info.tvwBottom !== 80 || info.sofaBottom !== 0)) throw new Error('3D height above floor wrong: ' + JSON.stringify(info));
+  if (info.tvTop !== undefined && (info.tvMeshes < 12 || info.tvTop < 120)) throw new Error('TV unit model (console + screen on a stand) missing: ' + JSON.stringify(info));
+  return 'wall TV at 80 cm, clamp 500, undo' + (info.tvMeshes ? ', TV unit ' + info.tvMeshes + ' meshes' : '');
+});
+
 check('glass floor: 2D pattern, slab hole under it and transparent panel in 3D (issue #57)', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());

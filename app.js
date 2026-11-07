@@ -41,6 +41,10 @@ const CAT_DEFS = [
   ['bookcase', 0, 'Kitaplık', 100, 35, 200, '📚', 'rect', '#b08968', 'Bookcase'],
   ['rug', 0, 'Halı', 200, 140, 2, '▦', 'rect', '#fca5a5', 'Rug'],
   ['plant', 0, 'Bitki', 40, 40, 90, '🪴', 'round', '#86efac', 'Plant'],
+  ['tvw', 0, 'Duvar TV', 140, 6, 80, '📺', 'rect', '#111827', 'Wall TV'],
+  ['art', 0, 'Tablo', 80, 3, 60, '🖼️', 'rect', '#8a6a4f', 'Wall Art'],
+  ['shelfW', 0, 'Duvar Rafı', 100, 25, 4, '▭', 'rect', '#b08968', 'Wall Shelf'],
+  ['ac', 0, 'Klima', 90, 25, 30, '❄️', 'rect', '#f8fafc', 'Air Conditioner'],
   ['bed2', 1, 'Çift Kişilik Yatak', 160, 200, 50, '🛏️', 'bed', '#fde68a', 'Double Bed'],
   ['bed1', 1, 'Tek Kişilik Yatak', 100, 200, 50, '🛏️', 'bed', '#fde68a', 'Single Bed'],
   ['bedK', 1, 'King Yatak', 180, 200, 50, '🛏️', 'bed', '#fde68a', 'King Bed'],
@@ -58,12 +62,14 @@ const CAT_DEFS = [
   ['counter2', 2, 'Tezgâh 60', 60, 60, 90, '▭', 'rect', '#e2e8f0', 'Counter 60'],
   ['island', 2, 'Ada Tezgâh', 180, 90, 90, '▭', 'rect', '#e2e8f0', 'Kitchen Island'],
   ['wm', 2, 'Çamaşır Mak.', 60, 60, 85, '🧺', 'rect', '#cbd5e1', 'Washing Machine'],
+  ['cabU', 2, 'Üst Dolap', 80, 35, 70, '🗄️', 'rect', '#e2e8f0', 'Wall Cabinet'],
   ['wc', 3, 'Klozet', 40, 70, 40, '🚽', 'rect', '#f1f5f9', 'Toilet'],
   ['basin', 3, 'Lavabo', 60, 45, 85, '🚰', 'rect', '#f1f5f9', 'Washbasin'],
   ['basin2', 3, 'Çift Lavabo', 120, 50, 85, '🚰', 'rect', '#f1f5f9', 'Double Washbasin'],
   ['shower', 3, 'Duş Teknesi', 90, 90, 200, '🚿', 'rect', '#bae6fd', 'Shower'],
   ['tub', 3, 'Küvet', 170, 75, 55, '🛁', 'rect', '#bae6fd', 'Bathtub'],
   ['bidet', 3, 'Bide', 40, 55, 40, '🚽', 'rect', '#f1f5f9', 'Bidet'],
+  ['wmirror', 3, 'Ayna', 60, 3, 90, '🪞', 'rect', '#cbd5e1', 'Mirror'],
   ['desk', 4, 'Çalışma Masası', 140, 70, 75, '🖥️', 'rect', '#d6b88f', 'Office Desk'],
   ['deskL', 4, 'L Masa', 180, 140, 75, '🖥️', 'rect', '#d6b88f', 'L-Shaped Desk'],
   ['ochair', 4, 'Ofis Koltuğu', 60, 60, 100, '💺', 'round', '#94a3b8', 'Office Chair'],
@@ -82,6 +88,9 @@ const CAT_DEFS = [
 ];
 const CATALOG = CAT_DEFS.map(a => ({ id: a[0], cat: a[1], name: a[2], w: a[3], d: a[4], h: a[5], icon: a[6], k: a[7], color: a[8], en: a[9] }));
 const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
+// yerden yükseklik (#61): duvara asılan eşyalar bu yükseklikte gelir; alan isteğe bağlı, yoksa 0 (yerde)
+const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110 };
+const FURN_ELEV_MAX = 500, furnElev = o => (o && +o.elev > 0 ? Math.min(FURN_ELEV_MAX, +o.elev) : 0);
 const OPENINGS = [
   { id: 'door', name: 'Kapı', en: 'Door', w: 90, h: 210, sill: 0, icon: '🚪' },
   { id: 'double', name: 'Çift Kanatlı Kapı', en: 'Double Door', w: 160, h: 210, sill: 0, icon: '🚪' },
@@ -2515,7 +2524,7 @@ function ifcToProject(text, opts = {}) {
   /* --- Kolonlar (yapı iskeleti) ve özel bileşenler / mobilyalar --- */
   const footOf = g => { const pts = polyOf(g); if (!pts || pts.length < 3) return null; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } return { pts, x0, y0, x1, y1, ar: Math.abs(ifcArea(pts.map(p => [p.x, p.y]))) }; };
   const polyItem = (ft, base) => { const cx = r1((ft.x0 + ft.x1) / 2), cy = r1((ft.y0 + ft.y1) / 2); return Object.assign(base, { k: 'poly', w: Math.max(1, r1(ft.x1 - ft.x0)), d: Math.max(1, r1(ft.y1 - ft.y0)), x: cx, y: cy, rot: 0, pts: ft.pts.map(p => ({ x: r1(p.x - cx), y: r1(p.y - cy) })) }); };
-  const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (Math.abs(el) >= 3) o.elev = Math.max(-1000, Math.min(2000, el)); return o; };
+  const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (el >= 3) o.elev = Math.min(500, el); return o; }; // 0..500 = FURN_ELEV_MAX (#61)
   for (const id of ids(IFC_COLUMNS)) {
     const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 4) { stats.skipped++; continue; }
     const [z0, z1] = zr(g.body), h0 = Math.max(10, Math.min(5000, Math.round(z1 - z0)));
@@ -2791,7 +2800,9 @@ function parts3D(g, o, C) {
 const CAT_PARTS = { billiard: billiardParts };
 function furnSvg(f, live) {
   const C = pal(), fs = Math.max(12, Math.min(f.w, f.d) * 0.42);
-  let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${furnBody(f)}`;
+  const fe = f.k === 'roof' ? 0 : furnElev(f); // yerden yükseklik (#61): asılı eşya kesikli çizilir + ▲ etiketi
+  let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${fe ? `<g stroke-dasharray="6 4">${furnBody(f)}</g>` : furnBody(f)}`;
+  if (fe) s += `<text transform="translate(0 ${f.d / 2 + 9}) rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="11" fill="${C.sub}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">▲ +${Math.round(fe)}</text>`;
   if (f.icon && f.k !== 'roof' && !(Array.isArray(f.parts) && f.parts.length)) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
   if (f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="${C.text}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
   return s + '</g>';
@@ -3144,7 +3155,7 @@ function mkOp(def, wall, d) {
   if (def.extra) Object.assign(o, JSON.parse(JSON.stringify(def.extra))); // ön ayar alanları (#42)
   return o;
 }
-function mkFurn(def, x, y, rot = 0) { const o = { id: uid(), type: def.id, name: itemName(def), icon: def.icon, k: def.k, w: def.w, d: def.d, h: def.h, color: def.color, x, y, rot, label: '' }; if (def.k === 'poly' && def.pts) o.pts = JSON.parse(JSON.stringify(def.pts)); if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } if (def.extra) for (const k in def.extra) if (k !== 'pts') o[k] = JSON.parse(JSON.stringify(def.extra[k])); cleanParts(o); return o; }
+function mkFurn(def, x, y, rot = 0) { const o = { id: uid(), type: def.id, name: itemName(def), icon: def.icon, k: def.k, w: def.w, d: def.d, h: def.h, color: def.color, x, y, rot, label: '' }; if (def.k === 'poly' && def.pts) o.pts = JSON.parse(JSON.stringify(def.pts)); if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } if (def.extra) for (const k in def.extra) if (k !== 'pts') o[k] = JSON.parse(JSON.stringify(def.extra[k])); if (o.elev == null && CAT_ELEV[def.id]) o.elev = CAT_ELEV[def.id]; cleanParts(o); return o; }
 function mkRoom(pts, name) {
   const n = F().rooms.length;
   return { id: uid(), name: name || L('Oda ', 'Room ') + (n + 1), color: ROOMCOL[n % ROOMCOL.length], floor: 'none', pts };
@@ -4411,7 +4422,8 @@ function renderProps() {
     else h += acts(`<button class="btn sm" data-act="opflip">${L('↔ Menteşe', '↔ Hinge')}</button><button class="btn sm" data-act="opside">${L('↕ Açılış yönü', '↕ Swing side')}</button>`);
   } else if (k === 'furn') {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
-    h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Kot / zeminden (cm)', 'Elevation above floor (cm)'), 'furn', 'elev', +o.elev || 0, { min: -1000, max: 2000, step: 5 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
+    h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
+    if (o.k !== 'stairs' && o.k !== 'ramp') h += fld(L('Yerden yükseklik (cm)', 'Height above floor (cm)'), 'furn', 'elev', furnElev(o), { min: 0, max: FURN_ELEV_MAX, step: 5 }); // duvara asılan eşya (#61)
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button>`);
     if (o.k === 'ramp' && n === 1) {
       // rampa ayarları (#58): tür, korkuluk; canlı eğim (% ve 1:X) + yönetmelik rozeti
@@ -4585,6 +4597,7 @@ function applyProp(t, final) {
     if (p === 'name') { if (String(v).trim()) tm.name = String(v).trim().slice(0, 60); } else tm[p] = clamp(v, 1, 5000);
     render(); if (p !== 'name' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
   }
+  if (k === 'furn' && p === 'elev') v = clamp(+v || 0, 0, FURN_ELEV_MAX); // yerden yükseklik (#61)
   if (k === 'room' && p === 'slabT') v = clamp(v, 0, 200); // 0 = ince yüzey (eski görünüm) (#63)
   if (k === 'floor' && p === 'wallH') { const n = +v; if (!(n > 0)) return; const hv = clamp(n, FLOOR_H_MIN, FLOOR_H_MAX); if (hv === P.wallH) delete F().wallH; else F().wallH = hv; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
@@ -4627,7 +4640,6 @@ function applyProp(t, final) {
     else if (k === 'wall' && p === 'mul') { if (!final) continue; const m = clamp(Math.round(v), 20, 1000); delete o.mulN; if (m === MUL_DEF) delete o.mul; else o.mul = m; }
     else if (k === 'wall' && p === 'mulN') { if (!final) continue; o.mulN = clamp(Math.round(v), 0, 200); }
     else if (k === 'wall' && p === 'wt') { setWallType(o, v); }
-    else if (k === 'furn' && p === 'elev') { const e = clamp(Math.round(v), -1000, 2000); if (e) o.elev = e; else delete o.elev; }
     else if (k === 'op' && p === 'open') { o.open = v ? 90 : 0; }
     else if (k === 'op' && p === 'type') { o[p] = v; if (v === 'window' && o.sill === 0) { o.sill = 90; o.h = 120; } if (v !== 'window' && o.sill > 0) { o.sill = 0; o.h = 210; } }
     else o[p] = v;
@@ -4775,7 +4787,7 @@ $('#props').addEventListener('click', e => {
    tip değildir. Kapı açılış yönü (side) kaydedilir ama yerleştirirken imlecin tarafını izler (duvar yönü
    her duvarda farklıdır); S ile çevrilir. #41 alanları (mat, color, frameCol, glass) da taşınır. */
 const PRESET_OP_EXTRA = ['mat', 'color', 'frameCol', 'glass'];
-const PRESET_FURN_EXTRA = ['stepN', 'stairType', 'railing', 'rampType', 'pts', 'faces', 'fbase', 'elev', 'parts', 'pbase', 'partsV'];
+const PRESET_FURN_EXTRA = ['stepN', 'stairType', 'railing', 'rampType', 'pts', 'faces', 'fbase', 'parts', 'pbase', 'partsV', 'elev'];
 const clonePlain = v => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
 function presetFromObj(kind, o, name) {
   const p = { id: uid(), name: String(name).slice(0, 60), kind };
@@ -6439,7 +6451,7 @@ function archPrims(spec) {
     // çatılar (IFC): her yüz düzleme izdüşürülür; kesitte yalnızca bakış yönündekiler (kesilmez, görünüş olarak)
     for (const o of f.furn || []) {
       if (o.k !== 'roof') continue;
-      const th = (o.rot || 0) * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th), base = E + (+o.elev || 0);
+      const th = (o.rot || 0) * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th), base = E + furnElev(o);
       for (const q of roofFaces(o)) {
         const ps = q.map(p => { const w = pr({ x: o.x + p[0] * c - p[1] * sn, y: o.y + p[0] * sn + p[1] * c }); return { s: w.s, d: w.d, z: base + p[2] }; });
         const depth = ps.reduce((a, p) => a + p.d, 0) / ps.length; if (cut && depth <= 0) continue;
@@ -8464,12 +8476,64 @@ function furn3D(g, o, C) {
       break;
     }
     case 'tv': {
-      bb(w, h * 0.75, d, sh(-0.06), 0, 0, 0, 0, ed);
-      bb(w * 0.98, 3, d * 0.98, sh(-0.2), 0, h * 0.75, 0);
-      const sw = w * 0.72, shh = h * 1.1;
-      b(sw, shh, 3, '#1f2937', 0, h * 0.78 + shh / 2, -d * 0.12, 0, 0, ed);
-      b(sw * 0.94, shh * 0.9, 1, '#0ea5e9', 0, h * 0.78 + shh / 2, -d * 0.12 + 2, 0, 0.9);
-      bb(w * 0.2, 2, d * 0.5, dark, 0, h * 0.75, 0);
+      // TV ünitesi: ayaklı alçak konsol + kapaklar; üstünde ayaklı, ince 16:9 ekran (kapalı, koyu)
+      const legH = Math.min(10, h * 0.16), top = Math.max(2, Math.min(3, h * 0.06)), bodyH = h - legH - top;
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) bb(3, legH, 3, dark, sx * (w / 2 - 6), 0, sz * (d / 2 - 5));
+      bb(w, bodyH, d, sh(-0.06), 0, legH, 0, 0, ed);
+      bb(w + 1, top, d + 1, sh(-0.2), 0, h - top, 0, 0, ed);
+      const nd = clamp(Math.round(w / 50), 2, 4), dw = w / nd;
+      for (let i = 0; i < nd; i++) {
+        const dx = (i + 0.5) * dw - w / 2;
+        bb(dw - 1.5, bodyH - 3, 1.5, sh(0.06), dx, legH + 1.5, d / 2 + 0.75);
+        bb(dw * 0.3, 1.2, 1.5, metal, dx, legH + bodyH - 6, d / 2 + 2);
+      }
+      const sw = Math.min(w * 0.8, 165), shh = sw * 9 / 16, gap = 9, sz = -d * 0.15;
+      bb(sw * 0.3, 1.5, Math.min(22, d * 0.55), dark, 0, h, sz + 3);
+      bb(Math.min(8, sw * 0.06), gap + shh * 0.3, 2.5, dark, 0, h, sz - 0.5);
+      bb(sw, shh, 2.5, '#111827', 0, h + gap, sz + 1, 0, ed);
+      bb(sw - 2.4, shh - 2.4, 0.4, '#1e293b', 0, h + gap + 1.2, sz + 2.4);
+      break;
+    }
+    case 'tvw': { // duvar TV'si (#61): ince panel + arkada askı aparatı
+      const t = Math.max(2, d * 0.5);
+      bb(w * 0.3, h * 0.3, d - t, dark, 0, h * 0.35, -d / 2 + (d - t) / 2);
+      bb(w, h, t, '#111827', 0, 0, d / 2 - t / 2, 0, ed);
+      bb(w - 2.4, h - 2.4, 0.4, '#1e293b', 0, 1.2, d / 2 + 0.2);
+      break;
+    }
+    case 'art': { // tablo: çerçeve + tuval + birkaç renk alanı
+      bb(w, h, d, col, 0, 0, 0, 0, ed);
+      bb(w * 0.86, h * 0.86, 0.6, '#f5efe6', 0, h * 0.07, d / 2 + 0.3);
+      bb(w * 0.34, h * 0.42, 0.3, '#c2410c', -w * 0.16, h * 0.4, d / 2 + 0.7);
+      bb(w * 0.3, h * 0.26, 0.3, '#1d4ed8', w * 0.18, h * 0.18, d / 2 + 0.7);
+      bb(w * 0.22, h * 0.22, 0.3, '#ca8a04', w * 0.2, h * 0.56, d / 2 + 0.7);
+      break;
+    }
+    case 'shelfW': { // duvar rafı: tabla + iki konsol (raf havadaysa)
+      bb(w, h, d, col, 0, 0, 0, 0, ed);
+      if (furnElev(o) >= 12) for (const sx of [-1, 1]) bb(2, 10, d * 0.8, metal, sx * w * 0.32, -10, -d * 0.1);
+      break;
+    }
+    case 'ac': { // split klima iç ünitesi
+      bb(w, h, d, col, 0, 0, 0, 0, ed);
+      bb(w * 0.86, Math.max(1.5, h * 0.08), 1, '#94a3b8', 0, h * 0.12, d / 2 + 0.5);
+      bb(w * 0.9, 0.6, 0.6, sh(-0.12), 0, h * 0.55, d / 2 + 0.3);
+      bb(3, 1.2, 0.6, '#22c55e', w * 0.38, h * 0.35, d / 2 + 0.3);
+      break;
+    }
+    case 'cabU': { // üst mutfak dolabı: gövde + kapaklar, kulplar altta
+      bb(w, h, d, sh(-0.06), 0, 0, 0, 0, ed);
+      const nd = w > 60 ? 2 : 1, dw = w / nd;
+      for (let i = 0; i < nd; i++) {
+        const dx = (i + 0.5) * dw - w / 2;
+        bb(dw - 1, h - 1.5, 1.5, sh(0.05), dx, 0.75, d / 2 + 0.75);
+        bb(Math.min(14, dw * 0.35), 1.2, 1.5, metal, dx, 5, d / 2 + 2);
+      }
+      break;
+    }
+    case 'wmirror': { // ayna: ince çerçeve + açık, hafif mavimsi cam
+      bb(w, h, d, col, 0, 0, 0, 0, ed);
+      bb(w - 4, h - 4, 0.4, '#dbeafe', 0, 2, d / 2 + 0.2);
       break;
     }
     case 'rug': {
@@ -8867,7 +8931,7 @@ function build3D(keepCam = false) {
       S.add(m);
     }
     f.furn.forEach((o, fi3) => {
-      const fy = elev + furnOff(o) + (+o.elev || 0), ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, fy, o.y); g.rotation.y = ry; g.userData = { furnId: o.id, elev: fy }; S.add(g);
+      const fy = elev + furnOff(o) + furnElev(o), ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, fy, o.y); g.rotation.y = ry; g.userData = { furnId: o.id, elev: fy }; S.add(g);
       // çakışan mobilya (ör. üst üste havuzlar = nehir): katman sırasına göre hafif yükseltilir, aynı yükseklikteki yüzeyler titremez
       let ig = g; if (furnLv[fi3]) { ig = new THREE.Group(); ig.position.y = furnLv[fi3] * 0.5; g.add(ig); }
       furn3D(ig, o, furnCtx);

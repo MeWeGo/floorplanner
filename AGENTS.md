@@ -39,6 +39,8 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 
 ## 2. Golden Rules (read first)
 
+> **Product principle:** the app is made for **ease of use** by non-experts and is **optimised as far as possible while preserving every feature**. Prefer sensible defaults and automatic behaviour over new dialogs, modes and settings; keep pro-only extras behind advanced options. Keep hot paths cheap (render, mouse-move, 3D build): no per-frame allocation, do work lazily. Never remove an existing feature to simplify — streamline or tuck it away instead.
+
 1. **No dependencies, no build.** Do not introduce npm, bundlers, frameworks or TypeScript. The app must work by double-clicking `index.html`. The only exception is the optional `mcp/` tooling, which is also zero-dependency Node and must never be loaded by `app.js`.
 2. **Keep all UI text bilingual (`tr` / `en`)** using `L('Türkçe', 'English')` (labels, toasts, prompts, modal text, catalog items). Code identifiers and comments may be English or Turkish — match the surrounding code.
 3. **State is the single source of truth.** Mutate `P` (project) → call `commit()` → call `refresh()`/`render()`. Never read geometry back from the DOM.
@@ -75,7 +77,7 @@ Floor = {
   "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain|railing|fence", mul?:cm, mulN?:n (curtain mullions, #71), color?:"#hex" (paint; absent = theme default), pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
   "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1, open?:0|90, mat?:"wood|glass|paneled|metal", color?:"#hex", frameCol?:"#hex", glass?:"clear|frosted" } ],   // doors & windows
   "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label, stepN?, stairType?:"straight|l|u|spiral", railing?:"none|left|right|both", rampType?:"accessible|vehicle|landscape",   // stair fields for k:"stairs" (#33); ramps (k:"ramp", #58) use rampType + railing
-                elev?:cm (height above the floor, #72; absent = 0), faces?:[[[x,y,z],…],…], fbase?:{w,d,h} (k:"roof" only: IFC roof faces, local cm, z from the item base),
+                faces?:[[[x,y,z],…],…], fbase?:{w,d,h} (k:"roof" only: IFC roof faces, local cm, z from the item base),
                 parts?:[{ name?, type:"box|cyl|sphere|extrude", x, y, z, w, d, h, rot?, color?, mat?:"gloss|metal|glass", axis?:"x|y", pts? }], pbase?:{w,d,h}, partsV?:1 } ],   // multi-part furniture (see §8)
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone|grass|water|gravel|deck|asphalt|glass|tex:<id>", glass?:"clear|frosted", slabT?:20, pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
   "slabs":  [ { id, name, floor:"concrete|…", glass?:"clear|frosted", color:null|"#hex", t:20, off:0, pts:[{x,y},…] } ],   // free slabs: balconies / terraces (issue #22)
@@ -245,6 +247,12 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - Catalogue item `ramp` (`k: 'ramp'`): `w` = width, `d` = horizontal length, `h` = rise. Like stairs it climbs toward local −y (low end at +d/2). `rampType(o)` (`RAMP_TYPES`: accessible / vehicle / landscape, default accessible) and `rampRail(o)` (`railing`, default `both`, `none` for vehicle ramps) are the only readers of the optional fields, so legacy-free defaults need no `normalizeProject` work.
 - `rampSlope(o)` → `{ pct, ratio, deg, cls }`; `cls` (`RAMP_CLS`): ≤ 6 % `ideal`, ≤ 8 % `access`, ≤ 15 % `vehicle`, else `steep`. The panel shows % / 1:X / degrees with a coloured badge; an accessible ramp steeper than 8 % offers **↔ Lengthen to 8 %** (`rampfit`, keeps the rise).
 - 2D (`furnBody`): outline, anti-slip lines, curb lines (accessible), rail lines, an up arrow and a `%6.7 · ↑40` label (exported too). 3D (`furn3D` case `ramp`): one `ExtrudeGeometry` wedge, 5 cm curbs (accessible), grooves (vehicle, detail only), posts about every 150 cm and handrails at 90 cm (+ 70 cm on accessible ramps) parallel to the slope. `isStructFurn` includes ramps for the floor underlay.
+
+### Height above floor (issue #61)
+- Furniture may carry an optional `elev` (cm above the floor, 0–`FURN_ELEV_MAX` = 500). `furnElev(o)` is the only reader (absent / ≤ 0 = 0), so old projects need no default. `build3D` lifts the furniture group by it on top of the free-slab offset (`fy = elev + furnOff(o) + furnElev(o)`); `g.userData.elev` already carries it, so `moveFurn3D` and 3D drags keep the height.
+- Wall-mounted catalogue items get a default from `CAT_ELEV` in `mkFurn` (only when `o.elev == null`, so a preset's own value wins): `tvw` Wall TV 80, `art` 120, `shelfW` 150, `ac` 220, `cabU` Wall Cabinet 145, `wmirror` 110. The floor-standing `tv` unit is deliberately not in it.
+- 2D (`furnSvg`): a raised item is drawn dashed (the usual "above the cut" convention) with a `▲ +80` tag in front of it (exported too). Panel: **Height above floor (cm)** for every item except stairs and ramps; `applyProp` clamps it. `PRESET_FURN_EXTRA` includes `elev`.
+- MCP: `CAT_ELEV` and the six items are mirrored in `mcp/server.js`; `add_furniture` takes `elev` (0–500), `list_catalog` and `summarize` show it. Walls and rooms have no offset on purpose: short walls already make parapets, and free slabs have **Level offset** for platforms. Guard: `tests/furn-elev.test.js` + a smoke check.
 
 ### Per-floor wall height (issue #59)
 - `Floor.wallH` is optional: `floorH(f)` = `f.wallH` or `P.wallH`; `curFloorH()` for the active floor. `mkWall` (and the MCP `mkWall` / `add_rect_walls`) default new walls to it; `add_floor` accepts `wallH`.
@@ -480,6 +488,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/parts-builder.test.js` | furniture studio: the starting draft for parts / plain / round / poly items, bilingual problem list, top + front preview with one clickable group per part, Apply refusing problems, committing once and keeping an item's scale, and the panel / keyboard wiring |
 | `tests/bookcase.test.js` | bookcase / shelf 3D models (#54): open front carcass, visible shelves, bookcase book rows gated by detail flag, dresser/nightstand drawer fronts kept |
 | `tests/glass-ramp-floorh.test.js` | glass floor / ramp / per-floor height (#57–#59) on the real functions: ramp slope % and code classes, railing defaults, `floorH` fallback and mixed-height `floorElev`, `mkWall` taking the floor height, glass holes + slab wiring in `build3D`, MCP catalogue / finish mirror |
+| `tests/furn-elev.test.js` | height above floor (#61) on the real functions: `furnElev` defaults / cap, `CAT_ELEV` items and the app ↔ MCP mirror, catalogue default only when unset, dashed + tagged 2D, panel / clamp / preset / 3D wiring, the TV unit's 16:9 screen, MCP `elev` round trip and range |
 | `tests/room-slab-variants.test.js` | room slab thickness and room layouts (#63, #66) on the real functions: `roomSlabT` defaults / caps, room poses carrying finish / colour / glass / thickness, slab and void poses unchanged, guarded restore, clickable room bodies, 3D room picking, MCP `slabThickness` range |
 | `tests/walls-camera.test.js` | curtain mullion maths (#71), railing / fence types, defaults and posts (#73), perspective / orthographic wiring, aspect / frustum helpers and the iso preset (#74) |
 | `tests/ifc-import.test.js` | IFC import on the real parser: block parity with `mcp/server.js`, STEP value decoding, rejected formats, the `tests/fixtures/*.ifc` models (IFC4 / mm and IFC2x3 / feet: storeys, walls, curved and curtain walls, doors / windows, rooms, slabs, voids), corner cleanup, file-open / drop wiring and the MCP `import_ifc` tool |
