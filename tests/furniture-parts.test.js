@@ -51,6 +51,12 @@ test('partIssues / validateParts: sizes, box, heights and floating parts', () =>
   assert.match(E.partIssues({ z: 75, w: 10, d: 10, h: 10 }, base).join(), /above the item height/);
   assert.match(E.partIssues({ z: -5, w: 10, d: 10, h: 10 }, base).join(), /below the floor/);
   assert.match(E.partIssues({ w: 1, d: 1, h: 1, color: 'green', mat: 'chrome' }, base).join(), /color.*mat/);
+  // prototype keys are not part types
+  assert.match(E.partIssues({ type: 'constructor', w: 1, d: 1, h: 1 }, base).join(), /not one of/);
+  assert.strictEqual(E.cleanPart({ type: 'toString' }).type, 'box');
+  // round parts: rotation does not grow the footprint; an ellipse uses its rotated extents
+  assert.deepStrictEqual(E.partIssues({ type: 'cyl', x: 44, w: 12, d: 12, h: 1, rot: 45 }, base), []);
+  assert.match(E.partIssues({ type: 'sphere', y: 18, w: 20, d: 4, h: 1, rot: 90 }, base).join(), /sticks out/);
   // a rotated part is checked by its rotated footprint
   assert.match(E.partIssues({ w: 100, d: 10, h: 1, rot: 90 }, base).join(), /sticks out/);
 
@@ -169,6 +175,11 @@ test('MCP: a billiards table is built as ONE furniture item from components', as
   r = await c.tool('set_transform', { furnitureId: id, w: 280 });
   r = await c.tool('set_transform', { furnitureId: id, w: 560, scaleParts: true });
   assert.match(r.text, /scaled to the item size/);
+  // a later plain resize keeps the parts at their current (scaled) size
+  r = await c.tool('set_transform', { furnitureId: id, w: 600 });
+  assert.match(r.text, /drawn in 300×155×85/);
+  r = await c.tool('set_transform', { furnitureId: id, w: 560 });
+  assert.match(r.text, /drawn in 280×155×85/);
 
   const saved = await c.tool('save_furniture', { furnitureId: id, name: 'My billiards' });
   assert.ok(!saved.err, saved.text);
@@ -191,6 +202,17 @@ test('MCP: a billiards table is built as ONE furniture item from components', as
   assert.match(tpl.text, /30 parts[\s\S]*✓ valid/);
   const cat = await c.tool('add_furniture', { catalogId: 'billiard', x: 0, y: 900 });
   assert.ok(!cat.err, cat.text);
+  const tiny = await c.tool('create_furniture', { name: 'Tiny', w: 120, d: 60, h: 25, x: 0, y: 0, template: 'billiards' });
+  assert.ok(tiny.err && /billiards template part/.test(tiny.text), 'a template that does not fit is rejected up front');
+
+  // plain catalogue items: checking them changes nothing; editing parts needs add_component first
+  const sofa = (await c.tool('add_furniture', { catalogId: 'sofa3', x: 0, y: 1200 })).text.match(/ (\w{7}) \(/)[1];
+  const before = JSON.stringify(JSON.parse((await c.tool('get_project')).text).floors[0].furn.find(o => o.id === sofa));
+  assert.match((await c.tool('validate_furniture', { furnitureId: sofa })).text, /no parts/);
+  assert.ok((await c.tool('remove_component', { furnitureId: sofa, index: 0 })).err);
+  assert.ok((await c.tool('add_component', { furnitureId: sofa, w: -1, d: 1, h: 1 })).err);
+  const after = JSON.stringify(JSON.parse((await c.tool('get_project')).text).floors[0].furn.find(o => o.id === sofa));
+  assert.strictEqual(after, before, 'validate / failed edits must not convert the sofa');
 
   // set_project keeps old items untouched and cleans parts
   const old = { id: 'old0001', type: 'custom', name: 'Frame', icon: '▭', k: 'rect', w: 290, d: 160, h: 85, color: '#4b2e1f', x: 250, y: 220, rot: 0, label: false };
