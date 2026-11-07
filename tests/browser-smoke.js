@@ -744,50 +744,90 @@ check('multi-part furniture: the billiards table is one item, drawn from its par
   return info.parts + ' parts, ' + info.shapes2d + ' 2D shapes' + (info.meshes ? ', felt at ' + info.feltTop + ' cm in 3D' : '');
 });
 
-check('parts editor: build a plain table from parts, refuse problems, apply once, undo, Esc', async page => {
-  const info = await page.evaluate(`(() => {
+check('furniture studio: drop, drag, resize, keys, undo, templates, place in plan (2D + 3D)', async page => {
+  const info = await page.evaluate(`(async () => {
     loadProject(newProject());
-    const t = mkFurn(BYID.table4, 300, 200, 0); F().furn.push(t); commit(); sel = [t.id]; refresh();
-    const out = {};
-    const btn = document.querySelector('#props [data-act="parts"]'); out.label = btn ? btn.textContent.trim() : '';
-    btn.click(); out.modal = ui.modal; out.start = ui.pb.d.parts.length;
-    const set = (sel, v) => { const el = document.querySelector('#modal ' + sel); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };
-    document.querySelector('#modal [data-pbadd="cyl"]').click();
-    out.added = ui.pb.d.parts.length; out.selected = ui.pb.sel;
-    set('[data-pf="z"]', 500);
-    out.views = [...document.querySelectorAll('#pbPrev svg')].map(s => s.querySelectorAll('[data-pi]').length);
-    out.errShown = !!document.querySelector('#pbMsg .pb-msg.err');
-    // keys go nowhere while the editor is open: Delete must not delete the table behind it
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
-    out.stillThere = !!F().furn.find(o => o.id === t.id);
-    const h0 = hist.length;
-    document.querySelector('#modal [data-pbact="apply"]').click();
-    out.refused = ui.modal === 'parts' && !F().furn.find(o => o.id === t.id).parts && hist.length === h0;
-    document.querySelector('#modal [data-pbact="ontop"]').click(); out.ontopZ = ui.pb.d.parts[1].z;
-    // the table body (on the floor, under the new part) must not climb onto anything above it
-    ui.pb.sel = 0; document.querySelector('#modal [data-pbact="ontop"]').click(); out.bodyZ = ui.pb.d.parts[0].z; ui.pb.sel = 1;
-    set('[data-pf="z"]', 120); document.querySelector('#modal [data-pbact="fit"]').click(); out.fitH = ui.pb.d.h;
-    document.querySelector('#modal [data-pbact="apply"]').click();
-    const o = F().furn.find(x => x.id === t.id);
-    out.applied = ui.modal !== 'parts' && Array.isArray(o.parts) && o.parts.length === 2 && o.h === out.fitH && hist.length === h0 + 1;
-    out.drawn = document.querySelectorAll('#gFurn [data-id="' + t.id + '"] rect, #gFurn [data-id="' + t.id + '"] ellipse').length;
-    out.relabel = (document.querySelector('#props [data-act="parts"]') || {}).textContent;
-    undo(); out.undone = !F().furn.find(x => x.id === t.id).parts;
-    sel = [t.id]; refresh(); document.querySelector('#props [data-act="parts"]').click();
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); out.escClosed = ui.modal !== 'parts';
+    const out = {}, D = () => ui.pb.d, last = () => D().parts[D().parts.length - 1];
+    const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    // world (view cm) -> screen point of an SVG view
+    const scr = (view, u, v) => { const svg = document.getElementById('fsv-' + view), m = svg.getScreenCTM(), p = svg.createSVGPoint(); p.x = u; p.y = v; const r = p.matrixTransform(m); return [r.x, r.y]; };
+    const ptr = (type, el, x, y) => el.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, bubbles: true, button: 0, pointerId: 7 }));
+    const drag = (view, el, u0, v0, u1, v1) => { const [x0, y0] = scr(view, u0, v0), [x1, y1] = scr(view, u1, v1); ptr('pointerdown', el, x0, y0); for (let k = 1; k <= 4; k++) ptr('pointermove', window, x0 + (x1 - x0) * k / 4, y0 + (y1 - y0) * k / 4); ptr('pointerup', window, x1, y1); };
+    const key = (k, o) => window.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true }, o || {})));
+
+    // open from My Library: Create furniture
+    ui.cat = LIBCATS.length - 1; buildLib(); document.querySelector('#items [data-fsnew]').click(); await frame();
+    out.open = ui.modal === 'parts' && !!document.getElementById('fstudio') && D().parts.length === 0;
+    out.has3d = !!document.querySelector('#fs3d canvas');
+    // click a block: the Top lands at the top of the box
+    document.querySelector('#fstudio [data-blk="top"]').click();
+    out.topZ = last().z; out.boxH = D().h;
+    // drag-and-drop a leg onto the top view at (35, -20)
+    const dt = new DataTransfer(); dt.setData('text/plain', 'fsblk:leg');
+    const [dx, dy] = scr('top', 35, -20), box = document.getElementById('fsv-top').parentElement;
+    box.dispatchEvent(new DragEvent('dragover', { clientX: dx, clientY: dy, dataTransfer: dt, bubbles: true }));
+    box.dispatchEvent(new DragEvent('drop', { clientX: dx, clientY: dy, dataTransfer: dt, bubbles: true }));
+    const leg = last(); out.drop = [leg.x, leg.y, leg.z];
+    await frame();
+    // drag the leg 10 cm right in the front view (it is selected; grab its middle)
+    const legEl = document.querySelector('#fsv-front [data-pi="1"] rect');
+    drag('front', legEl, leg.x, -leg.h / 2, leg.x + 10, -leg.h / 2);
+    out.moved = D().parts[1].x; out.hist = ui.pb.hist.length;
+    // resize the top: select it, pull its +w handle 20 cm out
+    ui.pb.sel = 0; pbRedraw(); await frame();
+    const p0 = D().parts[0], hd = document.querySelector('#fsv-top [data-h="w+"]');
+    drag('top', hd, p0.x + p0.w / 2, p0.y, p0.x + p0.w / 2 + 20, p0.y);
+    out.resized = [D().parts[0].w, D().parts[0].x];
+    out.issue = !!document.querySelector('#pbMsg .pb-msg.err'); // the top now sticks out of the box
+    document.querySelector('#fstudio [data-pbact="fit"]').click(); out.fitW = D().w; out.fixed = !document.querySelector('#pbMsg .pb-msg.err');
+    // keys: arrow nudges, Delete removes, Ctrl+Z / Ctrl+Y walk the studio history (never the plan)
+    ui.pb.sel = 1; pbRedraw(); const x1 = D().parts[1].x; key('ArrowRight'); out.nudge = D().parts[1].x - x1;
+    const n = D().parts.length; key('Delete'); out.deleted = D().parts.length === n - 1;
+    key('z', { ctrlKey: true }); out.undone = D().parts.length === n; key('y', { ctrlKey: true }); out.redone = D().parts.length === n - 1; key('z', { ctrlKey: true });
+    // mirror copy of the leg lands on the other side
+    ui.pb.sel = 1; pbRedraw(); document.querySelector('#fstudio [data-pbact="mirror"]').click(); out.mirror = [D().parts[1].x, D().parts[2].x];
+    out.planUntouched = F().furn.length === 0 && hist.length === 1;
+    out.meshes = ui.pb.f3 && ui.pb.f3.root ? ui.pb.f3.root.children.length : null; out.parts = D().parts.length;
+    // 3D: grab the top board (part 0) in the 3D view and drag it sideways
+    if (ui.pb.f3) {
+      const F3 = ui.pb.f3, cv3 = F3.r.domElement, rc = cv3.getBoundingClientRect(), q = D().parts[0], v = new THREE.Vector3(q.x, q.z + q.h / 2, q.y).project(F3.cam);
+      const sx = rc.left + (v.x + 1) / 2 * rc.width, sy = rc.top + (1 - v.y) / 2 * rc.height, x0 = q.x;
+      ui.pb.sel = 1; pbRedraw();
+      ptr('pointerdown', cv3, sx, sy); for (let k = 1; k <= 4; k++) ptr('pointermove', window, sx + k * 10, sy); ptr('pointerup', window, sx + 40, sy);
+      out.pick3d = ui.pb.sel === 0; out.drag3d = D().parts[0].x !== x0;
+      key('z', { ctrlKey: true }); out.undo3d = D().parts[0].x === x0;
+    }
+    // place in plan: one item, one undo step, also saved to My Library
+    const nm = document.getElementById('fsName'); nm.value = 'Test table'; nm.dispatchEvent(new Event('input', { bubbles: true }));
+    const h0 = hist.length; document.querySelector('#fstudio [data-fs="apply"]').click();
+    const o = F().furn[0];
+    out.placed = !!o && o.parts.length === out.parts && o.name === 'Test table' && hist.length === h0 + 1 && !document.getElementById('fstudio') && ui.modal !== 'parts';
+    out.lib = (P.lib.presets || []).some(p => p.name === 'Test table' && p.extra && p.extra.parts.length === out.parts);
+    // reopen from the panel, switch to a template, Esc (confirm accepted) closes without touching the item
+    sel = [o.id]; refresh(); document.querySelector('#props [data-act="parts"]').click(); await frame();
+    const conf = window.confirm; window.confirm = () => true;
+    const tplSel = document.getElementById('fsTpl'); tplSel.value = 'chair'; tplSel.dispatchEvent(new Event('change', { bubbles: true }));
+    out.tpl = D().parts.length; out.tplName = D().parts.some(p => p.name === 'seat' || p.name === 'backrest');
+    key('Escape'); window.confirm = conf; out.escClosed = ui.modal !== 'parts' && !document.getElementById('fstudio');
+    out.itemKept = F().furn[0].parts.length === out.parts;
     sel = []; refresh();
     return out;
   })()`);
-  if (!/Build from parts|Parçalardan kur/.test(info.label) || info.modal !== 'parts' || info.start !== 1) throw new Error('editor did not open with a starter part: ' + JSON.stringify(info));
-  if (info.added !== 2 || info.selected !== 1 || info.views.join() !== '2,2') throw new Error('adding a part / preview failed: ' + JSON.stringify(info));
-  if (!info.errShown || !info.refused) throw new Error('a part above the item was not refused: ' + JSON.stringify(info));
-  if (!info.stillThere) throw new Error('Delete reached the plan behind the parts editor');
-  if (info.bodyZ !== 0) throw new Error('Sit on top lifted the table body to ' + info.bodyZ);
-  if (info.ontopZ !== 75) throw new Error('Sit on top put the part at ' + info.ontopZ + ' instead of the table top (75)');
-  if (!info.applied || info.drawn < 3) throw new Error('Apply did not write the parts in one undo step: ' + JSON.stringify(info));
-  if (!/Edit parts|Parçaları düzenle/.test(info.relabel || '')) throw new Error('panel button did not switch to Edit parts');
-  if (!info.undone || !info.escClosed) throw new Error('undo / Esc failed: ' + JSON.stringify(info));
-  return 'starter part, add, refuse, sit on top 75 cm, fit box ' + info.fitH + ' cm, one undo step, Esc';
+  const bad = m => { throw new Error(m + ': ' + JSON.stringify(info)); };
+  if (!info.open) bad('studio did not open from My Library');
+  if (info.topZ !== info.boxH - 3) bad('the Top block did not land at the top of the box');
+  if (info.drop[0] !== 35 || info.drop[1] !== -20 || info.drop[2] !== 0) bad('drag-and-drop did not place the leg where it was dropped, on the floor');
+  if (!(info.moved >= 44 && info.moved <= 47.5) || info.hist < 4) bad('dragging the leg in the front view did not move it ~10 cm (47.5 = snapped flush to the box edge)');
+  if (!(info.resized[0] >= 118 && info.resized[0] <= 122) || !(info.resized[1] >= 9 && info.resized[1] <= 11)) bad('the w+ handle did not grow the top by ~20 cm on one side');
+  if (!info.issue || !info.fixed || info.fitW < 120) bad('sticking-out top was not flagged / Fit box did not fix it');
+  if (info.nudge !== 1 || !info.deleted || !info.undone || !info.redone) bad('keyboard nudge / delete / studio undo-redo failed');
+  if (info.mirror[0] !== -info.mirror[1]) bad('Mirror copy did not land on the other side');
+  if (!info.planUntouched) bad('studio edits leaked into the plan before Apply');
+  if (info.meshes !== null && info.meshes !== info.parts) bad('3D view shows the wrong number of meshes');
+  if (info.has3d && (!info.pick3d || !info.drag3d || !info.undo3d)) bad('3D click-to-select / drag / undo failed');
+  if (!info.placed || !info.lib) bad('Place in plan did not add one item + library preset in one undo step');
+  if (info.tpl < 4 || !info.tplName || !info.escClosed || !info.itemKept) bad('template / Esc flow failed');
+  return 'drop, drag, resize, fit, keys, undo/redo, mirror, place + library, template, Esc' + (info.has3d ? ', 3D ' + info.meshes + ' meshes' : ' (no WebGL)');
 });
 
 check('render studio: every style renders and restores the scene (issue #34)', async page => {
