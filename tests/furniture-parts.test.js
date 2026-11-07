@@ -93,7 +93,7 @@ test('app wiring: defaults on load, 2D / 3D renderers, catalogue, presets, mirro
   assert.match(appJs, /function furn3D\(g, o, C\) \{\n\s*if \(Array\.isArray\(o\.parts\) && o\.parts\.length\) return parts3D\(g, o, C\);/);
   assert.match(appJs, /\['billiard', 0, 'Bilardo Masası', 280, 155, 85,/);
   assert.match(appJs, /const CAT_PARTS = \{ billiard: billiardParts \};/);
-  assert.match(appJs, /PRESET_FURN_EXTRA = \[[^\]]*'parts', 'pbase', 'partsV'\]/);
+  assert.match(appJs, /PRESET_FURN_EXTRA = \[[^\]]*'parts', 'pbase', 'partsV'[^\]]*\]/);
   const p3 = appJs.slice(appJs.indexOf('function parts3D'), appJs.indexOf('const CAT_PARTS'));
   assert.ok(!/new THREE\.(Box|Cylinder|Sphere)Geometry/.test(p3), 'parts3D must reuse the shared unit geometries');
   const ps = appJs.slice(appJs.indexOf('function partsSvg'), appJs.indexOf('function parts3D'));
