@@ -336,6 +336,46 @@ check('project tabs keep separate plans and undo, and paste across (issue #17)',
   return '2 tabs, separate undo, cross-tab paste, close';
 });
 
+check('adjustable group: edit members adds a new wall and places it per layout without cycling', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F(), w1 = mkWall({ x: 0, y: 0 }, { x: 300, y: 0 }), w2 = mkWall({ x: 0, y: 200 }, { x: 300, y: 200 });
+    f.walls.push(w1, w2); commit(); setTool('select');
+    sel = [w1.id, w2.id]; groupSel(); varAction('varInit'); varAction('varNew');
+    const rec = f.groups[0];
+    // 1b: shift the group so the two layouts differ
+    [w1, w2].forEach(w => { w.a.x += 100; w.b.x += 100; }); commit();
+    sel = [w1.id]; refresh();
+    document.querySelector('[data-act="grpEdit"]').click();
+    const editing = !!ui.grpEdit;
+    const w3 = mkWall({ x: 100, y: 400 }, { x: 400, y: 400 }); f.walls.push(w3); commit();
+    const joined = w3.grp === rec.id && rec.vars.every(v => v.poses[w3.id]);
+    // click the new wall: selects it alone, no layout change
+    view.z = 1; view.x = 50; view.y = 50; render();
+    const r = cv.getBoundingClientRect(), s = w2s({ x: 250, y: 400 });
+    const ev = (type, dx = 0) => cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x + dx, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 }));
+    const idx0 = rec.idx;
+    ev('pointerdown'); ev('pointerup');
+    const alone = sel.length === 1 && sel[0] === w3.id, noCycle = rec.idx === idx0;
+    // drag it 60 cm right in 1b
+    ev('pointerdown'); ev('pointermove', 30); ev('pointermove', 60); ev('pointerup', 60);
+    const moved1b = w3.a.x;
+    switchGroupVarTo(rec, 0);
+    const in1a = w3.a.x, w1in1a = w1.a.x;
+    switchGroupVarTo(rec, 1);
+    const back1b = w3.a.x;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    return { editing, joined, alone, noCycle, moved1b, in1a, back1b, w1in1a, after: !!ui.grpEdit };
+  })()`);
+  if (!info.editing) throw new Error('Edit members button did not start editing: ' + JSON.stringify(info));
+  if (!info.joined) throw new Error('a wall drawn while editing did not join the group: ' + JSON.stringify(info));
+  if (!info.alone || !info.noCycle) throw new Error('clicking a member while editing cycled / selected the whole group: ' + JSON.stringify(info));
+  if (!(info.moved1b > 140)) throw new Error('the new wall did not move on its own: ' + JSON.stringify(info));
+  if (info.in1a !== 100 || info.w1in1a !== 0) throw new Error('layout 1a did not keep its own positions: ' + JSON.stringify(info));
+  if (info.back1b !== info.moved1b) throw new Error('layout 1b lost the new wall position: ' + JSON.stringify(info));
+  if (info.after) throw new Error('Esc did not leave group editing: ' + JSON.stringify(info));
+});
+
 check('overlapping objects: Ctrl+click cycles, right-click lists, layers reorder, 3D lifts', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
