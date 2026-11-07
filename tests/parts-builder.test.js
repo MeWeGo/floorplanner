@@ -5,67 +5,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js').replace(/\r\n/g, '\n');
 
-const fnSrc = name => {
-  const start = src.indexOf('function ' + name + '(');
-  assert.ok(start >= 0, name + '() missing from app.js');
-  let i = src.indexOf('{', start);
-  assert.ok(i >= 0, 'no opening brace for ' + name);
-  let depth = 0;
-  const stack = ['code'];
-  const exprDepths = [];
-  while (i < src.length) {
-    const c = src[i];
-    const next = src[i + 1];
-    const top = stack[stack.length - 1];
-    if (top === 'code' || top === 'template-expr') {
-      if (c === '/' && next === '/') { stack.push('comment'); i++; }
-      else if (c === '/' && next === '*') { stack.push('block-comment'); i++; }
-      else if (c === "'") stack.push('single');
-      else if (c === '"') stack.push('double');
-      else if (c === '`') stack.push('template');
-      else if (c === '{') {
-        if (top === 'code') depth++;
-        else exprDepths[exprDepths.length - 1]++;
-      } else if (c === '}') {
-        if (top === 'code') {
-          depth--;
-          if (depth === 0) return src.slice(start, i + 1);
-        } else {
-          exprDepths[exprDepths.length - 1]--;
-          if (exprDepths[exprDepths.length - 1] === 0) {
-            exprDepths.pop();
-            stack.pop();
-          }
-        }
-      }
-    } else if (top === 'comment') {
-      if (c === '\n') stack.pop();
-    } else if (top === 'block-comment') {
-      if (c === '*' && next === '/') { stack.pop(); i++; }
-    } else if (top === 'single') {
-      if (c === '\\') i++;
-      else if (c === "'") stack.pop();
-    } else if (top === 'double') {
-      if (c === '\\') i++;
-      else if (c === '"') stack.pop();
-    } else if (top === 'template') {
-      if (c === '\\') i++;
-      else if (c === '$' && next === '{') {
-        stack.push('template-expr');
-        exprDepths.push(1);
-        i++;
-      } else if (c === '`') {
-        stack.pop();
-      }
-    }
-    i++;
-  }
-  throw new Error('Unterminated function ' + name);
-};
+const fnSrc = name => fnSrcOf(src, name);
 
 const lineSrc = name => {
   const start = src.indexOf('const ' + name);

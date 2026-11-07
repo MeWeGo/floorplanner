@@ -3382,7 +3382,7 @@ $('#props').addEventListener('click', e => {
       const nm = prompt(L('Şekil adı:', 'Shape name:'), o.name || L('Şekil', 'Shape'));
       if (nm) {
         P.lib = P.lib || { shapes: [] }; P.lib.shapes = P.lib.shapes || [];
-        P.lib.shapes.push({ id: uid(), name: nm, en: nm, k: o.k, pts: o.pts ? JSON.parse(JSON.stringify(o.pts)) : undefined, w: o.w, d: o.d, h: o.h, color: o.color, icon: o.k === 'round' ? '⬤' : '⬡' });
+        P.lib.shapes.push({ id: uid(), name: nm, en: nm, k: o.k, pts: o.pts ? JSON.parse(JSON.stringify(o.pts)) : undefined, w: o.w, d: o.d, h: o.h, color: o.color, icon: o.k === 'round' ? '⬤' : '⬡', ...(Array.isArray(o.parts) && o.parts.length ? { parts: clonePlain(o.parts), pbase: clonePlain(o.pbase), partsV: PARTS_V } : {}) });
         commit(); buildLib(); toast(L(`“${nm}” kütüphaneye eklendi (⬡ Kütüphanem)`, `“${nm}” added to the library (⬡ My Library)`));
         return;
       }
@@ -3492,7 +3492,7 @@ $('#items').addEventListener('click', e => {
   const b = e.target.closest('.item'); if (!b) return;
   if (b.dataset.type === 'pre') { const p = (P.lib.presets || []).find(x => x.id === b.dataset.id); if (p) startPlace(p.kind, presetDef(p)); return; }
   let type = b.dataset.type, def = type === 'op' ? opDefLast(OPDEF[b.dataset.id]) : type === 'def' ? (P.lib.shapes || []).find(s => s.id === b.dataset.id) : BYID[b.dataset.id];
-  if (type === 'def') { if (!def) return; type = 'furn'; def = { id: 'sh_' + def.id, name: def.name, en: def.en, k: def.k, pts: def.pts, w: def.w, d: def.d, h: def.h, color: def.color, icon: def.icon }; }
+  if (type === 'def') { if (!def) return; type = 'furn'; def = { id: 'sh_' + def.id, name: def.name, en: def.en, k: def.k, pts: def.pts, w: def.w, d: def.d, h: def.h, color: def.color, icon: def.icon, extra: def.parts ? { parts: def.parts, pbase: def.pbase, partsV: def.partsV } : undefined }; }
   startPlace(type, def);
 });
 
@@ -4116,7 +4116,7 @@ $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8)
 /* ---------- Modal ---------- */
 function openModal(html, kind = null) { ui.modal = kind; $('#modal').innerHTML = html; $('#modalbg').style.display = 'flex'; }
 function closeModal() { ui.modal = null; $('#modalbg').style.display = 'none'; }
-$('#modalbg').addEventListener('mousedown', e => { if (e.target.id === 'modalbg') closeModal(); });
+$('#modalbg').addEventListener('mousedown', e => { if (e.target.id !== 'modalbg') return; if (ui.modal === 'parts' && ui.pb && JSON.stringify(ui.pb.d) !== ui.pb.orig && !confirm(L('Uygulanmamış parça değişiklikleri silinsin mi?', 'Discard the parts changes you have not applied?'))) return; closeModal(); });
 $('#modal').addEventListener('click', e => { if (e.target.closest('[data-close]')) closeModal(); });
 /* ---------- AI (MCP) help: copy-ready prompt for the user's agent ---------- */
 function copyText(text) {
@@ -4374,7 +4374,7 @@ function brgApply(remotePlan, newRev, kind) {
   catch (e) { console.warn('[ai-bridge] could not apply plan', e); }
   if (newRev) { brgRev = newRev; localStorage.setItem(BRIDGE_SEEN, String(brgRev)); }
   // the agent's plan replaces whatever the starter-screen offered
-  try { if (ui.modal === 'templates' || ui.modal === 'help' || ui.modal === 'projects') closeModal(); } catch (e) { }
+  try { if (ui.modal === 'templates' || ui.modal === 'help' || ui.modal === 'projects' || ui.modal === 'parts') closeModal(); } catch (e) { } // parça taslağı eski plana aitti
   if (ui.view3d && typeof schedBuild3D === 'function') schedBuild3D();
   setTimeout(() => { brgApplying = false; }, 700);
   toast(kind === 'restore'
@@ -5726,6 +5726,7 @@ function pbStart(o) {
   else parts = [cleanPart({ name: L('gövde', 'body'), type: o.k === 'round' ? 'cyl' : 'box', w: o.w, d: o.d, h: o.h, color: partHex(o.color) ? o.color : undefined })];
   const b = has && o.pbase ? o.pbase : { w: o.w, d: o.d, h: o.h };
   ui.pb = { id: o.id, sel: 0, d: { w: partR(b.w), d: partR(b.d), h: partR(b.h), color: partHex(o.color) ? o.color : '#b08968', parts } };
+  ui.pb.orig = JSON.stringify(ui.pb.d); // arka plana tıklayınca değişiklik varsa sorulur
   openPartsBuilder();
 }
 // sorunlar, iki dilde: kutudan taşma, tabanın altı, öğe yüksekliğinin üstü, havada duran parça
@@ -5754,19 +5755,19 @@ function pbPreview() {
   const D = ui.pb.d, C = pal(), s = ui.pb.sel, m = Math.max(D.w, D.d, D.h) * 0.05 + 3;
   const line = `stroke="${C.furnStroke}" stroke-width="1" vector-effect="non-scaling-stroke"`, hl = `stroke="${C.accent}" stroke-width="2.5" vector-effect="non-scaling-stroke"`;
   const box = (x, y, w, h) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${C.sub}" stroke-dasharray="4 3" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
-  const order = D.parts.map((p, i) => ({ p, i }));
+  const order = D.parts.map((p, i) => ({ p, i, b: partBounds(p) })); // sınırlar bir kez hesaplanır
   let top = box(-D.w / 2, -D.d / 2, D.w, D.d);
   for (const { p, i } of order.slice().sort((a, b) => (a.p.z + a.p.h) - (b.p.z + b.p.h) || a.i - b.i)) top += `<g data-pi="${i}">${partShapeSvg(p, p.color || D.color, line)}</g>`;
   if (D.parts[s]) top += partShapeSvg(D.parts[s], 'none', hl);
   // önden: bakan +y tarafında, uzaktaki (küçük y) önce çizilir
-  const fShape = (p, col, attrs) => {
-    const b = partBounds(p), cx = (b.x0 + b.x1) / 2, w = b.x1 - b.x0, h = p.h;
+  const fShape = (p, col, attrs, b = partBounds(p)) => {
+    const cx = (b.x0 + b.x1) / 2, w = b.x1 - b.x0, h = p.h;
     if (p.type === 'sphere' || (p.type === 'cyl' && p.axis === 'y')) return `<ellipse cx="${cx}" cy="${-(p.z + h / 2)}" rx="${w / 2}" ry="${h / 2}" fill="${col}" ${attrs}/>`;
     return `<rect x="${b.x0}" y="${-(p.z + h)}" width="${w}" height="${h}" rx="${p.type === 'cyl' && p.axis === 'x' ? h / 2 : 0}" fill="${col}" ${attrs}/>`;
   };
   let front = box(-D.w / 2, -D.h, D.w, D.h) + `<line x1="${-D.w / 2 - m}" x2="${D.w / 2 + m}" y1="0" y2="0" stroke="${C.stroke}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
-  for (const { p, i } of order.slice().sort((a, b) => partBounds(a.p).y1 - partBounds(b.p).y1 || a.i - b.i)) front += `<g data-pi="${i}">${fShape(p, p.color || D.color, line)}</g>`;
-  if (D.parts[s]) front += fShape(D.parts[s], 'none', hl);
+  for (const { p, i, b } of order.slice().sort((a, b) => a.b.y1 - b.b.y1 || a.i - b.i)) front += `<g data-pi="${i}">${fShape(p, p.color || D.color, line, b)}</g>`;
+  if (D.parts[s]) front += fShape(D.parts[s], 'none', hl, order[s].b);
   const vb = (x, y, w, h) => `viewBox="${x - m} ${y - m} ${w + 2 * m} ${h + 2 * m}"`;
   return `<figure><figcaption>${L('Üstten', 'Top')} · ${partR(D.w)} × ${partR(D.d)} cm</figcaption><svg ${vb(-D.w / 2, -D.d / 2, D.w, D.d)} preserveAspectRatio="xMidYMid meet">${top}</svg></figure>`
     + `<figure><figcaption>${L('Önden', 'Front')} · ${L('yükseklik', 'height')} ${partR(D.h)} cm</figcaption><svg ${vb(-D.w / 2, -D.h, D.w, D.h)} preserveAspectRatio="xMidYMid meet">${front}</svg></figure>`;
@@ -5805,7 +5806,7 @@ function openPartsBuilder() {
         <div id="pbPrev" class="pb-views">${pbPreview()}</div>
         <div id="pbMsg">${pbMsgs()}</div>
         <h4>📦 ${L('Öğe kutusu (cm)', 'Item box (cm)')}</h4>
-        <div class="pb-box">${bf(L('Genişlik', 'Width'), 'w')}${bf(L('Derinlik', 'Depth'), 'd')}${bf(L('Yükseklik', 'Height'), 'h')}</div>
+        <div>${bf(L('Genişlik', 'Width'), 'w')}${bf(L('Derinlik', 'Depth'), 'd')}${bf(L('Yükseklik', 'Height'), 'h')}</div>
         <div class="row"><button type="button" class="btn sm" data-pbact="fit" title="${L('Kutuyu tüm parçaları alacak kadar büyütür / küçültür', 'Grows or shrinks the box to hold every part')}">📦 ${L('Kutuyu parçalara uydur', 'Fit box to parts')}</button></div>
       </div>
       <div class="pb-right">
@@ -5874,12 +5875,13 @@ $('#modal').addEventListener('click', e => {
     pbLive(); return;
   }
   if (!p) return;
-  if (act === 'dup') { if (D.parts.length >= PARTS_MAX) return; const q = clonePlain(p); q.x = partR(q.x + Math.min(10, p.w)); D.parts.splice(ui.pb.sel + 1, 0, q); ui.pb.sel++; }
+  if (act === 'dup') { if (D.parts.length >= PARTS_MAX) { toast(L(`En çok ${PARTS_MAX} parça`, `At most ${PARTS_MAX} parts`)); return; } const q = clonePlain(p); q.x = partR(q.x + Math.min(10, p.w)); D.parts.splice(ui.pb.sel + 1, 0, q); ui.pb.sel++; }
   else if (act === 'del') { D.parts.splice(ui.pb.sel, 1); ui.pb.sel = Math.min(ui.pb.sel, D.parts.length - 1); }
   else if (act === 'floor') p.z = 0;
   else if (act === 'ontop') {
     const b = partBounds(p); let z = 0;
-    D.parts.forEach(q => { if (q === p) return; const c = partBounds(q); if (c.x0 < b.x1 && c.x1 > b.x0 && c.y0 < b.y1 && c.y1 > b.y0) z = Math.max(z, c.z1); });
+    // yalnızca parçanın ALTINDA kalanlar sayılır (üstü parçanın tabanına kadar): ayak tablaya, isteka topa çıkmasın
+    D.parts.forEach(q => { if (q === p) return; const c = partBounds(q); if (c.z1 <= b.z0 + 0.5 && c.x0 < b.x1 && c.x1 > b.x0 && c.y0 < b.y1 && c.y1 > b.y0) z = Math.max(z, c.z1); });
     p.z = partR(z);
   }
   pbRedraw();

@@ -637,6 +637,8 @@ check('parts editor: build a plain table from parts, refuse problems, apply once
     document.querySelector('#modal [data-pbact="apply"]').click();
     out.refused = ui.modal === 'parts' && !F().furn.find(o => o.id === t.id).parts && hist.length === h0;
     document.querySelector('#modal [data-pbact="ontop"]').click(); out.ontopZ = ui.pb.d.parts[1].z;
+    // the table body (on the floor, under the new part) must not climb onto anything above it
+    ui.pb.sel = 0; document.querySelector('#modal [data-pbact="ontop"]').click(); out.bodyZ = ui.pb.d.parts[0].z; ui.pb.sel = 1;
     set('[data-pf="z"]', 120); document.querySelector('#modal [data-pbact="fit"]').click(); out.fitH = ui.pb.d.h;
     document.querySelector('#modal [data-pbact="apply"]').click();
     const o = F().furn.find(x => x.id === t.id);
@@ -653,6 +655,7 @@ check('parts editor: build a plain table from parts, refuse problems, apply once
   if (info.added !== 2 || info.selected !== 1 || info.views.join() !== '2,2') throw new Error('adding a part / preview failed: ' + JSON.stringify(info));
   if (!info.errShown || !info.refused) throw new Error('a part above the item was not refused: ' + JSON.stringify(info));
   if (!info.stillThere) throw new Error('Delete reached the plan behind the parts editor');
+  if (info.bodyZ !== 0) throw new Error('Sit on top lifted the table body to ' + info.bodyZ);
   if (info.ontopZ !== 75) throw new Error('Sit on top put the part at ' + info.ontopZ + ' instead of the table top (75)');
   if (!info.applied || info.drawn < 3) throw new Error('Apply did not write the parts in one undo step: ' + JSON.stringify(info));
   if (!/Edit parts|Parçaları düzenle/.test(info.relabel || '')) throw new Error('panel button did not switch to Edit parts');
