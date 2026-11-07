@@ -93,6 +93,12 @@ test('5: tests/fixtures/two-storey.ifc (IFC4, mm): stats, levels, walls rectangl
     rooms: 1,
     slabs: 2,
     voids: 1,
+    columns: 0,
+    railings: 0,
+    components: 0,
+    roofs: 1, // the ROOF slab becomes a roof item
+    stairs: 0,
+    ramps: 0,
     skipped: 0,
   });
 
@@ -295,4 +301,174 @@ test('10: MCP: tools/list includes import_ifc and calling it with path tests/fix
   const projRes = await c.call('tools/call', { name: 'get_project', arguments: {} });
   const proj = JSON.parse(projRes.result.content[0].text);
   assert.strictEqual(proj.floors.length, 2);
+});
+
+test('11: tests/fixtures/columns-offset.ifc (IFC4, mm): columns, negative offset wall, 2-storey wall, proxy and railings', () => {
+  const ifcText = read('tests/fixtures/columns-offset.ifc');
+  const { project, stats } = ifcToProject(ifcText);
+
+  // stats assertions
+  assert.strictEqual(stats.columns, 3, 'stats.columns must be 3');
+  assert.strictEqual(stats.railings, 2, 'stats.railings must be 2');
+  assert.strictEqual(stats.components, 1, 'stats.components must be 1');
+
+  // 2 storeys
+  assert.strictEqual(project.floors.length, 2, 'must import exactly 2 floors');
+  const f0 = project.floors[0];
+  const f1 = project.floors[1];
+  assert.strictEqual(f0.name, 'Level 1');
+  assert.strictEqual(f1.name, 'Level 2');
+
+  const wallLen = w => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
+
+  // negative-offset wall lands on Level 1
+  const negWall = f0.walls.find(w => Math.abs(wallLen(w) - 500) < 0.1);
+  assert.ok(negWall, 'negative-offset wall of length 500 must land on Level 1');
+  assert.strictEqual(negWall.h, 280);
+  assert.ok(!f1.walls.some(w => Math.abs(wallLen(w) - 500) < 0.1), 'negative-offset wall must not be on Level 2');
+
+  // 2-storey wall appears on both floors with heights about 280 (300 minus 20) and 280/300 for the top piece
+  const twoStoreyBottom = f0.walls.find(w => Math.abs(wallLen(w) - 700) < 0.1);
+  assert.ok(twoStoreyBottom, '2-storey wall bottom piece must appear on Level 1');
+  assert.ok(Math.abs(twoStoreyBottom.h - 280) <= 1, `2-storey wall bottom piece height expected about 280, got ${twoStoreyBottom.h}`);
+
+  const twoStoreyTop = f1.walls.find(w => Math.abs(wallLen(w) - 700) < 0.1);
+  assert.ok(twoStoreyTop, '2-storey wall top piece must appear on Level 2');
+  assert.ok(
+    twoStoreyTop.h === 300, // top storey: up to the wall top (600 - 300)
+    `2-storey wall top piece height expected about 280 or 300, got ${twoStoreyTop.h}`
+  );
+
+  // rectangular column imports on BOTH floors as type "colSq", k "rect", w 30 d 50 (or swapped, allow either)
+  const colSq0 = f0.furn.find(fn => fn.type === 'colSq' && fn.k === 'rect');
+  assert.ok(colSq0, 'rectangular column must import on Level 1 as type colSq, k rect');
+  assert.ok(
+    (Math.abs(colSq0.w - 30) < 0.1 && Math.abs(colSq0.d - 50) < 0.1) ||
+    (Math.abs(colSq0.w - 50) < 0.1 && Math.abs(colSq0.d - 30) < 0.1),
+    `Level 1 rectangular column dimensions expected 30x50 or 50x30, got ${colSq0.w}x${colSq0.d}`
+  );
+
+  const colSq1 = f1.furn.find(fn => fn.type === 'colSq' && fn.k === 'rect');
+  assert.ok(colSq1, 'rectangular column must import on Level 2 as type colSq, k rect');
+  assert.ok(
+    (Math.abs(colSq1.w - 30) < 0.1 && Math.abs(colSq1.d - 50) < 0.1) ||
+    (Math.abs(colSq1.w - 50) < 0.1 && Math.abs(colSq1.d - 30) < 0.1),
+    `Level 2 rectangular column dimensions expected 30x50 or 50x30, got ${colSq1.w}x${colSq1.d}`
+  );
+
+  // round column as type "column", k "round", w ~40
+  const roundCol = f0.furn.find(fn => fn.type === 'column' && fn.k === 'round');
+  assert.ok(roundCol, 'round column must import on Level 1 as type column, k round');
+  assert.ok(Math.abs(roundCol.w - 40) <= 2, `round column width expected ~40, got ${roundCol.w}`);
+
+  // proxy as type "shape", k "poly", h 90, elev 50, 4 pts, name "Generic Box"
+  const proxyBox = f0.furn.find(fn => fn.name === 'Generic Box');
+  assert.ok(proxyBox, 'Generic Box must be in Level 1 furn');
+  assert.strictEqual(proxyBox.type, 'shape');
+  assert.strictEqual(proxyBox.k, 'poly');
+  assert.strictEqual(proxyBox.h, 90);
+  assert.strictEqual(proxyBox.elev, 50);
+  assert.ok(Array.isArray(proxyBox.pts) && proxyBox.pts.length === 4, `Generic Box pts expected 4, got ${proxyBox.pts?.length}`);
+
+  // IfcRailing becomes a wall with wt "railing" and h 110 on Level 2
+  const balconyRailing = f1.walls.find(w => w.wt === 'railing');
+  assert.ok(balconyRailing, 'Balcony Railing must become a wall on Level 2');
+  assert.strictEqual(balconyRailing.wt, 'railing');
+  assert.strictEqual(balconyRailing.h, 110);
+
+  // "Railing:Glass" becomes a railing wall (wt railing) on Level 1 and is NOT in furn
+  const glassRailing = f0.walls.find(w => w.wt === 'railing');
+  assert.ok(glassRailing, 'Railing:Glass must become a wall with wt railing on Level 1');
+  assert.strictEqual(glassRailing.wt, 'railing');
+  assert.strictEqual(glassRailing.h, 110);
+  assert.ok(!f0.furn.some(fn => fn.name === 'Railing:Glass'), 'Railing:Glass must NOT be in Level 1 furn');
+  assert.ok(!f1.furn.some(fn => fn.name === 'Railing:Glass'), 'Railing:Glass must NOT be in Level 2 furn');
+});
+
+test('12: tests/fixtures/roof-stairs.ifc (IFC4, mm): gable roof with faces, L stair as a parametric stair', () => {
+  const { project, stats } = ifcToProject(read('tests/fixtures/roof-stairs.ifc'));
+  assert.strictEqual(stats.roofs, 1);
+  assert.strictEqual(stats.stairs, 1);
+  const [ground, upper] = project.floors;
+  assert.deepStrictEqual([ground.name, upper.name], ['Ground', 'Upper']);
+
+  // roof: one item on Upper, both ROOF slabs merged into its faces, none left as floor slabs
+  const roof = upper.furn.find(o => o.k === 'roof');
+  assert.ok(roof, 'roof item on the Upper floor');
+  assert.strictEqual(roof.type, 'roof');
+  assert.strictEqual(roof.faces.length, 12, 'two 6-face roof slabs');
+  assert.ok(Math.abs(roof.w - 600) < 1 && Math.abs(roof.d - 400) < 1, `roof ${roof.w} x ${roof.d}`);
+  assert.ok(roof.h >= 150 && roof.h <= 175, `roof height ${roof.h}`);
+  assert.ok(Math.abs(roof.elev - 300) <= 5, `roof elev ${roof.elev}`);
+  assert.deepStrictEqual(roof.fbase, { w: roof.w, d: roof.d, h: roof.h });
+  for (const f of roof.faces) for (const p of f) {
+    assert.ok(Math.abs(p[0]) <= roof.w / 2 + 0.1 && Math.abs(p[1]) <= roof.d / 2 + 0.1, 'faces are local to the item centre');
+    assert.ok(p[2] >= -0.1 && p[2] <= roof.h + 0.1, 'face z runs from the item base');
+  }
+  assert.strictEqual(upper.slabs.length + ground.slabs.length, 0, 'ROOF slabs and the stair landing are not floor slabs');
+
+  // stair: L-shaped, first flight climbs toward plan +x, risers summed, railing kept on the stair (not a wall)
+  const st = ground.furn.find(o => o.k === 'stairs');
+  assert.ok(st, 'stair on the Ground floor');
+  assert.strictEqual(st.type, 'stairs');
+  assert.strictEqual(st.stairType, 'l');
+  assert.strictEqual(st.stepN, 18);
+  assert.ok(Math.abs(st.rot - 90) <= 5, `stair rot ${st.rot}`);
+  assert.notStrictEqual(st.railing, 'none');
+  assert.strictEqual(st.h, 300);
+  assert.ok(!project.floors.some(f => f.walls.some(w => w.wt === 'railing')), 'a railing inside a stair is not a railing wall');
+});
+
+test('13: roof items are wired into 2D, 3D, mirror, Swap W/D, presets and sections', () => {
+  assert.match(appJs, /else if \(f\.k === 'roof'\) s \+= roofSvg\(/);
+  assert.match(appJs, /if \(o\.k === 'roof'\) \{ roof3D\(g, o, C\); return; \}/);
+  assert.match(appJs, /m\.k === 'roof' && Array\.isArray\(m\.faces\)/, 'mirror reflects roof faces');
+  assert.match(appJs, /o\.k === 'roof' && Array\.isArray\(o\.faces\)\) \{ o\.faces = o\.faces\.map/, 'Swap W/D turns roof faces');
+  assert.match(appJs, /PRESET_FURN_EXTRA = \[[^\]]*'faces', 'fbase'/);
+  assert.match(appJs, /prims\.push\(\{ t: 'rpoly'/);
+  assert.match(appJs, /if \(p\.t === 'rpoly'\)/);
+  // roofFaces scales with w / d / h against fbase (resize and group scale need nothing else)
+  const src = appJs.slice(appJs.indexOf('function roofFaces'), appJs.indexOf('\n}', appJs.indexOf('function roofFaces')) + 2);
+  const roofFaces = new Function(src + '\nreturn roofFaces;')();
+  const out = roofFaces({ w: 200, d: 100, h: 60, fbase: { w: 100, d: 100, h: 30 }, faces: [[[50, 50, 30], [-50, 50, 0], [0, -50, 0]], [[1, 1, 1]]] });
+  assert.deepStrictEqual(out, [[[100, 50, 60], [-100, 50, 0], [0, -50, 0]]], 'scaled, and degenerate faces dropped');
+});
+
+test('14: tests/fixtures/ramp-colours.ifc (IFC4, mm): colours, material finishes, glass door, car ramp', () => {
+  const { project, stats } = ifcToProject(read('tests/fixtures/ramp-colours.ifc'));
+  assert.strictEqual(stats.ramps, 1);
+  assert.strictEqual(stats.skipped, 0);
+  const f = project.floors[0];
+  const lenOf = w => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
+  const [brick, concrete] = f.walls.slice().sort((p, q) => q.a.y - p.a.y); // plan y = -IFC Y: the brick wall (IFC Y 0) is the lower one on screen
+  assert.ok(Math.abs(lenOf(brick) - 500) < 1 && Math.abs(lenOf(concrete) - 500) < 1);
+  assert.strictEqual(brick.color, '#b3331a', 'item style colour becomes wall paint');
+  assert.strictEqual(concrete.color, undefined, 'a grey material colour keeps the default wall look');
+  assert.deepStrictEqual(f.slabs.map(s => [s.floor, s.color]), [['wood', '#996633']], 'material name picks the finish, its style the tint');
+  assert.strictEqual(f.ops.length, 1);
+  assert.strictEqual(f.ops[0].mat, 'glass', 'door material from the material name / transparent style');
+  assert.strictEqual(f.ops[0].color, undefined, 'a glass leaf keeps the default glass tint');
+  const r = f.furn.find(o => o.k === 'ramp');
+  assert.ok(r, 'ramp imported');
+  assert.strictEqual(r.type, 'ramp');
+  assert.deepStrictEqual([r.w, r.d, r.h, r.rot], [300, 600, 90, 90], 'width, length, rise of the top surface, climbing toward plan +x');
+  assert.strictEqual(r.rampType, 'vehicle');
+  assert.strictEqual(r.railing, 'none');
+  assert.strictEqual(r.elev, undefined, 'low end on the floor');
+});
+
+test('15: material-name matching for finishes and door materials (English and Turkish)', () => {
+  const env = new Function(blockOf(appJs) + '\nreturn { IFC_FINISH, IFC_DOOR_MAT, ifcPick, ifcNeutral };')();
+  const fin = n => env.ifcPick(env.IFC_FINISH, n);
+  assert.strictEqual(fin('BETONARME_KONSEPT_EMP'), 'concrete');
+  assert.strictEqual(fin('GAZBETON_EMP_KONSEPT'), 'concrete');
+  assert.strictEqual(fin('Oak Parquet'), 'wood');
+  assert.strictEqual(fin('Seramik Kaplama'), 'tile');
+  assert.strictEqual(fin('KP_CAM_EMP'), 'glass');
+  assert.strictEqual(fin('taş duvar'), 'stone');
+  assert.strictEqual(fin('Default Floor'), null);
+  assert.strictEqual(env.ifcPick(env.IFC_DOOR_MAT, 'Door - Steel Frame'), 'metal');
+  assert.strictEqual(env.ifcPick(env.IFC_DOOR_MAT, 'Ahşap Kapı'), 'wood');
+  assert.ok(env.ifcNeutral('#c8c8c8') && env.ifcNeutral('#ffffff'));
+  assert.ok(!env.ifcNeutral('#e8ecb0') && !env.ifcNeutral('#b3331a'));
 });

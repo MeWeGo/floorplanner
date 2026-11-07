@@ -103,12 +103,12 @@ The agent runs `node mcp/bridge.js` and the app tab connects automatically; afte
 | :-- | :-- |
 | `new_project` | Start an empty project (name, grid, wall thickness/height) |
 | `load_project` / `save_project` | Read / write the app's `.json` project files |
-| `import_ifc` | Import a Revit / ArchiCAD / BIM model exported as `.ifc` (IFC2x3 / IFC4): storeys, walls, doors & windows, rooms, slabs, slab openings |
+| `import_ifc` | Import a Revit / ArchiCAD / BIM model exported as `.ifc` (IFC2x3 / IFC4): storeys, walls, doors & windows, rooms, slabs, slab openings, columns, railings, roofs, stairs, ramps, components, colours & materials |
 | `get_project` / `set_project` | Get or replace the full working project JSON |
 | `summarize` | Floors, wall ids & lengths, openings, room areas, furniture — with ids |
 | `list_catalog` | Furniture catalogue + door/window presets with ids and sizes |
 | `add_floor` | New floor, returns its index |
-| `add_wall` | One wall (cm, Y-down, solid or curtain) |
+| `add_wall` | One wall (cm, Y-down; solid, curtain (`mul` / `mulN` mullions), railing or fence) |
 | `add_rect_walls` | Rectangle of 4 walls, optional room polygon inside |
 | `add_opening` | Door/window on a wall (parametric `d` from wall end A) |
 | `add_furniture` | Catalogue item at x,y with rotation |

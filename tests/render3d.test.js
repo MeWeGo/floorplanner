@@ -69,7 +69,7 @@ test('the capture happens in one synchronous task', () => {
   assert.match(fn, /setPixelRatio\(1\)/, 'accumulated devicePixelRatio would silently multiply the output size');
   assert.match(fn, /setSize\([^\n]*false\)/, 'setSize must not change the element CSS size');
   assert.match(fn, /finally\s*{[\s\S]*resize3D\(\)/, 'the viewport must be restored in a finally block');
-  assert.match(fn, /updateProjectionMatrix\(\)/, 'camera aspect must be updated for the capture size');
+  assert.match(fn, /setCamAspect\(cam, w \/ h\)|updateProjectionMatrix\(\)/, 'camera aspect must be updated for the capture size');
 });
 
 test('the 3D capture is reachable from both UIs, with a 3D-named file', () => {
@@ -99,7 +99,7 @@ test('the default export is a rendered image, not a viewport screenshot', () => 
   assert.match(hq, /drawImage/, 'the passes must be composited into an accumulation canvas');
   assert.match(hq, /globalAlpha = 1 \/ \(i \+ 1\)/, 'the passes are not averaged — that is what removes aliasing');
   assert.match(hq, /halton\(/, 'the jitter pattern is gone — edges will alias again');
-  assert.match(hq, /projectionMatrix\.elements\[8\]/, 'no sub-pixel jitter is applied to the camera');
+  assert.match(hq, /projectionMatrix\.elements\[(8|JX)\]/, 'no sub-pixel jitter is applied to the camera');
   assert.match(hq, /mapSize\.set\(4096/, 'the render should use a sharper shadow map than the live view');
   assert.match(hq, /shadow\.camera/, 'the shadow frustum should be tightened for the render');
   assert.match(hq, /shadowMap\.autoUpdate = false/, 'the static shadow map is rebuilt on every pass — that is seconds wasted');
@@ -109,7 +109,7 @@ test('the default export is a rendered image, not a viewport screenshot', () => 
   assert.match(hq, /finally\s*{[\s\S]*e\.visible = true/, 'the outline helpers must be restored');
   assert.match(hq, /finally\s*{[\s\S]*scene\.background = oldBg/, 'the backdrop must be restored');
   assert.match(hq, /finally\s*{[\s\S]*T3\.run = oldRun/, 'the animation loop must be restored');
-  assert.match(hq, /projectionMatrix\.elements\[9\] = 0/, 'the camera jitter must be cleared after the render');
+  assert.match(hq, /projectionMatrix\.elements\[(9|JX \+ 1)\] = (0|jy0)/, 'the camera jitter must be cleared after the render');
   assert.match(hq, /supersample|bufK/, 'the supersampled buffer is what makes the downscale produce smooth edges');
   assert.match(js, /function sharpenCanvas/, 'the downscale needs an unsharp pass to stay crisp');
 });
