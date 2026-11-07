@@ -699,6 +699,31 @@ check('per-floor wall heights: apply to all walls, floors stack on their own hei
   return 'floor 350 → upper floor at 370, undo ok, project reset ok';
 });
 
+check('IFC import: a Revit-style model opens in a new tab and draws in 2D and 3D', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 300, 300); commit();
+    const tabsBefore = tabs.length;
+    const text = await (await fetch('tests/fixtures/two-storey.ifc')).text();
+    const stats = importIfcText(text, 'two-storey.ifc');
+    const out = { stats, tabs: tabs.length - tabsBefore, name: P.name, floors: P.floors.length,
+      walls2d: document.querySelectorAll('#gWalls [data-id]').length, ops2d: document.querySelectorAll('#gOps [data-id]').length,
+      rooms2d: document.querySelectorAll('#gRooms [data-id]').length, undo: hist.length };
+    let bad = ''; try { ifcToProject('hello'); } catch (e) { bad = e.message; } out.bad = bad;
+    show3D(true); await new Promise(r => setTimeout(r, 600));
+    out.view3d = !!ui.view3d; out.meshes = 0;
+    if (T3 && T3.scene) T3.scene.traverse(o => { if (o.isMesh) out.meshes++; });
+    show3D(false);
+    return out;
+  })()`);
+  const s = info.stats || {};
+  if (s.floors !== 2 || s.walls !== 5 || s.ops !== 2 || s.rooms !== 1) throw new Error('IFC import counts wrong: ' + JSON.stringify(info));
+  if (info.tabs !== 1) throw new Error('IFC import did not open in a new tab: ' + JSON.stringify(info));
+  if (info.walls2d < 4 || info.ops2d < 2 || info.rooms2d < 1) throw new Error('imported plan not drawn in 2D: ' + JSON.stringify(info));
+  if (!/not an IFC/.test(info.bad)) throw new Error('non-IFC text was not rejected: ' + info.bad);
+  if (info.view3d && info.meshes < 10) throw new Error('imported plan has no 3D model: ' + JSON.stringify(info));
+  return `${s.floors} floors, ${s.walls} walls, ${s.ops} openings, ${s.rooms} room; new tab; 3D ${info.view3d ? info.meshes + ' meshes' : 'skipped'}`;
+});
+
 check('multi-part furniture: the billiards table is one item, drawn from its parts in 2D and 3D', async page => {
   const info = await page.evaluate(`(() => {
     const old = { id: 'oldbox1', type: 'custom', name: 'Old box', icon: '▭', k: 'rect', w: 80, d: 40, h: 70, color: '#888888', x: 600, y: 200, rot: 0, label: '' };
