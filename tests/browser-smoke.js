@@ -572,6 +572,91 @@ check('parametric stairs: 2D and 3D draw the same treads for every type (issue #
   return info.types.map(t => t.t + ' ' + t.n).join(', ') + (info.built ? ' · 3D built' : '');
 });
 
+check('ramp: slope badge, 2D arrow + label, 3D wedge with rails (issue #58)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const r = mkFurn(BYID.ramp, 300, 300, 0); r.d = 600; r.h = 40; F().furn.push(r); commit(); sel = [r.id]; refresh();
+    const g = document.querySelector('#gFurn [data-id="' + r.id + '"]');
+    const out = { pct: Math.round(rampSlope(r).pct * 10) / 10, cls: rampSlope(r).cls, label: g ? g.textContent.includes(pctTxt(6.7)) : false,
+      badge: (document.querySelector('#props') || {}).textContent.includes('6.7'), type: !!document.querySelector('#props [data-p="rampType"]') };
+    r.h = 70; commit(); refresh(); out.fit = !!document.querySelector('#props [data-act="rampfit"]');
+    document.querySelector('#props [data-act="rampfit"]').click(); out.fitD = r.d;
+    out.svg = exportSvg().svg.includes(pctTxt(8));
+    document.getElementById('b3d').click();
+    if (ui.view3d) {
+      const grp = T3.scene.children.find(c => c.userData && c.userData.furnId === r.id), box = new THREE.Box3().setFromObject(grp);
+      out.meshes = 0; grp.traverse(o => { if (o.isMesh) out.meshes++; });
+      out.top = Math.round(box.max.y); show3D(false);
+    }
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (info.pct !== 6.7 || info.cls !== 'access') throw new Error('slope maths: ' + JSON.stringify(info));
+  if (!info.label || !info.badge || !info.type) throw new Error('2D label / panel badge / type missing: ' + JSON.stringify(info));
+  if (!info.fit || info.fitD !== 875) throw new Error('lengthen-to-8% did not work: ' + JSON.stringify(info));
+  if (!info.svg) throw new Error('the slope label is not in the SVG export: ' + JSON.stringify(info));
+  if (info.meshes !== undefined && (info.meshes < 8 || info.top < 150)) throw new Error('3D ramp wedge / rails missing: ' + JSON.stringify(info));
+  return '6.7% accessible, lengthened to 875 cm' + (info.meshes ? ', 3D ' + info.meshes + ' meshes' : '');
+});
+
+check('glass floor: 2D pattern, slab hole under it and transparent panel in 3D (issue #57)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    addRectWalls(0, 0, 600, 400);
+    P.floors.push(newFloor('1')); fi = 1; addRectWalls(0, 0, 600, 400);
+    F().rooms.push({ id: uid(), name: 'Bridge', color: '#cbd5e1', floor: 'glass', pts: [{ x: 200, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }, { x: 200, y: 300 }] });
+    F().slabs.push({ id: uid(), name: 'Glass bridge', floor: 'glass', color: null, t: 20, off: 0, pts: [{ x: 450, y: 100 }, { x: 550, y: 100 }, { x: 550, y: 300 }, { x: 450, y: 300 }] });
+    commit(); sel = [F().rooms[0].id]; refresh();
+    const out = { pat: !!document.querySelector('#defs pattern#p-glass') || defsSvg().includes('id="p-glass"'), used: document.querySelector('#gRooms').innerHTML.includes('url(#p-glass)'),
+      field: !!document.querySelector('#props [data-p="glass"]'), opt: !!document.querySelector('#props [data-p="floor"] option[value="glass"]') };
+    ui.v3dFloor = 'all';
+    document.getElementById('b3d').click();
+    if (ui.view3d) {
+      const gl = []; T3.scene.traverse(o => { if (o.userData && o.userData.glassFloor) gl.push(o); });
+      out.glass = gl.length; out.transparent = gl.length ? gl[0].material.transparent && gl[0].material.opacity < 0.5 : false;
+      // the floor-1 slab under the glass room must have a hole
+      const slabs = []; T3.scene.traverse(o => { if (o.isMesh && o.geometry && o.geometry.type === 'ExtrudeGeometry' && Math.abs(o.position.y - 290) < 1 && !o.userData.glassFloor) slabs.push(o); });
+      out.holes = slabs.reduce((n, m) => n + ((m.geometry.parameters.shapes.holes || []).length || 0), 0);
+      show3D(false);
+    }
+    fi = 0; sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.pat || !info.used) throw new Error('2D glass pattern missing: ' + JSON.stringify(info));
+  if (!info.field || !info.opt) throw new Error('room panel lacks the glass options: ' + JSON.stringify(info));
+  if (info.glass !== undefined && (info.glass !== 2 || !info.transparent || info.holes < 2)) throw new Error('3D glass floor wrong: ' + JSON.stringify(info));
+  return 'pattern + panel' + (info.glass ? ', 3D glass panel over a slab hole' : '');
+});
+
+check('per-floor wall heights: apply to all walls, floors stack on their own height (issue #59)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    addRectWalls(0, 0, 400, 300); commit();
+    const w = F().walls[0]; F().ops.push(mkOp(OPDEF.window, w, 200)); commit();
+    const w2 = F().walls[1]; w2.h = 180; sel = [w2.id]; commit(); refresh();
+    document.querySelector('#props [data-act="wallhfloor"]').click();
+    const op = F().ops[0], fitted = op.sill + op.h <= 175;
+    undo(); undo();
+    const w1 = F().walls[0]; w1.h = 350; sel = [w1.id]; commit(); refresh();
+    document.querySelector('#props [data-act="wallhfloor"]').click();
+    const out = { fitted, all: F().walls.every(x => x.h === 350), floorH: F().wallH };
+    undo(); out.undone = F().walls.filter(x => x.h === 350).length;
+    redo();
+    P.floors.push(newFloor('1')); fi = 1; addRectWalls(0, 0, 400, 300); commit();
+    out.newWall = F().walls[0].h; out.e1 = floorElev(1); fi = 0;
+    sel = []; refresh();
+    document.querySelector('#props [data-act="wallhall"]').click();
+    out.reset = P.floors.every(f => !f.wallH && f.walls.every(x => x.h === P.wallH));
+    return out;
+  })()`);
+  if (!info.fitted) throw new Error('a window stuck out above the lowered walls: ' + JSON.stringify(info));
+  if (!info.all || info.floorH !== 350) throw new Error('apply to floor failed: ' + JSON.stringify(info));
+  if (info.undone !== 1) throw new Error('undo did not restore the other walls: ' + JSON.stringify(info));
+  if (info.newWall !== 270 || info.e1 !== 370) throw new Error('floor stacking / new wall height wrong: ' + JSON.stringify(info));
+  if (!info.reset) throw new Error('apply-to-all-existing did not reset heights: ' + JSON.stringify(info));
+  return 'floor 350 → upper floor at 370, undo ok, project reset ok';
+});
+
 check('multi-part furniture: the billiards table is one item, drawn from its parts in 2D and 3D', async page => {
   const info = await page.evaluate(`(() => {
     const old = { id: 'oldbox1', type: 'custom', name: 'Old box', icon: '▭', k: 'rect', w: 80, d: 40, h: 70, color: '#888888', x: 600, y: 200, rot: 0, label: '' };

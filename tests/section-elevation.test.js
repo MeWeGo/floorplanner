@@ -37,6 +37,7 @@ function makeEnv(floors = []) {
       const y0 = Math.min(...ys), y1 = Math.max(...ys);
       return [[{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]];
     };
+    ${constLine('floorH')}
     ${constLine('floorElev')}
     ${constLine('fmtLevel')}
     ${constLine('ELEV_DIRS')}

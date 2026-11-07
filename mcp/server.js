@@ -79,6 +79,7 @@ const CATALOG = [
   { id: 'shelf', cat: 4, name: 'Raf Ünitesi', en: 'Shelving Unit', w: 120, d: 35, h: 180, icon: '📚', k: 'rect', color: '#b08968' },
   { id: 'printer', cat: 4, name: 'Yazıcı', en: 'Printer', w: 50, d: 45, h: 40, icon: '🖨️', k: 'rect', color: '#cbd5e1' },
   { id: 'stairs', cat: 5, name: 'Merdiven', en: 'Stairs', w: 100, d: 300, h: 270, icon: '🪜', k: 'stairs', color: '#e2e8f0' },
+  { id: 'ramp', cat: 5, name: 'Rampa', en: 'Ramp', w: 120, d: 500, h: 35, icon: '♿', k: 'ramp', color: '#cbd5e1' },
   { id: 'column', cat: 5, name: 'Kolon', en: 'Round Column', w: 40, d: 40, h: 270, icon: '', k: 'round', color: '#64748b' },
   { id: 'colSq', cat: 5, name: 'Kare Kolon', en: 'Square Column', w: 40, d: 40, h: 270, icon: '', k: 'rect', color: '#64748b' },
   { id: 'car', cat: 5, name: 'Araba', en: 'Car', w: 180, d: 450, h: 150, icon: '🚗', k: 'rect', color: '#fca5a5' },
@@ -99,7 +100,7 @@ const OPENINGS = [
 ];
 const OPDEF = Object.fromEntries(OPENINGS.map(o => [o.id, o]));
 const ROOMCOL = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#e9d5ff', '#fed7aa', '#a5f3fc', '#fbcfe8'];
-const FLOORPATS = ['none', 'wood', 'tile', 'carpet', 'marble', 'concrete', 'stone', 'grass', 'water', 'gravel', 'deck', 'asphalt']; // + 'tex:<id>' custom textures (#40)
+const FLOORPATS = ['none', 'wood', 'tile', 'carpet', 'marble', 'concrete', 'stone', 'grass', 'water', 'gravel', 'deck', 'asphalt', 'glass']; // + 'tex:<id>' custom textures (#40)
 // a finish is a built-in pattern or "tex:<id>" of a texture listed in project.textures (image data lives in the browser)
 const finishOk = v => FLOORPATS.includes(v) || (typeof v === 'string' && /^tex:/.test(v) && ((P && P.textures) || []).some(t => 'tex:' + t.id === v));
 const FINISH_DOC = FLOORPATS.join(' | ') + ' | "tex:<id>" (a custom texture from project.textures)';
@@ -348,7 +349,7 @@ function mkWall(f, a) {
     a: { x: num(a.x1, undefined, 'x1'), y: num(a.y1, undefined, 'y1') },
     b: { x: num(a.x2, undefined, 'x2'), y: num(a.y2, undefined, 'y2') },
     t: num(a.t, P.wallT, 't'),
-    h: num(a.h, P.wallH, 'h'),
+    h: num(a.h, +f.wallH > 0 ? +f.wallH : P.wallH, 'h'),
     wt: a.wt === 'curtain' ? 'curtain' : 'solid',
   };
   if (a.color) w.color = String(a.color);
@@ -433,7 +434,7 @@ function summarize() {
   out.push('Project "' + p.name + '" — schema v' + p.v + ', grid ' + p.grid + ' cm (' + p.gridType + '), default wall ' + p.wallT + ' cm × ' + p.wallH + ' cm high, ' + p.floors.length + ' floor(s)');
   p.floors.forEach((f, i) => {
     out.push('');
-    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts');
+    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts');
     for (const w of f.walls)
       out.push('  wall ' + w.id + ': (' + w.a.x + ',' + w.a.y + ') → (' + w.b.x + ',' + w.b.y + ')  length ' + Math.round(wLen(w)) + ' cm, t=' + w.t + ', h=' + w.h + (w.wt !== 'solid' ? ', ' + w.wt : ''));
     for (const o of f.ops)
@@ -668,10 +669,16 @@ tool('ack_user_requests',
 
 tool('add_floor',
   'Add a new empty floor on top of the existing ones and return its index.',
-  { name: { type: 'string', description: 'Floor name, e.g. "1. Kat" / "First Floor".' } },
+  { name: { type: 'string', description: 'Floor name, e.g. "1. Kat" / "First Floor".' },
+    wallH: { type: 'number', description: 'Optional wall height of this floor in cm, 100–800 (default: project wallH). New walls on it get this height and the floors above stack on it in 3D.' } },
   [],
   a => {
     const f = newFloor(a.name || ('Floor ' + P.floors.length));
+    if (a.wallH != null) {
+      const h = num(a.wallH, undefined, 'wallH');
+      if (h < 100 || h > 800) throw new Error('wallH must be between 100 and 800 cm (got ' + h + ')');
+      f.wallH = h;
+    }
     proj().floors.push(f);
     return 'Added floor ' + (P.floors.length - 1) + ' "' + f.name + '" (id ' + f.id + '). Pass floorIndex=' + (P.floors.length - 1) + ' to the other tools to draw on it.';
   });
@@ -682,7 +689,7 @@ tool('add_wall',
     x1: { type: 'number' }, y1: { type: 'number' },
     x2: { type: 'number' }, y2: { type: 'number' },
     t: { type: 'number', description: 'Thickness in cm. Default: project wallT.' },
-    h: { type: 'number', description: 'Height in cm. Default: project wallH.' },
+    h: { type: 'number', description: 'Height in cm. Default: the floor wallH, else project wallH.' },
     wt: { type: 'string', enum: ['solid', 'curtain'], description: 'Wall type: "solid" (default) or "curtain" (glass facade).' },
     color: { type: 'string', description: 'Optional wall paint colour (#hex). Omit for the default wall colour.' },
     floorIndex: floorArg,
@@ -698,7 +705,7 @@ tool('add_rect_walls',
     w: { type: 'number', description: 'Width in cm (outer rectangle).' },
     h: { type: 'number', description: 'Height in cm (outer rectangle).' },
     t: { type: 'number', description: 'Wall thickness in cm. Default: project wallT.' },
-    h3: { type: 'number', description: 'Wall height in cm. Default: project wallH.' },
+    h3: { type: 'number', description: 'Wall height in cm. Default: the floor wallH, else project wallH.' },
     roomName: { type: 'string', description: 'If set, also create a room polygon (inset by half the wall thickness) with this name.' },
     floorIndex: floorArg,
   },
@@ -708,7 +715,7 @@ tool('add_rect_walls',
     const t = num(a.t, P.wallT, 't');
     const xa = num(a.x, undefined, 'x'), ya = num(a.y, undefined, 'y');
     const xb = xa + num(a.w, undefined, 'w'), yb = ya + num(a.h, undefined, 'h');
-    const mk = (x1, y1, x2, y2) => mkWall(f, { x1, y1, x2, y2, t, h: num(a.h3, P.wallH, 'h3') });
+    const mk = (x1, y1, x2, y2) => mkWall(f, { x1, y1, x2, y2, t, h: num(a.h3, +f.wallH > 0 ? +f.wallH : P.wallH, 'h3') });
     const ws = [mk(xa, ya, xb, ya), mk(xb, ya, xb, yb), mk(xb, yb, xa, yb), mk(xa, yb, xa, ya)];
     let extra = '';
     if (a.roomName) {
@@ -830,7 +837,7 @@ tool('add_text',
   });
 
 tool('update_object',
-  'Change properties of an existing object (wall t/h/wt or endpoints, opening d/w/side..., furniture x/y/rot..., room name/pts...). The "id" property cannot be changed.',
+  'Change properties of an existing object (wall t/h/wt or endpoints, opening d/w/side..., furniture x/y/rot..., room name/pts/floor...). Ramps (type "ramp"): w = width, d = horizontal length, h = rise, rampType accessible|vehicle|landscape, railing none|left|right|both. Rooms/slabs may use floor "glass" with glass clear|frosted. The "id" property cannot be changed.',
   {
     id: { type: 'string', description: 'Object id (see summarize).' },
     props: { type: 'object', description: 'Properties to set, e.g. {"t":30} or {"name":"Mutfak"}.' },
