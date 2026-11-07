@@ -572,6 +572,51 @@ check('parametric stairs: 2D and 3D draw the same treads for every type (issue #
   return info.types.map(t => t.t + ' ' + t.n).join(', ') + (info.built ? ' · 3D built' : '');
 });
 
+check('multi-part furniture: the billiards table is one item, drawn from its parts in 2D and 3D', async page => {
+  const info = await page.evaluate(`(() => {
+    const old = { id: 'oldbox1', type: 'custom', name: 'Old box', icon: '▭', k: 'rect', w: 80, d: 40, h: 70, color: '#888888', x: 600, y: 200, rot: 0, label: '' };
+    const p = newProject(); p.floors[0].furn.push(JSON.parse(JSON.stringify(old)));
+    loadProject(p);
+    const oldSame = JSON.stringify(F().furn[0]) === JSON.stringify(old);
+    const t = mkFurn(BYID.billiard, 250, 200, 0); F().furn.push(t); commit(); sel = []; refresh();
+    const g = document.querySelector('#gFurn [data-id="' + t.id + '"]');
+    const out = { oldSame, parts: t.parts.length, shapes2d: g ? g.querySelectorAll('rect,ellipse,polygon').length : -1, valid: validateParts(t).ok };
+    const svg = exportSvg().svg; out.exportHasFelt = svg.includes('#1f7a4a');
+    document.getElementById('b3d').click();
+    if (ui.view3d) {
+      const grp = T3.scene.children.find(c => c.userData && c.userData.furnId === t.id);
+      const meshes = []; grp.traverse(o => { if (o.isMesh) meshes.push(o); });
+      grp.updateMatrixWorld(true);
+      const top = m => new THREE.Box3().setFromObject(m).max.y, bot = m => new THREE.Box3().setFromObject(m).min.y;
+      const felt = meshes[t.parts.findIndex(q => q.name === 'felt bed')], ball = meshes[t.parts.findIndex(q => q.name === 'cue ball')], leg = meshes[t.parts.findIndex(q => q.name === 'leg')];
+      out.meshes = meshes.length; out.feltTop = Math.round(top(felt)); out.ballBottom = Math.round(bot(ball)); out.legBottom = Math.round(bot(leg));
+      out.height = Math.round(new THREE.Box3().setFromObject(grp).max.y);
+      const cueSize = () => { const g2 = T3.scene.children.find(c => c.userData && c.userData.furnId === t.id), ms = []; g2.updateMatrixWorld(true); g2.traverse(o => { if (o.isMesh) ms.push(o); }); return new THREE.Box3().setFromObject(ms[t.parts.findIndex(q => q.name === 'cue')]).getSize(new THREE.Vector3()); };
+      const c0 = cueSize(); out.cueLying = c0.x > 100 && c0.y < 5 && c0.z < 15; // axis 'x' cylinder lies along the table
+      show3D(false);
+      // swap W/D turns the parts 90°: the cue now runs along the plan y (Three z) and everything stays inside the box
+      sel = [t.id]; refresh(); document.querySelector('#props [data-act="swapwd"]').click();
+      const t2 = F().furn.find(o => o.id === t.id); out.swapValid = validateParts(t2).ok && t2.w === 155 && t2.d === 280;
+      document.getElementById('b3d').click(); const c1 = cueSize(); out.cueSwapped = c1.z > 100 && c1.x < 15 && c1.y < 5; show3D(false);
+      undo();
+    }
+    // mirror keeps the parts inside the item box
+    sel = [t.id]; flipSel('h'); out.mirrorValid = validateParts(F().furn.find(o => o.id === t.id)).ok;
+    return out;
+  })()`);
+  if (!info.oldSame) throw new Error('an old furniture item without parts changed on load');
+  if (info.parts < 25 || !info.valid) throw new Error('billiards table has ' + info.parts + ' parts, valid=' + info.valid);
+  if (info.shapes2d < info.parts) throw new Error('2D footprint draws ' + info.shapes2d + ' shapes for ' + info.parts + ' parts');
+  if (!info.exportHasFelt) throw new Error('the SVG export lost the felt');
+  if (!info.mirrorValid) throw new Error('mirroring pushed parts out of the item box');
+  if (info.meshes !== undefined) {
+    if (info.meshes !== info.parts) throw new Error('3D built ' + info.meshes + ' meshes for ' + info.parts + ' parts');
+    if (info.feltTop !== 79 || info.ballBottom !== 79 || info.legBottom !== 0 || info.height !== 85) throw new Error('3D heights wrong: ' + JSON.stringify(info));
+    if (!info.cueLying || !info.cueSwapped || !info.swapValid) throw new Error('lying cue / swap W/D wrong: ' + JSON.stringify(info));
+  }
+  return info.parts + ' parts, ' + info.shapes2d + ' 2D shapes' + (info.meshes ? ', felt at ' + info.feltTop + ' cm in 3D' : '');
+});
+
 check('render studio: every style renders and restores the scene (issue #34)', async page => {
   const info = await page.evaluate(`(async () => {
     loadProject(newProject()); addRectWalls(0, 0, 600, 400); F().ops.push(mkOp(OPDEF.window, F().walls[0], 300)); commit(); sel = []; refresh();

@@ -40,6 +40,7 @@ const CATALOG = [
   { id: 'sofa2', cat: 0, name: '2 Kişilik Koltuk', en: '2-Seat Sofa', w: 160, d: 90, h: 85, icon: '🛋️', k: 'sofa', color: '#a5b4fc' },
   { id: 'armchair', cat: 0, name: 'Berjer', en: 'Armchair', w: 85, d: 85, h: 85, icon: '💺', k: 'sofa', color: '#c4b5fd' },
   { id: 'coffee', cat: 0, name: 'Orta Sehpa', en: 'Coffee Table', w: 100, d: 55, h: 40, icon: '▭', k: 'rect', color: '#d6b88f' },
+  { id: 'billiard', cat: 0, name: 'Bilardo Masası', en: 'Billiards Table', w: 280, d: 155, h: 85, icon: '🎱', k: 'rect', color: '#5b3a24' },
   { id: 'tv', cat: 0, name: 'TV Ünitesi', en: 'TV Unit', w: 180, d: 40, h: 50, icon: '📺', k: 'rect', color: '#9ca3af' },
   { id: 'table4', cat: 0, name: '4 Kişilik Masa', en: '4-Seat Table', w: 140, d: 80, h: 75, icon: '🍽️', k: 'rect', color: '#d6b88f' },
   { id: 'table6', cat: 0, name: '6 Kişilik Masa', en: '6-Seat Table', w: 180, d: 90, h: 75, icon: '🍽️', k: 'rect', color: '#d6b88f' },
@@ -131,6 +132,148 @@ function parsePts(v, min, name) {
   return v.map((p, i) => ({ x: num(p && p.x, undefined, name + '[' + i + '].x'), y: num(p && p.y, undefined, name + '[' + i + '].y') }));
 }
 
+/* PARTS-ENGINE:BEGIN ---------- Çok parçalı mobilya (programlanabilir mobilya, şema v1) ----------
+   This block is copied VERBATIM into app.js and mcp/server.js (tests/furniture-parts.test.js compares them).
+   A furniture item may carry   parts: [{ name?, type, x, y, z, w, d, h, rot?, color?, mat?, axis?, pts? }]
+   plus pbase: { w, d, h } (the design box the parts were drawn in) and partsV (schema version).
+   - Local cm, centre of the item = (0, 0), y points down like the plan, z = BOTTOM elevation above the floor.
+   - type: box | cyl | sphere | extrude. cyl stands upright (axis z) unless axis is 'x' or 'y' (lying);
+     its w × d × h is always the bounding box. extrude = pts polygon (cm, relative to x, y) lifted h from z.
+   - rot = degrees clockwise on the plan, like furniture rot. mat: matte (default) | gloss | metal | glass.
+   - When the item is resized (w / d / h ≠ pbase) the parts scale with it; old items without parts are untouched. */
+const PARTS_V = 1;
+const PART_TYPES = ['box', 'cyl', 'sphere', 'extrude'];
+const PART_ALIAS = Object.assign(Object.create(null), { box: 'box', cube: 'box', cyl: 'cyl', cylinder: 'cyl', sphere: 'sphere', sph: 'sphere', ball: 'sphere', extrude: 'extrude', prism: 'extrude' }); // no prototype keys ("constructor")
+const PART_MATS = ['matte', 'gloss', 'metal', 'glass'];
+const PARTS_MAX = 64, PARTS_SOFT = 40;
+// small helpers kept inside the block on purpose (instead of the app's rnd / clamp) so it can be pasted verbatim into mcp/server.js
+const partFin = v => v !== null && v !== undefined && v !== '' && typeof v !== 'boolean' && Number.isFinite(+v);
+const partHex = c => typeof c === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c);
+const partR = v => Math.round(v * 100) / 100;
+function partPts(v) {
+  if (!Array.isArray(v) || v.length < 3) return null;
+  const pts = v.map(q => q && partFin(q.x) && partFin(q.y) ? { x: partR(+q.x), y: partR(+q.y) } : null);
+  return pts.every(Boolean) ? pts : null;
+}
+// lenient: any input → a valid part (used when loading projects; bad fields fall back to defaults)
+function cleanPart(p) {
+  p = p && typeof p === 'object' ? p : {};
+  const n = (v, d) => partFin(v) ? partR(+v) : d;
+  let type = PART_ALIAS[String(p.type === undefined ? 'box' : p.type).toLowerCase()] || 'box';
+  const pts = type === 'extrude' ? partPts(p.pts) : null;
+  if (type === 'extrude' && !pts) type = 'box';
+  const q = { type };
+  if (p.name) q.name = String(p.name).slice(0, 40);
+  q.x = n(p.x, 0); q.y = n(p.y, 0); q.z = n(p.z, 0);
+  if (pts) {
+    const xs = pts.map(a => a.x), ys = pts.map(a => a.y);
+    q.w = partR(Math.max(...xs) - Math.min(...xs)) || 0.1; q.d = partR(Math.max(...ys) - Math.min(...ys)) || 0.1; q.pts = pts;
+  } else { q.w = Math.max(0.1, Math.abs(n(p.w, 10))); q.d = Math.max(0.1, Math.abs(n(p.d, 10))); }
+  q.h = Math.max(0.1, Math.abs(n(p.h, 10)));
+  const r = n(p.rot, 0); if (r) q.rot = partR(((r % 360) + 360) % 360);
+  if (partHex(p.color)) q.color = p.color;
+  if (PART_MATS.includes(p.mat) && p.mat !== 'matte') q.mat = p.mat;
+  if (type === 'cyl' && (p.axis === 'x' || p.axis === 'y')) q.axis = p.axis;
+  return q;
+}
+// footprint + height range of a CLEAN part in item-local cm: { x0, x1, y0, y1, z0, z1 }
+function partBounds(q) {
+  const a = (q.rot || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  if (q.type === 'sphere' || (q.type === 'cyl' && !q.axis)) { // round footprint: exact extents of the rotated ellipse
+    const ex = Math.hypot(q.w / 2 * c, q.d / 2 * s), ey = Math.hypot(q.w / 2 * s, q.d / 2 * c);
+    return { x0: q.x - ex, x1: q.x + ex, y0: q.y - ey, y1: q.y + ey, z0: q.z, z1: q.z + q.h };
+  }
+  const loc = q.pts || [{ x: -q.w / 2, y: -q.d / 2 }, { x: q.w / 2, y: -q.d / 2 }, { x: q.w / 2, y: q.d / 2 }, { x: -q.w / 2, y: q.d / 2 }];
+  const pts = loc.map(p => ({ x: q.x + p.x * c - p.y * s, y: q.y + p.x * s + p.y * c }));
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys), z0: q.z, z1: q.z + q.h };
+}
+// strict: problems with a RAW part (empty list = valid). base = the design box { w, d, h }
+function partIssues(p, base) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return ['part must be an object'];
+  const e = [], t = PART_ALIAS[String(p.type === undefined ? 'box' : p.type).toLowerCase()];
+  if (!t) e.push('type "' + p.type + '" is not one of ' + PART_TYPES.join(', '));
+  for (const k of ['x', 'y', 'z', 'rot']) if (p[k] !== undefined && p[k] !== null && !partFin(p[k])) e.push(k + ' must be a number');
+  if (t === 'extrude') {
+    if (!partPts(p.pts)) e.push('extrude needs pts: 3+ {x, y} points in cm, relative to the part centre');
+    if (!(partFin(p.h) && +p.h > 0)) e.push('h must be a number > 0');
+  } else for (const k of ['w', 'd', 'h']) if (!(partFin(p[k]) && +p[k] > 0)) e.push(k + ' must be a number > 0');
+  if (p.color !== undefined && p.color !== null && !partHex(p.color)) e.push('color must be #rgb or #rrggbb');
+  if (p.mat !== undefined && p.mat !== null && !PART_MATS.includes(p.mat)) e.push('mat must be one of ' + PART_MATS.join(', '));
+  if (p.axis !== undefined && p.axis !== null && !['x', 'y', 'z'].includes(p.axis)) e.push('axis must be x, y or z');
+  if (!e.length && base) {
+    const b = partBounds(cleanPart(p)), tol = 1;
+    if (b.x0 < -base.w / 2 - tol || b.x1 > base.w / 2 + tol || b.y0 < -base.d / 2 - tol || b.y1 > base.d / 2 + tol)
+      e.push('sticks out of the ' + base.w + ' × ' + base.d + ' cm footprint (x ' + partR(b.x0) + '…' + partR(b.x1) + ', y ' + partR(b.y0) + '…' + partR(b.y1) + '; the item spans x ±' + base.w / 2 + ', y ±' + base.d / 2 + ')');
+    if (b.z0 < -tol) e.push('starts below the floor (z ' + partR(b.z0) + ' < 0)');
+    if (b.z1 > base.h + tol) e.push('top at ' + partR(b.z1) + ' cm is above the item height ' + base.h + ' cm');
+  }
+  return e;
+}
+// normalise an item's parts in place (lenient). No parts field → untouched, so old projects stay byte-identical
+function cleanParts(o) {
+  if (!o || !('parts' in o)) return o;
+  if (!Array.isArray(o.parts)) { delete o.parts; delete o.pbase; delete o.partsV; return o; }
+  o.parts = o.parts.filter(p => p && typeof p === 'object').slice(0, PARTS_MAX).map(cleanPart);
+  const b = o.pbase && typeof o.pbase === 'object' ? o.pbase : {};
+  o.pbase = { w: +b.w > 0 ? partR(+b.w) : o.w, d: +b.d > 0 ? partR(+b.d) : o.d, h: +b.h > 0 ? partR(+b.h) : o.h };
+  o.partsV = PARTS_V;
+  return o;
+}
+// parts are drawn in pbase; a resized item scales them
+function partsScale(o) {
+  const b = o.pbase || o, f = (v, bv) => +bv > 0 && +v > 0 ? v / bv : 1;
+  return { sx: f(o.w, b.w), sy: f(o.d, b.d), sz: f(o.h, b.h) };
+}
+// whole-item check → { ok, errors, warnings, count }
+function validateParts(o) {
+  const errors = [], warnings = [];
+  if (!o || typeof o !== 'object') return { ok: false, errors: ['not a furniture object'], warnings, count: 0 };
+  for (const k of ['w', 'd', 'h']) if (!(partFin(o[k]) && +o[k] > 0)) errors.push('item ' + k + ' must be a number > 0');
+  const parts = Array.isArray(o.parts) ? o.parts : [], base = o.pbase || { w: o.w, d: o.d, h: o.h };
+  if (!Array.isArray(o.parts)) warnings.push('no parts: the item renders as a plain ' + (o.k || 'box'));
+  else if (!parts.length) warnings.push('no parts yet: add components (the item renders as a plain box until then)');
+  if (parts.length > PARTS_MAX) errors.push(parts.length + ' parts; the limit is ' + PARTS_MAX);
+  else if (parts.length > PARTS_SOFT) warnings.push(parts.length + ' parts is heavy for 3D; try to stay under ' + PARTS_SOFT);
+  const label = (p, i) => 'part ' + i + (p && p.name ? ' "' + p.name + '"' : '');
+  parts.forEach((p, i) => { for (const m of partIssues(p, errors.length ? null : base)) errors.push(label(p, i) + ': ' + m); });
+  if (!errors.length) {
+    // floating parts: nothing under them (another part's top or the floor) where they overlap
+    const bs = parts.map(p => partBounds(cleanPart(p)));
+    bs.forEach((b, i) => {
+      if (b.z0 <= 0.5) return;
+      const held = bs.some((c, j) => j !== i && c.z1 >= b.z0 - 1 && c.z0 < b.z0 && c.x0 < b.x1 && c.x1 > b.x0 && c.y0 < b.y1 && c.y1 > b.y0);
+      if (!held) warnings.push(label(parts[i], i) + ' floats at z ' + partR(b.z0) + ' cm with nothing under it');
+    });
+  }
+  return { ok: !errors.length, errors, warnings, count: parts.length };
+}
+// reference example: a 9-ft style billiards table built from parts (w = long side)
+function billiardParts(w = 280, d = 155, h = 85) {
+  const rail = Math.min(14, d * 0.09), felt = h - 6, rail3 = felt + 3.8, bed = felt - 3, ap = 10, legH = bed - ap, ball = 5.7;
+  const wood = '#5b3a24', woodD = '#3d2516', railC = '#6b4026', cloth = '#1f7a4a', cush = '#17603a', out = [];
+  const add = (name, type, x, y, z, pw, pd, ph, color, extra) => out.push(Object.assign({ name, type, x: partR(x), y: partR(y), z: partR(z), w: partR(pw), d: partR(pd), h: partR(ph), color }, extra || {}));
+  const lx = w / 2 - 30, ly = d / 2 - 24;
+  for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) add('leg', 'box', sx * lx, sy * ly, 0, 14, 14, legH, woodD);
+  for (const sy of [-1, 1]) add('stretcher', 'box', 0, sy * ly, 18, 2 * lx, 8, 8, woodD);
+  add('apron', 'box', 0, 0, legH, w - 16, d - 16, ap, wood);
+  add('felt bed', 'box', 0, 0, bed, w - 2 * rail, d - 2 * rail, 3, cloth);
+  for (const sy of [-1, 1]) add('long rail', 'box', 0, sy * (d / 2 - rail / 2), bed, w, rail, rail3 - bed, railC, { mat: 'gloss' });
+  for (const sx of [-1, 1]) add('short rail', 'box', sx * (w / 2 - rail / 2), 0, bed, rail, d - 2 * rail, rail3 - bed, railC, { mat: 'gloss' });
+  for (const sy of [-1, 1]) add('cushion', 'box', 0, sy * (d / 2 - rail - 1.5), felt, w - 2 * rail, 3, 3, cush);
+  for (const sx of [-1, 1]) add('cushion', 'box', sx * (w / 2 - rail - 1.5), 0, felt, 3, d - 2 * rail - 6, 3, cush);
+  const px = w / 2 - rail + 1, py = d / 2 - rail + 1;
+  for (const [x, y] of [[-px, -py], [0, -py - 1], [px, -py], [px, py], [0, py + 1], [-px, py]]) add('pocket', 'cyl', x, y, bed + 0.1, 12, 12, rail3 - bed + 0.2, '#111111');
+  add('cue ball', 'sphere', -w / 4, 0, felt, ball, ball, ball, '#f8fafc', { mat: 'gloss' });
+  const rack = ['#facc15', '#2563eb', '#dc2626', '#7c3aed', '#111111', '#f97316'], rx = w / 4, dx = ball * 0.87;
+  let k = 0;
+  for (let row = 0; row < 3; row++) for (let j = 0; j <= row; j++) add('ball', 'sphere', rx + row * dx, (j - row / 2) * ball * 1.02, felt, ball, ball, ball, rack[k++], { mat: 'gloss' });
+  add('cue', 'cyl', -w * 0.06, d / 2 - rail - 16, felt, Math.min(147, w - 2 * rail - 20), 2.6, 2.6, '#d9b48a', { axis: 'x', rot: 4 });
+  return out;
+}
+/* PARTS-ENGINE:END */
+const CAT_PARTS = { billiard: billiardParts }; // mirror of CAT_PARTS in app.js
+
 /* ---------- Project state ---------- */
 let P = null; // working project (same schema the app saves/loads)
 
@@ -175,6 +318,7 @@ function normalizeProject(obj) {
     for (const w of f.walls) if (!w.wt) w.wt = 'solid';
     for (const sl of f.slabs) { if (!(sl.t > 0)) sl.t = 20; sl.floor = sl.floor || 'concrete'; sl.off = +sl.off || 0; }
     for (const v of f.voids) if (!VOID_TYPES.includes(v.type)) v.type = 'stair';
+    for (const o of f.furn) cleanParts(o); // multi-part furniture; items without "parts" are untouched
   });
   return obj;
 }
@@ -242,6 +386,7 @@ function mkFurn(f, a) {
     x: num(a.x, undefined, 'x'), y: num(a.y, undefined, 'y'), rot: num(a.rot, 0, 'rot'),
     label: a.label || '',
   };
+  if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } // multi-part catalogue item
   f.furn.push(o);
   return o;
 }
@@ -300,7 +445,7 @@ function summarize() {
     for (const v of f.voids || [])
       out.push('  void ' + v.id + ': ' + v.type + (v.name ? ' "' + v.name + '"' : '') + ' ' + fmtArea(polyArea(v.pts)));
     for (const t of f.furn)
-      out.push('  furn ' + t.id + ': ' + t.name + ' ' + t.w + '×' + t.d + ' cm at (' + t.x + ',' + t.y + ') rot=' + t.rot + '°');
+      out.push('  furn ' + t.id + ': ' + t.name + ' ' + t.w + '×' + t.d + ' cm at (' + t.x + ',' + t.y + ') rot=' + t.rot + '°' + (Array.isArray(t.parts) ? ', ' + t.parts.length + ' parts' : ''));
     for (const t of f.texts)
       out.push('  text ' + t.id + ': "' + t.text + '" at (' + t.x + ',' + t.y + ')');
   });
@@ -707,6 +852,7 @@ tool('update_object',
       throw new Error('props.wall "' + found.o.wall + '" does not exist on this floor');
     if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!found.o.wt) found.o.wt = 'solid'; }
     if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
+    if (found.kind === 'furn' && 'parts' in props) cleanParts(found.o);
     return 'Updated ' + found.kind + ' ' + found.o.id + ':\n' + JSON.stringify(found.o, null, 2);
   });
 
@@ -730,6 +876,245 @@ tool('delete_objects',
     return 'Deleted ' + a.ids.length + ' object(s)' + (cascaded ? ' and ' + cascaded + ' opening(s) on deleted walls' : '') + '.';
   });
 
+/* ---------- Multi-part furniture (programmable furniture, parts schema v1) ----------
+   A controlled API instead of hand-written JSON: every component goes through partIssues()
+   (positive sizes, known type / material, inside the item's box) before it is stored. */
+const FURN_SCHEMA = {
+  version: PARTS_V,
+  units: 'cm; item-local coordinates with the item centre at (0, 0); y points down like the plan; z = bottom elevation above the floor',
+  item: { w: 'width (local x)', d: 'depth (local y)', h: 'total height', parts: 'array of components (max ' + PARTS_MAX + ', keep under ' + PARTS_SOFT + ')', pbase: '{ w, d, h } the box the parts were designed in; resizing the item scales the parts' },
+  part: {
+    type: PART_TYPES.join(' | ') + ' (aliases: cube, cylinder, ball, prism)',
+    name: 'optional label, e.g. "leg"', x: 'centre x', y: 'centre y', z: 'bottom elevation (0 = floor)',
+    w: 'size along local x', d: 'size along local y', h: 'height', rot: 'degrees clockwise on the plan (yaw)',
+    color: '#rgb / #rrggbb (default: the item colour)', mat: PART_MATS.join(' | ') + ' (default matte)',
+    axis: 'cyl only: z (upright, default) | x | y (lying along that axis; w × d × h is still the bounding box)',
+    pts: 'extrude only: 3+ {x, y} points relative to the part centre; extruded h up from z',
+  },
+  rules: ['every part must fit inside the item box: |x| ≤ w/2, |y| ≤ d/2, 0 ≤ z, z + h ≤ item h (1 cm tolerance)',
+    'stack parts: a table top sits at z = leg height; something lying on it starts at the top\'s z + h',
+    'validate_furniture warns about parts that float with nothing under them'],
+  example: { name: 'Side table', w: 50, d: 50, h: 55, parts: [
+    { name: 'top', type: 'box', x: 0, y: 0, z: 52, w: 50, d: 50, h: 3, color: '#b08968' },
+    { name: 'leg', type: 'cyl', x: -20, y: -20, z: 0, w: 4, d: 4, h: 52, color: '#3d2516' }] },
+};
+// needParts: the tool edits parts → the item must already have them (only add_component turns a plain item into a parts item)
+function findFurnObj(f, id, needParts) {
+  const o = f.furn.find(x => x.id === id);
+  if (!o) throw new Error('No furniture with id "' + id + '" on this floor. create_furniture returns one; summarize lists them.');
+  if (needParts && !Array.isArray(o.parts)) throw new Error('Furniture ' + id + ' has no parts. Use add_component first, or create_furniture for a new multi-part item.');
+  return o;
+}
+const PART_KEYS = ['type', 'name', 'x', 'y', 'z', 'w', 'd', 'h', 'rot', 'color', 'axis', 'pts', 'mat'];
+function partArg(a) {
+  if (!a || typeof a !== 'object' || Array.isArray(a)) return a;
+  const p = {};
+  for (const k of PART_KEYS) if (a[k] !== undefined && a[k] !== null) p[k] = a[k];
+  if (a.material !== undefined && a.material !== null) p.mat = a.material;
+  return p;
+}
+function strictPart(p, o, label) {
+  const issues = partIssues(p, o.pbase);
+  if (issues.length) throw new Error(label + ' rejected: ' + issues.join('; '));
+  return cleanPart(p);
+}
+// part selector: index, or name (all: true → every part with that name)
+function pickParts(o, a) {
+  if (a.index !== undefined && a.index !== null) {
+    if (!Number.isInteger(a.index) || a.index < 0 || a.index >= o.parts.length) throw new Error('index ' + JSON.stringify(a.index) + ' is out of range (0..' + (o.parts.length - 1) + ')');
+    return [a.index];
+  }
+  if (a.name) {
+    const hits = o.parts.map((p, i) => p.name === a.name ? i : -1).filter(i => i >= 0);
+    if (!hits.length) throw new Error('No part named "' + a.name + '". Parts: ' + o.parts.map((p, i) => i + ':' + (p.name || p.type)).join(', '));
+    if (hits.length > 1 && !a.all) throw new Error(hits.length + ' parts are named "' + a.name + '" (indices ' + hits.join(', ') + '). Pass index, or all: true to change every one.');
+    return hits;
+  }
+  throw new Error('Pass index (0-based) or name to pick the part');
+}
+function describeFurn(o) {
+  const v = validateParts(o), s = partsScale(o);
+  const out = ['furniture ' + o.id + ' "' + o.name + '" ' + o.w + '×' + o.d + '×' + o.h + ' cm at (' + o.x + ',' + o.y + ') rot=' + o.rot + '°, ' + v.count + ' parts (schema v' + (o.partsV || PARTS_V) + ')'];
+  if (s.sx !== 1 || s.sy !== 1 || s.sz !== 1) out.push('  parts are drawn in ' + o.pbase.w + '×' + o.pbase.d + '×' + o.pbase.h + ' cm and scaled to the item size');
+  (o.parts || []).forEach((p, i) => out.push('  ' + i + ': ' + (p.name ? '"' + p.name + '" ' : '') + p.type + (p.axis ? '(' + p.axis + ')' : '') + ' at (' + p.x + ',' + p.y + ') z ' + p.z + '…' + partR(p.z + p.h) + ', ' + p.w + '×' + p.d + '×' + p.h + (p.rot ? ' rot ' + p.rot + '°' : '') + (p.color ? ' ' + p.color : '') + (p.mat ? ' ' + p.mat : '')));
+  out.push(v.ok ? '✓ valid' : '✗ ' + v.errors.length + ' error(s):');
+  for (const e of v.errors) out.push('  error: ' + e);
+  for (const w of v.warnings) out.push('  warning: ' + w);
+  return out.join('\n');
+}
+const partProps = {
+  type: { type: 'string', enum: PART_TYPES, description: 'box (default) | cyl | sphere | extrude.' },
+  name: { type: 'string', description: 'Label, e.g. "leg", "top", "pocket".' },
+  x: { type: 'number', description: 'Centre x in item-local cm (item centre = 0).' },
+  y: { type: 'number', description: 'Centre y in item-local cm (y points down like the plan).' },
+  z: { type: 'number', description: 'BOTTOM elevation in cm above the floor (a top on 72 cm legs has z 72).' },
+  w: { type: 'number', description: 'Size along local x, cm.' },
+  d: { type: 'number', description: 'Size along local y, cm.' },
+  h: { type: 'number', description: 'Height, cm.' },
+  rot: { type: 'number', description: 'Yaw in degrees, clockwise on the plan.' },
+  color: { type: 'string', description: '#hex. Default: the item colour.' },
+  material: { type: 'string', enum: PART_MATS, description: 'matte (default) | gloss | metal | glass.' },
+  axis: { type: 'string', enum: ['z', 'x', 'y'], description: 'cyl only: z upright (default), x / y lying along that axis.' },
+  pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: 'extrude only: 3+ outline points relative to the part centre.' },
+};
+const furnIdArg = { type: 'string', description: 'Furniture id (from create_furniture / summarize).' };
+const pickArgs = {
+  index: { type: 'integer', description: '0-based part index (see validate_furniture).' },
+  name: { type: 'string', description: 'Part name instead of index.' },
+  all: { type: 'boolean', description: 'With name: apply to every part with that name.' },
+};
+
+tool('get_furniture_schema',
+  'Describe the multi-part furniture format (coordinates, part types, materials, rules) with a small example. Read this before create_furniture.',
+  {}, [],
+  () => JSON.stringify(FURN_SCHEMA, null, 2));
+
+tool('create_furniture',
+  'Create ONE furniture object made of components (parts) and place it at (x, y). Build tables, cabinets, billiards tables… as one item: create_furniture → add_component (or several at once with parts: […]) → validate_furniture. Do NOT fake one object with many separate add_furniture items: those all stand on the floor in 3D.',
+  {
+    name: { type: 'string', description: 'Display name, e.g. "Billiards table".' },
+    w: { type: 'number', description: 'Overall width (local x), cm.' },
+    d: { type: 'number', description: 'Overall depth (local y), cm.' },
+    h: { type: 'number', description: 'Overall height, cm (the top of the highest part).' },
+    x: { type: 'number', description: 'Centre x in the plan, cm.' },
+    y: { type: 'number', description: 'Centre y in the plan, cm.' },
+    rot: { type: 'number', description: 'Rotation, degrees clockwise. Default 0.' },
+    color: { type: 'string', description: 'Default #hex for parts without a colour (also the 2D fallback).' },
+    icon: { type: 'string', description: 'Emoji shown in 2D. Default ▭.' },
+    template: { type: 'string', enum: ['empty', 'billiards'], description: '"billiards" starts from the reference billiards table (rails, felt, pockets, legs, balls, cue) fitted to w × d × h. Default empty.' },
+    parts: { type: 'array', items: { type: 'object' }, description: 'Optional components to add right away (same fields as add_component).' },
+    floorIndex: floorArg,
+  },
+  ['name', 'w', 'd', 'h', 'x', 'y'],
+  a => {
+    const f = floorOf(a), tpl = a.template === 'billiards';
+    const w = num(a.w, undefined, 'w'), d = num(a.d, undefined, 'd'), h = num(a.h, undefined, 'h');
+    if (!(w > 0 && d > 0 && h > 0)) throw new Error('w, d and h must be > 0');
+    const o = { id: uid(), type: 'custom', name: String(a.name).slice(0, 60), icon: a.icon || (tpl ? '🎱' : '▭'), k: 'rect', w, d, h,
+      color: partHex(a.color) ? a.color : (tpl ? '#5b3a24' : '#b08968'), x: num(a.x, undefined, 'x'), y: num(a.y, undefined, 'y'), rot: num(a.rot, 0, 'rot'), label: '',
+      parts: [], pbase: { w, d, h }, partsV: PARTS_V };
+    if (tpl) o.parts = billiardParts(w, d, h).map((p, i) => strictPart(p, o, 'billiards template part ' + i + ' "' + p.name + '" (try about 280 × 155 × 85 cm)'));
+    if (Array.isArray(a.parts)) o.parts.push(...a.parts.map((p, i) => strictPart(partArg(p), o, 'parts[' + i + ']')));
+    if (o.parts.length > PARTS_MAX) throw new Error('at most ' + PARTS_MAX + ' parts');
+    f.furn.push(o);
+    return 'Created furniture ' + o.id + '. Add components with add_component (furnitureId "' + o.id + '").\n' + describeFurn(o);
+  });
+
+tool('add_component',
+  'Add a component (part) to a multi-part furniture item. Coordinates are item-local cm: centre (0,0), z = bottom elevation. Pass the fields directly, or parts: [{…}, …] to add several at once (all-or-nothing). Rejected if a size is not positive or the part sticks out of the item box.',
+  Object.assign({ furnitureId: furnIdArg, parts: { type: 'array', items: { type: 'object' }, description: 'Several parts at once, each with the fields below.' } }, partProps, { floorIndex: floorArg }),
+  ['furnitureId'],
+  a => {
+    const o = findFurnObj(floorOf(a), String(a.furnitureId)), had = Array.isArray(o.parts) ? o.parts.length : 0;
+    const box = { pbase: o.pbase || { w: o.w, d: o.d, h: o.h } }; // validate first, convert the item only on success
+    const many = Array.isArray(a.parts), add = (many ? a.parts : [a]).map((p, i) => strictPart(partArg(p), box, many ? 'parts[' + i + ']' : 'part'));
+    if (had + add.length > PARTS_MAX) throw new Error('at most ' + PARTS_MAX + ' parts per item (has ' + had + ')');
+    if (!Array.isArray(o.parts)) { o.parts = []; o.partsV = PARTS_V; }
+    o.pbase = box.pbase;
+    const at = o.parts.length; o.parts.push(...add);
+    return 'Added ' + add.length + ' part(s) at index ' + at + (add.length > 1 ? '…' + (at + add.length - 1) : '') + '.\n' + describeFurn(o);
+  });
+
+tool('update_component',
+  'Change fields of a component (picked by index or name). The merged part is re-validated; nothing changes if it is invalid.',
+  Object.assign({ furnitureId: furnIdArg }, pickArgs, { props: { type: 'object', description: 'Fields to set, e.g. {"z": 72, "h": 3, "material": "gloss"}.' }, floorIndex: floorArg }),
+  ['furnitureId', 'props'],
+  a => {
+    const o = findFurnObj(floorOf(a), String(a.furnitureId), true);
+    if (!a.props || typeof a.props !== 'object') throw new Error('props must be an object');
+    const idx = pickParts(o, a), pr = partArg(a.props);
+    const next = idx.map(i => strictPart(Object.assign({}, o.parts[i], pr), o, 'part ' + i));
+    idx.forEach((i, k) => { o.parts[i] = next[k]; });
+    return 'Updated part(s) ' + idx.join(', ') + '.\n' + describeFurn(o);
+  });
+
+tool('remove_component',
+  'Remove a component (by index or name; all: true removes every part with that name).',
+  Object.assign({ furnitureId: furnIdArg }, pickArgs, { floorIndex: floorArg }),
+  ['furnitureId'],
+  a => {
+    const o = findFurnObj(floorOf(a), String(a.furnitureId), true), idx = new Set(pickParts(o, a));
+    o.parts = o.parts.filter((p, i) => !idx.has(i));
+    return 'Removed ' + idx.size + ' part(s).\n' + describeFurn(o);
+  });
+
+tool('set_material',
+  'Set colour and/or material of one component, several (name + all), or every component (everything: true).',
+  Object.assign({ furnitureId: furnIdArg }, pickArgs, {
+    everything: { type: 'boolean', description: 'Apply to every part.' },
+    color: { type: 'string', description: '#hex.' },
+    material: { type: 'string', enum: PART_MATS, description: 'matte | gloss | metal | glass.' },
+    floorIndex: floorArg,
+  }),
+  ['furnitureId'],
+  a => {
+    const o = findFurnObj(floorOf(a), String(a.furnitureId), true);
+    if (a.color === undefined && a.material === undefined) throw new Error('Pass color and/or material');
+    if (a.color !== undefined && !partHex(a.color)) throw new Error('color must be #rgb or #rrggbb');
+    if (a.material !== undefined && !PART_MATS.includes(a.material)) throw new Error('material must be one of ' + PART_MATS.join(', '));
+    const idx = a.everything ? o.parts.map((p, i) => i) : pickParts(o, a);
+    for (const i of idx) { const p = o.parts[i]; if (a.color !== undefined) p.color = a.color; if (a.material !== undefined) { if (a.material === 'matte') delete p.mat; else p.mat = a.material; } }
+    return 'Set ' + [a.color, a.material].filter(Boolean).join(' / ') + ' on ' + idx.length + ' part(s).';
+  });
+
+tool('set_transform',
+  'Move, rotate or resize a multi-part furniture item. By default a resize keeps the parts at their current visible size (the box just grows/shrinks — run validate_furniture after shrinking); scaleParts: true stretches every part with the item instead.',
+  {
+    furnitureId: furnIdArg,
+    x: { type: 'number' }, y: { type: 'number' },
+    rot: { type: 'number', description: 'Degrees clockwise.' },
+    w: { type: 'number' }, d: { type: 'number' }, h: { type: 'number' },
+    scaleParts: { type: 'boolean', description: 'Stretch the parts with the new size. Default false.' },
+    floorIndex: floorArg,
+  },
+  ['furnitureId'],
+  a => {
+    const o = findFurnObj(floorOf(a), String(a.furnitureId));
+    for (const k of ['x', 'y', 'rot']) if (a[k] !== undefined) o[k] = num(a[k], undefined, k);
+    for (const k of ['w', 'd', 'h']) if (a[k] !== undefined) { const v = num(a[k], undefined, k); if (!(v > 0)) throw new Error(k + ' must be > 0'); if (o.pbase && !a.scaleParts) o.pbase[k] = partR(o.pbase[k] * v / o[k]); o[k] = v; } // keep the parts' current visible size
+    return describeFurn(o);
+  });
+
+tool('validate_furniture',
+  'Check a multi-part furniture item: positive sizes, known types / materials, parts inside the item box, sane heights, floating parts. Lists every part with its index.',
+  { furnitureId: furnIdArg, floorIndex: floorArg },
+  ['furnitureId'],
+  a => describeFurn(findFurnObj(floorOf(a), String(a.furnitureId))));
+
+tool('save_furniture',
+  'Save a multi-part furniture item to the project library (⬡ My Library in the app) so it can be placed again with place_furniture or from the library panel.',
+  { furnitureId: furnIdArg, name: { type: 'string', description: 'Library name. Default: the item name.' }, floorIndex: floorArg },
+  ['furnitureId'],
+  a => {
+    const o = findFurnObj(floorOf(a), String(a.furnitureId), true), v = validateParts(o);
+    if (!v.ok) throw new Error('Fix the errors first:\n' + v.errors.join('\n'));
+    const p = { id: uid(), name: String(a.name || o.name).slice(0, 60), kind: 'furn', type: o.type, k: o.k, icon: o.icon, w: o.w, d: o.d, h: o.h, color: o.color,
+      extra: { parts: JSON.parse(JSON.stringify(o.parts)), pbase: Object.assign({}, o.pbase), partsV: PARTS_V } };
+    const lib = proj().lib; lib.presets = lib.presets || []; lib.presets.push(p);
+    return 'Saved "' + p.name + '" to the library as preset ' + p.id + ' (' + o.parts.length + ' parts).';
+  });
+
+tool('place_furniture',
+  'Place a saved library item (save_furniture / the app\'s My Library) at (x, y) — by preset id or name.',
+  {
+    presetId: { type: 'string', description: 'Library preset id.' },
+    name: { type: 'string', description: 'Library preset name (if no presetId).' },
+    x: { type: 'number' }, y: { type: 'number' },
+    rot: { type: 'number', description: 'Degrees clockwise. Default 0.' },
+    floorIndex: floorArg,
+  },
+  ['x', 'y'],
+  a => {
+    const ps = (proj().lib.presets || []).filter(p => p.kind === 'furn');
+    const p = ps.find(q => a.presetId ? q.id === a.presetId : q.name === a.name);
+    if (!p) throw new Error('No furniture preset ' + JSON.stringify(a.presetId || a.name) + '. Saved: ' + (ps.map(q => q.id + ' "' + q.name + '"').join(', ') || 'none'));
+    const o = { id: uid(), type: p.type || 'custom', name: p.name, icon: p.icon || '▭', k: p.k || 'rect', w: p.w, d: p.d, h: p.h, color: p.color,
+      x: num(a.x, undefined, 'x'), y: num(a.y, undefined, 'y'), rot: num(a.rot, 0, 'rot'), label: '' };
+    for (const k in p.extra || {}) o[k] = JSON.parse(JSON.stringify(p.extra[k]));
+    cleanParts(o); floorOf(a).furn.push(o);
+    return 'Placed "' + o.name + '" ' + o.id + ' at (' + o.x + ',' + o.y + ').';
+  });
+
 /* ---------- MCP / JSON-RPC 2.0 over stdio ---------- */
 function send(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
 function ok(id, result) { send({ jsonrpc: '2.0', id, result }); }
@@ -745,7 +1130,14 @@ const INSTRUCTIONS =
   'instantly in their open tab (and persist to IndexedDB across refresh) and pull_from_browser to start from their latest changes. ' +
   'The user can queue natural-language instructions in the app\'s floating AI panel - read them with get_user_requests and mark them done with ack_user_requests. ' +
   'SAFETY: every push_to_browser is snapshotted (before + after) by the bridge; if the user says "go back" / "undo that" / "restore", call list_snapshots then restore_snapshot. ' +
-  'Pass a short label to push_to_browser ("add a bathroom") so the history is readable.';
+  'Pass a short label to push_to_browser ("add a bathroom") so the history is readable. ' +
+  'MULTI-PART FURNITURE: anything not in the catalogue (billiards table, bunk with desk, kitchen island…) is ONE item built from parts: ' +
+  'get_furniture_schema → create_furniture → add_component (z = bottom elevation, item-local cm) → validate_furniture → save_furniture. ' +
+  'Never fake one object with several add_furniture items: separate items all stand on the floor in 3D.';
+const RESOURCES = [
+  { uri: 'floorplanner://schema/furniture-parts', name: 'Multi-part furniture schema', mimeType: 'application/json', description: 'Coordinates, part types, materials and rules for create_furniture / add_component.', text: () => JSON.stringify(FURN_SCHEMA, null, 2) },
+  { uri: 'floorplanner://example/billiards-table', name: 'Reference billiards table', mimeType: 'application/json', description: 'A 280 × 155 × 85 cm billiards table built from 30 parts.', text: () => JSON.stringify({ name: 'Billiards table', w: 280, d: 155, h: 85, parts: billiardParts(280, 155, 85) }, null, 2) },
+];
 
 async function handle(msg) {
   const m = msg.method, params = msg.params || {};
@@ -753,7 +1145,7 @@ async function handle(msg) {
     case 'initialize':
       ok(msg.id, {
         protocolVersion: params.protocolVersion || '2024-11-05',
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, resources: {} },
         serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
         instructions: INSTRUCTIONS,
       });
@@ -775,7 +1167,13 @@ async function handle(msg) {
       }
       break;
     }
-    case 'resources/list': ok(msg.id, { resources: [] }); break;
+    case 'resources/list': ok(msg.id, { resources: RESOURCES.map(r => ({ uri: r.uri, name: r.name, description: r.description, mimeType: r.mimeType })) }); break;
+    case 'resources/read': {
+      const r = RESOURCES.find(x => x.uri === params.uri);
+      if (!r) return err(msg.id, -32002, 'Resource not found: ' + params.uri);
+      ok(msg.id, { contents: [{ uri: r.uri, mimeType: r.mimeType, text: r.text() }] });
+      break;
+    }
     case 'resources/templates/list': ok(msg.id, { resourceTemplates: [] }); break;
     case 'prompts/list': ok(msg.id, { prompts: [] }); break;
     default:
