@@ -103,6 +103,7 @@ The agent runs `node mcp/bridge.js` and the app tab connects automatically; afte
 | :-- | :-- |
 | `new_project` | Start an empty project (name, grid, wall thickness/height) |
 | `load_project` / `save_project` | Read / write the app's `.json` project files |
+| `import_ifc` | Import a Revit / ArchiCAD / BIM model exported as `.ifc` (IFC2x3 / IFC4): storeys, walls, doors & windows, rooms, slabs, slab openings |
 | `get_project` / `set_project` | Get or replace the full working project JSON |
 | `summarize` | Floors, wall ids & lengths, openings, room areas, furniture — with ids |
 | `list_catalog` | Furniture catalogue + door/window presets with ids and sizes |
