@@ -37,6 +37,7 @@ function makeEnv(initialP) {
       return fl;
     };
     const VOID_TYPES = { stair: 1 };
+    const cleanParts = o => o; // parts engine (furniture-parts.test.js covers it)
     let P = initialP || { floors: [newFloor()] };
     const find = id => {
       const f = P && P.floors && P.floors[0];

@@ -30,6 +30,7 @@ const api = new Function(`
   const wLen = w => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
   const BYID = { sofa3: { id: 'sofa3', icon: 'S', k: 'sofa' }, stairs: { id: 'stairs', icon: 'T', k: 'stairs' } };
   const ui = {};
+  const CAT_PARTS = {}, PARTS_V = 1; // multi-part catalogue items (furniture-parts.test.js covers them)
   ${openings}
   ${lineSrc('OPDEF')}
   ${fnSrc('opType')}

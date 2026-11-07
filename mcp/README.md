@@ -111,6 +111,14 @@ The agent runs `node mcp/bridge.js` and the app tab connects automatically; afte
 | `add_rect_walls` | Rectangle of 4 walls, optional room polygon inside |
 | `add_opening` | Door/window on a wall (parametric `d` from wall end A) |
 | `add_furniture` | Catalogue item at x,y with rotation |
+| `get_furniture_schema` | The multi-part furniture format (also the resources `floorplanner://schema/furniture-parts` and `floorplanner://example/billiards-table`) |
+| `create_furniture` | One custom item (name, w×d×h, x, y) built from parts; `template: "billiards"` starts from the reference table |
+| `add_component` | Add a part (box / cyl / sphere / extrude, item-local x, y, **z = bottom elevation**, w, d, h, rot, color, material) — or `parts: [...]` at once; rejected if it is invalid or sticks out of the item box |
+| `update_component` / `remove_component` | Change / remove a part by index or name (`all: true` for every part with that name) |
+| `set_material` | Colour and/or finish (`matte`, `gloss`, `metal`, `glass`) of one, several or all parts |
+| `set_transform` | Move / rotate / resize the item; `scaleParts: true` stretches the parts with it |
+| `validate_furniture` | Part list + errors (sizes, outside the box, above the item height) and warnings (floating parts, too many parts) |
+| `save_furniture` / `place_furniture` | Save the item to the project library (**⬡ My Library** in the app) / place a saved one again |
 | `add_room` | Room polygon (name, color, wood/tile/carpet pattern) |
 | `add_slab` | Free slab without walls — balcony / terrace / deck (thickness, finish, level offset) |
 | `add_void` | Stairwell / shaft / atrium hole in a floor's slab (draw it on the upper floor) |
@@ -126,6 +134,21 @@ The agent runs `node mcp/bridge.js` and the app tab connects automatically; afte
 | `restore_snapshot` | Put a saved version back (undo for AI edits; the app updates live) |
 
 All coordinates are **centimetres**, **Y axis points down** (screen convention), ids are the 7-char strings shown by `summarize`.
+
+### Multi-part furniture
+
+Anything the catalogue lacks (a billiards table, a desk with drawers, a kitchen island) is **one** furniture item made of parts — never several `add_furniture` boxes, which all stand on the floor in 3D:
+
+```text
+create_furniture { name: "Billiards table", w: 280, d: 155, h: 85, x: 300, y: 200 }
+add_component   { furnitureId, parts: [
+  { name: "leg",  type: "box", x: -110, y: -53, z: 0,  w: 14,  d: 14,  h: 66 },
+  { name: "felt", type: "box", x: 0,    y: 0,   z: 76, w: 252, d: 127, h: 3, color: "#1f7a4a" },
+  { name: "ball", type: "sphere", x: 70, y: 0,  z: 79, w: 5.7, d: 5.7, h: 5.7, material: "gloss" } ] }
+validate_furniture { furnitureId }
+```
+
+Part coordinates are item-local (item centre = 0, 0) and `z` is the part's **bottom** above the floor. The schema is versioned (`partsV: 1`); the item also stores `pbase` (the box the parts were designed in), so resizing it in the app scales the parts.
 
 ### Saved versions ("go back")
 

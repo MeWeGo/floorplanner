@@ -32,6 +32,7 @@ const CAT_DEFS = [
   ['sofa2', 0, '2 Kişilik Koltuk', 160, 90, 85, '🛋️', 'sofa', '#a5b4fc', '2-Seat Sofa'],
   ['armchair', 0, 'Berjer', 85, 85, 85, '💺', 'sofa', '#c4b5fd', 'Armchair'],
   ['coffee', 0, 'Orta Sehpa', 100, 55, 40, '▭', 'rect', '#d6b88f', 'Coffee Table'],
+  ['billiard', 0, 'Bilardo Masası', 280, 155, 85, '🎱', 'rect', '#5b3a24', 'Billiards Table'],
   ['tv', 0, 'TV Ünitesi', 180, 40, 50, '📺', 'rect', '#9ca3af', 'TV Unit'],
   ['table4', 0, '4 Kişilik Masa', 140, 80, 75, '🍽️', 'rect', '#d6b88f', '4-Seat Table'],
   ['table6', 0, '6 Kişilik Masa', 180, 90, 75, '🍽️', 'rect', '#d6b88f', '6-Seat Table'],
@@ -317,6 +318,7 @@ function mirrorObjs(os, o, u, opsOf = w => F().ops.filter(op => op.wall === w.id
     else if (kind === 'furn') {
       const p = R(m); m.x = p.x; m.y = p.y; m.rot = normDeg(2 * ax - (m.rot || 0) + 180);
       if (m.k === 'poly' && Array.isArray(m.pts)) m.pts = m.pts.map(q => ({ x: -q.x, y: q.y })).reverse();
+      if (Array.isArray(m.parts)) m.parts = m.parts.map(q => { const r = Object.assign({}, q, { x: -q.x }); if (q.rot) r.rot = (360 - q.rot) % 360; if (q.pts) r.pts = q.pts.map(t => ({ x: -t.x, y: t.y })).reverse(); return r; });
     } else if (kind === 'text') {
       const p = R(m); m.x = p.x; m.y = p.y;
       let r = normDeg(2 * ax - (m.rot || 0)); if (r > 90 && r < 270) r = normDeg(r + 180); m.rot = r;
@@ -800,7 +802,8 @@ function normalizeProject(P) {
   if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) if (!w.wt) w.wt = 'solid';
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; }
-    for (const v of f.voids) if (!VOID_TYPES[v.type]) v.type = 'stair'; });
+    for (const v of f.voids) if (!VOID_TYPES[v.type]) v.type = 'stair';
+    for (const o of f.furn) cleanParts(o); }); // parçalı mobilya: alanı olmayan eski öğelere dokunulmaz
   return P;
 }
 function loadProject(obj, msg) {
@@ -1220,6 +1223,7 @@ function opSvg(op, live) {
   return s + '</g>';
 }
 function furnBody(f) {
+  if (Array.isArray(f.parts) && f.parts.length) return partsSvg(f); // çok parçalı mobilya (parts şeması v1)
   const C = pal(), hw = f.w / 2, hd = f.d / 2, col = f.color, sk = C.furnStroke, fop = `fill-opacity="${C.furnOp}"`;
   let s = '';
   if (f.k === 'round') s += `<ellipse rx="${hw}" ry="${hd}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
@@ -1305,10 +1309,187 @@ function stairRails(o, st = stairSteps(o)) {
   }
   return out.filter(r => r.pts.length >= 1);
 }
+/* PARTS-ENGINE:BEGIN ---------- Çok parçalı mobilya (programlanabilir mobilya, şema v1) ----------
+   This block is copied VERBATIM into app.js and mcp/server.js (tests/furniture-parts.test.js compares them).
+   A furniture item may carry   parts: [{ name?, type, x, y, z, w, d, h, rot?, color?, mat?, axis?, pts? }]
+   plus pbase: { w, d, h } (the design box the parts were drawn in) and partsV (schema version).
+   - Local cm, centre of the item = (0, 0), y points down like the plan, z = BOTTOM elevation above the floor.
+   - type: box | cyl | sphere | extrude. cyl stands upright (axis z) unless axis is 'x' or 'y' (lying);
+     its w × d × h is always the bounding box. extrude = pts polygon (cm, relative to x, y) lifted h from z.
+   - rot = degrees clockwise on the plan, like furniture rot. mat: matte (default) | gloss | metal | glass.
+   - When the item is resized (w / d / h ≠ pbase) the parts scale with it; old items without parts are untouched. */
+const PARTS_V = 1;
+const PART_TYPES = ['box', 'cyl', 'sphere', 'extrude'];
+const PART_ALIAS = { box: 'box', cube: 'box', cyl: 'cyl', cylinder: 'cyl', sphere: 'sphere', sph: 'sphere', ball: 'sphere', extrude: 'extrude', prism: 'extrude' };
+const PART_MATS = ['matte', 'gloss', 'metal', 'glass'];
+const PARTS_MAX = 64, PARTS_SOFT = 40;
+const partFin = v => v !== null && v !== undefined && v !== '' && typeof v !== 'boolean' && Number.isFinite(+v);
+const partHex = c => typeof c === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c);
+const partR = v => Math.round(v * 100) / 100;
+function partPts(v) {
+  if (!Array.isArray(v) || v.length < 3) return null;
+  const pts = v.map(q => q && partFin(q.x) && partFin(q.y) ? { x: partR(+q.x), y: partR(+q.y) } : null);
+  return pts.every(Boolean) ? pts : null;
+}
+// lenient: any input → a valid part (used when loading projects; bad fields fall back to defaults)
+function cleanPart(p) {
+  p = p && typeof p === 'object' ? p : {};
+  const n = (v, d) => partFin(v) ? partR(+v) : d;
+  let type = PART_ALIAS[String(p.type === undefined ? 'box' : p.type).toLowerCase()] || 'box';
+  const pts = type === 'extrude' ? partPts(p.pts) : null;
+  if (type === 'extrude' && !pts) type = 'box';
+  const q = { type };
+  if (p.name) q.name = String(p.name).slice(0, 40);
+  q.x = n(p.x, 0); q.y = n(p.y, 0); q.z = n(p.z, 0);
+  if (pts) {
+    const xs = pts.map(a => a.x), ys = pts.map(a => a.y);
+    q.w = partR(Math.max(...xs) - Math.min(...xs)) || 0.1; q.d = partR(Math.max(...ys) - Math.min(...ys)) || 0.1; q.pts = pts;
+  } else { q.w = Math.max(0.1, Math.abs(n(p.w, 10))); q.d = Math.max(0.1, Math.abs(n(p.d, 10))); }
+  q.h = Math.max(0.1, Math.abs(n(p.h, 10)));
+  const r = n(p.rot, 0); if (r) q.rot = partR(((r % 360) + 360) % 360);
+  if (partHex(p.color)) q.color = p.color;
+  if (PART_MATS.includes(p.mat) && p.mat !== 'matte') q.mat = p.mat;
+  if (type === 'cyl' && (p.axis === 'x' || p.axis === 'y')) q.axis = p.axis;
+  return q;
+}
+// footprint + height range of a CLEAN part in item-local cm: { x0, x1, y0, y1, z0, z1 }
+function partBounds(q) {
+  const a = (q.rot || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  const loc = q.pts || [{ x: -q.w / 2, y: -q.d / 2 }, { x: q.w / 2, y: -q.d / 2 }, { x: q.w / 2, y: q.d / 2 }, { x: -q.w / 2, y: q.d / 2 }];
+  const pts = loc.map(p => ({ x: q.x + p.x * c - p.y * s, y: q.y + p.x * s + p.y * c }));
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys), z0: q.z, z1: q.z + q.h };
+}
+// strict: problems with a RAW part (empty list = valid). base = the design box { w, d, h }
+function partIssues(p, base) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return ['part must be an object'];
+  const e = [], t = PART_ALIAS[String(p.type === undefined ? 'box' : p.type).toLowerCase()];
+  if (!t) e.push('type "' + p.type + '" is not one of ' + PART_TYPES.join(', '));
+  for (const k of ['x', 'y', 'z', 'rot']) if (p[k] !== undefined && p[k] !== null && !partFin(p[k])) e.push(k + ' must be a number');
+  if (t === 'extrude') {
+    if (!partPts(p.pts)) e.push('extrude needs pts: 3+ {x, y} points in cm, relative to the part centre');
+    if (!(partFin(p.h) && +p.h > 0)) e.push('h must be a number > 0');
+  } else for (const k of ['w', 'd', 'h']) if (!(partFin(p[k]) && +p[k] > 0)) e.push(k + ' must be a number > 0');
+  if (p.color !== undefined && p.color !== null && !partHex(p.color)) e.push('color must be #rgb or #rrggbb');
+  if (p.mat !== undefined && p.mat !== null && !PART_MATS.includes(p.mat)) e.push('mat must be one of ' + PART_MATS.join(', '));
+  if (p.axis !== undefined && p.axis !== null && !['x', 'y', 'z'].includes(p.axis)) e.push('axis must be x, y or z');
+  if (!e.length && base) {
+    const b = partBounds(cleanPart(p)), tol = 1;
+    if (b.x0 < -base.w / 2 - tol || b.x1 > base.w / 2 + tol || b.y0 < -base.d / 2 - tol || b.y1 > base.d / 2 + tol)
+      e.push('sticks out of the ' + base.w + ' × ' + base.d + ' cm footprint (x ' + partR(b.x0) + '…' + partR(b.x1) + ', y ' + partR(b.y0) + '…' + partR(b.y1) + '; the item spans x ±' + base.w / 2 + ', y ±' + base.d / 2 + ')');
+    if (b.z0 < -tol) e.push('starts below the floor (z ' + partR(b.z0) + ' < 0)');
+    if (b.z1 > base.h + tol) e.push('top at ' + partR(b.z1) + ' cm is above the item height ' + base.h + ' cm');
+  }
+  return e;
+}
+// normalise an item's parts in place (lenient). No parts field → untouched, so old projects stay byte-identical
+function cleanParts(o) {
+  if (!o || !('parts' in o)) return o;
+  if (!Array.isArray(o.parts)) { delete o.parts; delete o.pbase; delete o.partsV; return o; }
+  o.parts = o.parts.filter(p => p && typeof p === 'object').slice(0, PARTS_MAX).map(cleanPart);
+  const b = o.pbase && typeof o.pbase === 'object' ? o.pbase : {};
+  o.pbase = { w: +b.w > 0 ? partR(+b.w) : o.w, d: +b.d > 0 ? partR(+b.d) : o.d, h: +b.h > 0 ? partR(+b.h) : o.h };
+  o.partsV = PARTS_V;
+  return o;
+}
+// parts are drawn in pbase; a resized item scales them
+function partsScale(o) {
+  const b = o.pbase || o, f = (v, bv) => +bv > 0 && +v > 0 ? v / bv : 1;
+  return { sx: f(o.w, b.w), sy: f(o.d, b.d), sz: f(o.h, b.h) };
+}
+// whole-item check → { ok, errors, warnings, count }
+function validateParts(o) {
+  const errors = [], warnings = [];
+  if (!o || typeof o !== 'object') return { ok: false, errors: ['not a furniture object'], warnings, count: 0 };
+  for (const k of ['w', 'd', 'h']) if (!(partFin(o[k]) && +o[k] > 0)) errors.push('item ' + k + ' must be a number > 0');
+  const parts = Array.isArray(o.parts) ? o.parts : [], base = o.pbase || { w: o.w, d: o.d, h: o.h };
+  if (!Array.isArray(o.parts)) warnings.push('no parts: the item renders as a plain ' + (o.k || 'box'));
+  else if (!parts.length) warnings.push('no parts yet: add components (the item renders as a plain box until then)');
+  if (parts.length > PARTS_MAX) errors.push(parts.length + ' parts; the limit is ' + PARTS_MAX);
+  else if (parts.length > PARTS_SOFT) warnings.push(parts.length + ' parts is heavy for 3D; try to stay under ' + PARTS_SOFT);
+  const label = (p, i) => 'part ' + i + (p && p.name ? ' "' + p.name + '"' : '');
+  parts.forEach((p, i) => { for (const m of partIssues(p, errors.length ? null : base)) errors.push(label(p, i) + ': ' + m); });
+  if (!errors.length) {
+    // floating parts: nothing under them (another part's top or the floor) where they overlap
+    const bs = parts.map(p => partBounds(cleanPart(p)));
+    bs.forEach((b, i) => {
+      if (b.z0 <= 0.5) return;
+      const held = bs.some((c, j) => j !== i && c.z1 >= b.z0 - 1 && c.z0 < b.z0 && c.x0 < b.x1 && c.x1 > b.x0 && c.y0 < b.y1 && c.y1 > b.y0);
+      if (!held) warnings.push(label(parts[i], i) + ' floats at z ' + partR(b.z0) + ' cm with nothing under it');
+    });
+  }
+  return { ok: !errors.length, errors, warnings, count: parts.length };
+}
+// reference example: a 9-ft style billiards table built from parts (w = long side)
+function billiardParts(w = 280, d = 155, h = 85) {
+  const rail = Math.min(14, d * 0.09), felt = h - 6, rail3 = felt + 3.8, bed = felt - 3, ap = 10, legH = bed - ap, ball = 5.7;
+  const wood = '#5b3a24', woodD = '#3d2516', railC = '#6b4026', cloth = '#1f7a4a', cush = '#17603a', out = [];
+  const add = (name, type, x, y, z, pw, pd, ph, color, extra) => out.push(Object.assign({ name, type, x: partR(x), y: partR(y), z: partR(z), w: partR(pw), d: partR(pd), h: partR(ph), color }, extra || {}));
+  const lx = w / 2 - 30, ly = d / 2 - 24;
+  for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) add('leg', 'box', sx * lx, sy * ly, 0, 14, 14, legH, woodD);
+  for (const sy of [-1, 1]) add('stretcher', 'box', 0, sy * ly, 18, 2 * lx, 8, 8, woodD);
+  add('apron', 'box', 0, 0, legH, w - 16, d - 16, ap, wood);
+  add('felt bed', 'box', 0, 0, bed, w - 2 * rail, d - 2 * rail, 3, cloth);
+  for (const sy of [-1, 1]) add('long rail', 'box', 0, sy * (d / 2 - rail / 2), bed, w, rail, rail3 - bed, railC, { mat: 'gloss' });
+  for (const sx of [-1, 1]) add('short rail', 'box', sx * (w / 2 - rail / 2), 0, bed, rail, d - 2 * rail, rail3 - bed, railC, { mat: 'gloss' });
+  for (const sy of [-1, 1]) add('cushion', 'box', 0, sy * (d / 2 - rail - 1.5), felt, w - 2 * rail, 3, 3, cush);
+  for (const sx of [-1, 1]) add('cushion', 'box', sx * (w / 2 - rail - 1.5), 0, felt, 3, d - 2 * rail - 6, 3, cush);
+  const px = w / 2 - rail + 1, py = d / 2 - rail + 1;
+  for (const [x, y] of [[-px, -py], [0, -py - 1], [px, -py], [px, py], [0, py + 1], [-px, py]]) add('pocket', 'cyl', x, y, bed + 0.1, 12, 12, rail3 - bed + 0.2, '#111111');
+  add('cue ball', 'sphere', -w / 4, 0, felt, ball, ball, ball, '#f8fafc', { mat: 'gloss' });
+  const rack = ['#facc15', '#2563eb', '#dc2626', '#7c3aed', '#111111', '#f97316'], rx = w / 4, dx = ball * 0.87;
+  let k = 0;
+  for (let row = 0; row < 3; row++) for (let j = 0; j <= row; j++) add('ball', 'sphere', rx + row * dx, (j - row / 2) * ball * 1.02, felt, ball, ball, ball, rack[k++], { mat: 'gloss' });
+  add('cue', 'cyl', -w * 0.06, d / 2 - rail - 16, felt, Math.min(147, w - 2 * rail - 20), 2.6, 2.6, '#d9b48a', { axis: 'x', rot: 4 });
+  return out;
+}
+/* PARTS-ENGINE:END */
+// Çok parçalı mobilya 2B: parçaların üstten görünüşü — yüksekte olan üstte çizilir, grup tek katman olarak saydamlaşır
+function partsSvg(f) {
+  const C = pal(), s = partsScale(f), sk = C.furnStroke, hw = f.w / 2, hd = f.d / 2;
+  const ns = 'stroke="' + sk + '" stroke-width="1" vector-effect="non-scaling-stroke"';
+  const list = f.parts.map((p, i) => ({ p, i })).sort((a, b) => (a.p.z + a.p.h) - (b.p.z + b.p.h) || a.i - b.i);
+  let out = `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="transparent"/><g opacity="${C.furnOp}" transform="scale(${s.sx} ${s.sy})">`;
+  for (const { p } of list) {
+    const col = p.color || f.color || '#cbd5e1', tr = `transform="translate(${p.x} ${p.y})${p.rot ? ' rotate(' + p.rot + ')' : ''}"`;
+    if (p.type === 'extrude' && p.pts) out += `<polygon points="${p.pts.map(q => q.x + ',' + q.y).join(' ')}" fill="${col}" ${ns} ${tr}/>`;
+    else if (p.type === 'sphere' || (p.type === 'cyl' && !p.axis)) out += `<ellipse rx="${p.w / 2}" ry="${p.d / 2}" fill="${col}" ${ns} ${tr}/>`;
+    else {
+      const r = p.type === 'cyl' ? (p.axis === 'x' ? p.d / 2 : p.w / 2) : Math.min(2, p.w / 4, p.d / 4);
+      out += `<rect x="${-p.w / 2}" y="${-p.d / 2}" width="${p.w}" height="${p.d}" rx="${r}" fill="${col}" ${ns} ${tr}/>`;
+    }
+  }
+  return out + '</g>';
+}
+// Çok parçalı mobilya 3B: paylaşılan birim geometriler ölçeklenir (extrude hariç); ölçek grubu yeniden boyutlandırmayı izler
+function parts3D(g, o, C) {
+  const s = partsScale(o), root = new THREE.Group(); root.scale.set(s.sx, s.sz, s.sy); g.add(root);
+  for (const p of o.parts) {
+    const m = C.pmat(p.color || o.color || '#cbd5e1', p.mat);
+    let mesh;
+    if (p.type === 'extrude' && p.pts) {
+      const geo = new THREE.ExtrudeGeometry(new THREE.Shape(p.pts.map(q => new THREE.Vector2(q.x, -q.y))), { depth: p.h, bevelEnabled: false });
+      geo.rotateX(-Math.PI / 2); mesh = new THREE.Mesh(geo, m); mesh.position.set(p.x, p.z, p.y);
+    } else {
+      mesh = new THREE.Mesh(p.type === 'sphere' ? C.unit.sph : p.type === 'cyl' ? C.unit.cyl : C.unit.box, m);
+      mesh.position.set(p.x, p.z + p.h / 2, p.y);
+      if (p.type === 'box') mesh.scale.set(p.w, p.h, p.d);
+      else if (p.type === 'sphere') mesh.scale.set(p.w / 2, p.h / 2, p.d / 2);
+      else if (p.axis === 'x') { mesh.scale.set(p.h / 2, p.w, p.d / 2); mesh.rotation.z = Math.PI / 2; } // yatık silindir: boyu x boyunca
+      else if (p.axis === 'y') { mesh.scale.set(p.w / 2, p.d, p.h / 2); mesh.rotation.x = Math.PI / 2; }
+      else mesh.scale.set(p.w / 2, p.h, p.d / 2);
+    }
+    mesh.rotation.order = 'YXZ'; mesh.rotation.y = -(p.rot || 0) * Math.PI / 180;
+    mesh.receiveShadow = true; mesh.castShadow = p.mat !== 'glass' && p.w * p.d * p.h > 1500;
+    root.add(mesh);
+  }
+}
+// katalogdaki parçalı öğeler: kimlik → parça üreteci (mkFurn yerleştirirken kopyalar)
+const CAT_PARTS = { billiard: billiardParts };
 function furnSvg(f, live) {
   const C = pal(), fs = Math.max(12, Math.min(f.w, f.d) * 0.42);
   let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${furnBody(f)}`;
-  if (f.icon) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
+  if (f.icon && !(Array.isArray(f.parts) && f.parts.length)) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
   if (f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="${C.text}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
   return s + '</g>';
 }
@@ -1648,7 +1829,7 @@ function mkOp(def, wall, d) {
   if (def.extra) Object.assign(o, JSON.parse(JSON.stringify(def.extra))); // ön ayar alanları (#42)
   return o;
 }
-function mkFurn(def, x, y, rot = 0) { const o = { id: uid(), type: def.id, name: itemName(def), icon: def.icon, k: def.k, w: def.w, d: def.d, h: def.h, color: def.color, x, y, rot, label: '' }; if (def.k === 'poly' && def.pts) o.pts = JSON.parse(JSON.stringify(def.pts)); if (def.extra) for (const k in def.extra) if (k !== 'pts') o[k] = JSON.parse(JSON.stringify(def.extra[k])); return o; }
+function mkFurn(def, x, y, rot = 0) { const o = { id: uid(), type: def.id, name: itemName(def), icon: def.icon, k: def.k, w: def.w, d: def.d, h: def.h, color: def.color, x, y, rot, label: '' }; if (def.k === 'poly' && def.pts) o.pts = JSON.parse(JSON.stringify(def.pts)); if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } if (def.extra) for (const k in def.extra) if (k !== 'pts') o[k] = JSON.parse(JSON.stringify(def.extra[k])); return o; }
 function mkRoom(pts, name) {
   const n = F().rooms.length;
   return { id: uid(), name: name || L('Oda ', 'Room ') + (n + 1), color: ROOMCOL[n % ROOMCOL.length], floor: 'none', pts };
@@ -2922,6 +3103,10 @@ function renderProps() {
         + `<div class="stat" title="${L('Blondel kuralı: 2 × rıht + basamak ≈ 63 cm (60–64 rahat)', 'Blondel rule: 2 × riser + tread ≈ 63 cm (60–64 is comfortable)')}"><span>2r + t</span><b style="color:${bc}">${Math.round(bl.v * 10) / 10} cm ${bl.ok ? '✓' : bl.warn ? '≈' : '✗'}</b></div>`
         + `<div class="row"><button class="btn sm" data-act="stairfit">${L('⇕ Kat yüksekliğine eşitle', '⇕ Match storey height')} (${P.wallH + 20} cm)</button></div>`;
     }
+    if (Array.isArray(o.parts) && o.parts.length && n === 1) { // çok parçalı mobilya: parça sayısı + doğrulama (düzenleme şimdilik MCP / JSON ile)
+      const v = validateParts(o);
+      h += `<div class="stat" title="${L('Bu mobilya parçalardan oluşur; ölçüleri değiştirince parçalar birlikte ölçeklenir', 'This item is built from parts; resizing it scales the parts with it')}"><span>🧩 ${L('Parçalar', 'Parts')}</span><b style="color:${v.ok ? '#16a34a' : 'var(--danger)'}">${v.count}${v.ok ? '' : ' ⚠'}</b></div>`;
+    }
     if (o.type !== 'shape' && n === 1) h += `<div class="row"><button class="btn sm" data-act="savepreset" title="${L('Bu ölçü ve rengi kütüphaneye kaydet, tekrar tekrar yerleştir', 'Save this size and colour to the library and place it again')}">💾 ${L('Kütüphaneye kaydet', 'Save to library')}</button></div>`;
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
@@ -3184,7 +3369,8 @@ $('#props').addEventListener('click', e => {
       }
     }
     if (a === 'rot90' && kind === 'furn') o.rot = (o.rot + 90) % 360;
-    if (a === 'swapwd' && kind === 'furn') { [o.w, o.d] = [o.d, o.w]; if (o.k === 'poly' && o.pts) o.pts = o.pts.map(p => ({ x: p.y, y: p.x })); }
+    if (a === 'swapwd' && kind === 'furn') { [o.w, o.d] = [o.d, o.w]; if (o.k === 'poly' && o.pts) o.pts = o.pts.map(p => ({ x: p.y, y: p.x }));
+      if (Array.isArray(o.parts)) { o.parts = o.parts.map(q => Object.assign({}, q, { x: -q.y, y: q.x, rot: ((q.rot || 0) + 90) % 360 })); if (o.pbase) o.pbase = { w: o.pbase.d, d: o.pbase.w, h: o.pbase.h }; } }
     if (a === 'saveshape' && kind === 'furn') {
       const nm = prompt(L('Şekil adı:', 'Shape name:'), o.name || L('Şekil', 'Shape'));
       if (nm) {
@@ -3213,7 +3399,7 @@ $('#props').addEventListener('click', e => {
    tip değildir. Kapı açılış yönü (side) kaydedilir ama yerleştirirken imlecin tarafını izler (duvar yönü
    her duvarda farklıdır); S ile çevrilir. #41 alanları (mat, color, frameCol, glass) da taşınır. */
 const PRESET_OP_EXTRA = ['mat', 'color', 'frameCol', 'glass'];
-const PRESET_FURN_EXTRA = ['stepN', 'stairType', 'railing', 'pts'];
+const PRESET_FURN_EXTRA = ['stepN', 'stairType', 'railing', 'pts', 'parts', 'pbase', 'partsV'];
 const clonePlain = v => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
 function presetFromObj(kind, o, name) {
   const p = { id: uid(), name: String(name).slice(0, 60), kind };
@@ -6085,6 +6271,7 @@ function floorMat(kind, color, lt, C) {
 const waterBed = c => mixHex(c, '#0c4a6e', 0.7);
 // Katalog kimliğine göre parametrik mobilya: ölçüler o.w/d/h'den türetilir
 function furn3D(g, o, C) {
+  if (Array.isArray(o.parts) && o.parts.length) return parts3D(g, o, C); // çok parçalı mobilya (parts şeması v1)
   const { box, cyl, sph } = C, ed = C.det;
   const w = o.w, d = o.d, h = o.h, col = o.color || '#cbd5e1';
   const sh = t => shade(col, t);
@@ -6416,7 +6603,9 @@ function build3D(keepCam = false) {
     const m = new THREE.Mesh(unitSph, mat(color)); m.scale.set(r * sx, r * sy, r * sz); m.position.set(x, y, z);
     m.receiveShadow = true; m.castShadow = r * r * r > 1200; parent.add(m); return m;
   };
-  const furnCtx = { box, cyl, sph, mat, det };
+  // parçalı mobilya malzemesi: mat (matte | gloss | metal | glass); matCache'te tutulur ki sonraki build'de dispose edilsin
+  const pmat = (c, kind) => { if (!kind || kind === 'matte') return mat(c); if (kind === 'glass') return mat(c, 0.35); const k = c + '|' + kind; return matCache[k] || (matCache[k] = new THREE.MeshPhongMaterial({ color: c, shininess: kind === 'metal' ? 90 : 45, specular: kind === 'metal' ? 0x9aa4b0 : 0x2a2a2a, side: THREE.DoubleSide })); };
+  const furnCtx = { box, cyl, sph, mat, det, pmat, unit: { box: unitBox, cyl: unitCyl, sph: unitSph } };
   let elev = 0;
   P.floors.forEach((f, fidx) => {
     if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return;
