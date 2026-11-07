@@ -907,7 +907,10 @@ function ifcToProject(text, opts = {}) {
     if (t === 'IFCARBITRARYCLOSEDPROFILEDEF' || t === 'IFCARBITRARYPROFILEDEFWITHVOIDS') return curve(R(a[2]));
     if (t === 'IFCDERIVEDPROFILEDEF') { const m = place(R(a[3])); return profile(R(a[2]), depth + 1).map(p => app(m, p)); }
     if (t === 'IFCCOMPOSITEPROFILEDEF') { const out = []; for (const v of a[2] || []) out.push(...profile(R(v), depth + 1)); return out; }
-    if (/PROFILEDEF$/.test(t) && a[2] && R(a[2])) { const m = M(); return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(p => app(m, p)); } // I/L/T/U kesitleri: yalnızca konum
+    if (/PROFILEDEF$/.test(t) && a[2] && R(a[2])) { // I / T / L / U / C / Z kesitleri: dış dikdörtgen (I: genişlik a[3], derinlik a[4]; diğerleri: derinlik a[3], genişlik a[4])
+      const ish = /ISHAPE/.test(t), x = (+(ish ? a[3] : a[4]) || 2) / 2, y = (+(ish ? a[4] : a[3]) || 2) / 2, m = M();
+      return [[-x, -y], [x, -y], [x, y], [-x, y]].map(p => app(m, p));
+    }
     return [];
   };
   const loopPts = id => { const a = A(id); return T(id) === 'IFCPOLYLOOP' ? (a[0] || []).map(pt) : []; };
@@ -1155,10 +1158,28 @@ function ifcToProject(text, opts = {}) {
     return width >= 150 ? 'double' : 'door';
   };
   const filled = new Set(fillOf.values());
+  // Revit pencere / kapı ailelerini çoğu zaman IfcBuildingElementProxy olarak, IfcRelFillsElement olmadan verir: gövde merkezi
+  // dolgusuz bir açıklığın içinde kalan proxy o açıklığın penceresi / kapısı olur (ayrıca şekil olarak eklenmez)
+  const proxyFill = new Map(), usedProxy = new Set();
+  {
+    const cen = b => { let x = 0, y = 0, z = 0; for (const p of b) { x += p[0]; y += p[1]; z += p[2]; } return [x / b.length, y / b.length, z / b.length]; };
+    const prox = (db.byType.get('IFCBUILDINGELEMENTPROXY') || []).filter(id => !railProxy.has(id) && geom(id).body.length).map(id => ({ id, c: cen(geom(id).body) }));
+    for (const oid of ids(IFC_OPENINGS)) {
+      if (filled.has(oid) || !prox.length) continue; const b = geom(oid).body; if (!b.length) continue;
+      const [z0, z1] = zr(b); let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const p of b) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+      const oc = cen(b); let best = 0, bd = Infinity;
+      for (const q of prox) {
+        const c = q.c; if (usedProxy.has(q.id) || c[0] < x0 - 10 || c[0] > x1 + 10 || c[1] < y0 - 10 || c[1] > y1 + 10 || c[2] < z0 - 10 || c[2] > z1 + 10) continue;
+        const dd = Math.hypot(c[0] - oc[0], c[1] - oc[1], c[2] - oc[2]); if (dd < bd) { bd = dd; best = q.id; }
+      }
+      if (best) { proxyFill.set(oid, best); usedProxy.add(best); }
+    }
+  }
   const jobs = [];
   for (const fid of ids(new Set([...IFC_DOORS, ...IFC_WINDOWS]))) jobs.push({ fid, oid: fillOf.get(fid) || 0 });
-  for (const oid of ids(IFC_OPENINGS)) if (!filled.has(oid)) jobs.push({ fid: 0, oid });
-  for (const { fid, oid } of jobs) {
+  for (const oid of ids(IFC_OPENINGS)) if (!filled.has(oid)) jobs.push({ fid: 0, oid, px: proxyFill.get(oid) || 0 });
+  for (const { fid, oid, px = 0 } of jobs) {
     const host = oid ? voidHost.get(oid) : 0;
     if (oid && host && IFC_SLABS.has(T(host))) continue; // döşeme boşluğu: aşağıda
     let pts = oid ? geom(oid).body : []; if (!pts.length && fid) pts = geom(fid).body;
@@ -1179,12 +1200,13 @@ function ifcToProject(text, opts = {}) {
     ow = Math.max(10, Math.min(L, Math.round(ow))); oh = Math.max(10, Math.min(w.h, Math.round(oh)));
     let sill = Math.round(z0 - (w._z0 == null ? z0 : w._z0)); if (sill < 5) sill = 0;
     sill = Math.max(0, Math.min(w.h - oh, sill));
-    const type = fid ? opTypeOf(fid, ow) : sill > 5 ? 'window' : 'arch';
+    const pxName = px ? nameOf(px) + ' ' + typeName(px) : '', pxDoor = /door|kap[ıi]/i.test(pxName), pxWin = /window|pencere/i.test(pxName);
+    const type = fid ? opTypeOf(fid, ow) : px ? (pxDoor || (!pxWin && sill <= 5) ? (ow >= 150 ? 'double' : 'door') : 'window') : sill > 5 ? 'window' : 'arch';
     const d = Math.max(ow / 2, Math.min(L - ow / 2, (mn + mx) / 2));
     const st = storeyOf(fid || oid, z0), bk = [...bucket.values()].find(b => b.walls.includes(w)) || fl(st);
     const op = { id: uid(), wall: w.id, d: r1(d), w: ow, h: oh, sill, type, flip: 0, side: 1, open: 0 };
-    if (fid) { // kapı / pencere malzemesi ve renkleri (#41 alanları)
-      const lk = looksOf(fid);
+    if (fid || px) { // kapı / pencere malzemesi ve renkleri (#41 alanları)
+      const lk = looksOf(fid || px);
       if (type !== 'window' && type !== 'arch') { const m = ifcPick(IFC_DOOR_MAT, lk.names) || (lk.glass && !lk.col ? 'glass' : null); if (m) op.mat = m; if (lk.col && m !== 'glass') op.color = lk.col; }
       else if (lk.col) op.frameCol = lk.col;
     }
@@ -1220,11 +1242,20 @@ function ifcToProject(text, opts = {}) {
   }
 
   /* --- Kolonlar (yapı iskeleti) ve özel bileşenler / mobilyalar --- */
-  const footOf = g => { const pts = polyOf(g); if (!pts || pts.length < 3) return null; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } return { pts, x0, y0, x1, y1, ar: Math.abs(ifcArea(pts.map(p => [p.x, p.y]))) }; };
-  const polyItem = (ft, base) => { const cx = r1((ft.x0 + ft.x1) / 2), cy = r1((ft.y0 + ft.y1) / 2); return Object.assign(base, { k: 'poly', w: Math.max(1, r1(ft.x1 - ft.x0)), d: Math.max(1, r1(ft.y1 - ft.y0)), x: cx, y: cy, rot: 0, pts: ft.pts.map(p => ({ x: r1(p.x - cx), y: r1(p.y - cy) })) }); };
+  const footOf = g => { // ince kesit (2 mm cidarlı T profil) temizlikte çökerse gövdenin dış zarfı
+    let pts = polyOf(g); if ((!pts || pts.length < 3 || Math.abs(ifcArea(pts.map(p => [p.x, p.y]))) < 0.5) && g.body.length >= 3) pts = ifcHull(g.body).map(p => ({ x: r1(p[0]), y: r1(p[1]) }));
+    if (!pts || pts.length < 3) return null; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } return { pts, x0, y0, x1, y1, ar: Math.abs(ifcArea(pts.map(p => [p.x, p.y]))) }; };
+  // çokgen öğe: en küçük dikdörtgenin doğrultusunda (döndürülmüş eleman doğru en / boy / açı alır); pts yerel, merkez 0,0
+  const polyItem = (ft, base) => {
+    const rc = ifcRect(ft.pts.map(p => [p.x, p.y]));
+    if (!rc) { const cx = r1((ft.x0 + ft.x1) / 2), cy = r1((ft.y0 + ft.y1) / 2); return Object.assign(base, { k: 'poly', w: Math.max(1, r1(ft.x1 - ft.x0)), d: Math.max(1, r1(ft.y1 - ft.y0)), x: cx, y: cy, rot: 0, pts: ft.pts.map(p => ({ x: r1(p.x - cx), y: r1(p.y - cy) })) }); }
+    const th = rc.rot * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th);
+    return Object.assign(base, { k: 'poly', w: Math.max(1, r1(rc.w)), d: Math.max(1, r1(rc.d)), x: r1(rc.cx), y: r1(rc.cy), rot: r1(((rc.rot % 360) + 360) % 360),
+      pts: ft.pts.map(p => { const dx = p.x - rc.cx, dy = p.y - rc.cy; return { x: r1(dx * c + dy * sn), y: r1(-dx * sn + dy * c) }; }) });
+  };
   const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (el >= 3) o.elev = Math.min(500, el); return o; }; // 0..500 = FURN_ELEV_MAX (#61)
   for (const id of ids(IFC_COLUMNS)) {
-    const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 4) { stats.skipped++; continue; }
+    const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 0.5) { stats.skipped++; continue; }
     const [z0, z1] = zr(g.body), h0 = Math.max(10, Math.min(5000, Math.round(z1 - z0)));
     const rc = ifcRect(ft.pts.map(p => [p.x, p.y])), nm = nameOf(id).slice(0, 80);
     const round = !!rc && ft.pts.length >= 8 && Math.abs(rc.w - rc.d) <= Math.max(1, rc.w * 0.04) && ft.ar / (Math.PI * rc.w * rc.d / 4) > 0.9;
@@ -1238,10 +1269,10 @@ function ifcToProject(text, opts = {}) {
   const compIds = ids(IFC_COMPONENTS), compSet = new Set(compIds);
   for (const id of compIds) {
     let up = false; for (let p = parent.get(id), k = 0; p && k < 30; p = parent.get(p), k++) if (compSet.has(p)) { up = true; break; }
-    if (up || railProxy.has(id) || under(id, STAIRISH) || under(id, ROOFISH)) continue; // montajın parçası (montaj tek şekil gelir) ya da korkuluk (duvar olarak geldi)
+    if (up || railProxy.has(id) || usedProxy.has(id) || under(id, STAIRISH) || under(id, ROOFISH)) continue; // usedProxy: açıklığın penceresi / kapısı oldu // montajın parçası (montaj tek şekil gelir) ya da korkuluk (duvar olarak geldi)
     let g = geom(id);
     if (!g.body.length) { const body = [], foot = []; for (const c of kids.get(id) || []) { const cg = geom(c); body.push(...cg.body); foot.push(...cg.foot); } g = { body, foot, axis: [] }; }
-    const ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 4 || ft.ar > 4e6) { stats.skipped++; continue; }
+    const ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 0.5 || ft.ar > 4e6) { stats.skipped++; continue; } // ince profiller (5 cm T) de gelir
     const [z0, z1] = zr(g.body), st = storeyOf(id, z0), t = T(id), furnish = t !== 'IFCBUILDINGELEMENTPROXY' && t !== 'IFCELEMENTASSEMBLY';
     const nm = nameOf(id);
     const base = { id: uid(), type: 'shape', name: (nm || tr('Bileşen', 'Component')).slice(0, 80), icon: '⬡', h: Math.max(1, Math.min(5000, Math.round(z1 - z0))), color: looksDeep(id).col || (furnish ? '#bcaaa4' : '#94a3b8'), label: '' };
