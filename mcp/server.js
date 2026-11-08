@@ -150,6 +150,8 @@ function parsePts(v, min, name) {
    - type: box | cyl | sphere | extrude. cyl stands upright (axis z) unless axis is 'x' or 'y' (lying);
      its w × d × h is always the bounding box. extrude = pts polygon (cm, relative to x, y) lifted h from z.
    - rot = degrees clockwise on the plan, like furniture rot. mat: matte (default) | gloss | metal | glass.
+   - rx / ry = optional tilt in degrees about the part's own x / y axis (all-axis rotation). The part turns about its
+     centre (x, y, z + h/2) as R = Rz(rot) · Ry(ry) · Rx(rx): first rx, then ry, then rot. Absent = 0 (upright).
    - When the item is resized (w / d / h ≠ pbase) the parts scale with it; old items without parts are untouched. */
 const PARTS_V = 1;
 const PART_TYPES = ['box', 'cyl', 'sphere', 'extrude'];
@@ -181,13 +183,55 @@ function cleanPart(p) {
   } else { q.w = Math.max(0.1, Math.abs(n(p.w, 10))); q.d = Math.max(0.1, Math.abs(n(p.d, 10))); }
   q.h = Math.max(0.1, Math.abs(n(p.h, 10)));
   const r = n(p.rot, 0); if (r) q.rot = partR(((r % 360) + 360) % 360);
+  for (const k of ['rx', 'ry']) { const t = partR(((n(p[k], 0) % 360) + 360) % 360); if (t && t !== 360) q[k] = t; }
   if (partHex(p.color)) q.color = p.color;
   if (PART_MATS.includes(p.mat) && p.mat !== 'matte') q.mat = p.mat;
   if (type === 'cyl' && (p.axis === 'x' || p.axis === 'y')) q.axis = p.axis;
   return q;
 }
+// all-axis rotation: 3 × 3 matrix (rows) of R = Rz(rz) · Ry(ry) · Rx(rx) in the plan frame (x right, y down, z up), degrees
+function partRotM(rx, ry, rz) {
+  const r = Math.PI / 180, A = (rx || 0) * r, B = (ry || 0) * r, G = (rz || 0) * r;
+  const ca = Math.cos(A), sa = Math.sin(A), cb = Math.cos(B), sb = Math.sin(B), cg = Math.cos(G), sg = Math.sin(G);
+  const m = [[cb, sb * sa, sb * ca], [0, ca, -sa], [-sb, cb * sa, cb * ca]]; // Ry · Rx
+  return [[cg * m[0][0] - sg * m[1][0], cg * m[0][1] - sg * m[1][1], cg * m[0][2] - sg * m[1][2]],
+    [sg * m[0][0] + cg * m[1][0], sg * m[0][1] + cg * m[1][1], sg * m[0][2] + cg * m[1][2]], m[2]];
+}
+const partTilted = q => !!(q && (+q.rx || +q.ry));
+// sample points of a CLEAN part's surface in item-local cm ([x, y, z]); exact corners for boxes / extrusions, 24-gons for round shapes
+function partCloud(q) {
+  const M = partRotM(q.rx, q.ry, q.rot), hw = q.w / 2, hd = q.d / 2, hh = q.h / 2, loc = [], N = 24;
+  if (q.type === 'extrude' && q.pts) for (const p of q.pts) loc.push([p.x, p.y, -hh], [p.x, p.y, hh]);
+  else if (q.type === 'box') for (const x of [-hw, hw]) for (const y of [-hd, hd]) for (const z of [-hh, hh]) loc.push([x, y, z]);
+  else for (let i = 0; i < N; i++) {
+    const c = Math.cos(i * 2 * Math.PI / N), s = Math.sin(i * 2 * Math.PI / N);
+    if (q.type === 'sphere') for (const t of [-60, -30, 0, 30, 60]) { const ct = Math.cos(t * Math.PI / 180), st = Math.sin(t * Math.PI / 180); loc.push([hw * c * ct, hd * s * ct, hh * st]); }
+    else if (q.axis === 'x') loc.push([-hw, hd * c, hh * s], [hw, hd * c, hh * s]);
+    else if (q.axis === 'y') loc.push([hw * c, -hd, hh * s], [hw * c, hd, hh * s]);
+    else loc.push([hw * c, hd * s, -hh], [hw * c, hd * s, hh]);
+  }
+  if (q.type === 'sphere') loc.push([0, 0, -hh], [0, 0, hh]);
+  return loc.map(([x, y, z]) => [q.x + M[0][0] * x + M[0][1] * y + M[0][2] * z, q.y + M[1][0] * x + M[1][1] * y + M[1][2] * z, q.z + hh + M[2][0] * x + M[2][1] * y + M[2][2] * z]);
+}
+// convex hull of 2D points [[u, v], …] (monotone chain), counter-clockwise
+function partHull(pts) {
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
+  for (const q of p) { while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
 // footprint + height range of a CLEAN part in item-local cm: { x0, x1, y0, y1, z0, z1 }
 function partBounds(q) {
+  if (partTilted(q)) {
+    if (q.type === 'sphere') { // exact extents of the turned ellipsoid
+      const M = partRotM(q.rx, q.ry, q.rot), ax = [q.w / 2, q.d / 2, q.h / 2], e = M.map(r => Math.hypot(r[0] * ax[0], r[1] * ax[1], r[2] * ax[2]));
+      return { x0: q.x - e[0], x1: q.x + e[0], y0: q.y - e[1], y1: q.y + e[1], z0: q.z + ax[2] - e[2], z1: q.z + ax[2] + e[2] };
+    }
+    const c = partCloud(q), col = i => c.map(p => p[i]);
+    return { x0: Math.min(...col(0)), x1: Math.max(...col(0)), y0: Math.min(...col(1)), y1: Math.max(...col(1)), z0: Math.min(...col(2)), z1: Math.max(...col(2)) };
+  }
   const a = (q.rot || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
   if (q.type === 'sphere' || (q.type === 'cyl' && !q.axis)) { // round footprint: exact extents of the rotated ellipse
     const ex = Math.hypot(q.w / 2 * c, q.d / 2 * s), ey = Math.hypot(q.w / 2 * s, q.d / 2 * c);
@@ -203,7 +247,7 @@ function partIssues(p, base) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return ['part must be an object'];
   const e = [], t = PART_ALIAS[String(p.type === undefined ? 'box' : p.type).toLowerCase()];
   if (!t) e.push('type "' + p.type + '" is not one of ' + PART_TYPES.join(', '));
-  for (const k of ['x', 'y', 'z', 'rot']) if (p[k] !== undefined && p[k] !== null && !partFin(p[k])) e.push(k + ' must be a number');
+  for (const k of ['x', 'y', 'z', 'rot', 'rx', 'ry']) if (p[k] !== undefined && p[k] !== null && !partFin(p[k])) e.push(k + ' must be a number');
   if (t === 'extrude') {
     if (!partPts(p.pts)) e.push('extrude needs pts: 3+ {x, y} points in cm, relative to the part centre');
     if (!(partFin(p.h) && +p.h > 0)) e.push('h must be a number > 0');
@@ -2243,7 +2287,7 @@ const FURN_SCHEMA = {
   part: {
     type: PART_TYPES.join(' | ') + ' (aliases: cube, cylinder, ball, prism)',
     name: 'optional label, e.g. "leg"', x: 'centre x', y: 'centre y', z: 'bottom elevation (0 = floor)',
-    w: 'size along local x', d: 'size along local y', h: 'height', rot: 'degrees clockwise on the plan (yaw)',
+    w: 'size along local x', d: 'size along local y', h: 'height', rot: 'degrees clockwise on the plan (yaw, about the upright z axis)', rx: 'optional tilt in degrees about the part x axis (forward / back)', ry: 'optional tilt in degrees about the part y axis (sideways); the part turns about its centre as Rz(rot)·Ry(ry)·Rx(rx), so z is the bottom only while it is upright',
     color: '#rgb / #rrggbb (default: the item colour)', mat: PART_MATS.join(' | ') + ' (default matte)',
     axis: 'cyl only: z (upright, default) | x | y (lying along that axis; w × d × h is still the bounding box)',
     pts: 'extrude only: 3+ {x, y} points relative to the part centre; extruded h up from z',
@@ -2262,7 +2306,7 @@ function findFurnObj(f, id, needParts) {
   if (needParts && !Array.isArray(o.parts)) throw new Error('Furniture ' + id + ' has no parts. Use add_component first, or create_furniture for a new multi-part item.');
   return o;
 }
-const PART_KEYS = ['type', 'name', 'x', 'y', 'z', 'w', 'd', 'h', 'rot', 'color', 'axis', 'pts', 'mat'];
+const PART_KEYS = ['type', 'name', 'x', 'y', 'z', 'w', 'd', 'h', 'rot', 'rx', 'ry', 'color', 'axis', 'pts', 'mat'];
 function partArg(a) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return a;
   const p = {};
@@ -2291,9 +2335,9 @@ function pickParts(o, a) {
 }
 function describeFurn(o) {
   const v = validateParts(o), s = partsScale(o);
-  const out = ['furniture ' + o.id + ' "' + o.name + '" ' + o.w + '×' + o.d + '×' + o.h + ' cm at (' + o.x + ',' + o.y + ') rot=' + o.rot + '°, ' + v.count + ' parts (schema v' + (o.partsV || PARTS_V) + ')'];
+  const out = ['furniture ' + o.id + ' "' + o.name + '" ' + o.w + '×' + o.d + '×' + o.h + ' cm at (' + o.x + ',' + o.y + ') rot=' + o.rot + '°' + (o.rx || o.ry ? ' tilt x ' + (o.rx || 0) + '° y ' + (o.ry || 0) + '°' : '') + ', ' + v.count + ' parts (schema v' + (o.partsV || PARTS_V) + ')'];
   if (s.sx !== 1 || s.sy !== 1 || s.sz !== 1) out.push('  parts are drawn in ' + o.pbase.w + '×' + o.pbase.d + '×' + o.pbase.h + ' cm and scaled to the item size');
-  (o.parts || []).forEach((p, i) => out.push('  ' + i + ': ' + (p.name ? '"' + p.name + '" ' : '') + p.type + (p.axis ? '(' + p.axis + ')' : '') + ' at (' + p.x + ',' + p.y + ') z ' + p.z + '…' + partR(p.z + p.h) + ', ' + p.w + '×' + p.d + '×' + p.h + (p.rot ? ' rot ' + p.rot + '°' : '') + (p.color ? ' ' + p.color : '') + (p.mat ? ' ' + p.mat : '')));
+  (o.parts || []).forEach((p, i) => out.push('  ' + i + ': ' + (p.name ? '"' + p.name + '" ' : '') + p.type + (p.axis ? '(' + p.axis + ')' : '') + ' at (' + p.x + ',' + p.y + ') z ' + p.z + '…' + partR(p.z + p.h) + ', ' + p.w + '×' + p.d + '×' + p.h + (p.rot ? ' rot ' + p.rot + '°' : '') + (p.rx ? ' rx ' + p.rx + '°' : '') + (p.ry ? ' ry ' + p.ry + '°' : '') + (p.color ? ' ' + p.color : '') + (p.mat ? ' ' + p.mat : '')));
   out.push(v.ok ? '✓ valid' : '✗ ' + v.errors.length + ' error(s):');
   for (const e of v.errors) out.push('  error: ' + e);
   for (const w of v.warnings) out.push('  warning: ' + w);
@@ -2308,7 +2352,9 @@ const partProps = {
   w: { type: 'number', description: 'Size along local x, cm.' },
   d: { type: 'number', description: 'Size along local y, cm.' },
   h: { type: 'number', description: 'Height, cm.' },
-  rot: { type: 'number', description: 'Yaw in degrees, clockwise on the plan.' },
+  rot: { type: 'number', description: 'Yaw in degrees, clockwise on the plan (about the upright z axis).' },
+  rx: { type: 'number', description: 'Tilt in degrees about the part x axis (forward / back). Applied first; the part turns about its centre.' },
+  ry: { type: 'number', description: 'Tilt in degrees about the part y axis (sideways). Applied after rx, before rot.' },
   color: { type: 'string', description: '#hex. Default: the item colour.' },
   material: { type: 'string', enum: PART_MATS, description: 'matte (default) | gloss | metal | glass.' },
   axis: { type: 'string', enum: ['z', 'x', 'y'], description: 'cyl only: z upright (default), x / y lying along that axis.' },
@@ -2415,11 +2461,13 @@ tool('set_material',
   });
 
 tool('set_transform',
-  'Move, rotate or resize a multi-part furniture item. By default a resize keeps the parts at their current visible size (the box just grows/shrinks — run validate_furniture after shrinking); scaleParts: true stretches every part with the item instead.',
+  'Move, rotate (rot = yaw; rx / ry tilt the whole item about its x / y axis) or resize a furniture item. By default a resize keeps the parts at their current visible size (the box just grows/shrinks — run validate_furniture after shrinking); scaleParts: true stretches every part with the item instead.',
   {
     furnitureId: furnIdArg,
     x: { type: 'number' }, y: { type: 'number' },
     rot: { type: 'number', description: 'Degrees clockwise.' },
+    rx: { type: 'number', description: 'Tilt the whole item about its x axis, degrees (0 = upright). In 3D the lowest point rests on the floor (or elev).' },
+    ry: { type: 'number', description: 'Tilt the whole item about its y axis, degrees (0 = upright).' },
     w: { type: 'number' }, d: { type: 'number' }, h: { type: 'number' },
     scaleParts: { type: 'boolean', description: 'Stretch the parts with the new size. Default false.' },
     floorIndex: floorArg,
@@ -2428,6 +2476,7 @@ tool('set_transform',
   a => {
     const o = findFurnObj(floorOf(a), String(a.furnitureId));
     for (const k of ['x', 'y', 'rot']) if (a[k] !== undefined) o[k] = num(a[k], undefined, k);
+    for (const k of ['rx', 'ry']) if (a[k] !== undefined) { const v = partR(((num(a[k], undefined, k) % 360) + 360) % 360); if (v && v !== 360) o[k] = v; else delete o[k]; } // all-axis tilt
     for (const k of ['w', 'd', 'h']) if (a[k] !== undefined) { const v = num(a[k], undefined, k); if (!(v > 0)) throw new Error(k + ' must be > 0'); if (o.pbase && !a.scaleParts) o.pbase[k] = partR(o.pbase[k] * v / o[k]); o[k] = v; } // keep the parts' current visible size
     return describeFurn(o);
   });

@@ -91,6 +91,8 @@ const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
 // yerden yükseklik (#61): duvara asılan eşyalar bu yükseklikte gelir; alan isteğe bağlı, yoksa 0 (yerde)
 const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110 };
 const FURN_ELEV_MAX = 500, furnElev = o => (o && +o.elev > 0 ? Math.min(FURN_ELEV_MAX, +o.elev) : 0);
+// tüm eksenlerde döndürme: eşyanın isteğe bağlı rx / ry eğimi (derece; yok = dik). Merdiven, rampa ve çatı eğilmez
+const NO_TILT_K = new Set(['stairs', 'ramp', 'roof']), furnTilted = o => !!(o && !NO_TILT_K.has(o.k) && (+o.rx || +o.ry));
 const OPENINGS = [
   { id: 'door', name: 'Kapı', en: 'Door', w: 90, h: 210, sill: 0, icon: '🚪' },
   { id: 'double', name: 'Çift Kanatlı Kapı', en: 'Double Door', w: 160, h: 210, sill: 0, icon: '🚪' },
@@ -295,8 +297,10 @@ function opPos(op) {
   return { x: w.a.x + ux * op.d, y: w.a.y + uy * op.d, ang: wAng(w) * 180 / Math.PI, t: w.t, w };
 }
 function furnCorners(f) {
-  const r = f.rot * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), hw = f.w / 2, hd = f.d / 2;
-  return [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([x, y]) => ({ x: f.x + x * c - y * s, y: f.y + x * s + y * c }));
+  const r = f.rot * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  let x0 = -f.w / 2, x1 = f.w / 2, y0 = -f.d / 2, y1 = f.d / 2;
+  if (furnTilted(f)) { const h = furnTiltPts(f), xs = h.map(q => q[0]), ys = h.map(q => q[1]); x0 = Math.min(...xs); x1 = Math.max(...xs); y0 = Math.min(...ys); y1 = Math.max(...ys); } // eğik eşya: gerçek 2B izi
+  return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => ({ x: f.x + x * c - y * s, y: f.y + x * s + y * c }));
 }
 function bboxOf(kind, o) {
   let pts;
@@ -366,7 +370,8 @@ function mirrorObjs(os, o, u, opsOf = w => F().ops.filter(op => op.wall === w.id
       const p = R(m); m.x = p.x; m.y = p.y; m.rot = normDeg(2 * ax - (m.rot || 0) + 180);
       if (m.k === 'poly' && Array.isArray(m.pts)) m.pts = m.pts.map(q => ({ x: -q.x, y: q.y })).reverse();
       if (m.k === 'roof' && Array.isArray(m.faces)) m.faces = m.faces.map(f => f.map(q => [-q[0], q[1], q[2]]).reverse());
-      if (Array.isArray(m.parts)) m.parts = m.parts.map(q => { const r = Object.assign({}, q, { x: -q.x }); if (q.rot) r.rot = (360 - q.rot) % 360; if (q.pts) r.pts = q.pts.map(t => ({ x: -t.x, y: t.y })).reverse(); return r; });
+      if (m.ry) m.ry = (360 - m.ry) % 360; // yerel x aynası: Y eğimi ters döner, X eğimi aynı kalır
+      if (Array.isArray(m.parts)) m.parts = m.parts.map(q => { const r = Object.assign({}, q, { x: -q.x }); if (q.rot) r.rot = (360 - q.rot) % 360; if (q.ry) r.ry = (360 - q.ry) % 360; if (q.pts) r.pts = q.pts.map(t => ({ x: -t.x, y: t.y })).reverse(); return r; });
     } else if (kind === 'text') {
       const p = R(m); m.x = p.x; m.y = p.y;
       let r = normDeg(2 * ax - (m.rot || 0)); if (r > 90 && r < 270) r = normDeg(r + 180); m.rot = r;
@@ -1457,6 +1462,8 @@ function stairRails(o, st = stairSteps(o)) {
    - type: box | cyl | sphere | extrude. cyl stands upright (axis z) unless axis is 'x' or 'y' (lying);
      its w × d × h is always the bounding box. extrude = pts polygon (cm, relative to x, y) lifted h from z.
    - rot = degrees clockwise on the plan, like furniture rot. mat: matte (default) | gloss | metal | glass.
+   - rx / ry = optional tilt in degrees about the part's own x / y axis (all-axis rotation). The part turns about its
+     centre (x, y, z + h/2) as R = Rz(rot) · Ry(ry) · Rx(rx): first rx, then ry, then rot. Absent = 0 (upright).
    - When the item is resized (w / d / h ≠ pbase) the parts scale with it; old items without parts are untouched. */
 const PARTS_V = 1;
 const PART_TYPES = ['box', 'cyl', 'sphere', 'extrude'];
@@ -1488,13 +1495,55 @@ function cleanPart(p) {
   } else { q.w = Math.max(0.1, Math.abs(n(p.w, 10))); q.d = Math.max(0.1, Math.abs(n(p.d, 10))); }
   q.h = Math.max(0.1, Math.abs(n(p.h, 10)));
   const r = n(p.rot, 0); if (r) q.rot = partR(((r % 360) + 360) % 360);
+  for (const k of ['rx', 'ry']) { const t = partR(((n(p[k], 0) % 360) + 360) % 360); if (t && t !== 360) q[k] = t; }
   if (partHex(p.color)) q.color = p.color;
   if (PART_MATS.includes(p.mat) && p.mat !== 'matte') q.mat = p.mat;
   if (type === 'cyl' && (p.axis === 'x' || p.axis === 'y')) q.axis = p.axis;
   return q;
 }
+// all-axis rotation: 3 × 3 matrix (rows) of R = Rz(rz) · Ry(ry) · Rx(rx) in the plan frame (x right, y down, z up), degrees
+function partRotM(rx, ry, rz) {
+  const r = Math.PI / 180, A = (rx || 0) * r, B = (ry || 0) * r, G = (rz || 0) * r;
+  const ca = Math.cos(A), sa = Math.sin(A), cb = Math.cos(B), sb = Math.sin(B), cg = Math.cos(G), sg = Math.sin(G);
+  const m = [[cb, sb * sa, sb * ca], [0, ca, -sa], [-sb, cb * sa, cb * ca]]; // Ry · Rx
+  return [[cg * m[0][0] - sg * m[1][0], cg * m[0][1] - sg * m[1][1], cg * m[0][2] - sg * m[1][2]],
+    [sg * m[0][0] + cg * m[1][0], sg * m[0][1] + cg * m[1][1], sg * m[0][2] + cg * m[1][2]], m[2]];
+}
+const partTilted = q => !!(q && (+q.rx || +q.ry));
+// sample points of a CLEAN part's surface in item-local cm ([x, y, z]); exact corners for boxes / extrusions, 24-gons for round shapes
+function partCloud(q) {
+  const M = partRotM(q.rx, q.ry, q.rot), hw = q.w / 2, hd = q.d / 2, hh = q.h / 2, loc = [], N = 24;
+  if (q.type === 'extrude' && q.pts) for (const p of q.pts) loc.push([p.x, p.y, -hh], [p.x, p.y, hh]);
+  else if (q.type === 'box') for (const x of [-hw, hw]) for (const y of [-hd, hd]) for (const z of [-hh, hh]) loc.push([x, y, z]);
+  else for (let i = 0; i < N; i++) {
+    const c = Math.cos(i * 2 * Math.PI / N), s = Math.sin(i * 2 * Math.PI / N);
+    if (q.type === 'sphere') for (const t of [-60, -30, 0, 30, 60]) { const ct = Math.cos(t * Math.PI / 180), st = Math.sin(t * Math.PI / 180); loc.push([hw * c * ct, hd * s * ct, hh * st]); }
+    else if (q.axis === 'x') loc.push([-hw, hd * c, hh * s], [hw, hd * c, hh * s]);
+    else if (q.axis === 'y') loc.push([hw * c, -hd, hh * s], [hw * c, hd, hh * s]);
+    else loc.push([hw * c, hd * s, -hh], [hw * c, hd * s, hh]);
+  }
+  if (q.type === 'sphere') loc.push([0, 0, -hh], [0, 0, hh]);
+  return loc.map(([x, y, z]) => [q.x + M[0][0] * x + M[0][1] * y + M[0][2] * z, q.y + M[1][0] * x + M[1][1] * y + M[1][2] * z, q.z + hh + M[2][0] * x + M[2][1] * y + M[2][2] * z]);
+}
+// convex hull of 2D points [[u, v], …] (monotone chain), counter-clockwise
+function partHull(pts) {
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
+  for (const q of p) { while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
 // footprint + height range of a CLEAN part in item-local cm: { x0, x1, y0, y1, z0, z1 }
 function partBounds(q) {
+  if (partTilted(q)) {
+    if (q.type === 'sphere') { // exact extents of the turned ellipsoid
+      const M = partRotM(q.rx, q.ry, q.rot), ax = [q.w / 2, q.d / 2, q.h / 2], e = M.map(r => Math.hypot(r[0] * ax[0], r[1] * ax[1], r[2] * ax[2]));
+      return { x0: q.x - e[0], x1: q.x + e[0], y0: q.y - e[1], y1: q.y + e[1], z0: q.z + ax[2] - e[2], z1: q.z + ax[2] + e[2] };
+    }
+    const c = partCloud(q), col = i => c.map(p => p[i]);
+    return { x0: Math.min(...col(0)), x1: Math.max(...col(0)), y0: Math.min(...col(1)), y1: Math.max(...col(1)), z0: Math.min(...col(2)), z1: Math.max(...col(2)) };
+  }
   const a = (q.rot || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
   if (q.type === 'sphere' || (q.type === 'cyl' && !q.axis)) { // round footprint: exact extents of the rotated ellipse
     const ex = Math.hypot(q.w / 2 * c, q.d / 2 * s), ey = Math.hypot(q.w / 2 * s, q.d / 2 * c);
@@ -1510,7 +1559,7 @@ function partIssues(p, base) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return ['part must be an object'];
   const e = [], t = PART_ALIAS[String(p.type === undefined ? 'box' : p.type).toLowerCase()];
   if (!t) e.push('type "' + p.type + '" is not one of ' + PART_TYPES.join(', '));
-  for (const k of ['x', 'y', 'z', 'rot']) if (p[k] !== undefined && p[k] !== null && !partFin(p[k])) e.push(k + ' must be a number');
+  for (const k of ['x', 'y', 'z', 'rot', 'rx', 'ry']) if (p[k] !== undefined && p[k] !== null && !partFin(p[k])) e.push(k + ' must be a number');
   if (t === 'extrude') {
     if (!partPts(p.pts)) e.push('extrude needs pts: 3+ {x, y} points in cm, relative to the part centre');
     if (!(partFin(p.h) && +p.h > 0)) e.push('h must be a number > 0');
@@ -2890,13 +2939,15 @@ function ifcJoinWalls(walls) {
 function partsSvg(f) {
   const C = pal(), s = partsScale(f), sk = C.furnStroke, hw = f.w / 2, hd = f.d / 2;
   const ns = 'stroke="' + sk + '" stroke-width="1" vector-effect="non-scaling-stroke"';
-  const list = f.parts.map((p, i) => ({ p, i })).sort((a, b) => (a.p.z + a.p.h) - (b.p.z + b.p.h) || a.i - b.i);
+  const top = p => partTilted(p) ? partBounds(p).z1 : p.z + p.h;
+  const list = f.parts.map((p, i) => ({ p, i, t: top(p) })).sort((a, b) => a.t - b.t || a.i - b.i);
   let out = `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="transparent"/><g opacity="${C.furnOp}" transform="scale(${s.sx} ${s.sy})">`;
   for (const { p } of list) out += partShapeSvg(p, p.color || f.color || '#cbd5e1', ns);
   return out + '</g>';
 }
 // bir parçanın üstten şekli (öğe yerel cm); plan çizimi ve parça düzenleyici önizlemesi ortak kullanır
 function partShapeSvg(p, col, attrs) {
+  if (partTilted(p)) return `<polygon points="${partHull(partCloud(p).map(q => [q[0], q[1]])).map(q => partR(q[0]) + ',' + partR(q[1])).join(' ')}" fill="${col}" ${attrs}/>`; // eğik parça: üstten izdüşümün dış zarfı
   const tr = `transform="translate(${p.x} ${p.y})${p.rot ? ' rotate(' + p.rot + ')' : ''}"`;
   if (p.type === 'extrude' && p.pts) return `<polygon points="${p.pts.map(q => q.x + ',' + q.y).join(' ')}" fill="${col}" ${attrs} ${tr}/>`;
   if (p.type === 'sphere' || (p.type === 'cyl' && !p.axis)) return `<ellipse rx="${p.w / 2}" ry="${p.d / 2}" fill="${col}" ${attrs} ${tr}/>`;
@@ -2921,17 +2972,35 @@ function parts3D(g, o, C) {
       else if (p.axis === 'y') { mesh.scale.set(p.w / 2, p.d, p.h / 2); mesh.rotation.x = Math.PI / 2; }
       else mesh.scale.set(p.w / 2, p.h, p.d / 2);
     }
-    mesh.rotation.order = 'YXZ'; mesh.rotation.y = -(p.rot || 0) * Math.PI / 180;
+    if (partTilted(p)) {
+      // tüm eksenlerde döndürme: plan R = Rz(rot)·Ry(ry)·Rx(rx) → Three 'YZX' (açılar ters işaretli; plan y = Three z); silindirin yatış dönüşü önce uygulanır
+      const pre = mesh.quaternion.clone(), r = Math.PI / 180;
+      if (p.type === 'extrude' && p.pts) { mesh.geometry.translate(0, -p.h / 2, 0); mesh.position.y = p.z + p.h / 2; } // merkez etrafında dönsün
+      mesh.rotation.set(-(p.rx || 0) * r, -(p.rot || 0) * r, -(p.ry || 0) * r, 'YZX'); mesh.quaternion.multiply(pre);
+    } else { mesh.rotation.order = 'YXZ'; mesh.rotation.y = -(p.rot || 0) * Math.PI / 180; }
     mesh.receiveShadow = true; mesh.castShadow = p.mat !== 'glass' && p.w * p.d * p.h > 1500;
     root.add(mesh);
   }
 }
 // katalogdaki parçalı öğeler: kimlik → parça üreteci (mkFurn yerleştirirken kopyalar)
 const CAT_PARTS = { billiard: billiardParts };
+// eğik eşyanın (rx / ry) 2B izi: kutunun — parçalı eşyada parçaların — eğik hâlinin üstten dış zarfı
+function furnTiltPts(f) {
+  const M = partRotM(f.rx, f.ry, 0), hw = f.w / 2, hd = f.d / 2, hh = f.h / 2;
+  let loc = [];
+  if (Array.isArray(f.parts) && f.parts.length) { const s = partsScale(f); for (const p of f.parts) for (const c of partCloud(p)) loc.push([c[0] * s.sx, c[1] * s.sy, c[2] * s.sz - hh]); }
+  else for (const x of [-hw, hw]) for (const y of [-hd, hd]) for (const z of [-hh, hh]) loc.push([x, y, z]);
+  return partHull(loc.map(([x, y, z]) => [M[0][0] * x + M[0][1] * y + M[0][2] * z, M[1][0] * x + M[1][1] * y + M[1][2] * z]));
+}
+function furnTiltSvg(f) {
+  const C = pal();
+  return `<polygon points="${furnTiltPts(f).map(q => partR(q[0]) + ',' + partR(q[1])).join(' ')}" fill="${f.color || '#cbd5e1'}" fill-opacity="${C.furnOp}" stroke="${C.furnStroke}" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+}
 function furnSvg(f, live) {
   const C = pal(), fs = Math.max(12, Math.min(f.w, f.d) * 0.42);
   const fe = f.k === 'roof' ? 0 : furnElev(f); // yerden yükseklik (#61): asılı eşya kesikli çizilir + ▲ etiketi
-  let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${fe ? `<g stroke-dasharray="6 4">${furnBody(f)}</g>` : furnBody(f)}`;
+  const body = furnTilted(f) ? furnTiltSvg(f) : furnBody(f);
+  let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${fe ? `<g stroke-dasharray="6 4">${body}</g>` : body}`;
   if (fe) s += `<text transform="translate(0 ${f.d / 2 + 9}) rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="11" fill="${C.sub}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">▲ +${Math.round(fe)}</text>`;
   if (f.icon && f.k !== 'roof' && !(Array.isArray(f.parts) && f.parts.length)) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
   if (f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="${C.text}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
@@ -3071,7 +3140,7 @@ function handleSvg() {
       s += hnd(o.a.x, o.a.y, 'da', 'move') + hnd(o.b.x, o.b.y, 'db', 'move') + hnd((o.a.x + o.b.x) / 2 + nx * off, (o.a.y + o.b.y) / 2 + ny * off, 'doff', 'move', 'circle');
     }
     if (kind === 'furn') {
-      const c = furnCorners(o); c.forEach((p, i) => s += hnd(p.x, p.y, 'c' + i, 'nwse-resize'));
+      if (!furnTilted(o)) { const c = furnCorners(o); c.forEach((p, i) => s += hnd(p.x, p.y, 'c' + i, 'nwse-resize')); } // eğik eşya: ölçü panelden (köşeler yerel w × d değil)
       const r = o.rot * Math.PI / 180, dd = o.d / 2 + 30 / z;
       const rx = o.x + Math.sin(r) * dd, ry = o.y - Math.cos(r) * dd, tx = o.x + Math.sin(r) * o.d / 2, ty = o.y - Math.cos(r) * o.d / 2;
       s += `<line x1="${tx}" y1="${ty}" x2="${rx}" y2="${ry}" stroke="#f59e0b" stroke-width="${1.5 / z}" pointer-events="none"/>` + hnd(rx, ry, 'rot', 'grab', 'circle');
@@ -4562,6 +4631,10 @@ function renderProps() {
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
     if (o.k !== 'stairs' && o.k !== 'ramp') h += fld(L('Yerden yükseklik (cm)', 'Height above floor (cm)'), 'furn', 'elev', furnElev(o), { min: 0, max: FURN_ELEV_MAX, step: 5 }); // duvara asılan eşya (#61)
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button>`);
+    if (!NO_TILT_K.has(o.k)) { // tüm eksenlerde döndürme: öne / arkaya (X) ve yana (Y) yatırma; 3B'de en alt nokta zemine oturur
+      h += fld(L('Öne / arkaya yatır X (°)', 'Tilt forward / back X (°)'), 'furn', 'rx', +o.rx || 0, { min: 0, max: 360, step: 15 }) + fld(L('Yana yatır Y (°)', 'Tilt sideways Y (°)'), 'furn', 'ry', +o.ry || 0, { min: 0, max: 360, step: 15 });
+      h += acts(`<button class="btn sm" data-act="tiltx" title="${L('X ekseninde 90° yatır (ör. dolabı sırtüstü yatır)', 'Tilt 90° about X (e.g. lay a cabinet on its back)')}">⤾ X 90°</button><button class="btn sm" data-act="tilty" title="${L('Y ekseninde 90° yatır (yan yatır)', 'Tilt 90° about Y (lay it on its side)')}">⤿ Y 90°</button>${furnTilted(o) ? `<button class="btn sm" data-act="upright">↺ ${L('Dik', 'Upright')}</button>` : ''}`);
+    }
     if (o.k === 'ramp' && n === 1) {
       // rampa ayarları (#58): tür, korkuluk; canlı eğim (% ve 1:X) + yönetmelik rozeti
       const sl = rampSlope(o), [cc, ctr, cen] = RAMP_CLS[sl.cls];
@@ -4780,6 +4853,7 @@ function applyProp(t, final) {
     else if (k === 'wall' && p === 'mulN') { if (!final) continue; o.mulN = clamp(Math.round(v), 0, 200); }
     else if (k === 'wall' && p === 'wt') { setWallType(o, v); }
     else if (k === 'wall' && p === 'rs') { if (v === 'bars' || !RAIL_STYLES[v]) delete o.rs; else o.rs = v; ui.railRs = v; }
+    else if (k === 'furn' && (p === 'rx' || p === 'ry')) { const a = Math.round(((v % 360) + 360) % 360 * 100) / 100; if (a && a !== 360 && !NO_TILT_K.has(o.k)) o[p] = a; else delete o[p]; }
     else if (k === 'op' && p === 'open') { o.open = v ? 90 : 0; }
     else if (k === 'op' && p === 'type') { o[p] = v; if (v === 'window' && o.sill === 0) { o.sill = 90; o.h = 120; } if (v !== 'window' && o.sill > 0) { o.sill = 0; o.h = 210; } }
     else o[p] = v;
@@ -4790,7 +4864,7 @@ function applyProp(t, final) {
     else if (affects3D(k, p)) schedBuild3D();
   }
   if (final && k === 'op' && ['w', 'h', 'sill'].includes(p)) os.forEach(x => rememberOpSize(x.o));
-  if (final) { commit(); if (['type', 'mat', 'floor', 'len', 'deg', 'pivot', 'wt', 'mul', 'mulN', 'stepN', 'stairType', 'railing', 'rampType'].includes(p) || (k === 'furn' && os.some(x => x.o.k === 'stairs' || x.o.k === 'ramp') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color')) renderProps(); }
+  if (final) { commit(); if (['type', 'mat', 'floor', 'len', 'deg', 'pivot', 'wt', 'mul', 'mulN', 'stepN', 'stairType', 'railing', 'rampType'].includes(p) || (k === 'furn' && (p === 'rx' || p === 'ry')) || (k === 'furn' && os.some(x => x.o.k === 'stairs' || x.o.k === 'ramp') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color')) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -4896,6 +4970,8 @@ $('#props').addEventListener('click', e => {
       }
     }
     if (a === 'rot90' && kind === 'furn') o.rot = (o.rot + 90) % 360;
+    if ((a === 'tiltx' || a === 'tilty') && kind === 'furn' && !NO_TILT_K.has(o.k)) { const k = a === 'tiltx' ? 'rx' : 'ry', v = ((+o[k] || 0) + 90) % 360; if (v) o[k] = v; else delete o[k]; if (ui.view3d && T3) schedBuild3D(); }
+    if (a === 'upright' && kind === 'furn') { delete o.rx; delete o.ry; if (ui.view3d && T3) schedBuild3D(); }
     if (a === 'swapwd' && kind === 'furn') { [o.w, o.d] = [o.d, o.w]; if (o.k === 'poly' && o.pts) o.pts = o.pts.map(p => ({ x: p.y, y: p.x }));
       if (o.k === 'roof' && Array.isArray(o.faces)) { o.faces = o.faces.map(f => f.map(q => [q[1], q[0], q[2]]).reverse()); if (o.fbase) o.fbase = { w: o.fbase.d, d: o.fbase.w, h: o.fbase.h }; }
       if (Array.isArray(o.parts)) { o.parts = o.parts.map(q => Object.assign({}, q, { x: -q.y, y: q.x, rot: ((q.rot || 0) + 90) % 360 })); if (o.pbase) o.pbase = { w: o.pbase.d, d: o.pbase.w, h: o.pbase.h }; } }
@@ -4927,7 +5003,7 @@ $('#props').addEventListener('click', e => {
    tip değildir. Kapı açılış yönü (side) kaydedilir ama yerleştirirken imlecin tarafını izler (duvar yönü
    her duvarda farklıdır); S ile çevrilir. #41 alanları (mat, color, frameCol, glass) da taşınır. */
 const PRESET_OP_EXTRA = ['mat', 'color', 'frameCol', 'glass'];
-const PRESET_FURN_EXTRA = ['stepN', 'stairType', 'railing', 'rs', 'rampType', 'pts', 'faces', 'fbase', 'parts', 'pbase', 'partsV', 'elev'];
+const PRESET_FURN_EXTRA = ['stepN', 'stairType', 'railing', 'rs', 'rampType', 'pts', 'faces', 'fbase', 'parts', 'pbase', 'partsV', 'elev', 'rx', 'ry'];
 const clonePlain = v => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
 function presetFromObj(kind, o, name) {
   const p = { id: uid(), name: String(name).slice(0, 60), kind };
@@ -7387,7 +7463,10 @@ function pbFields() {
     + `<div class="row"><button type="button" class="btn sm" data-pbact="cx" title="${L('Sağ-sol ortaya al', 'Centre left / right')}">↔ ${L('Ortala', 'Centre')}</button><button type="button" class="btn sm" data-pbact="mirror" title="${L('Karşı tarafa aynalı bir kopya ekler (ör. ikinci ayak)', 'Adds a mirrored copy on the other side (e.g. the second leg)')}">⇋ ${L('Aynala kopyala', 'Mirror copy')}</button></div>`
     + `<h4>${L('Ölçü (cm)', 'Size (cm)')}</h4>`
     + (p.type === 'extrude' ? '' : num(L('Genişlik', 'Width'), 'w', p.w, { min: 0.1 }) + num(L('Derinlik', 'Depth'), 'd', p.d, { min: 0.1 }))
-    + num(L('Yükseklik', 'Height'), 'h', p.h, { min: 0.1 }) + num(L('Döndür (°)', 'Rotate (°)'), 'rot', p.rot, { step: 15 })
+    + num(L('Yükseklik', 'Height'), 'h', p.h, { min: 0.1 })
+    + `<h4>${L('Döndürme (°)', 'Rotation (°)')}</h4>` + num(L('Döndür — dikey eksen (Z)', 'Turn — upright axis (Z)'), 'rot', p.rot, { step: 15 })
+    + num(L('Öne / arkaya yatır (X)', 'Tilt forward / back (X)'), 'rx', p.rx, { step: 15 }) + num(L('Yana yatır (Y)', 'Tilt sideways (Y)'), 'ry', p.ry, { step: 15 })
+    + `<div class="row"><button type="button" class="btn sm" data-pbact="rx90" title="${L('X ekseninde 90° yatırır', 'Tilts 90° about X')}">⤾ X 90°</button><button type="button" class="btn sm" data-pbact="ry90" title="${L('Y ekseninde 90° yatırır', 'Tilts 90° about Y')}">⤿ Y 90°</button>${partTilted(p) ? `<button type="button" class="btn sm" data-pbact="upright" title="${L('Yatırmayı sıfırlar', 'Clears the tilt')}">↺ ${L('Dik', 'Upright')}</button>` : ''}</div>`
     + `<div class="row"><button type="button" class="btn sm" data-pbact="dup">⧉ ${L('Çoğalt', 'Duplicate')}</button><button type="button" class="btn sm" data-pbact="del">🗑 ${L('Parçayı sil', 'Delete part')}</button></div>`;
 }
 
@@ -7419,6 +7498,7 @@ function fsViewSvg(view, svg) {
   if (view !== 'top') o += `<line x1="${vb[0]}" x2="${vb[0] + vb[2]}" y1="0" y2="0" stroke="${C.stroke}" stroke-width="2" ${ns} pointer-events="none"/>`;
   const shape = (p, i, col, attrs) => {
     if (view === 'top') return partShapeSvg(p, col, attrs);
+    if (partTilted(p)) return `<polygon points="${partHull(partCloud(p).map(c => fsUV(view, c[0], c[1], c[2]))).map(c => partR(c[0]) + ',' + partR(c[1])).join(' ')}" fill="${col}" ${attrs}/>`; // eğik parça: görünüşteki izdüşüm zarfı
     const q = fsProj(p, view, bs[i]);
     if (q.round) return `<ellipse cx="${(q.a0 + q.a1) / 2}" cy="${(q.b0 + q.b1) / 2}" rx="${(q.a1 - q.a0) / 2}" ry="${(q.b1 - q.b0) / 2}" fill="${col}" ${attrs}/>`;
     const r = p.type === 'cyl' && !p.axis ? 0 : p.type === 'cyl' ? Math.min(q.a1 - q.a0, q.b1 - q.b0) / 2 : 0;
@@ -7446,12 +7526,13 @@ function fsHandles(view, p, b, r, C) {
   let o = '';
   if (view === 'top') {
     const a = (p.rot || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a), at = (lx, ly) => [p.x + lx * c - ly * s, p.y + lx * s + ly * c];
-    if (p.type !== 'extrude') for (const [h, lx, ly] of [['w+', p.w / 2, 0], ['w-', -p.w / 2, 0], ['d+', 0, p.d / 2], ['d-', 0, -p.d / 2]]) { const [x, y] = at(lx, ly); o += dot(x, y, h, 'pointer'); }
+    if (p.type !== 'extrude' && !partTilted(p)) for (const [h, lx, ly] of [['w+', p.w / 2, 0], ['w-', -p.w / 2, 0], ['d+', 0, p.d / 2], ['d-', 0, -p.d / 2]]) { const [x, y] = at(lx, ly); o += dot(x, y, h, 'pointer'); }
     const [rx, ry] = at(0, -p.d / 2 - r * 5), [ex, ey] = at(0, -p.d / 2);
     o += `<line x1="${ex}" y1="${ey}" x2="${rx}" y2="${ry}" stroke="${C.accent}" stroke-width="1" vector-effect="non-scaling-stroke" pointer-events="none"/>` + dot(rx, ry, 'rot', 'grab');
     return o;
   }
   const q = fsProj(p, view, b), mid = (q.b0 + q.b1) / 2, am = (q.a0 + q.a1) / 2;
+  if (partTilted(p)) return o; // eğik parça: ölçü panelden (kenar tutamaçları yerel eksenlere denk gelmez)
   if (p.type !== 'extrude') o += dot(q.a1, mid, 'a+', 'ew-resize') + dot(q.a0, mid, 'a-', 'ew-resize');
   return o + dot(am, q.b0, 'top', 'ns-resize') + dot(am, q.b1, 'bot', 'ns-resize');
 }
@@ -7533,7 +7614,7 @@ function fsAddBlock(key, at) {
 function fsSitOnTop(p, parts, below = Infinity) {
   const b = partBounds(p); let z = 0;
   parts.forEach(q => { if (q === p) return; const c = partBounds(q); if (c.z1 <= below + 0.5 && c.x0 < b.x1 && c.x1 > b.x0 && c.y0 < b.y1 && c.y1 > b.y0) z = Math.max(z, c.z1); });
-  p.z = partR(z);
+  p.z = partR(z + p.z - b.z0); // eğik parçada z ≠ en alt nokta
 }
 function fsDrop(view, svg, e, key) {
   const [u, v] = fsPt(svg, e), [ax, bx, sa, sb] = FS_AX[view], at = {};
@@ -7712,11 +7793,13 @@ function fsAct(act) {
   if (act === 'dup' || act === 'mirror') {
     if (D.parts.length >= PARTS_MAX) { toast(L(`En çok ${PARTS_MAX} parça`, `At most ${PARTS_MAX} parts`)); return; }
     const q = clonePlain(p);
-    if (act === 'mirror') { q.x = partR(-p.x); if (q.rot) q.rot = partR((360 - q.rot) % 360); if (q.pts) q.pts = q.pts.map(t => ({ x: -t.x, y: t.y })).reverse(); if (Math.abs(q.x - p.x) < 0.5) q.y = partR(-p.y); }
+    if (act === 'mirror') { q.x = partR(-p.x); if (q.rot) q.rot = partR((360 - q.rot) % 360); if (q.ry) q.ry = partR((360 - q.ry) % 360); if (q.pts) q.pts = q.pts.map(t => ({ x: -t.x, y: t.y })).reverse(); if (Math.abs(q.x - p.x) < 0.5) q.y = partR(-p.y); }
     else q.x = partR(q.x + Math.min(10, p.w));
     D.parts.splice(ui.pb.sel + 1, 0, q); ui.pb.sel++;
   } else if (act === 'del') { D.parts.splice(ui.pb.sel, 1); ui.pb.sel = Math.min(ui.pb.sel, D.parts.length - 1); }
-  else if (act === 'floor') p.z = 0;
+  else if (act === 'floor') p.z = partR(p.z - partBounds(p).z0); // eğik parçanın en alt noktası yere değsin
+  else if (act === 'rx90' || act === 'ry90') { const k = act.slice(0, 2), z0 = partBounds(p).z0, a = ((p[k] || 0) + 90) % 360; if (a) p[k] = a; else delete p[k]; p.z = partR(Math.max(0, p.z + z0 - partBounds(p).z0)); } // alt nokta yerinde kalır
+  else if (act === 'upright') { const z0 = partBounds(p).z0; delete p.rx; delete p.ry; p.z = partR(Math.max(0, z0)); }
   else if (act === 'cx') p.x = 0;
   else if (act === 'ontop') fsSitOnTop(p, D.parts, partBounds(p).z0);
   fsPush(); pbRedraw();
@@ -7732,7 +7815,7 @@ function fsWire(root) {
     else {
       const v = +t.value; if (t.value === '' || !Number.isFinite(v)) return;
       if ((k === 'w' || k === 'd' || k === 'h') && !(v > 0)) return;
-      if (k === 'rot') { if (v) p.rot = v; else delete p.rot; } else p[k] = v;
+      if (k === 'rot' || k === 'rx' || k === 'ry') { const a = partR(((v % 360) + 360) % 360); if (a && a !== 360) p[k] = a; else delete p[k]; } else p[k] = v;
     }
     pbLive();
   });
@@ -9107,6 +9190,7 @@ function build3D(keepCam = false) {
       const fy = elev + furnOff(o) + furnElev(o), ry = -o.rot * Math.PI / 180, g = new THREE.Group(); g.position.set(o.x, fy, o.y); g.rotation.y = ry; g.userData = { furnId: o.id, elev: fy }; S.add(g);
       // çakışan mobilya (ör. üst üste havuzlar = nehir): katman sırasına göre hafif yükseltilir, aynı yükseklikteki yüzeyler titremez
       let ig = g; if (furnLv[fi3]) { ig = new THREE.Group(); ig.position.y = furnLv[fi3] * 0.5; g.add(ig); }
+      if (furnTilted(o)) ig = furnTiltGroup(ig, o); // tüm eksenlerde döndürülmüş eşya: en alt noktası zemine oturur
       furn3D(ig, o, furnCtx);
     });
     (f.sketches || []).forEach(sk => {
@@ -9153,6 +9237,14 @@ function refreshSel3D() {
     else if (!c.isMesh && u.wallId) for (const og of c.children) if (og.userData && ids.has(og.userData.opId)) h3.push(new THREE.BoxHelper(og, col));
   }
   for (const h of h3) T3.scene.add(h);
+}
+// eşya eğimi: merkez (yarı yükseklik) etrafında Ry(ry)·Rx(rx), sonra en alt köşe zemine (eşyanın kotuna) indirilir
+function furnTiltGroup(parent, o) {
+  const M = partRotM(o.rx, o.ry, 0), r = Math.PI / 180, t = new THREE.Group(), c = new THREE.Group();
+  t.position.y = Math.abs(M[2][0]) * o.w / 2 + Math.abs(M[2][1]) * o.d / 2 + Math.abs(M[2][2]) * o.h / 2;
+  t.rotation.set(-(o.rx || 0) * r, 0, -(o.ry || 0) * r, 'ZYX');
+  c.position.y = -o.h / 2; t.add(c); parent.add(t);
+  return c;
 }
 function moveFurn3D(o) {
   if (!T3 || !ui.view3d) return;
