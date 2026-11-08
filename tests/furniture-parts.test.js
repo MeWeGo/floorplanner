@@ -158,6 +158,11 @@ test('MCP: a billiards table is built as ONE furniture item from components', as
   assert.ok(!r.err, r.text);
   r = await c.tool('update_component', { furnitureId: id, name: 'felt bed', props: { color: '#1d4ed8' } });
   assert.ok(!r.err, r.text);
+  // studio group ids round-trip through the MCP schema (rendering ignores them)
+  r = await c.tool('update_component', { furnitureId: id, name: 'leg', props: { gid: 'leg_set-1' } });
+  assert.ok(!r.err && /group leg_set-1/.test(r.text), r.text);
+  r = await c.tool('update_component', { furnitureId: id, name: 'leg', props: { gid: 'bad id' } });
+  assert.ok(r.err && /gid must be 1-16/.test(r.text), r.text);
   r = await c.tool('update_component', { furnitureId: id, name: 'pocket', props: { z: 300 } });
   assert.ok(r.err && /6 parts are named "pocket"/.test(r.text), 'ambiguous names need index or all');
   r = await c.tool('set_material', { furnitureId: id, name: 'pocket', all: true, material: 'metal' });
@@ -192,6 +197,7 @@ test('MCP: a billiards table is built as ONE furniture item from components', as
   const want = ex.parts.length - 4 + 1 - 1; // 4 legs swapped for 1, cue removed
   assert.strictEqual(a.parts.length, want);
   assert.strictEqual(a.parts.find(p => p.name === 'felt bed').color, '#1d4ed8');
+  assert.strictEqual(a.parts.find(p => p.name === 'leg').gid, 'leg_set-1', 'a studio group id survives the MCP round-trip');
   assert.ok(a.parts.filter(p => p.name === 'pocket').every(p => p.mat === 'metal'));
   assert.strictEqual(a.rot, 90); assert.strictEqual(a.w, 560); assert.deepStrictEqual(a.pbase, { w: 280, d: 155, h: 85 });
   assert.deepStrictEqual(b.parts, a.parts); assert.strictEqual(proj.lib.presets[0].extra.parts.length, a.parts.length);

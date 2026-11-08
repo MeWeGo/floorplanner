@@ -144,7 +144,7 @@ function parsePts(v, min, name) {
 
 /* PARTS-ENGINE:BEGIN ---------- Çok parçalı mobilya (programlanabilir mobilya, şema v1) ----------
    This block is copied VERBATIM into app.js and mcp/server.js (tests/furniture-parts.test.js compares them).
-   A furniture item may carry   parts: [{ name?, type, x, y, z, w, d, h, rot?, color?, mat?, axis?, pts? }]
+   A furniture item may carry   parts: [{ name?, type, x, y, z, w, d, h, rot?, color?, mat?, axis?, pts?, gid? }]
    plus pbase: { w, d, h } (the design box the parts were drawn in) and partsV (schema version).
    - Local cm, centre of the item = (0, 0), y points down like the plan, z = BOTTOM elevation above the floor.
    - type: box | cyl | sphere | extrude. cyl stands upright (axis z) unless axis is 'x' or 'y' (lying);
@@ -152,6 +152,8 @@ function parsePts(v, min, name) {
    - rot = degrees clockwise on the plan, like furniture rot. mat: matte (default) | gloss | metal | glass.
    - rx / ry = optional tilt in degrees about the part's own x / y axis (all-axis rotation). The part turns about its
      centre (x, y, z + h/2) as R = Rz(rot) · Ry(ry) · Rx(rx): first rx, then ry, then rot. Absent = 0 (upright).
+   - gid = optional group id (1–16 letters / digits / _ / -). Parts with the same gid form a group in the furniture
+     studio (select / move / rotate together); rendering ignores it, so grouping never changes the model.
    - When the item is resized (w / d / h ≠ pbase) the parts scale with it; old items without parts are untouched. */
 const PARTS_V = 1;
 const PART_TYPES = ['box', 'cyl', 'sphere', 'extrude'];
@@ -176,6 +178,7 @@ function cleanPart(p) {
   if (type === 'extrude' && !pts) type = 'box';
   const q = { type };
   if (p.name) q.name = String(p.name).slice(0, 40);
+  if (typeof p.gid === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(p.gid)) q.gid = p.gid;
   q.x = n(p.x, 0); q.y = n(p.y, 0); q.z = n(p.z, 0);
   if (pts) {
     const xs = pts.map(a => a.x), ys = pts.map(a => a.y);
@@ -255,6 +258,7 @@ function partIssues(p, base) {
   if (p.color !== undefined && p.color !== null && !partHex(p.color)) e.push('color must be #rgb or #rrggbb');
   if (p.mat !== undefined && p.mat !== null && !PART_MATS.includes(p.mat)) e.push('mat must be one of ' + PART_MATS.join(', '));
   if (p.axis !== undefined && p.axis !== null && !['x', 'y', 'z'].includes(p.axis)) e.push('axis must be x, y or z');
+  if (p.gid !== undefined && p.gid !== null && !(typeof p.gid === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(p.gid))) e.push('gid must be 1-16 letters, digits, _ or -');
   if (!e.length && base) {
     const b = partBounds(cleanPart(p)), tol = 1;
     if (b.x0 < -base.w / 2 - tol || b.x1 > base.w / 2 + tol || b.y0 < -base.d / 2 - tol || b.y1 > base.d / 2 + tol)
@@ -2288,6 +2292,7 @@ const FURN_SCHEMA = {
     type: PART_TYPES.join(' | ') + ' (aliases: cube, cylinder, ball, prism)',
     name: 'optional label, e.g. "leg"', x: 'centre x', y: 'centre y', z: 'bottom elevation (0 = floor)',
     w: 'size along local x', d: 'size along local y', h: 'height', rot: 'degrees clockwise on the plan (yaw, about the upright z axis)', rx: 'optional tilt in degrees about the part x axis (forward / back)', ry: 'optional tilt in degrees about the part y axis (sideways); the part turns about its centre as Rz(rot)·Ry(ry)·Rx(rx), so z is the bottom only while it is upright',
+    gid: 'optional group id (1–16 letters / digits / _ / -); parts with the same gid are grouped in the furniture studio (rendering ignores it)',
     color: '#rgb / #rrggbb (default: the item colour)', mat: PART_MATS.join(' | ') + ' (default matte)',
     axis: 'cyl only: z (upright, default) | x | y (lying along that axis; w × d × h is still the bounding box)',
     pts: 'extrude only: 3+ {x, y} points relative to the part centre; extruded h up from z',
@@ -2306,7 +2311,7 @@ function findFurnObj(f, id, needParts) {
   if (needParts && !Array.isArray(o.parts)) throw new Error('Furniture ' + id + ' has no parts. Use add_component first, or create_furniture for a new multi-part item.');
   return o;
 }
-const PART_KEYS = ['type', 'name', 'x', 'y', 'z', 'w', 'd', 'h', 'rot', 'rx', 'ry', 'color', 'axis', 'pts', 'mat'];
+const PART_KEYS = ['type', 'name', 'x', 'y', 'z', 'w', 'd', 'h', 'rot', 'rx', 'ry', 'color', 'axis', 'pts', 'mat', 'gid'];
 function partArg(a) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return a;
   const p = {};
@@ -2337,7 +2342,7 @@ function describeFurn(o) {
   const v = validateParts(o), s = partsScale(o);
   const out = ['furniture ' + o.id + ' "' + o.name + '" ' + o.w + '×' + o.d + '×' + o.h + ' cm at (' + o.x + ',' + o.y + ') rot=' + o.rot + '°' + (o.rx || o.ry ? ' tilt x ' + (o.rx || 0) + '° y ' + (o.ry || 0) + '°' : '') + ', ' + v.count + ' parts (schema v' + (o.partsV || PARTS_V) + ')'];
   if (s.sx !== 1 || s.sy !== 1 || s.sz !== 1) out.push('  parts are drawn in ' + o.pbase.w + '×' + o.pbase.d + '×' + o.pbase.h + ' cm and scaled to the item size');
-  (o.parts || []).forEach((p, i) => out.push('  ' + i + ': ' + (p.name ? '"' + p.name + '" ' : '') + p.type + (p.axis ? '(' + p.axis + ')' : '') + ' at (' + p.x + ',' + p.y + ') z ' + p.z + '…' + partR(p.z + p.h) + ', ' + p.w + '×' + p.d + '×' + p.h + (p.rot ? ' rot ' + p.rot + '°' : '') + (p.rx ? ' rx ' + p.rx + '°' : '') + (p.ry ? ' ry ' + p.ry + '°' : '') + (p.color ? ' ' + p.color : '') + (p.mat ? ' ' + p.mat : '')));
+  (o.parts || []).forEach((p, i) => out.push('  ' + i + ': ' + (p.name ? '"' + p.name + '" ' : '') + p.type + (p.axis ? '(' + p.axis + ')' : '') + ' at (' + p.x + ',' + p.y + ') z ' + p.z + '…' + partR(p.z + p.h) + ', ' + p.w + '×' + p.d + '×' + p.h + (p.rot ? ' rot ' + p.rot + '°' : '') + (p.rx ? ' rx ' + p.rx + '°' : '') + (p.ry ? ' ry ' + p.ry + '°' : '') + (p.gid ? ' group ' + p.gid : '') + (p.color ? ' ' + p.color : '') + (p.mat ? ' ' + p.mat : '')));
   out.push(v.ok ? '✓ valid' : '✗ ' + v.errors.length + ' error(s):');
   for (const e of v.errors) out.push('  error: ' + e);
   for (const w of v.warnings) out.push('  warning: ' + w);
@@ -2355,6 +2360,7 @@ const partProps = {
   rot: { type: 'number', description: 'Yaw in degrees, clockwise on the plan (about the upright z axis).' },
   rx: { type: 'number', description: 'Tilt in degrees about the part x axis (forward / back). Applied first; the part turns about its centre.' },
   ry: { type: 'number', description: 'Tilt in degrees about the part y axis (sideways). Applied after rx, before rot.' },
+  gid: { type: 'string', description: 'Optional group id (1-16 letters / digits / _ / -); parts sharing it are grouped in the furniture studio.' },
   color: { type: 'string', description: '#hex. Default: the item colour.' },
   material: { type: 'string', enum: PART_MATS, description: 'matte (default) | gloss | metal | glass.' },
   axis: { type: 'string', enum: ['z', 'x', 'y'], description: 'cyl only: z upright (default), x / y lying along that axis.' },

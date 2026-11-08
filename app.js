@@ -1456,7 +1456,7 @@ function stairRails(o, st = stairSteps(o)) {
 }
 /* PARTS-ENGINE:BEGIN ---------- Çok parçalı mobilya (programlanabilir mobilya, şema v1) ----------
    This block is copied VERBATIM into app.js and mcp/server.js (tests/furniture-parts.test.js compares them).
-   A furniture item may carry   parts: [{ name?, type, x, y, z, w, d, h, rot?, color?, mat?, axis?, pts? }]
+   A furniture item may carry   parts: [{ name?, type, x, y, z, w, d, h, rot?, color?, mat?, axis?, pts?, gid? }]
    plus pbase: { w, d, h } (the design box the parts were drawn in) and partsV (schema version).
    - Local cm, centre of the item = (0, 0), y points down like the plan, z = BOTTOM elevation above the floor.
    - type: box | cyl | sphere | extrude. cyl stands upright (axis z) unless axis is 'x' or 'y' (lying);
@@ -1464,6 +1464,8 @@ function stairRails(o, st = stairSteps(o)) {
    - rot = degrees clockwise on the plan, like furniture rot. mat: matte (default) | gloss | metal | glass.
    - rx / ry = optional tilt in degrees about the part's own x / y axis (all-axis rotation). The part turns about its
      centre (x, y, z + h/2) as R = Rz(rot) · Ry(ry) · Rx(rx): first rx, then ry, then rot. Absent = 0 (upright).
+   - gid = optional group id (1–16 letters / digits / _ / -). Parts with the same gid form a group in the furniture
+     studio (select / move / rotate together); rendering ignores it, so grouping never changes the model.
    - When the item is resized (w / d / h ≠ pbase) the parts scale with it; old items without parts are untouched. */
 const PARTS_V = 1;
 const PART_TYPES = ['box', 'cyl', 'sphere', 'extrude'];
@@ -1488,6 +1490,7 @@ function cleanPart(p) {
   if (type === 'extrude' && !pts) type = 'box';
   const q = { type };
   if (p.name) q.name = String(p.name).slice(0, 40);
+  if (typeof p.gid === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(p.gid)) q.gid = p.gid;
   q.x = n(p.x, 0); q.y = n(p.y, 0); q.z = n(p.z, 0);
   if (pts) {
     const xs = pts.map(a => a.x), ys = pts.map(a => a.y);
@@ -1567,6 +1570,7 @@ function partIssues(p, base) {
   if (p.color !== undefined && p.color !== null && !partHex(p.color)) e.push('color must be #rgb or #rrggbb');
   if (p.mat !== undefined && p.mat !== null && !PART_MATS.includes(p.mat)) e.push('mat must be one of ' + PART_MATS.join(', '));
   if (p.axis !== undefined && p.axis !== null && !['x', 'y', 'z'].includes(p.axis)) e.push('axis must be x, y or z');
+  if (p.gid !== undefined && p.gid !== null && !(typeof p.gid === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(p.gid))) e.push('gid must be 1-16 letters, digits, _ or -');
   if (!e.length && base) {
     const b = partBounds(cleanPart(p)), tol = 1;
     if (b.x0 < -base.w / 2 - tol || b.x1 > base.w / 2 + tol || b.y0 < -base.d / 2 - tol || b.y1 > base.d / 2 + tol)
@@ -7395,6 +7399,72 @@ const FS_BLOCKS = [
 const fsBlock = key => FS_BLOCKS.find(b => b[0] === key);
 const fsDirty = () => ui.pb && (JSON.stringify(ui.pb.d) !== ui.pb.orig || (ui.pb.name || '') !== (ui.pb.name0 || ''));
 const fsRound = v => ui.pb && ui.pb.snap ? Math.round(v) : partR(v);
+/* --- parça grupları: aynı `gid`'i taşıyan parçalar stüdyoda birlikte seçilir / taşınır / döner.
+   Grup kimliği parçanın kendisinde durur, böylece kaydetme / JSON / MCP turunda korunur; çizim onu yok sayar. --- */
+const pbGroupIds = () => { const out = []; for (const p of ui.pb.d.parts) if (p.gid && !out.includes(p.gid)) out.push(p.gid); return out; };
+const pbGroupLabel = gid => { const i = pbGroupIds().indexOf(gid); return i < 0 ? L('Grup', 'Group') : L(`Grup ${i + 1}`, `Group ${i + 1}`); };
+function pbSelSet() {
+  const D = ui.pb && ui.pb.d, out = new Set();
+  if (!D) return out;
+  if (ui.pb.gsel) D.parts.forEach((p, i) => { if (p.gid === ui.pb.gsel) out.add(i); });
+  else for (const i of ui.pb.multi || []) if (D.parts[i]) out.add(i);
+  if (!out.size && ui.pb.sel >= 0 && D.parts[ui.pb.sel]) out.add(ui.pb.sel);
+  return out;
+}
+const pbSelIds = () => [...pbSelSet()].sort((a, b) => a - b);
+function pbSelBounds(ids) {
+  const bs = ids.map(i => partBounds(ui.pb.d.parts[i]));
+  return { x0: Math.min(...bs.map(b => b.x0)), x1: Math.max(...bs.map(b => b.x1)), y0: Math.min(...bs.map(b => b.y0)), y1: Math.max(...bs.map(b => b.y1)), z0: Math.min(...bs.map(b => b.z0)), z1: Math.max(...bs.map(b => b.z1)) };
+}
+// tıkla / Ctrl (veya Shift) + tıkla = çoklu seçim, Alt + tıkla = gruptaki tek parçayı seç
+function pbPickPart(i, e, shiftMulti = true) {
+  const D = ui.pb.d, p = D.parts[i]; if (!p) return false;
+  const before = ui.pb.sel + '|' + (ui.pb.gsel || '') + '|' + (ui.pb.multi || []).join(',');
+  if (e && (e.ctrlKey || e.metaKey || (shiftMulti && e.shiftKey))) {
+    const m = new Set(ui.pb.multi || []);
+    if (m.has(i)) m.delete(i); else m.add(i);
+    ui.pb.multi = [...m].sort((a, b) => a - b); ui.pb.gsel = null; ui.pb.sel = i;
+    if (ui.pb.sel + '|' + (ui.pb.gsel || '') + '|' + (ui.pb.multi || []).join(',') !== before) pbRedraw();
+    return false; // çoklu seçimde sürükleme başlamaz
+  }
+  ui.pb.multi = [];
+  if (e && e.altKey) { ui.pb.sel = i; ui.pb.gsel = null; }
+  else if (p.gid) { ui.pb.sel = i; ui.pb.gsel = p.gid; }
+  else { ui.pb.sel = i; ui.pb.gsel = null; }
+  if (ui.pb.sel + '|' + (ui.pb.gsel || '') + '|' + (ui.pb.multi || []).join(',') !== before) pbRedraw();
+  return true;
+}
+function pbPruneGroups() {
+  const D = ui.pb && ui.pb.d; if (!D) return;
+  const n = {}; for (const p of D.parts) if (p.gid) n[p.gid] = (n[p.gid] || 0) + 1;
+  for (const p of D.parts) if (p.gid && n[p.gid] < 2) delete p.gid;
+  if (ui.pb.gsel && n[ui.pb.gsel] < 2) ui.pb.gsel = null;
+}
+function pbGroup() {
+  const D = ui.pb.d, idx = pbSelIds().filter(i => D.parts[i]);
+  if (idx.length < 2) { toast(L('Gruplamak için en az 2 parça seçin (Ctrl / Shift + tık)', 'Select at least 2 parts to group (Ctrl / Shift + click)')); return; }
+  const used = new Set(D.parts.map(p => p.gid).filter(Boolean)); let g; do { g = 'g' + uid(); } while (used.has(g));
+  idx.forEach(i => { D.parts[i].gid = g; });
+  pbPruneGroups(); // bir üyesi buraya taşınan eski grup tek parça kaldıysa dağılsın
+  ui.pb.gsel = g; ui.pb.sel = idx[0]; ui.pb.multi = [];
+  fsPush(); pbRedraw();
+  toast(L(`${idx.length} parça gruplandı – birlikte taşınır / döner`, `${idx.length} parts grouped – they move / rotate together`));
+}
+function pbUngroup() {
+  const D = ui.pb.d, g = ui.pb.gsel; if (!g) return;
+  const n = D.parts.filter(p => p.gid === g).length;
+  D.parts.forEach(p => { if (p.gid === g) delete p.gid; });
+  ui.pb.gsel = null;
+  fsPush(); pbRedraw();
+  toast(L(`Grup çözüldü (${n} parça)`, `Group dissolved (${n} parts)`));
+}
+// oklar / PgUp / PgDn: seçili parçaları (grup ise hepsini) aynı adımda kaydır
+function pbNudge(axis, d) {
+  const D = ui.pb.d, ids = pbSelIds(); if (!ids.length) return;
+  ids.forEach(i => { const p = D.parts[i]; p[axis] = partR(p[axis] + d); });
+  if (axis === 'z') { const bb = pbSelBounds(ids); if (bb.z0 < 0) ids.forEach(i => { D.parts[i].z = partR(D.parts[i].z - bb.z0); }); }
+  fsPush(); pbRedraw();
+}
 
 // seçili mobilyadan taslak: parçası yoksa tek parçalık başlangıç (kutu / silindir / şeklin kendi profili)
 function pbStart(o) {
@@ -7414,7 +7484,7 @@ function fsNew(tpl) {
 }
 function fsInit(id, name, d) {
   const prevSnap = ui.pb ? ui.pb.snap : true;
-  ui.pb = { id, name, name0: name, sel: d.parts.length ? 0 : -1, d, snap: prevSnap !== false, hist: [JSON.stringify(d)], hi: 0 };
+  ui.pb = { id, name, name0: name, sel: d.parts.length ? 0 : -1, d, snap: prevSnap !== false, hist: [JSON.stringify(d)], hi: 0, multi: [], gsel: null };
   ui.pb.orig = ui.pb.hist[0];
   openStudio();
 }
@@ -7427,7 +7497,7 @@ function fsPush() {
 }
 function fsUndo(dir) {
   const P2 = ui.pb, i = P2.hi + dir; if (i < 0 || i >= P2.hist.length) return;
-  P2.hi = i; P2.d = JSON.parse(P2.hist[i]); P2.sel = Math.min(P2.sel, P2.d.parts.length - 1); pbRedraw();
+  P2.hi = i; P2.d = JSON.parse(P2.hist[i]); P2.sel = Math.min(P2.sel, P2.d.parts.length - 1); P2.multi = []; P2.gsel = null; pbRedraw();
 }
 // sorunlar, iki dilde: kutudan taşma, tabanın altı, öğe yüksekliğinin üstü, havada duran parça
 function pbIssues() {
@@ -7451,12 +7521,37 @@ function pbMsgs() {
   return is.map(x => `<div class="pb-msg ${x.err ? 'err' : 'warn'}"${x.i >= 0 ? ` data-pbsel="${x.i}"` : ''}>${x.err ? '⚠' : '•'} ${x.t}</div>`).join('');
 }
 function pbList() {
-  const D = ui.pb.d;
-  return D.parts.map((p, i) => `<button type="button" class="pb-item${i === ui.pb.sel ? ' on' : ''}" data-pbsel="${i}"><i style="background:${hex6(p.color || D.color)}"></i><span>${i + 1}. ${esc(p.name || L(...PB_TYPES[p.type]))}</span><small>${Math.round(p.w)}×${Math.round(p.d)}×${Math.round(p.h)}</small></button>`).join('')
-    || `<p class="muted">${L('Henüz parça yok', 'No parts yet')}</p>`;
+  const D = ui.pb.d, multi = new Set(ui.pb.multi || []), gsel = ui.pb.gsel;
+  if (!D.parts.length) return `<p class="muted">${L('Henüz parça yok', 'No parts yet')}</p>`;
+  const groups = new Map();
+  D.parts.forEach((p, i) => { if (p.gid) { if (!groups.has(p.gid)) groups.set(p.gid, []); groups.get(p.gid).push(i); } });
+  const item = i => {
+    const p = D.parts[i], on = gsel ? p.gid === gsel : i === ui.pb.sel;
+    return `<button type="button" class="pb-item${on ? ' on' : ''}${p.gid ? ' in-grp' : ''}${multi.has(i) ? ' multi' : ''}" data-pbsel="${i}"><i style="background:${hex6(p.color || D.color)}"></i><span>${i + 1}. ${esc(p.name || L(...PB_TYPES[p.type]))}</span><small>${Math.round(p.w)}×${Math.round(p.d)}×${Math.round(p.h)}</small></button>`;
+  };
+  const out = [], done = new Set();
+  D.parts.forEach((p, i) => {
+    if (p.gid) {
+      if (done.has(p.gid)) return;
+      done.add(p.gid);
+      const ids = groups.get(p.gid);
+      out.push(`<button type="button" class="pb-grp${gsel === p.gid ? ' on' : ''}" data-pbgrp="${esc(p.gid)}"><span>👥 ${esc(pbGroupLabel(p.gid))}</span><small>${ids.length} ${L('parça', 'parts')}</small></button>`);
+      for (const j of ids) out.push(item(j));
+    } else out.push(item(i));
+  });
+  return out.join('');
 }
 function pbFields() {
-  const D = ui.pb.d, p = D.parts[ui.pb.sel];
+  const D = ui.pb.d, ids = pbSelIds(), p = D.parts[ui.pb.sel];
+  if (ids.length > 1) {
+    const g = ui.pb.gsel;
+    const names = ids.slice(0, 8).map(i => D.parts[i].name || L(...PB_TYPES[D.parts[i].type])).join(', ');
+    return `<div class="pb-group"><h4>👥 ${g ? esc(pbGroupLabel(g)) : L('Seçim', 'Selection')} · ${ids.length} ${L('parça', 'parts')}</h4>`
+      + `<p class="muted">${esc(names)}${ids.length > 8 ? '…' : ''}</p>`
+      + `<p class="muted fs-tip">${L('Grup birlikte taşınır ve döner. Tek parçayı düzenlemek için Alt + tıkla.', 'The group moves and rotates together. Alt + click a part to edit it alone.')}</p>`
+      + `<div class="row">${g ? `<button type="button" class="btn sm" data-pbact="ungroup">🔓 ${L('Grubu çöz', 'Ungroup')}</button>` : `<button type="button" class="btn sm primary" data-pbact="group">👥 ${L('Grupla', 'Group')}</button>`}</div>`
+      + `<div class="row"><button type="button" class="btn sm" data-pbact="dup">⧉ ${L('Çoğalt', 'Duplicate')}</button><button type="button" class="btn sm" data-pbact="mirror">⇋ ${L('Aynala kopyala', 'Mirror copy')}</button><button type="button" class="btn sm" data-pbact="del">🗑 ${L('Sil', 'Delete')}</button></div></div>`;
+  }
   if (!p) return `<p class="muted">${L('Bir parça seçin ya da soldan ekleyin.', 'Select a part, or add one from the left.')}</p>`;
   const num = (lbl, k, v, o = {}) => `<label class="f"><span>${lbl}</span><input type="number" data-pf="${k}" value="${partR(v || 0)}" step="${o.step || 1}"${o.min !== undefined ? ` min="${o.min}"` : ''}></label>`;
   const pick = (lbl, k, v, map) => `<label class="f"><span>${lbl}</span><select data-pf="${k}">${Object.entries(map).map(([kk, x]) => `<option value="${kk}"${kk === v ? ' selected' : ''}>${L(...x)}</option>`).join('')}</select></label>`;
@@ -7495,7 +7590,7 @@ function fsViewBox(view) {
   return [x - m, y - m, w + 2 * m, h + 2 * m];
 }
 function fsViewSvg(view, svg) {
-  const D = ui.pb.d, C = pal(), s = ui.pb.sel, sp = D.parts[s], vb = fsViewBox(view);
+  const D = ui.pb.d, C = pal(), ids = pbSelIds(), s = ids.length === 1 ? ids[0] : ui.pb.sel, sp = ids.length === 1 ? D.parts[s] : null, vb = fsViewBox(view);
   const k = svg && svg.clientWidth ? Math.min(svg.clientWidth / vb[2], svg.clientHeight / vb[3]) : 2; // px / cm
   const px = n => n / k, ns = 'vector-effect="non-scaling-stroke"';
   const line = `stroke="${C.furnStroke}" stroke-width="1" ${ns}`, hl = `fill="none" stroke="${C.accent}" stroke-width="2.5" ${ns}`;
@@ -7517,10 +7612,12 @@ function fsViewSvg(view, svg) {
   const key = view === 'top' ? i => bs[i].z1 : view === 'front' ? i => bs[i].y1 : i => bs[i].x1;
   D.parts.map((p, i) => i).sort((a, b) => key(a) - key(b) || a - b)
     .forEach(i => { o += `<g data-pi="${i}" style="cursor:move">${shape(D.parts[i], i, D.parts[i].color || D.color, line)}</g>`; });
-  if (sp) {
-    o += shape(sp, s, 'none', hl).replace(/fill="none" fill="none"/, 'fill="none"').replace('/>', ' pointer-events="none"/>');
-    o += fsHandles(view, sp, bs[s], px(6), C);
+  for (const i of ids) {
+    const q = D.parts[i]; if (!q) continue;
+    o += shape(q, i, 'none', hl).replace(/fill="none" fill="none"/, 'fill="none"').replace('/>', ' pointer-events="none"/>');
   }
+  if (sp) o += fsHandles(view, sp, bs[s], px(6), C);
+  else if (ids.length > 1 && view === 'top') o += fsGroupHandles(ids, bs, px(6), C);
   if (ui.pb.guide && ui.pb.guide.views.includes(view)) {
     const g = ui.pb.guide, [u, v] = fsUV(view, g.axis === 'x' ? g.v : 0, g.axis === 'y' ? g.v : 0, g.axis === 'z' ? g.v : 0);
     const vert = (view === 'top' && g.axis === 'x') || (view === 'front' && g.axis === 'x') || (view === 'side' && g.axis === 'y');
@@ -7545,6 +7642,14 @@ function fsHandles(view, p, b, r, C) {
   if (p.type !== 'extrude') o += dot(q.a1, mid, 'a+', 'ew-resize') + dot(q.a0, mid, 'a-', 'ew-resize');
   return o + dot(am, q.b0, 'top', 'ns-resize') + dot(am, q.b1, 'bot', 'ns-resize');
 }
+// grup tutamacı: üstten görünüşte tek bir döndürme noktası (taşıma zaten herhangi bir üyeyi sürükleyerek olur)
+function fsGroupHandles(ids, bs, r, C) {
+  const bb = { x0: Math.min(...ids.map(i => bs[i].x0)), x1: Math.max(...ids.map(i => bs[i].x1)), y0: Math.min(...ids.map(i => bs[i].y0)), y1: Math.max(...ids.map(i => bs[i].y1)) };
+  const cx = (bb.x0 + bb.x1) / 2, top = bb.y0 - r * 5;
+  return `<rect x="${bb.x0}" y="${bb.y0}" width="${bb.x1 - bb.x0}" height="${bb.y1 - bb.y0}" fill="none" stroke="${C.accent}" stroke-dasharray="4 3" stroke-width="1" vector-effect="non-scaling-stroke" pointer-events="none"/>`
+    + `<line x1="${cx}" y1="${bb.y0}" x2="${cx}" y2="${top}" stroke="${C.accent}" stroke-width="1" vector-effect="non-scaling-stroke" pointer-events="none"/>`
+    + `<circle cx="${cx}" cy="${top}" r="${r}" data-h="grot" fill="${C.accent}" stroke="#fff" stroke-width="1.5" vector-effect="non-scaling-stroke" style="cursor:grab"/>`;
+}
 function fsDrawViews() {
   for (const v of FS_VIEWS) {
     const svg = document.getElementById('fsv-' + v); if (!svg) continue;
@@ -7563,7 +7668,8 @@ const fsCmPerPx = svg => { const m = svg.getScreenCTM(); return m && m.a ? 1 / m
 function fsMagnet(p, axis, tol, skip) {
   const D = ui.pb.d, b = partBounds(p), lo = axis === 'x' ? b.x0 : axis === 'y' ? b.y0 : b.z0, hi = axis === 'x' ? b.x1 : axis === 'y' ? b.y1 : b.z1;
   const half = axis === 'x' ? D.w / 2 : axis === 'y' ? D.d / 2 : 0, T = axis === 'z' ? [0, D.h] : [-half, 0, half];
-  D.parts.forEach((q, i) => { if (i === skip) return; const c = partBounds(q); if (axis === 'z') T.push(c.z1, c.z0); else { const a0 = axis === 'x' ? c.x0 : c.y0, a1 = axis === 'x' ? c.x1 : c.y1; T.push(a0, a1, (a0 + a1) / 2); } });
+  const sk = skip instanceof Set ? skip : skip === undefined || skip === null ? null : new Set([skip]);
+  D.parts.forEach((q, i) => { if (sk && sk.has(i)) return; const c = partBounds(q); if (axis === 'z') T.push(c.z1, c.z0); else { const a0 = axis === 'x' ? c.x0 : c.y0, a1 = axis === 'x' ? c.x1 : c.y1; T.push(a0, a1, (a0 + a1) / 2); } });
   const edges = axis === 'z' ? [lo, hi] : [lo, hi, (lo + hi) / 2];
   let best = null;
   for (const t of T) for (const e of edges) { const dd = t - e; if (Math.abs(dd) <= tol && (!best || Math.abs(dd) < Math.abs(best.d))) best = { d: dd, v: t }; }
@@ -7581,29 +7687,57 @@ const FS_AX = { top: ['x', 'y', 1, 1], front: ['x', 'z', 1, -1], side: ['y', 'z'
 function fsStartDrag(e, svg, view) {
   const D = ui.pb.d, h = e.target.closest('[data-h]'), g = e.target.closest('[data-pi]');
   if (!h && !g) return;
-  if (g && !h) { const i = +g.dataset.pi; if (i !== ui.pb.sel) { ui.pb.sel = i; pbRedraw(); } }
-  const i = ui.pb.sel, p = D.parts[i]; if (!p) return;
+  if (g && !h && !pbPickPart(+g.dataset.pi, e)) return;
+  const ids = pbSelIds(); if (!ids.length) return;
+  const group = ids.length > 1, single = group ? null : D.parts[ids[0]];
+  if (!group && !single) return;
   e.preventDefault(); try { svg.setPointerCapture(e.pointerId); } catch (er) { /* sentetik olay */ }
-  const st = { view, svg, h: h && h.dataset.h, p0: clonePlain(p), pt0: fsPt(svg, e), tol: fsCmPerPx(svg) * 8, moved: false };
+  const pt0 = fsPt(svg, e), bb0 = group ? pbSelBounds(ids) : null;
+  const st = { view, svg, h: h && h.dataset.h, ids, group, p0: single ? clonePlain(single) : null, orig: group ? ids.map(i => clonePlain(D.parts[i])) : null, pt0, tol: fsCmPerPx(svg) * 8, moved: false,
+    a0: bb0 ? Math.atan2(pt0[1] - (bb0.y0 + bb0.y1) / 2, pt0[0] - (bb0.x0 + bb0.x1) / 2) * 180 / Math.PI : 0 };
   const mv = ev => {
     const [u, v] = fsPt(svg, ev), du = u - st.pt0[0], dv = v - st.pt0[1];
     if (!st.moved && Math.hypot(du, dv) < fsCmPerPx(svg) * 2) return;
     st.moved = true;
-    const q = D.parts[i]; if (!q) return;
-    Object.assign(q, clonePlain(st.p0)); const guides = [];
-    const [ax, bx, sa, sb] = FS_AX[view];
-    if (!st.h) { fsMoveAxis(q, ax, st.p0[ax] + du * sa, st.tol, i, guides); fsMoveAxis(q, bx, st.p0[bx] + dv * sb, st.tol, i, guides); }
-    else if (st.h === 'rot') { let a = Math.atan2(v - q.y, u - q.x) * 180 / Math.PI + 90; if (ui.pb.snap && !ev.shiftKey) a = Math.round(a / 15) * 15; a = ((a % 360) + 360) % 360; if (a) q.rot = partR(a); else delete q.rot; }
-    else if (view === 'top') {
-      // yerel eksen boyunca boyutlandır: karşı kenar yerinde kalır
-      const lk = st.h[0], sg = st.h[1] === '+' ? 1 : -1, a = (q.rot || 0) * Math.PI / 180, ux = lk === 'w' ? Math.cos(a) : -Math.sin(a), uy = lk === 'w' ? Math.sin(a) : Math.cos(a);
-      const proj = du * ux + dv * uy, size = Math.max(0.5, fsRound(st.p0[lk] + sg * proj)), dl = (size - st.p0[lk]) * sg;
-      q[lk] = size; q.x = partR(st.p0.x + ux * dl / 2); q.y = partR(st.p0.y + uy * dl / 2);
-    } else if (st.h === 'a+' || st.h === 'a-') {
-      const lk = fsHorizKey(q, view), sg = st.h === 'a+' ? 1 : -1, size = Math.max(0.5, fsRound(st.p0[lk] + sg * du)), dl = (size - st.p0[lk]) * sg;
-      q[lk] = size; q[ax] = partR(st.p0[ax] + sa * dl / 2);
-    } else if (st.h === 'top') { q.h = Math.max(0.5, fsRound(st.p0.h - dv)); const m = ui.pb.snap ? fsMagnet(Object.assign({}, q, { z: q.z + q.h, h: 0 }), 'z', st.tol, i) : null; if (m) { q.h = partR(q.h + m.d); guides.push({ axis: 'z', v: m.v, views: ['front', 'side'] }); } }
-    else if (st.h === 'bot') { const top = st.p0.z + st.p0.h; q.z = Math.max(0, Math.min(top - 0.5, fsRound(st.p0.z - dv))); q.h = partR(top - q.z); }
+    const [ax, bx, sa, sb] = FS_AX[view], guides = [];
+    if (st.group) {
+      st.ids.forEach((i, k) => Object.assign(D.parts[i], clonePlain(st.orig[k])));
+      const bb = pbSelBounds(st.ids), cx = (bb.x0 + bb.x1) / 2, cy = (bb.y0 + bb.y1) / 2;
+      if (st.h === 'grot') { // grup döndürme: her parça grup merkezi etrafında döner
+        let a = Math.atan2(v - cy, u - cx) * 180 / Math.PI - st.a0;
+        if (ui.pb.snap && !ev.shiftKey) a = Math.round(a / 15) * 15;
+        const r = a * Math.PI / 180, ca = Math.cos(r), sn = Math.sin(r);
+        st.ids.forEach((i, k) => {
+          const q = D.parts[i], o0 = st.orig[k], dx = o0.x - cx, dy = o0.y - cy;
+          q.x = partR(cx + dx * ca - dy * sn); q.y = partR(cy + dx * sn + dy * ca);
+          const rot = partR((((o0.rot || 0) + a) % 360 + 360) % 360); if (rot) q.rot = rot; else delete q.rot;
+        });
+        ui.pb.guide = null; pbLive(); return;
+      }
+      if (!st.h) { // grubu tek parça gibi taşı: mıknatıs grup sınır kutusuna göre
+        const gb = { type: 'box', x: cx, y: cy, z: bb.z0, w: Math.max(0.1, bb.x1 - bb.x0), d: Math.max(0.1, bb.y1 - bb.y0), h: Math.max(0.1, bb.z1 - bb.z0) };
+        const x0 = gb[ax], y0 = gb[bx], skip = new Set(st.ids);
+        fsMoveAxis(gb, ax, x0 + du * sa, st.tol, skip, guides);
+        fsMoveAxis(gb, bx, y0 + dv * sb, st.tol, skip, guides);
+        const dax = gb[ax] - x0, dbx = gb[bx] - y0;
+        st.ids.forEach((i, k) => { const q = D.parts[i], o0 = st.orig[k]; q[ax] = partR(o0[ax] + dax); q[bx] = partR(o0[bx] + dbx); });
+      }
+    } else {
+      const q = D.parts[st.ids[0]]; if (!q) return;
+      Object.assign(q, clonePlain(st.p0));
+      if (!st.h) { fsMoveAxis(q, ax, st.p0[ax] + du * sa, st.tol, st.ids[0], guides); fsMoveAxis(q, bx, st.p0[bx] + dv * sb, st.tol, st.ids[0], guides); }
+      else if (st.h === 'rot') { let a = Math.atan2(v - q.y, u - q.x) * 180 / Math.PI + 90; if (ui.pb.snap && !ev.shiftKey) a = Math.round(a / 15) * 15; a = ((a % 360) + 360) % 360; if (a) q.rot = partR(a); else delete q.rot; }
+      else if (view === 'top') {
+        // yerel eksen boyunca boyutlandır: karşı kenar yerinde kalır
+        const lk = st.h[0], sg = st.h[1] === '+' ? 1 : -1, a = (q.rot || 0) * Math.PI / 180, ux = lk === 'w' ? Math.cos(a) : -Math.sin(a), uy = lk === 'w' ? Math.sin(a) : Math.cos(a);
+        const proj = du * ux + dv * uy, size = Math.max(0.5, fsRound(st.p0[lk] + sg * proj)), dl = (size - st.p0[lk]) * sg;
+        q[lk] = size; q.x = partR(st.p0.x + ux * dl / 2); q.y = partR(st.p0.y + uy * dl / 2);
+      } else if (st.h === 'a+' || st.h === 'a-') {
+        const lk = fsHorizKey(q, view), sg = st.h === 'a+' ? 1 : -1, size = Math.max(0.5, fsRound(st.p0[lk] + sg * du)), dl = (size - st.p0[lk]) * sg;
+        q[lk] = size; q[ax] = partR(st.p0[ax] + sa * dl / 2);
+      } else if (st.h === 'top') { q.h = Math.max(0.5, fsRound(st.p0.h - dv)); const m = ui.pb.snap ? fsMagnet(Object.assign({}, q, { z: q.z + q.h, h: 0 }), 'z', st.tol, st.ids[0]) : null; if (m) { q.h = partR(q.h + m.d); guides.push({ axis: 'z', v: m.v, views: ['front', 'side'] }); } }
+      else if (st.h === 'bot') { const top = st.p0.z + st.p0.h; q.z = Math.max(0, Math.min(top - 0.5, fsRound(st.p0.z - dv))); q.h = partR(top - q.z); }
+    }
     ui.pb.guide = guides[guides.length - 1] || null;
     pbLive();
   };
@@ -7657,17 +7791,28 @@ function fs3DInit() {
     setNdc(e);
     const hit = ray.intersectObjects(F3.root.children, false)[0]; if (!hit) return;
     const i = F3.root.children.indexOf(hit.object); if (i < 0) return;
-    if (i !== ui.pb.sel) { ui.pb.sel = i; pbRedraw(); }
-    const p = ui.pb.d.parts[i], p0 = clonePlain(p); ctl.enabled = false;
+    if (!pbPickPart(i, e, false)) return; // Ctrl + tık = çoklu seçim (Shift 3B'de yukarı / aşağı)
+    const ids = pbSelIds(), group = ids.length > 1, p = ui.pb.d.parts[i], p0 = clonePlain(p), orig = group ? ids.map(k => clonePlain(ui.pb.d.parts[k])) : null;
+    ctl.enabled = false;
     const vert = e.shiftKey, n = vert ? new THREE.Vector3(cam.position.x - p.x, 0, cam.position.z - p.y).normalize() : new THREE.Vector3(0, 1, 0);
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, hit.point), start = hit.point.clone(), tmp = new THREE.Vector3();
     let moved = false;
     const mv = ev => {
       setNdc(ev); if (!ray.ray.intersectPlane(plane, tmp)) return;
-      const q = ui.pb.d.parts[i]; if (!q) return;
-      Object.assign(q, clonePlain(p0)); const guides = [], tol = Math.max(ui.pb.d.w, ui.pb.d.d) * 0.02 + 1;
-      if (vert) fsMoveAxis(q, 'z', p0.z + tmp.y - start.y, tol, i, guides);
-      else { fsMoveAxis(q, 'x', p0.x + tmp.x - start.x, tol, i, guides); fsMoveAxis(q, 'y', p0.y + tmp.z - start.z, tol, i, guides); }
+      const guides = [], tol = Math.max(ui.pb.d.w, ui.pb.d.d) * 0.02 + 1;
+      if (group) {
+        ids.forEach((k, j) => Object.assign(ui.pb.d.parts[k], clonePlain(orig[j])));
+        const bb = pbSelBounds(ids), gb = { type: 'box', x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2, z: bb.z0, w: Math.max(0.1, bb.x1 - bb.x0), d: Math.max(0.1, bb.y1 - bb.y0), h: Math.max(0.1, bb.z1 - bb.z0) }, skip = new Set(ids);
+        const x0 = gb.x, y0 = gb.y, z0 = gb.z;
+        if (vert) fsMoveAxis(gb, 'z', z0 + tmp.y - start.y, tol, skip, guides);
+        else { fsMoveAxis(gb, 'x', x0 + tmp.x - start.x, tol, skip, guides); fsMoveAxis(gb, 'y', y0 + tmp.z - start.z, tol, skip, guides); }
+        ids.forEach((k, j) => { const q = ui.pb.d.parts[k], o0 = orig[j]; q.x = partR(o0.x + gb.x - x0); q.y = partR(o0.y + gb.y - y0); q.z = partR(o0.z + gb.z - z0); });
+      } else {
+        const q = ui.pb.d.parts[i]; if (!q) return;
+        Object.assign(q, clonePlain(p0));
+        if (vert) fsMoveAxis(q, 'z', p0.z + tmp.y - start.y, tol, i, guides);
+        else { fsMoveAxis(q, 'x', p0.x + tmp.x - start.x, tol, i, guides); fsMoveAxis(q, 'y', p0.y + tmp.z - start.z, tol, i, guides); }
+      }
       moved = true; ui.pb.guide = guides[guides.length - 1] || null; pbLive();
     };
     const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); ctl.enabled = true; ui.pb.guide = null; if (moved) fsPush(); pbRedraw(); };
@@ -7696,8 +7841,13 @@ function fs3DBuild() {
   const g = new THREE.Group(); holder.add(g);
   if (D.parts.length) parts3D(g, { w: D.w, d: D.d, h: D.h, color: D.color, parts: D.parts, pbase: { w: D.w, d: D.d, h: D.h } }, { pmat, unit });
   F3.root = g.children[0] || null;
-  const sel = F3.root && F3.root.children[ui.pb.sel];
-  if (sel) { F3.help = new THREE.BoxHelper(sel, pal().accent); scene.add(F3.help); }
+  const meshes = pbSelIds().map(i => F3.root && F3.root.children[i]).filter(Boolean);
+  if (meshes.length) {
+    const box = new THREE.Box3();
+    for (const m of meshes) box.expandByObject(m);
+    F3.help = new THREE.Box3Helper(box, pal().accent);
+    scene.add(F3.help);
+  }
   fs3DRender();
 }
 function fs3DRender() { const F3 = ui.pb && ui.pb.f3; if (F3 && F3.r.domElement.width) F3.r.render(F3.scene, F3.cam); }
@@ -7732,7 +7882,7 @@ function openStudio() {
       <button type="button" class="btn sm primary" data-fs="apply">✓ ${isNew ? L('Plana yerleştir', 'Place in plan') : L('Uygula', 'Apply')}</button>
     </header>
     <aside class="fs-pal"><h4>${L('Yapı taşları', 'Building blocks')}</h4>${blocks}
-      <p class="muted fs-tip">${L('Sürükle: parçayı taşı. Mavi noktalar: boyut / döndür. Kenarlar yakındaki parçalara yapışır. Ok tuşları: 1 cm (Shift 10). Del: sil. Ctrl+D: çoğalt.', 'Drag a part to move it. Blue dots resize / rotate. Edges stick to nearby parts. Arrow keys: 1 cm (Shift 10). Del: delete. Ctrl+D: duplicate.')}</p></aside>
+      <p class="muted fs-tip">${L('Sürükle: parçayı taşı. Mavi noktalar: boyut / döndür. Kenarlar yakındaki parçalara yapışır. Ctrl / Shift + tık: çoklu seçim, Ctrl+G: grupla, Ctrl+Shift+G: çöz, Alt + tık: gruptaki tek parça. Ok tuşları: 1 cm (Shift 10). Del: sil. Ctrl+D: çoğalt.', 'Drag a part to move it. Blue dots resize / rotate. Edges stick to nearby parts. Ctrl / Shift + click: multi-select, Ctrl+G: group, Ctrl+Shift+G: ungroup, Alt + click: one part in a group. Arrow keys: 1 cm (Shift 10). Del: delete. Ctrl+D: duplicate.')}</p></aside>
     <main class="fs-views">
       <div class="fs-v fs-3dv" data-view="3d"><div class="fs-cap">3B · ${L('döndür: boşluğu sürükle · parçayı sürükle: taşı (Shift: yukarı)', 'orbit: drag empty space · drag a part to move it (Shift: up / down)')}</div><div id="fs3d"></div></div>
       ${view('top', L('Üstten', 'Top'))}${view('front', L('Önden', 'Front'))}${view('side', L('Yandan (ön ◀ ▶ arka)', 'Side (front ◀ ▶ back)'))}
@@ -7792,25 +7942,59 @@ function pbApply(toLib) {
     : toLib ? L('Uygulandı ve ⬡ Kütüphanem’e eklendi', 'Applied and added to ⬡ My Library') : L('Parçalar uygulandı (Ctrl+Z geri alır)', 'Parts applied (Ctrl+Z undoes)'));
 }
 function fsAct(act) {
-  const D = ui.pb.d, p = D.parts[ui.pb.sel];
+  const D = ui.pb.d, ids = pbSelIds(), p = D.parts[ui.pb.sel], group = ids.length > 1;
   if (act === 'fit') {
     let w = 1, d = 1, h = 1;
     for (const q of D.parts) { const b = partBounds(q); w = Math.max(w, 2 * Math.abs(b.x0), 2 * Math.abs(b.x1)); d = Math.max(d, 2 * Math.abs(b.y0), 2 * Math.abs(b.y1)); h = Math.max(h, b.z1); }
     Object.assign(D, { w: Math.ceil(w), d: Math.ceil(d), h: Math.ceil(h) }); fsPush(); pbRedraw(); return;
   }
-  if (!p) return;
+  if (act === 'group') { pbGroup(); return; }
+  if (act === 'ungroup') { pbUngroup(); return; }
+  if (!ids.length || !p) return;
   if (act === 'dup' || act === 'mirror') {
-    if (D.parts.length >= PARTS_MAX) { toast(L(`En çok ${PARTS_MAX} parça`, `At most ${PARTS_MAX} parts`)); return; }
-    const q = clonePlain(p);
-    if (act === 'mirror') { q.x = partR(-p.x); if (q.rot) q.rot = partR((360 - q.rot) % 360); if (q.ry) q.ry = partR((360 - q.ry) % 360); if (q.pts) q.pts = q.pts.map(t => ({ x: -t.x, y: t.y })).reverse(); if (Math.abs(q.x - p.x) < 0.5) q.y = partR(-p.y); }
-    else q.x = partR(q.x + Math.min(10, p.w));
-    D.parts.splice(ui.pb.sel + 1, 0, q); ui.pb.sel++;
-  } else if (act === 'del') { D.parts.splice(ui.pb.sel, 1); ui.pb.sel = Math.min(ui.pb.sel, D.parts.length - 1); }
-  else if (act === 'floor') p.z = partR(p.z - partBounds(p).z0); // eğik parçanın en alt noktası yere değsin
-  else if (act === 'rx90' || act === 'ry90') { const k = act.slice(0, 2), z0 = partBounds(p).z0, a = ((p[k] || 0) + 90) % 360; if (a) p[k] = a; else delete p[k]; p.z = partR(Math.max(0, p.z + z0 - partBounds(p).z0)); } // alt nokta yerinde kalır
-  else if (act === 'upright') { const z0 = partBounds(p).z0; delete p.rx; delete p.ry; p.z = partR(Math.max(0, z0)); }
-  else if (act === 'cx') p.x = 0;
-  else if (act === 'ontop') fsSitOnTop(p, D.parts, partBounds(p).z0);
+    if (D.parts.length + (group ? ids.length : 1) > PARTS_MAX) { toast(L(`En çok ${PARTS_MAX} parça`, `At most ${PARTS_MAX} parts`)); return; }
+    if (group) { // grubun kopyası yeni bir grup olur (aynı gid'i paylaşır)
+      const used = new Set(D.parts.map(q => q.gid).filter(Boolean)); let g; do { g = 'g' + uid(); } while (used.has(g));
+      const off = Math.min(10, Math.max(...ids.map(i => D.parts[i].w)));
+      const copies = ids.map(i => {
+        const q = clonePlain(D.parts[i]);
+        if (act === 'mirror') { q.x = partR(-q.x); if (q.rot) q.rot = partR((360 - q.rot) % 360); if (q.ry) q.ry = partR((360 - q.ry) % 360); if (q.pts) q.pts = q.pts.map(t => ({ x: -t.x, y: t.y })).reverse(); }
+        else q.x = partR(q.x + off);
+        q.gid = g; return q;
+      });
+      D.parts.push(...copies); ui.pb.sel = D.parts.length - copies.length; ui.pb.gsel = g; ui.pb.multi = [];
+    } else {
+      const q = clonePlain(p);
+      if (act === 'mirror') { q.x = partR(-p.x); if (q.rot) q.rot = partR((360 - q.rot) % 360); if (q.ry) q.ry = partR((360 - q.ry) % 360); if (q.pts) q.pts = q.pts.map(t => ({ x: -t.x, y: t.y })).reverse(); if (Math.abs(q.x - p.x) < 0.5) q.y = partR(-p.y); }
+      else q.x = partR(q.x + Math.min(10, p.w));
+      delete q.gid; // tek parça kopyası eski gruba sessizce katılmasın
+      D.parts.splice(ui.pb.sel + 1, 0, q); ui.pb.sel++;
+    }
+    pbPruneGroups(); fsPush(); pbRedraw(); return;
+  }
+  if (act === 'del') {
+    if (group) {
+      const del = new Set(ids); D.parts = D.parts.filter((_, i) => !del.has(i));
+      ui.pb.sel = Math.min(ui.pb.sel, D.parts.length - 1); ui.pb.gsel = null; ui.pb.multi = [];
+    } else { D.parts.splice(ui.pb.sel, 1); ui.pb.sel = Math.min(ui.pb.sel, D.parts.length - 1); }
+    pbPruneGroups(); fsPush(); pbRedraw(); return;
+  }
+  if (group) {
+    const bb = pbSelBounds(ids);
+    if (act === 'floor') { const dz = -bb.z0; ids.forEach(i => { D.parts[i].z = partR(D.parts[i].z + dz); }); }
+    else if (act === 'cx') { const dx = -(bb.x0 + bb.x1) / 2; ids.forEach(i => { D.parts[i].x = partR(D.parts[i].x + dx); }); }
+    else if (act === 'ontop') {
+      const below = bb.z0, skip = new Set(ids); let z = 0;
+      D.parts.forEach((q, i) => { if (skip.has(i)) return; const c = partBounds(q); if (c.z1 <= below + 0.5 && c.x0 < bb.x1 && c.x1 > bb.x0 && c.y0 < bb.y1 && c.y1 > bb.y0) z = Math.max(z, c.z1); });
+      const dz = z - bb.z0; ids.forEach(i => { D.parts[i].z = partR(D.parts[i].z + dz); });
+    }
+  } else {
+    if (act === 'floor') p.z = partR(p.z - partBounds(p).z0); // eğik parçanın en alt noktası yere değsin
+    else if (act === 'rx90' || act === 'ry90') { const k = act.slice(0, 2), z0 = partBounds(p).z0, a = ((p[k] || 0) + 90) % 360; if (a) p[k] = a; else delete p[k]; p.z = partR(Math.max(0, p.z + z0 - partBounds(p).z0)); } // alt nokta yerinde kalır
+    else if (act === 'upright') { const z0 = partBounds(p).z0; delete p.rx; delete p.ry; p.z = partR(Math.max(0, z0)); }
+    else if (act === 'cx') p.x = 0;
+    else if (act === 'ontop') fsSitOnTop(p, D.parts, partBounds(p).z0);
+  }
   fsPush(); pbRedraw();
 }
 function fsWire(root) {
@@ -7853,7 +8037,9 @@ function fsWire(root) {
     const fsb = e.target.closest('[data-fs]');
     if (fsb) { const a = fsb.dataset.fs; if (a === 'undo') fsUndo(-1); else if (a === 'redo') fsUndo(1); else if (a === 'cancel') fsCancel(); else if (a === 'apply') pbApply(false); else if (a === 'savelib') pbApply(true); return; }
     const blk = e.target.closest('[data-blk]'); if (blk) { fsAddBlock(blk.dataset.blk); return; }
-    const pick = e.target.closest('#pbList [data-pbsel], #pbMsg [data-pbsel]'); if (pick) { ui.pb.sel = +pick.dataset.pbsel; pbRedraw(); return; }
+    const grp = e.target.closest('#pbList [data-pbgrp]');
+    if (grp) { const g = grp.dataset.pbgrp, i = ui.pb.d.parts.findIndex(p => p.gid === g); ui.pb.gsel = g; ui.pb.sel = i; ui.pb.multi = []; pbRedraw(); return; }
+    const pick = e.target.closest('#pbList [data-pbsel], #pbMsg [data-pbsel]'); if (pick) { pbPickPart(+pick.dataset.pbsel, e); return; }
     const a = e.target.closest('[data-pbact]'); if (a) fsAct(a.dataset.pbact);
   });
   root.addEventListener('dragstart', e => { const b = e.target.closest('[data-blk]'); if (b) { e.dataTransfer.setData('text/plain', 'fsblk:' + b.dataset.blk); e.dataTransfer.effectAllowed = 'copy'; } });
@@ -7869,17 +8055,18 @@ function fsWire(root) {
   b3.addEventListener('dragleave', () => b3.classList.remove('drop'));
   b3.addEventListener('drop', e => { e.preventDefault(); b3.classList.remove('drop'); const s = e.dataTransfer.getData('text/plain'); if (s.startsWith('fsblk:')) fsAddBlock(s.slice(6)); });
 }
-// stüdyo açıkken klavye (yazı alanı dışında): Esc, Delete, Ctrl+Z / Y, Ctrl+D, oklar, PageUp / PageDown
+// stüdyo açıkken klavye (yazı alanı dışında): Esc, Delete, Ctrl+Z / Y, Ctrl+G / Shift+G, Ctrl+D, oklar, PageUp / PageDown
 function fsKey(e) {
-  const D = ui.pb.d, p = D.parts[ui.pb.sel], ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+  const ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (e.key === 'Escape') { fsCancel(); return; }
   if (ctrl && k === 'z') { e.preventDefault(); fsUndo(e.shiftKey ? 1 : -1); return; }
   if (ctrl && k === 'y') { e.preventDefault(); fsUndo(1); return; }
+  if (ctrl && k === 'g') { e.preventDefault(); if (e.shiftKey) pbUngroup(); else pbGroup(); return; }
   if (ctrl && k === 'd') { e.preventDefault(); fsAct('dup'); return; }
-  if (!p) return;
+  if (!pbSelIds().length) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); fsAct('del'); return; }
   const st = e.shiftKey ? 10 : 1, mv = { ArrowLeft: ['x', -st], ArrowRight: ['x', st], ArrowUp: ['y', -st], ArrowDown: ['y', st], PageUp: ['z', st], PageDown: ['z', -st] }[e.key];
-  if (mv) { e.preventDefault(); p[mv[0]] = partR(Math.max(mv[0] === 'z' ? 0 : -Infinity, p[mv[0]] + mv[1])); fsPush(); pbRedraw(); }
+  if (mv) { e.preventDefault(); pbNudge(mv[0], mv[1]); }
 }
 /** The top-bar PNG button is context-aware, so say what it will do. */
 function syncExportTitles() {
