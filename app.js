@@ -970,7 +970,7 @@ function applyView() {
 }
 function zoomAt(f, sx, sy) {
   const nz = clamp(view.z * f, MIN_ZOOM, MAX_ZOOM), wx = (sx - view.x) / view.z, wy = (sy - view.y) / view.z;
-  view.z = nz; view.x = sx - wx * nz; view.y = sy - wy * nz; render();
+  view.z = nz; view.x = sx - wx * nz; view.y = sy - wy * nz; scheduleRender();
 }
 function fit() {
   const s = svgSize(); let b = contentBounds();
@@ -3163,7 +3163,15 @@ function handleSvg() {
   }
   return s;
 }
+// Bir karede tek çizim: fare / tekerlek / panel kaydırıcısı olayları kare hızından sık gelir; hepsi sonraki karede birleşir.
+// full=false yalnızca görünüm + ızgara (kaydırma): katmanlar dünya koordinatında, transform onları taşır.
+let rq = 0, rqFull = false;
+function scheduleRender(full = true) { rqFull = rqFull || full; if (!rq) rq = requestAnimationFrame(flushRender); }
+function flushRender() { rq = 0; if (rqFull) render(); else renderView(); }
+function renderView() { if (!P) return; applyView(); $('#gGrid').innerHTML = gridSvg(); }
 function render() {
+  if (rq) { cancelAnimationFrame(rq); rq = 0; }
+  rqFull = false;
   if (!P) return;
   const f = F();
   $('#defs').innerHTML = defsSvg();
@@ -4297,7 +4305,7 @@ cv.addEventListener('pointermove', e => {
     return;
   }
   if (d) {
-    if (d.type === 'pan') { view.x = d.vx + e.clientX - d.sx; view.y = d.vy + e.clientY - d.sy; render(); return; }
+    if (d.type === 'pan') { view.x = d.vx + e.clientX - d.sx; view.y = d.vy + e.clientY - d.sy; scheduleRender(false); return; }
     if (d.type === 'box') { d.cur = ui.raw; d.moved = true; drawPreview(); return; }
     if (d.type === 'plotbox') { d.cur = ui.raw; drawPreview(); return; }
     if (d.type === 'shape') { d.cur = ui.cur || ui.raw; drawPreview(); return; }
@@ -4430,7 +4438,7 @@ function doMove(raw, e) {
   }
   for (const c of d.conn) { c.w[c.e] = { x: c.o.x + dx, y: c.o.y + dy }; }
   if (d.roomInner) for (const it of d.roomInner) { it.o.x = it.g.x + dx; it.o.y = it.g.y + dy; }
-  render();
+  scheduleRender();
 }
 function startHandle(h, raw, e) {
   const os = selObjs(); if (!os.length) return;
@@ -4523,7 +4531,7 @@ function doHandle(raw, e) {
     else if (h === 'bgS') { o.h = Math.max(20, Math.round(p.y - y0)); }
     else if (h === 'bgN') { o.h = Math.max(20, Math.round(y1 - p.y)); o.y = y1 - o.h; }
   }
-  render();
+  scheduleRender();
 }
 
 /* ---------- Özellikler paneli ---------- */
@@ -4790,6 +4798,7 @@ function affects3D(k, p) {
   return false; // dim/text/bg/layer 3B'yi etkilemez
 }
 function applyProp(t, final) {
+  const render = final ? window.render : scheduleRender; // canlı giriş: karede bir çizim
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
   if (k === 'lyr') {
@@ -7189,7 +7198,7 @@ async function render3DHQ(opts) {
     r.setPixelRatio(oldRatio);
     resize3D();
     T3.run = oldRun;
-    if (ui.view3d && T3.run) r.render(scene, cam);
+    if (ui.view3d && T3.run) { r.render(scene, cam); T3.lastT = 0; loop3D(); }
     updateTools();                                    // restores the HUD hint text
   }
   return url;
@@ -7959,6 +7968,8 @@ function init3D() {
   if (T3) { resize3D(); return; }
   const el = $('#v3d'), r = new THREE.WebGLRenderer({ antialias: true });
   r.setPixelRatio(Math.min(2, devicePixelRatio)); el.appendChild(r.domElement);
+  // sahneyi değiştirebilecek her girdi bir sonraki kareyi çizdirir (yakalama aşaması: işleyicilerden önce)
+  for (const ev of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'keyup', 'input', 'change']) window.addEventListener(ev, req3D, { capture: true, passive: true });
   // yumuşak gölgeler + sinematik ton eşleme (r128 API'si)
   if (THREE.PCFSoftShadowMap) { r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap; }
   if (THREE.sRGBEncoding) r.outputEncoding = THREE.sRGBEncoding;
@@ -8123,7 +8134,7 @@ function init3D() {
   });
   T3 = { r, scene, cam, ctl, pcam: cam, ocam, ortho: false, run: false }; resize3D(); window.addEventListener('resize', () => { if (T3 && ui.view3d) resize3D(); });
 }
-function resize3D() { const el = $('#v3d'); T3.r.setSize(el.clientWidth, el.clientHeight); setCamAspect(T3.cam, el.clientWidth / (el.clientHeight || 1)); }
+function resize3D() { req3D(); const el = $('#v3d'); T3.r.setSize(el.clientWidth, el.clientHeight); setCamAspect(T3.cam, el.clientWidth / (el.clientHeight || 1)); }
 /* ---------- Perspektif / paralel (ortografik) kamera (#74) ----------
    T3.pcam (perspektif) ve T3.ocam (ortografik) aynı yörünge kontrolünü paylaşır; T3.cam etkin olanı gösterir.
    Geçişte konum, hedef ve bakış yönü korunur; ortografik çerçeve = perspektifin hedef uzaklığındaki görüntü boyutu. */
@@ -8360,10 +8371,12 @@ function syncWalkUI() {
 }
 function loop3D() {
   if (!T3 || !T3.run) return;
-  requestAnimationFrame(loop3D);
+  cancelAnimationFrame(T3.raf); T3.raf = requestAnimationFrame(loop3D); // tek döngü: yeniden başlatmalar çoğaltmaz
   // kare süresi (s): hız her makinede aynı olsun; sekme arkadayken büyük sıçrama olmasın
   const now = performance.now(), dt = Math.min(0.1, T3.lastT ? (now - T3.lastT) / 1000 : 1 / 60); T3.lastT = now;
-  if (T3.walk) { walkStep(dt); T3.r.render(T3.scene, T3.cam); return; } // OrbitControls.update() bakışı ezmesin
+  // Boşta çizim yok (#perf): girdi, yeniden kurma, boyut değişimi ya da tuş varken çizilir; güvenlik için saniyede bir.
+  const due = T3.dirty || keys3D.size > 0 || now - (T3.drawT || 0) > 1000;
+  if (T3.walk) { walkStep(dt); if (due) draw3D(now); return; } // OrbitControls.update() bakışı ezmesin
   if (keys3D.size) {
     const spd = (keys3D.has('shift') ? 1320 : 540) * dt; // eskiden 60 fps'de kare başına 22 / 9 cm
     const fwd = new THREE.Vector3(); T3.cam.getWorldDirection(fwd); fwd.y = 0;
@@ -8378,8 +8391,10 @@ function loop3D() {
     if (keys3D.has('q')) mv.y -= spd;
     if (mv.lengthSq() > 0) { T3.cam.position.add(mv); T3.ctl.target.add(mv); }
   }
-  T3.ctl.update(); T3.r.render(T3.scene, T3.cam);
+  if (T3.ctl.update() || due) draw3D(now);
 }
+function draw3D(now) { T3.dirty = false; T3.drawT = now; T3.r.render(T3.scene, T3.cam); }
+function req3D() { if (T3) T3.dirty = true; }
 /* ---------- 3B malzeme & mobilya detayı ---------- */
 // Renk yardımcıları: katalog renginden açık/koyu tonlar türetilir (t: -1..1)
 function hex2rgb(h) {
@@ -8916,6 +8931,7 @@ function lowWall3D(g, w, L, H, ops, box, det, lt) {
   }
 }
 function build3D(keepCam = false) {
+  req3D();
   sync3DFloors();
   const lt = isLight(), S = T3.scene;
   // önceki sahnenin GPU kaynaklarını serbest bırak (sık yeniden yapılanmalarda sızıntı olmasın)

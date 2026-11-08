@@ -172,6 +172,8 @@ Key semantics:
 ### Rendering pipeline
 `render()` rebuilds SVG layer strings (`layerStrings(f, live=true)`) into fixed groups: `gBg, gGrid, gRooms, gWalls, gOps, gFurn, gDims, gTexts, gSketch, gSel, gPv` (z-order bottom → top). `gPv` (preview) is redrawn alone by `drawPreview()` on mouse-move. Hit-testing uses `data-id` (objects) and `data-h` (handles) attributes with `e.target.closest(...)`; invisible `stroke="transparent"` / `fill="transparent"` shapes provide generous hit areas.
 
+**Once per frame.** Hot paths (pan, wheel zoom, `doMove` / `doHandle`, live panel `input`) call `scheduleRender()` instead of `render()`: one `requestAnimationFrame` draw per frame however many events arrive. `scheduleRender(false)` (pan) only runs `renderView()` = `applyView()` + `gridSvg()` — layers are in world coordinates, so the transform moves them (0.2 ms vs ~150 ms for a full render of a large plan). A synchronous `render()` cancels any pending frame, so `commit()` + `refresh()` on pointer-up always draws the final state. Only `gridSvg()` reads `view.x / view.y`; if a builder ever starts culling to the viewport, pan must use a full render.
+
 When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 ---
@@ -400,6 +402,7 @@ Handle ids: `wa/wb` (wall ends), `v<i>` (room vertex), `da/db/doff` (dimension),
   - **SVG and PDF stay 2D-only on purpose** (they carry a title block and scale bar). Tests: `tests/render3d.test.js` (scale maths, the synchronous-capture contract, the render-vs-screenshot guards) and a real render check in `browser-smoke.js` that fails on a blank PNG or an unrestored shadow map/viewport.
 - Floors stack with pitch `P.wallH + 20`. Floor slabs follow the outer contour of walls and enclosed spaces (via `slabPolys` and `ExtrudeGeometry`) rather than axis-aligned bounding boxes, eliminating overhang on angled walls. Built once on entering 3D (and on theme change) — it does **not** live-update; leave 3D (`Esc` or `2B`) to edit.
 - Camera travel: `keys3D` tracks held keys (`W/A/S/D`, Arrow keys, `Q/E`, `Shift`); movement is time-based (`dt` from `performance.now`). `loop3D()` translates both `T3.cam.position` and `T3.ctl.target` along the horizontal XZ camera forward/right vectors (or Y for `Q/E`), while walk mode has its own step (`walkStep`) on the floor with collision.
+- **Render on demand.** `loop3D()` keeps its rAF loop (single chain via `T3.raf`) but only draws (`draw3D`) when `T3.dirty` is set, a key is held, `OrbitControls.update()` reports movement (damping included) or 1 s has passed (safety net). `req3D()` sets the flag; it is called by `build3D`, `resize3D` and window capture listeners for pointer / wheel / key / input / change events. A new async change to the scene that is not followed by `build3D` must call `req3D()`.
 - Floor visibility: the `#s3dFloor` select (`.ctl3d`, top-left of the 3D overlay) + `sync3DFloors()`; `ui.v3dFloor` is `'all'` or a floor id. `build3D()` skips hidden floors, so an isolated floor is drawn at ground level (elevation counter only accumulates over shown floors).
 - If CDN scripts fail, `show3D` shows a toast and stays in 2D.
 
