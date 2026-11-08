@@ -1427,6 +1427,14 @@ body.fs-open #toast { position: fixed; z-index: 140; }
 .pb-item i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.25); }
 .pb-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pb-item small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pb-item.in-grp { margin-left: 10px; }
+.pb-item.multi { border-style: dashed; border-color: var(--accent); }
+.pb-grp { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 1px; padding: 4px 8px; border: 1px dashed var(--line); border-radius: 6px; background: color-mix(in srgb, var(--panel2) 72%, var(--accent) 28%); color: var(--text); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.pb-grp:hover { border-color: var(--accent); }
+.pb-grp.on { border-style: solid; border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.pb-grp small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pb-group { margin-top: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); }
+.pb-group h4 { margin-top: 2px; }
 .item.fs-new { border-style: dashed; }
 @media (max-width: 900px) {
   .fs { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(420px, 1fr) auto; overflow: auto; }

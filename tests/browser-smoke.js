@@ -854,11 +854,25 @@ check('furniture studio: drop, drag, resize, keys, undo, templates, place in pla
       out.pick3d = ui.pb.sel === 0; out.drag3d = D().parts[0].x !== x0;
       key('z', { ctrlKey: true }); out.undo3d = D().parts[0].x === x0;
     }
+    // grouping: Ctrl+click two legs in the list, Group, drag the group, keep the gid through Apply
+    ui.pb.sel = 1; ui.pb.multi = []; ui.pb.gsel = null; pbRedraw(); await frame();
+    document.querySelector('#pbList [data-pbsel="1"]').dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    document.querySelector('#pbList [data-pbsel="2"]').dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    out.multiSel = ui.pb.multi.slice();
+    document.querySelector('#fstudio [data-pbact="group"]').click(); await frame();
+    const gid = ui.pb.gsel, gLegs = D().parts.map(p => p.gid || '');
+    out.grouped = !!gid && gLegs[1] === gid && gLegs[2] === gid && !gLegs[0];
+    out.grpList = !!document.querySelector('#pbList [data-pbgrp]');
+    out.hasGrot = !!document.querySelector('#fsv-top [data-h="grot"]');
+    const gx1 = D().parts[1].x, gx2 = D().parts[2].x;
+    drag('top', document.querySelector('#fsv-top [data-pi="1"] rect'), D().parts[1].x, D().parts[1].y, D().parts[1].x + 10, D().parts[1].y);
+    out.groupDrag = D().parts[1].x !== gx1 && Math.abs((D().parts[1].x - gx1) - (D().parts[2].x - gx2)) < 0.01;
     // place in plan: one item, one undo step, also saved to My Library
     const nm = document.getElementById('fsName'); nm.value = 'Test table'; nm.dispatchEvent(new Event('input', { bubbles: true }));
     const h0 = hist.length; document.querySelector('#fstudio [data-fs="apply"]').click();
     const o = F().furn[0];
     out.placed = !!o && o.parts.length === out.parts && o.name === 'Test table' && hist.length === h0 + 1 && !document.getElementById('fstudio') && ui.modal !== 'parts';
+    out.placedGroup = !!o && o.parts.filter(p => p.gid === gid).length === 2;
     out.lib = (P.lib.presets || []).some(p => p.name === 'Test table' && p.extra && p.extra.parts.length === out.parts);
     // reopen from the panel, switch to a template, Esc (confirm accepted) closes without touching the item
     sel = [o.id]; refresh(); document.querySelector('#props [data-act="parts"]').click(); await frame();
@@ -883,8 +897,10 @@ check('furniture studio: drop, drag, resize, keys, undo, templates, place in pla
   if (info.meshes !== null && info.meshes !== info.parts) bad('3D view shows the wrong number of meshes');
   if (info.has3d && (!info.pick3d || !info.drag3d || !info.undo3d)) bad('3D click-to-select / drag / undo failed');
   if (!info.placed || !info.lib) bad('Place in plan did not add one item + library preset in one undo step');
+  if (JSON.stringify(info.multiSel) !== '[1,2]' || !info.grouped || !info.grpList || !info.hasGrot || !info.groupDrag) bad('grouping (Ctrl+click, Group, group drag, grot handle) failed');
+  if (!info.placedGroup) bad('the group id did not survive Place in plan');
   if (info.tpl < 4 || !info.tplName || !info.escClosed || !info.itemKept) bad('template / Esc flow failed');
-  return 'drop, drag, resize, fit, keys, undo/redo, mirror, place + library, template, Esc' + (info.has3d ? ', 3D ' + info.meshes + ' meshes' : ' (no WebGL)');
+  return 'drop, drag, resize, fit, keys, undo/redo, mirror, group, place + library, template, Esc' + (info.has3d ? ', 3D ' + info.meshes + ' meshes' : ' (no WebGL)');
 });
 
 check('render studio: every style renders and restores the scene (issue #34)', async page => {

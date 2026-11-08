@@ -53,6 +53,13 @@ const api = new Function(`
   const openStudio = () => { openStudioCalled++; };
   let pbRedrawCalled = 0;
   const pbRedraw = () => { pbRedrawCalled++; };
+  let pbLiveCalled = 0;
+  const pbLive = () => { pbLiveCalled++; };
+  const winL = {};
+  const window = {
+    addEventListener: (t, f) => { (winL[t] = winL[t] || []).push(f); },
+    removeEventListener: (t, f) => { winL[t] = (winL[t] || []).filter(x => x !== f); },
+  };
   let fsSyncTopCalled = 0;
   const fsSyncTop = () => { fsSyncTopCalled++; };
   let uidCounter = 0;
@@ -89,8 +96,13 @@ const api = new Function(`
   ${fnSrc('fsViewBox')}
   ${fnSrc('fsViewSvg')}
   ${fnSrc('fsHandles')}
+  ${fnSrc('fsGroupHandles')}
   ${fnSrc('fsMagnet')}
   ${fnSrc('fsMoveAxis')}
+  ${lineSrc('FS_AX')}
+  ${fnSrc('fsPt')}
+  ${lineSrc('fsCmPerPx')}
+  ${fnSrc('fsStartDrag')}
   ${fnSrc('fsAddBlock')}
   ${fnSrc('fsSitOnTop')}
   ${fnSrc('pbApply')}
@@ -99,10 +111,12 @@ const api = new Function(`
 
   return {
     ui, L, esc, pal, clonePlain,
-    cleanPart, partBounds, validateParts, FURN_TEMPLATES, FS_BLOCKS, PARTS_MAX,
+    cleanPart, cleanParts, partBounds, validateParts, FURN_TEMPLATES, FS_BLOCKS, PARTS_MAX,
     pbStart, fsNew, fsInit, fsPush, fsUndo, pbIssues, pbMsgs, pbList, pbFields,
-    fsUV, fsProj, fsHorizKey, fsViewBox, fsViewSvg, fsHandles, fsMagnet, fsMoveAxis,
+    fsUV, fsProj, fsHorizKey, fsViewBox, fsViewSvg, fsHandles, fsGroupHandles, fsMagnet, fsMoveAxis,
     fsAddBlock, fsSitOnTop, pbApply, fsAct, fsKey,
+    pbGroup, pbUngroup, pbSelSet, pbSelIds, pbSelBounds, pbPickPart, pbPruneGroups, pbNudge, pbGroupIds, pbGroupLabel,
+    fsStartDrag, winL,
     toast: () => toastMsg,
     setFind: f => { findTarget = f; },
     getCommitted: () => committed,
@@ -113,6 +127,8 @@ const api = new Function(`
     resetOpenStudioCalled: () => { openStudioCalled = 0; },
     getPbRedrawCalled: () => pbRedrawCalled,
     resetPbRedrawCalled: () => { pbRedrawCalled = 0; },
+    getPbLiveCalled: () => pbLiveCalled,
+    resetPbLiveCalled: () => { pbLiveCalled = 0; },
     getFsSyncTopCalled: () => fsSyncTopCalled,
     resetFsSyncTopCalled: () => { fsSyncTopCalled = 0; },
     getF: () => currentFloor,
@@ -588,4 +604,227 @@ test('(10) source guards: the window keydown handler routes to fsKey when ui.mod
 
   // cmdList has a furnstudio command
   assert.match(src, /act\(\s*['"]furnstudio['"]/, 'command palette must include furnstudio command');
+});
+
+const mkPart = (x, y, z = 0, w = 10, d = 10, h = 10) => api.cleanPart({ type: 'box', x, y, z, w, d, h });
+
+test('(11) gid: cleanPart keeps a valid group id and drops a bad one, partIssues / validateParts enforce it, cleanParts keeps it', () => {
+  const ok = api.cleanPart({ type: 'box', x: 0, y: 0, z: 0, w: 10, d: 10, h: 10, gid: 'g_ab-12' });
+  assert.strictEqual(ok.gid, 'g_ab-12', 'a valid gid is kept');
+
+  for (const bad of ['x'.repeat(17), 'has space', '', 'ğ', 5, {}]) {
+    const q = api.cleanPart({ type: 'box', x: 0, y: 0, z: 0, w: 10, d: 10, h: 10, gid: bad });
+    assert.ok(!('gid' in q), 'invalid gid must be dropped: ' + JSON.stringify(bad));
+  }
+
+  const good = api.validateParts({ w: 100, d: 100, h: 100, parts: [{ type: 'box', x: 0, y: 0, z: 0, w: 10, d: 10, h: 10, gid: 'ok_1' }] });
+  assert.strictEqual(good.ok, true, good.errors.join('; '));
+
+  const bad = api.validateParts({ w: 100, d: 100, h: 100, parts: [{ type: 'box', x: 0, y: 0, z: 0, w: 10, d: 10, h: 10, gid: 'not valid' }] });
+  assert.strictEqual(bad.ok, false);
+  assert.ok(bad.errors.some(e => /gid/.test(e)), 'validateParts must report the bad gid: ' + bad.errors.join('; '));
+
+  const item = api.cleanParts({ w: 50, d: 50, h: 50, parts: [
+    { type: 'box', x: -10, y: 0, z: 0, w: 10, d: 10, h: 10, gid: 'pair' },
+    { type: 'box', x: 10, y: 0, z: 0, w: 10, d: 10, h: 10, gid: 'pair' },
+  ] });
+  assert.deepStrictEqual(item.parts.map(p => p.gid), ['pair', 'pair'], 'cleanParts keeps gids');
+});
+
+test('(12) studio groups: Ctrl / Shift multi-select, group / ungroup, list + panel, prune, duplicate keeps the group, a single copy drops gid', () => {
+  api.fsNew();
+  api.ui.pb.d.parts = [mkPart(-30, 0), mkPart(0, 0), mkPart(30, 0)];
+  api.ui.pb.sel = 0; api.ui.pb.multi = [0, 2]; api.ui.pb.gsel = null;
+
+  // pbPickPart toggles multi-select with Ctrl / Shift and a plain click picks the group
+  assert.strictEqual(api.pbPickPart(1, { ctrlKey: true }), false, 'a modifier click never starts a drag');
+  assert.deepStrictEqual(api.ui.pb.multi, [0, 1, 2]);
+  api.pbPickPart(1, { ctrlKey: true });
+  assert.deepStrictEqual(api.ui.pb.multi, [0, 2]);
+  api.pbPickPart(2, { shiftKey: true });
+  assert.deepStrictEqual(api.ui.pb.multi, [0]);
+  api.pbPickPart(2, { ctrlKey: true });
+  assert.deepStrictEqual(api.ui.pb.multi, [0, 2]);
+
+  api.fsAct('group');
+  const g = api.ui.pb.d.parts[0].gid;
+  assert.ok(g && /^g[A-Za-z0-9_-]+$/.test(g), 'group id is g + uid');
+  assert.strictEqual(api.ui.pb.d.parts[2].gid, g, 'both selected parts share the gid');
+  assert.ok(!api.ui.pb.d.parts[1].gid, 'an unselected part stays ungrouped');
+  assert.strictEqual(api.ui.pb.gsel, g);
+  assert.deepStrictEqual(api.ui.pb.multi, []);
+  assert.deepStrictEqual(api.pbSelIds(), [0, 2], 'the group is the selection');
+  assert.deepStrictEqual(api.pbGroupIds(), [g]);
+  assert.strictEqual(api.pbGroupLabel(g), 'Group 1');
+  assert.match(api.toast(), /2 parts grouped/);
+
+  const list = api.pbList();
+  assert.match(list, new RegExp('data-pbgrp="' + g + '"'), 'the list shows a group header');
+  assert.strictEqual((list.match(/in-grp/g) || []).length, 2, 'both members are indented');
+  const fields = api.pbFields();
+  assert.match(fields, /data-pbact="ungroup"/, 'the group panel offers Ungroup');
+  assert.match(fields, /2 parts/);
+
+  // Alt + click edits one member; a plain click selects the group again
+  api.pbPickPart(2, { altKey: true });
+  assert.strictEqual(api.ui.pb.gsel, null);
+  assert.strictEqual(api.ui.pb.sel, 2);
+  assert.deepStrictEqual(api.pbSelIds(), [2]);
+  api.pbPickPart(0, {});
+  assert.strictEqual(api.ui.pb.gsel, g);
+  assert.deepStrictEqual(api.pbSelIds(), [0, 2]);
+
+  // Duplicate copies the whole group as a NEW group, leaving the original untouched
+  api.fsAct('dup');
+  const D = api.ui.pb.d;
+  assert.strictEqual(D.parts.length, 5);
+  const g2 = D.parts[3].gid;
+  assert.ok(g2 && g2 !== g, 'the copy gets a fresh group id');
+  assert.strictEqual(D.parts[4].gid, g2);
+  assert.strictEqual(D.parts[0].gid, g);
+  assert.strictEqual(api.ui.pb.gsel, g2);
+  assert.deepStrictEqual(D.parts.slice(3).map(p => p.x), [-20, 40], 'the copy is offset by min(10, part width)');
+
+  // A single-part copy of a grouped part drops the gid (it must not join silently)
+  api.ui.pb.gsel = null; api.ui.pb.multi = []; api.ui.pb.sel = 0;
+  api.fsAct('dup');
+  assert.ok(!api.ui.pb.d.parts[1].gid, 'a single copy does not inherit the group');
+  assert.strictEqual(api.ui.pb.sel, 1);
+
+  // Mirror copies a group with a shared fresh gid
+  api.fsNew();
+  api.ui.pb.d.parts = [mkPart(-30, 0), mkPart(30, 0)];
+  api.ui.pb.multi = [0, 1]; api.fsAct('group');
+  api.fsAct('mirror');
+  assert.strictEqual(api.ui.pb.d.parts.length, 4);
+  const gm = api.ui.pb.d.parts[2].gid;
+  assert.ok(gm && gm !== api.ui.pb.d.parts[0].gid && api.ui.pb.d.parts[3].gid === gm);
+  assert.deepStrictEqual(api.ui.pb.d.parts.slice(2).map(p => p.x), [30, -30], 'mirror negates x');
+
+  // Deleting a group removes every member
+  api.fsAct('del');
+  assert.strictEqual(api.ui.pb.d.parts.length, 2, 'only the originals remain');
+  assert.strictEqual(api.ui.pb.gsel, null);
+  api.ui.pb.gsel = api.ui.pb.d.parts[0].gid;
+  api.fsAct('del');
+  assert.strictEqual(api.ui.pb.d.parts.length, 0);
+
+  // Ungroup dissolves the group
+  api.fsNew();
+  api.ui.pb.d.parts = [mkPart(0, 0), mkPart(20, 0)];
+  api.ui.pb.multi = [0, 1]; api.fsAct('group');
+  api.fsAct('ungroup');
+  assert.ok(api.ui.pb.d.parts.every(p => !p.gid));
+  assert.strictEqual(api.ui.pb.gsel, null);
+  assert.match(api.toast(), /Group dissolved/);
+
+  // Regrouping one member of an old group prunes the single member left behind
+  api.fsNew();
+  api.ui.pb.d.parts = [mkPart(0, 0), mkPart(20, 0), mkPart(40, 0)];
+  api.ui.pb.multi = [0, 1]; api.fsAct('group');
+  api.ui.pb.multi = [0, 2]; api.ui.pb.gsel = null; api.fsAct('group');
+  assert.strictEqual(api.ui.pb.d.parts[0].gid, api.ui.pb.d.parts[2].gid);
+  assert.ok(!api.ui.pb.d.parts[1].gid, 'a one-member remnant of the old group is pruned');
+
+  // A group with fewer than 2 members is pruned automatically
+  api.fsNew();
+  const solo = mkPart(0, 0); solo.gid = 'solo';
+  api.ui.pb.d.parts = [solo]; api.ui.pb.gsel = 'solo'; api.ui.pb.sel = 0;
+  api.pbPruneGroups();
+  assert.ok(!api.ui.pb.d.parts[0].gid);
+  assert.strictEqual(api.ui.pb.gsel, null);
+});
+
+test('(13) group transforms: floor / centre / on top / nudge move every member together and clamp z', () => {
+  api.fsNew();
+  api.ui.pb.d.parts = [mkPart(-30, 0, 10), mkPart(10, 0, 20)];
+  api.ui.pb.multi = [0, 1]; api.fsAct('group');
+
+  api.fsAct('floor');
+  assert.deepStrictEqual(api.ui.pb.d.parts.map(p => p.z), [0, 10], 'the lowest member lands on the floor, the other keeps its offset');
+
+  // bbox x -35..15, centre -10 -> shift +10
+  api.fsAct('cx');
+  assert.deepStrictEqual(api.ui.pb.d.parts.map(p => p.x), [-20, 20], 'the group bbox centre moves to x = 0');
+
+  api.pbNudge('x', 5);
+  assert.deepStrictEqual(api.ui.pb.d.parts.map(p => p.x), [-15, 25], 'nudge moves every member');
+  api.pbNudge('z', -50);
+  assert.deepStrictEqual(api.ui.pb.d.parts.map(p => p.z), [0, 10], 'nudge clamps the group to the floor');
+
+  // On top: a base under the selected group
+  api.fsNew();
+  api.ui.pb.d.parts = [mkPart(0, 0, 0, 200, 100, 20), mkPart(-30, 0, 40), mkPart(30, 0, 40)];
+  api.ui.pb.multi = [1, 2]; api.fsAct('group');
+  api.fsAct('ontop');
+  assert.deepStrictEqual(api.ui.pb.d.parts.slice(1).map(p => p.z), [20, 20], 'the whole group sits on the part below it');
+});
+
+test('(14) fsViewSvg marks the whole selection (dashed bbox + grot); fsStartDrag moves a group rigidly and rotates it about its bbox centre', () => {
+  api.fsNew();
+  api.ui.pb.d.parts = [mkPart(-30, 0), mkPart(30, 0)];
+  api.ui.pb.multi = [0, 1]; api.fsAct('group');
+  api.ui.pb.snap = false;
+
+  const top = api.fsViewSvg('top');
+  assert.match(top, /data-h="grot"/, 'a multi-selection gets the group rotation handle');
+  assert.match(top, /stroke-dasharray="4 3"/, 'the group bbox is drawn dashed');
+  assert.strictEqual((top.match(/data-pi=/g) || []).length, 2, 'one data-pi group per part');
+  assert.ok(!top.includes('data-h="w+"'), 'no single-part resize handles for a group');
+
+  const svg = {
+    getScreenCTM: () => ({ a: 1, inverse: () => ({}) }),
+    createSVGPoint() { return { x: 0, y: 0, matrixTransform() { return { x: this.x, y: this.y }; } }; },
+    setPointerCapture() {},
+  };
+  const ev = (x, y, target, mods) => Object.assign({ clientX: x, clientY: y, target, pointerId: 7, preventDefault() {}, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false }, mods || {});
+  const partT = i => ({ closest: sel => sel === '[data-pi]' ? { dataset: { pi: String(i) } } : null });
+  const handleT = h => ({ closest: sel => sel === '[data-h]' ? { dataset: { h } } : null });
+  const fire = (t, x, y) => { for (const f of (api.winL[t] || []).slice()) f(ev(x, y, {})); };
+  const clearWin = () => { delete api.winL.pointermove; delete api.winL.pointerup; };
+
+  // group drag: both members move by the same delta
+  clearWin();
+  api.fsStartDrag(ev(0, 0, partT(0)), svg, 'top');
+  fire('pointermove', 30, 20);
+  assert.deepStrictEqual(api.ui.pb.d.parts.map(p => [p.x, p.y]), [[0, 20], [60, 20]], 'both members move rigidly');
+  fire('pointerup', 30, 20);
+  assert.deepStrictEqual(api.winL.pointermove, [], 'pointer listeners are removed');
+  assert.deepStrictEqual(api.winL.pointerup, []);
+  assert.ok(api.getPbLiveCalled() > 0, 'the live preview redraws while dragging');
+
+  // group rotation: grab the grot handle right of the centre, move below it -> +90°
+  api.ui.pb.d.parts = [mkPart(-20, 0), mkPart(20, 0)];
+  api.ui.pb.multi = [0, 1]; api.ui.pb.gsel = null; api.fsAct('group');
+  api.ui.pb.snap = false;
+  clearWin();
+  api.fsStartDrag(ev(25, 0, handleT('grot')), svg, 'top');
+  fire('pointermove', 0, 25);
+  assert.deepStrictEqual(api.ui.pb.d.parts.map(p => [p.x || 0, p.y]), [[0, -20], [0, 20]], 'members turn about the group centre');
+  assert.deepStrictEqual(api.ui.pb.d.parts.map(p => p.rot), [90, 90], 'each member also turns by the same angle');
+  fire('pointerup', 0, 25);
+});
+
+test('(15) grouping wiring: studio list / panel / keys / drag and the MCP schema carry gid', () => {
+  const mcp = read('mcp/server.js').replace(/\r\n/g, '\n');
+
+  assert.match(src, /data-pbgrp=/, 'the part list renders group headers');
+  assert.match(src, /function pbGroup\(/);
+  assert.match(src, /function pbUngroup\(/);
+  assert.match(src, /function pbPruneGroups\(/);
+  assert.match(src, /function pbNudge\(/);
+  assert.match(src, /pbPickPart\(/, 'part clicks go through the group-aware picker');
+  assert.match(src, /fsGroupHandles\(/, 'multi-selection draws group handles');
+  assert.match(src, /st\.h === 'grot'/, 'the group rotation handle is wired');
+  assert.match(src, /if \(ctrl && k === 'g'\)/, 'Ctrl+G / Ctrl+Shift+G are bound');
+  assert.match(src, /data-pbact="group"/);
+  assert.match(src, /data-pbact="ungroup"/);
+
+  assert.match(mcp, /const PART_KEYS = \[[^\]]*'gid'[^\]]*\]/, 'MCP accepts gid on components');
+  assert.match(mcp, /gid: 'optional group id/, 'the furniture schema documents gid');
+  assert.match(mcp, /gid: \{ type: 'string'/, 'partProps exposes gid');
+  assert.match(mcp, /p\.gid \? ' group ' \+ p\.gid/, 'describeFurn prints the group');
+
+  // The shared engine block must stay byte-identical (also guarded in furniture-parts.test.js)
+  assert.strictEqual(engineOf(src), engineOf(mcp));
 });
