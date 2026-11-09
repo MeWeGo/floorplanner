@@ -4137,7 +4137,7 @@ function endTouch(e) {
   if (e.pointerType !== 'touch') return false;
   touchPts.delete(e.pointerId);
   if (pinch) {
-    if (touchPts.size < 2) pinch.d = null;
+    if (touchPts.size < 2) pinch.active = false;
     if (touchPts.size === 0) { pinch = null; touchSnap = null; }
     return true;
   }
@@ -4152,7 +4152,8 @@ cv.addEventListener('pointerdown', e => {
       cancelTouchSingle();
       const [p1, p2] = [...touchPts.values()], r = cv.getBoundingClientRect();
       const mx = (p1.x + p2.x) / 2 - r.left, my = (p1.y + p2.y) / 2 - r.top, d = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-      pinch = { d, mx, my };
+      // mutlak hareket: başlangıç zoom/merkez saklanır, her olayda baştan hesaplanır (artımlı hata ve sıçrama olmaz)
+      pinch = { active: true, d0: d, z0: view.z, wx: (mx - view.x) / view.z, wy: (my - view.y) / view.z };
       scheduleRender(); return;
     }
     if (pinch) return;
@@ -4377,12 +4378,11 @@ cv.addEventListener('pointermove', e => {
     if (touchPts.size >= 2) {
       const [p1, p2] = [...touchPts.values()], r = cv.getBoundingClientRect();
       const mx = (p1.x + p2.x) / 2 - r.left, my = (p1.y + p2.y) / 2 - r.top, d = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-      if (pinch && pinch.d != null) {
-        view.x += mx - pinch.mx; view.y += my - pinch.my;
-        if (d > 4 && pinch.d > 4) zoomAt(d / pinch.d, mx, my);
-        else scheduleRender(false);
+      if (pinch && pinch.active) {
+        const nz = pinch.d0 > 4 && d > 4 ? clamp(pinch.z0 * d / pinch.d0, MIN_ZOOM, MAX_ZOOM) : view.z;
+        view.z = nz; view.x = mx - pinch.wx * nz; view.y = my - pinch.wy * nz;
+        scheduleRender();
       }
-      pinch = { d, mx, my };
       return;
     }
     if (pinch) return;
@@ -4476,6 +4476,7 @@ cv.addEventListener('pointerup', e => {
     refresh();
   }
 });
+cv.addEventListener('lostpointercapture', e => { if (touchPts.has(e.pointerId)) endTouch(e); }); // kaçırılan pointerup: eski parmak noktası kalmasın
 cv.addEventListener('pointercancel', e => {
   if (endTouch(e)) return;
   cancelTouchSingle(); scheduleRender();
