@@ -4095,8 +4095,78 @@ function openCtxMenu(e) {
 }
 window.addEventListener('pointerdown', closeCtxMenu);
 window.addEventListener('blur', closeCtxMenu);
+// Dokunmatik iki parmakla yakınlaştırma ve kaydırma (#80)
+const touchPts = new Map();
+let pinch = null, touchSnap = null;
+function cancelTouchSingle() {
+  const d = ui.drag;
+  if (d) {
+    if (d.type === 'move' && d.orig) {
+      for (const { o } of selObjs()) { const g = d.orig.get(o.id); if (g) Object.assign(o, JSON.parse(JSON.stringify(g))); }
+      if (d.conn) for (const c of d.conn) c.w[c.e] = { x: c.o.x, y: c.o.y };
+      if (d.roomInner) for (const it of d.roomInner) { it.o.x = it.g.x; it.o.y = it.g.y; }
+    } else if (d.type === 'handle') {
+      const o = selObjs()[0]?.o;
+      if (o && d.orig) Object.assign(o, JSON.parse(JSON.stringify(d.orig)));
+      if (d.conn && d.orig) { const ek = d.h === 'wa' ? 'a' : 'b'; for (const c of d.conn) if (d.orig[ek]) c.w[c.k] = { x: d.orig[ek].x, y: d.orig[ek].y }; }
+      if (d.origAll) for (const { o: mo } of selObjs()) { const g = d.origAll.get(mo.id); if (g) Object.assign(mo, JSON.parse(JSON.stringify(g))); }
+    }
+    ui.drag = null;
+  }
+  ui.pen = null;
+  if (touchSnap) {
+    if (hi !== touchSnap.hi && hist[touchSnap.hi]) {
+      P = JSON.parse(hist[touchSnap.hi]);
+      hist.length = touchSnap.hi + 1;
+      hi = touchSnap.hi;
+      autosave(); updateUndo();
+    }
+    sel = touchSnap.sel;
+    ui.draw = touchSnap.draw;
+    ui.polyPts = touchSnap.polyPts;
+    ui.dimStart = touchSnap.dimStart;
+    ui.secStart = touchSnap.secStart;
+    ui.mAxis = touchSnap.mAxis;
+    ui.calib = touchSnap.calib;
+    if (tool !== touchSnap.tool || ui.btn !== touchSnap.btn) { tool = touchSnap.tool; ui.btn = touchSnap.btn; updateTools(); }
+    touchSnap = null;
+    renderProps();
+  }
+}
+function endTouch(e) {
+  if (e.pointerType !== 'touch') return false;
+  touchPts.delete(e.pointerId);
+  if (pinch) {
+    if (touchPts.size < 2) pinch.d = null;
+    if (touchPts.size === 0) { pinch = null; touchSnap = null; }
+    return true;
+  }
+  if (touchPts.size === 0) touchSnap = null;
+  return false;
+}
 cv.addEventListener('pointerdown', e => {
-  cv.setPointerCapture(e.pointerId); setCursor(e);
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  if (e.pointerType === 'touch') {
+    touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touchPts.size >= 2) {
+      cancelTouchSingle();
+      const [p1, p2] = [...touchPts.values()], r = cv.getBoundingClientRect();
+      const mx = (p1.x + p2.x) / 2 - r.left, my = (p1.y + p2.y) / 2 - r.top, d = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      pinch = { d, mx, my };
+      scheduleRender(); return;
+    }
+    if (pinch) return;
+    touchSnap = {
+      hi, sel: sel.slice(), tool, btn: ui.btn,
+      draw: ui.draw ? JSON.parse(JSON.stringify(ui.draw)) : null,
+      polyPts: ui.polyPts ? JSON.parse(JSON.stringify(ui.polyPts)) : null,
+      dimStart: ui.dimStart ? { ...ui.dimStart } : null,
+      secStart: ui.secStart ? { ...ui.secStart } : null,
+      mAxis: ui.mAxis ? { ...ui.mAxis } : null,
+      calib: ui.calib ? { ...ui.calib } : null
+    };
+  }
+  setCursor(e);
   const raw = ui.raw, cur = ui.cur;
   if (e.button === 1 || tool === 'pan' || ui.space) { ui.drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y }; cv.style.cursor = 'grabbing'; return; }
   if (e.button !== 0) return;
@@ -4302,6 +4372,21 @@ function placeAt(raw) {
   commit(); refresh();
 }
 cv.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch' && touchPts.has(e.pointerId)) {
+    touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touchPts.size >= 2) {
+      const [p1, p2] = [...touchPts.values()], r = cv.getBoundingClientRect();
+      const mx = (p1.x + p2.x) / 2 - r.left, my = (p1.y + p2.y) / 2 - r.top, d = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      if (pinch && pinch.d != null) {
+        view.x += mx - pinch.mx; view.y += my - pinch.my;
+        if (d > 4 && pinch.d > 4) zoomAt(d / pinch.d, mx, my);
+        else scheduleRender(false);
+      }
+      pinch = { d, mx, my };
+      return;
+    }
+    if (pinch) return;
+  }
   setCursor(e); const d = ui.drag;
   if ((tool === 'pen' || tool === 'shape') && ui.pen) {
     const p = ui.raw, last = ui.pen.pts[ui.pen.pts.length - 1];
@@ -4319,6 +4404,7 @@ cv.addEventListener('pointermove', e => {
   updateGhost(); drawPreview();
 });
 cv.addEventListener('pointerup', e => {
+  if (endTouch(e)) return;
   if ((tool === 'pen' || tool === 'shape') && ui.pen) { tool === 'shape' ? finishShapeFree() : finishPen(); return; }
   const d = ui.drag; if (!d) return; ui.drag = null; setCursor(e);
   if (d.type === 'pan') { updateTools(); return; }
@@ -4389,6 +4475,10 @@ cv.addEventListener('pointerup', e => {
     if (d.moved) commit();
     refresh();
   }
+});
+cv.addEventListener('pointercancel', e => {
+  if (endTouch(e)) return;
+  cancelTouchSingle(); scheduleRender();
 });
 
 /* ---------- Taşıma ---------- */
@@ -8156,7 +8246,7 @@ function init3D() {
   const el = $('#v3d'), r = new THREE.WebGLRenderer({ antialias: true });
   r.setPixelRatio(Math.min(2, devicePixelRatio)); el.appendChild(r.domElement);
   // sahneyi değiştirebilecek her girdi bir sonraki kareyi çizdirir (yakalama aşaması: işleyicilerden önce)
-  for (const ev of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'keyup', 'input', 'change']) window.addEventListener(ev, req3D, { capture: true, passive: true });
+  for (const ev of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'touchstart', 'touchmove', 'touchend', 'wheel', 'keydown', 'keyup', 'input', 'change']) window.addEventListener(ev, req3D, { capture: true, passive: true });
   // yumuşak gölgeler + sinematik ton eşleme (r128 API'si)
   if (THREE.PCFSoftShadowMap) { r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap; }
   if (THREE.sRGBEncoding) r.outputEncoding = THREE.sRGBEncoding;
@@ -8280,6 +8370,27 @@ function init3D() {
   });
   const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = ORBIT_MAX_POLAR;
   let downPt = null;
+  // 3B dokunmatik iki parmak (#80): ikinci parmak indiğinde tek parmakla başlamış mobilya/açıklık sürüklemesini iptal et ki OrbitControls yakınlaştırabilsin
+  r.domElement.addEventListener('touchstart', e => {
+    if (!e.touches || e.touches.length < 2) return;
+    downPt = null;
+    if (T3 && T3.walk) T3.walk.drag = null;
+    if (!d3) return;
+    if (d3.moved) {
+      if (d3.op) {
+        const fo = findAnyFloor(d3.id);
+        if (fo && d3.d0 != null) { fo.o.d = d3.d0; schedBuild3D(); }
+      } else if (d3.orig) {
+        for (const sid of d3.members) {
+          const fd = findAnyFloor(sid), g0 = d3.orig.get(sid);
+          if (fd && g0) Object.assign(fd.o, JSON.parse(JSON.stringify(g0)));
+        }
+        if (d3.conn) for (const c of d3.conn) c.w[c.e] = { x: c.o.x, y: c.o.y };
+        schedBuild3D();
+      }
+    }
+    d3 = null;
+  }, { passive: true });
   r.domElement.addEventListener('pointerdown', e => { if (e.button === 0) downPt = { x: e.clientX, y: e.clientY }; });
   r.domElement.addEventListener('pointerup', e => {
     const dp = downPt; downPt = null; // eski bir basış konumu sonraki tıkı tetiklemesin

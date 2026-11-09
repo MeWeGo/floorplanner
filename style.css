@@ -537,11 +537,13 @@ main {
   position: absolute;
   inset: 0;
   display: none;
+  touch-action: none;
   background: var(--cv-bg);
 }
 
 #v3d canvas {
   display: block;
+  touch-action: none;
 }
 
 /* 3B kat seçici */
