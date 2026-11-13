@@ -1691,6 +1691,49 @@ check('adjustable group across two floors: link from the panel, layouts switch t
   return 'two floors switch together, undo restores both, unlink keeps the layouts';
 });
 
+check('realistic look: physically based materials, same render in dark and light theme, nothing leaks (#87)', async page => {
+  const info = await page.evaluate(`(async () => {
+    const theme0 = document.documentElement.dataset.theme;
+    loadProject(newProject());
+    addRectWalls(0, 0, 600, 400);
+    const f = F(), a = autoRoomAt({ x: 300, y: 200 }, true); if (a) a.floor = 'wood';
+    f.furn.push(mkFurn(BYID.sofa3, 300, 120), mkFurn(BYID.wc, 480, 300)); sel = []; commit(); refresh();
+    if (ui.live3d) setLive3D(false);
+    const lum = url => new Promise(res => { const im = new Image(); im.onload = () => { const c = document.createElement('canvas'); c.width = 64; c.height = 48; const g = c.getContext('2d'); g.drawImage(im, 0, 0, 64, 48); const d = g.getImageData(0, 0, 64, 48).data; let t = 0; for (let i = 0; i < d.length; i += 4) t += d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11; res(t / (d.length / 4)); }; im.onerror = () => res(-1); im.src = url; });
+    const shot = () => render3DHQ({ style: 'realistic', backdrop: 'sky', sun: { az: 215, alt: 42 }, longSide: 480, supersample: 1, frames: 1, format: 'jpeg' });
+    const count = () => { let std = 0, dec = 0; T3.scene.traverse(o => { if (o.userData && o.userData.fpDecal) dec++; const ms = Array.isArray(o.material) ? o.material : [o.material]; if (o.isMesh && ms.some(m => m && m.isMeshStandardMaterial)) std++; }); return { std, dec, env: !!T3.scene.environment }; };
+    const r = {};
+    document.documentElement.dataset.theme = 'light'; show3D(true);
+    if (!ui.view3d) return { err: '3D did not open' };
+    r.light = await lum(await shot());
+    const m0 = { ...T3.r.info.memory };
+    await shot(); await shot();
+    const m1 = { ...T3.r.info.memory };
+    r.leak = [m1.textures - m0.textures, m1.geometries - m0.geometries];
+    r.after = count();
+    document.documentElement.dataset.theme = 'dark'; build3D(true);
+    r.dark = await lum(await shot());
+    document.getElementById('b3dLive').click();
+    r.live = count(); r.rough = (() => { let wall = null, sofa = null, wc = null; T3.scene.traverse(o => { if (!o.isMesh || !o.material || !o.material.isMeshStandardMaterial) return; let p = o, u = {}; while (p && !(u = p.userData || {}).furnId && !u.wallId) p = p.parent; if (!p) return; if (u.wallId && wall == null && !o.material.transparent) wall = o.material.roughness; if (u.furnId) { const t = findAnyFloor(u.furnId).o.type; if (t === 'sofa3') sofa = o.material.roughness; if (t === 'wc') wc = o.material.roughness; } }); return { wall, sofa, wc }; })();
+    r.floor = (() => { let ok = false; T3.scene.traverse(o => { const m = o.material; if (o.isMesh && m && m.isMeshStandardMaterial && m.map && m.map.fpKind === 'wood') ok = !!(m.bumpMap && m.roughnessMap && m.map.fpLt); }); return ok; })();
+    document.getElementById('b3dLive').click();
+    r.off = count();
+    document.documentElement.dataset.theme = theme0; show3D(false);
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  if (!(info.light > 40) || !(info.dark > 40)) throw new Error('realistic render is dark or empty: light ' + info.light + ', dark ' + info.dark);
+  if (Math.abs(info.light - info.dark) > 4) throw new Error('dark-theme render differs from light-theme render: ' + info.light.toFixed(1) + ' vs ' + info.dark.toFixed(1));
+  if (info.leak[0] > 0 || info.leak[1] > 0) throw new Error('repeated renders leak GPU resources (textures, geometries): ' + info.leak);
+  if (info.after.std || info.after.dec || info.after.env) throw new Error('a render left realistic materials / decals / environment in the CAD scene: ' + JSON.stringify(info.after));
+  if (!info.live.std || !info.live.dec || !info.live.env) throw new Error('live realistic view has no physical materials / contact shading / reflections: ' + JSON.stringify(info.live));
+  const q = info.rough;
+  if (!(q.wc < 0.3 && q.sofa > 0.9 && q.wall > 0.85)) throw new Error('surfaces do not get distinct roughness (porcelain, fabric, plaster): ' + JSON.stringify(q));
+  if (!info.floor) throw new Error('wood floor has no relief / roughness map or is not the light texture in dark theme');
+  if (info.off.std || info.off.dec || info.off.env) throw new Error('turning the live view off left realistic materials behind: ' + JSON.stringify(info.off));
+  return 'brightness ' + info.light.toFixed(0) + ' light / ' + info.dark.toFixed(0) + ' dark, ' + info.live.std + ' physical meshes, ' + info.live.dec + ' contact decals';
+});
+
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();
   if (!browserPath) {
