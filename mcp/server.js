@@ -1712,10 +1712,19 @@ function ifcToProject(text, opts = {}) {
   }
 
   /* --- Merdivenler: IfcStair (kolları / sahanlıkları dahil) → parametrik merdiven (k: 'stairs') --- */
-  // kolun çıkış yönü: uzun eksen boyunca alçak uçtan yükseğe (merdiven ve rampa)
+  // kolun çıkış yönü: alçak uçtan yükseğe (merdiven ve rampa). Revit kolda yön vermez (yerleşim ekseni yok, yürüme çizgisi yok),
+  // yön gövdeden çıkar: noktalara z = a·x + b·y düzlemi oturtulur, eğim (a, b) en dik çıkan dikdörtgen kenarını seçer. Kısa kollar
+  // (3 rıht: 55 cm koşu, 255 cm genişlik) böylece enine dönmez; eğim yoksa (tek basamak) eski kural: uzun eksen boyunca.
   const climb = pts => {
     const rc = ifcRect(pts.map(p => [p[0], p[1]])); if (!rc) return null;
-    const th = rc.rot * Math.PI / 180; let ux = Math.cos(th), uy = Math.sin(th); if (rc.d > rc.w) [ux, uy] = [-uy, ux];
+    const th = rc.rot * Math.PI / 180; let ux = Math.cos(th), uy = Math.sin(th);
+    let mx = 0, my = 0, mz = 0; for (const p of pts) { mx += p[0]; my += p[1]; mz += p[2]; } mx /= pts.length; my /= pts.length; mz /= pts.length;
+    let sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
+    for (const p of pts) { const x = p[0] - mx, y = p[1] - my, z = p[2] - mz; sxx += x * x; sxy += x * y; syy += y * y; sxz += x * z; syz += y * z; }
+    const det = sxx * syy - sxy * sxy, ga = det ? (sxz * syy - syz * sxy) / det : 0, gb = det ? (syz * sxx - sxz * sxy) / det : 0;
+    const g1 = ga * ux + gb * uy, g2 = -ga * uy + gb * ux; // eğimin dikdörtgen eksenlerindeki bileşenleri
+    if (Math.max(Math.abs(g1), Math.abs(g2)) >= 0.05) return Math.abs(g1) >= Math.abs(g2) ? (g1 > 0 ? { x: ux, y: uy } : { x: -ux, y: -uy }) : (g2 > 0 ? { x: -uy, y: ux } : { x: uy, y: -ux });
+    if (rc.d > rc.w) [ux, uy] = [-uy, ux];
     let sa = 0, na = 0, sb = 0, nb = 0; for (const p of pts) { const t = (p[0] - rc.cx) * ux + (p[1] - rc.cy) * uy; if (t < 0) { sa += p[2]; na++; } else { sb += p[2]; nb++; } }
     return na && nb && sa / na > sb / nb ? { x: -ux, y: -uy } : { x: ux, y: uy };
   };
