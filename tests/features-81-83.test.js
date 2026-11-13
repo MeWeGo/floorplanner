@@ -191,6 +191,7 @@ test('(C) issue #81 live realistic 3D view wiring', () => {
 
   assert.match(applySrc, /isLineSegments[\s\S]*?BoxHelper/);
   assert.match(applySrc, /makeSky\(/);
+  assert.match(applySrc, /grassGroundMat\(/);
   assert.match(applySrc, /sunVector\(\s*st\.az\s*,\s*st\.alt\s*\)/);
   assert.match(applySrc, /S\.fog\s*=/);
   assert.match(applySrc, /T3\.live\s*=/);

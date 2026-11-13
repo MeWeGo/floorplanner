@@ -195,3 +195,12 @@ test('everything the sky / toon render changes is restored in finally', () => {
   assert.match(fin, /for \(const m of styleMats\) m\.dispose\(\)/, 'toon materials / gradient are not disposed');
   assert.match(fin, /T3\.ground\.material = oldGroundMat/);
 });
+
+test('auto-generated ground uses a grass texture in sky renders and live realistic mode', () => {
+  const gm = sliceFn('grassGroundMat');
+  assert.match(gm, /floorTexture\(\s*'grass'/, 'grassGroundMat must build a procedural grass texture');
+  assert.match(gm, /repeat\.set\(\s*40000\s*\/\s*120\s*,\s*40000\s*\/\s*120\s*\)/, 'grass texture repeat must scale to the 40000 cm PlaneGeometry');
+  assert.match(gm, /new THREE\.MeshLambertMaterial\(\s*\{\s*map:\s*_grassGroundTex/, 'grassGroundMat must return a textured MeshLambertMaterial');
+  const hq = sliceFn('render3DHQ');
+  assert.match(hq, /backdrop === 'sky'\s*\?\s*grassGroundMat\(\)\s*:/, 'sky backdrop renders must use grassGroundMat()');
+});

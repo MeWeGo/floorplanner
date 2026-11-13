@@ -1554,19 +1554,20 @@ check('live realistic 3D view: sky on, CAD edges hidden, walk mode works, CAD vi
     document.getElementById('b3d').click();
     if (!ui.view3d) return { err: '3D did not open' };
     const edges = () => { let n = 0; T3.scene.traverse(o => { if (o.isLineSegments && o.type !== 'BoxHelper' && o.visible) n++; }); return n; };
-    const r = { e0: edges(), bg0: T3.scene.background.getHex(), g0: T3.ground.material.color.getHex() };
+    const r = { e0: edges(), bg0: T3.scene.background.getHex(), g0: T3.ground.material.color.getHex(), gm0: !!T3.ground.material.map };
     document.getElementById('b3dLive').click();
     r.live = !!T3.live; r.e1 = edges(); r.fog = !!T3.scene.fog; r.sky = !!(T3.live && T3.scene.children.includes(T3.live.sky));
+    r.gmLive = !!(T3.ground && T3.ground.material && T3.ground.material.map);
     r.on = document.getElementById('b3dLive').classList.contains('on');
     document.getElementById('b3dEye').click();
     r.walk = !!T3.walk && !!T3.live;
     draw3D(performance.now());
     r.follow = !!T3.live && T3.live.sky.position.distanceTo(T3.cam.position) < 0.01;
     build3D(true);                                   // an edit while live: the look must survive the rebuild
-    r.e2 = edges(); r.live2 = !!T3.live;
+    r.e2 = edges(); r.live2 = !!T3.live; r.gmRebuild = !!(T3.ground && T3.ground.material && T3.ground.material.map);
     exitWalk(true);
     document.getElementById('b3dLive').click();
-    r.off = !T3.live && !T3.scene.fog; r.e3 = edges(); r.bg1 = T3.scene.background.getHex(); r.g1 = T3.ground.material.color.getHex();
+    r.off = !T3.live && !T3.scene.fog; r.e3 = edges(); r.bg1 = T3.scene.background.getHex(); r.g1 = T3.ground.material.color.getHex(); r.gm1 = !!T3.ground.material.map;
     r.skyLeft = T3.scene.children.some(c => c.material && c.material.isShaderMaterial);
     show3D(false);
     return r;
@@ -1574,11 +1575,12 @@ check('live realistic 3D view: sky on, CAD edges hidden, walk mode works, CAD vi
   if (info.err) throw new Error(info.err);
   if (!info.e0) throw new Error('the CAD view has no edge lines to hide (test plan too simple?)');
   if (!info.live || !info.on || !info.fog || !info.sky) throw new Error('live realistic view did not turn on: ' + JSON.stringify(info));
+  if (!info.gmLive || !info.gmRebuild) throw new Error('live realistic view did not apply grass texture to ground: ' + JSON.stringify(info));
   if (info.e1 !== 0 || info.e2 !== 0 || !info.live2) throw new Error('CAD edges are visible in the live view (' + info.e1 + ' / after rebuild ' + info.e2 + ')');
   if (!info.walk || !info.follow) throw new Error('walk mode + live view: walk=' + info.walk + ', sky follows camera=' + info.follow);
   if (!info.off || info.skyLeft) throw new Error('live view left sky / fog behind');
   if (info.e3 !== info.e0) throw new Error('edge lines not restored: ' + info.e3 + ' vs ' + info.e0);
-  if (info.bg1 !== info.bg0 || info.g1 !== info.g0) throw new Error('background / ground not restored');
+  if (info.bg1 !== info.bg0 || info.g1 !== info.g0 || info.gm1 !== info.gm0) throw new Error('background / ground not restored');
   return info.e0 + ' edges hidden and restored, sky follows the walker';
 });
 

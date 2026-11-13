@@ -7418,7 +7418,7 @@ async function render3DHQ(opts) {
     } else scene.background = new THREE.Color(0xffffff);
     if (T3.ground) {
       oldGroundMat = T3.ground.material;
-      studioGround = new THREE.MeshLambertMaterial({ color: backdrop === 'sky' ? 0xa19f8b : 0xf3f1ec, side: THREE.DoubleSide });
+      studioGround = backdrop === 'sky' ? grassGroundMat() : new THREE.MeshLambertMaterial({ color: 0xf3f1ec, side: THREE.DoubleSide });
       T3.ground.material = studioGround;
     }
     scene.traverse(o => {
@@ -8987,13 +8987,21 @@ function liveSkyFollow() {
   lv.sky.position.copy(c); // gökyüzü kamerayla gezer; sis binanın ötesinde başlar
   lv.fog.near = near; lv.fog.far = Math.max(near + 1000, Math.min(17000, near + Math.max(5000, sz * 6)));
 }
+let _grassGroundTex = null;
+function grassGroundMat() {
+  if (!_grassGroundTex) {
+    _grassGroundTex = floorTexture('grass', '#7cb342', true, { floorTex: {}, texs: [] });
+    _grassGroundTex.repeat.set(40000 / 120, 40000 / 120);
+  }
+  return new THREE.MeshLambertMaterial({ map: _grassGroundTex, side: THREE.DoubleSide });
+}
 function applyLive3D() {
   if (!T3 || !T3.scene) return;
   const S = T3.scene, old = T3.live; T3.live = null;
   if (old) { S.remove(old.sky); old.sky.geometry.dispose(); old.sky.material.dispose(); for (const m of old.mats) m.dispose(); S.fog = null; }
   if (!ui.live3d) return;
   const st = ui.studio, sv = sunVector(st.az, st.alt), sky = makeSky(sv, T3.cam, T3.fit);
-  const ground = new THREE.MeshLambertMaterial({ color: 0xa19f8b, side: THREE.DoubleSide }), slab = new THREE.MeshLambertMaterial({ color: 0xded8cc, side: THREE.DoubleSide });
+  const ground = grassGroundMat(), slab = new THREE.MeshLambertMaterial({ color: 0xded8cc, side: THREE.DoubleSide });
   S.traverse(o => {
     if (o.isLineSegments) { if (o.type !== 'BoxHelper') o.visible = false; } // seçim kutusu görünür kalır
     else if (o.userData && o.userData.slab) o.material = slab;
