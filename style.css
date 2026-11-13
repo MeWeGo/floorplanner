@@ -1238,8 +1238,16 @@ kbd {
   #props { width: 240px; }
 }
 
+#bInspect { display: none; }
+.flbadge { margin: 0 0 8px; }
+
 @media (max-width: 700px) {
   #props { display: none; }
+  /* dar ekran: özellik paneli bir çekmece olarak açılır (#82) */
+  #bInspect { display: block; position: absolute; top: 12px; right: 12px; z-index: 6; min-width: 34px; height: 34px; }
+  #bInspect.on { border-color: var(--accent); }
+  body.props-open #props { display: block; position: fixed; top: 0; right: 0; bottom: 0; z-index: 90; width: min(86vw, 300px); box-shadow: -8px 0 28px rgba(0, 0, 0, 0.35); }
+  body.props-open #bInspect { position: fixed; top: 8px; right: calc(min(86vw, 300px) + 8px); z-index: 91; }
 }
 
 /* ---------- Right-click object list & layers ---------- */

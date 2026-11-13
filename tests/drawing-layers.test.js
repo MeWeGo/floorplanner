@@ -48,6 +48,11 @@ function makeEnv(initialP) {
       }
       return null;
     };
+    // 3D picks objects on any floor (#82): pickable falls back to this
+    const findAnyFloor = id => {
+      for (const f of (P && P.floors) || []) for (const arr in KINDS) { const o = (f[arr] || []).find(x => x.id === id); if (o) return { kind: KINDS[arr], arr, o }; }
+      return null;
+    };
     ${constLine('defaultLayer')}
     ${constLine('layerById')}
     ${fnSrc('visFloor')}

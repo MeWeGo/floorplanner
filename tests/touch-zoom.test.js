@@ -169,7 +169,7 @@ test('(2) second finger cancels in-progress single-finger furniture drag or wall
   assert.strictEqual(runtime.ui.draw, null, 'second finger cancelled accidental wall draw start');
 });
 
-test('(3) lifting one finger after a pinch does not jump or trigger single-finger actions', () => {
+test('(3) lifting one finger after a pinch leaves the other finger panning, without a jump or an edit', () => {
   const { runtime, listeners } = makeHarness('select');
   listeners.pointerdown(touchEv(1, 300, 300));
   listeners.pointerdown(touchEv(2, 500, 300));
@@ -181,12 +181,37 @@ test('(3) lifting one finger after a pinch does not jump or trigger single-finge
   const vyAfterPinch = runtime.view.y;
 
   // Lift finger 2, move remaining finger 1, then lift finger 1
+  const planBefore = JSON.stringify(runtime.P), hiBefore = runtime.hi;
   listeners.pointerup(touchEv(2, 550, 300));
+  assert.strictEqual(runtime.view.x, vxAfterPinch, 'no jump when the finger lifts');
+  assert.strictEqual(runtime.ui.drag?.type, 'pan', 'the remaining finger pans');
   listeners.pointermove(touchEv(1, 350, 360));
   assert.strictEqual(runtime.view.z, zAfterPinch, 'zoom unchanged when moving remaining finger after pinch');
-  assert.strictEqual(runtime.view.x, vxAfterPinch, 'view.x unchanged when moving remaining finger after pinch');
-  assert.strictEqual(runtime.view.y, vyAfterPinch, 'view.y unchanged when moving remaining finger after pinch');
+  assert.strictEqual(runtime.view.x, vxAfterPinch + 100, 'remaining finger pans view.x by its own movement');
+  assert.strictEqual(runtime.view.y, vyAfterPinch + 60, 'remaining finger pans view.y by its own movement');
   listeners.pointerup(touchEv(1, 350, 360));
+  assert.strictEqual(runtime.ui.drag, null, 'pan ends with the last finger');
+  assert.strictEqual(JSON.stringify(runtime.P), planBefore, 'plan untouched');
+  assert.strictEqual(runtime.hi, hiBefore, 'no history entry');
+});
+
+test('(5) after a pinch, a re-added second finger pinches again and a fresh touch edits normally', () => {
+  const { runtime, listeners } = makeHarness('select');
+  listeners.pointerdown(touchEv(1, 300, 300));
+  listeners.pointerdown(touchEv(2, 500, 300));
+  listeners.pointerup(touchEv(2, 500, 300));
+  // second finger comes back while the first is still down: a new pinch, not a dead touch
+  listeners.pointerdown(touchEv(3, 500, 300));
+  assert.strictEqual(runtime.ui.drag, null, 'pan handed over to the new pinch');
+  const z0 = runtime.view.z;
+  listeners.pointermove(touchEv(1, 200, 300));
+  listeners.pointermove(touchEv(3, 600, 300));
+  assert.ok(Math.abs(runtime.view.z - z0 * 2) < 1e-6, 'second pinch zooms');
+  listeners.pointerup(touchEv(1, 200, 300));
+  listeners.pointerup(touchEv(3, 600, 300));
+  // all fingers up: a single finger drags furniture again
+  listeners.pointerdown(touchEv(4, 300, 250, 'fn1'));
+  assert.strictEqual(runtime.ui.drag?.type, 'move', 'single-finger editing works after the gesture');
 });
 
 test('(4) 3D viewport has touch-action: none and registers touch listeners', () => {
