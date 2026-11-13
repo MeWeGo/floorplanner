@@ -4,7 +4,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, wallTopSrc } = require('./helpers/repo');
 
 const src = read('app.js');
 const html = read('index.html');
@@ -47,6 +47,7 @@ function makeEnv(floors = []) {
     ${fnSrc('lineCutIntervals')}
     ${fnSrc('subIntervals')}
     ${fnSrc('sectionFrame')}
+    ${wallTopSrc(src)}
     ${fnSrc('archPrims')}
     return { P, dist, clamp, wLen, slabPolys, floorElev, fmtLevel, ELEV_DIRS, lineCutIntervals, subIntervals, sectionFrame, archPrims };
   `)(floors);

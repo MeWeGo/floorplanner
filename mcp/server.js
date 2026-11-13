@@ -2052,6 +2052,14 @@ function newProject(a) {
   };
 }
 /* Same defaults as loadProject() in app.js so old/agent-made JSON always loads. */
+// eğimli duvar üstü (#96): [[t, h], …] t 0 → 1 artan, h 10..2000 cm; geçersizse null
+function cleanWallTop(v) {
+  if (!Array.isArray(v) || v.length < 2 || v.length > 500) return null;
+  const out = v.map(p => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1]) ? [Math.round(+p[0] * 10000) / 10000, Math.round(+p[1] * 10) / 10] : null);
+  if (!out.every(Boolean) || out[0][0] !== 0 || out[out.length - 1][0] !== 1) return null;
+  for (let i = 0; i < out.length; i++) if (out[i][1] < 10 || out[i][1] > 2000 || (i && out[i][0] < out[i - 1][0])) return null;
+  return out;
+}
 function normalizeProject(obj) {
   if (!obj || typeof obj !== 'object' || !Array.isArray(obj.floors) || !obj.floors.length)
     throw new Error('Not a floor planner project: expected an object with a non-empty "floors" array (export JSON from the app, or start from new_project)');
@@ -2073,7 +2081,7 @@ function normalizeProject(obj) {
     for (const k in KINDS) f[k] = Array.isArray(f[k]) ? f[k] : [];
     f.groups = Array.isArray(f.groups) ? f.groups : [];
     for (const o of f.ops) if (o.open == null) o.open = 0;
-    for (const w of f.walls) if (!w.wt) w.wt = 'solid';
+    for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
     for (const sl of f.slabs) { if (!(sl.t > 0)) sl.t = 20; sl.floor = sl.floor || 'concrete'; sl.off = +sl.off || 0; }
     for (const v of f.voids) if (!VOID_TYPES.includes(v.type)) v.type = 'stair';
     for (const o of f.furn) cleanParts(o); // multi-part furniture; items without "parts" are untouched
@@ -2218,10 +2226,10 @@ function summarize() {
   if ((p.textures || []).length) out.push('Custom textures: ' + p.textures.map(t => 'tex:' + t.id + ' "' + t.name + '" ' + t.w + '×' + t.h + ' cm').join(', '));
   p.floors.forEach((f, i) => {
     out.push('');
-    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts, ' + (f.drafts || []).length + ' 2D drafting');
+    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + (f.noSlab ? ', no floor slab' : '') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts, ' + (f.drafts || []).length + ' 2D drafting');
     for (const d of f.drafts || []) out.push('  draft ' + d.id + ' ' + (d.shape === 'pline' ? (d.closed ? 'closed polyline' : d.pts.length === 2 ? 'line' : 'polyline') : d.shape) + ' pts ' + d.pts.map(q => '(' + q.x + ',' + q.y + ')').join(' ') + (d.dash ? ' ' + d.dash : ''));
     for (const w of f.walls)
-      out.push('  wall ' + w.id + ': (' + w.a.x + ',' + w.a.y + ') → (' + w.b.x + ',' + w.b.y + ')  length ' + Math.round(wLen(w)) + ' cm, t=' + w.t + ', h=' + w.h + (w.elev ? ', base ' + (w.elev > 0 ? '+' : '') + w.elev : '') + (w.wt !== 'solid' ? ', ' + w.wt : ''));
+      out.push('  wall ' + w.id + ': (' + w.a.x + ',' + w.a.y + ') → (' + w.b.x + ',' + w.b.y + ')  length ' + Math.round(wLen(w)) + ' cm, t=' + w.t + ', h=' + w.h + (w.elev ? ', base ' + (w.elev > 0 ? '+' : '') + w.elev : '') + (Array.isArray(w.top) ? ', sloped top ' + Math.min(...w.top.map(p => p[1])) + '–' + Math.max(...w.top.map(p => p[1])) : '') + (w.wt !== 'solid' ? ', ' + w.wt : ''));
     for (const o of f.ops)
       out.push('  ' + o.type + ' ' + o.id + ': w=' + o.w + ' h=' + o.h + ' sill=' + o.sill + ', centre ' + Math.round(o.d) + ' cm from wall ' + o.wall + ' end A' + (o.open ? ' [open]' : ''));
     for (const r of f.rooms)
@@ -2472,7 +2480,8 @@ tool('ack_user_requests',
 tool('add_floor',
   'Add a new empty floor on top of the existing ones and return its index.',
   { name: { type: 'string', description: 'Floor name, e.g. "1. Kat" / "First Floor".' },
-    wallH: { type: 'number', description: 'Optional wall height of this floor in cm, 100–800 (default: project wallH). New walls on it get this height and the floors above stack on it in 3D.' } },
+    wallH: { type: 'number', description: 'Optional wall height of this floor in cm, 100–800 (default: project wallH). New walls on it get this height and the floors above stack on it in 3D.' },
+    noSlab: { type: 'boolean', description: 'true = no automatic floor slab under this floor in 3D and sections (free slabs and room floors still show). Default false.' } },
   [],
   a => {
     const f = newFloor(a.name || ('Floor ' + P.floors.length));
@@ -2481,6 +2490,7 @@ tool('add_floor',
       if (h < 100 || h > 800) throw new Error('wallH must be between 100 and 800 cm (got ' + h + ')');
       f.wallH = h;
     }
+    if (a.noSlab === true) f.noSlab = true;
     proj().floors.push(f);
     return 'Added floor ' + (P.floors.length - 1) + ' "' + f.name + '" (id ' + f.id + '). Pass floorIndex=' + (P.floors.length - 1) + ' to the other tools to draw on it.';
   });
@@ -2775,7 +2785,7 @@ tool('add_text',
   });
 
 tool('update_object',
-  'Change properties of an existing object (wall t/h/wt or endpoints, opening d/w/side..., furniture x/y/rot..., room name/pts/floor...). Ramps (type "ramp"): w = width, d = horizontal length, h = rise, rampType accessible|vehicle|landscape, railing none|left|right|both. Rooms/slabs may use floor "glass" with glass clear|frosted. The "id" property cannot be changed.',
+  'Change properties of an existing object (wall t/h/wt or endpoints; a wall may take top: [[t, h], ...] = sloped top profile, t 0 to 1 along a→b, h cm above the wall base, null = flat; opening d/w/side..., furniture x/y/rot..., room name/pts/floor...). Ramps (type "ramp"): w = width, d = horizontal length, h = rise, rampType accessible|vehicle|landscape, railing none|left|right|both. Rooms/slabs may use floor "glass" with glass clear|frosted. The "id" property cannot be changed.',
   {
     id: { type: 'string', description: 'Object id (see summarize).' },
     props: { type: 'object', description: 'Properties to set, e.g. {"t":30} or {"name":"Mutfak"}.' },
@@ -2795,7 +2805,7 @@ tool('update_object',
     // sanity checks after merge
     if (found.kind === 'op' && found.o.wall && !f.walls.some(w => w.id === found.o.wall))
       throw new Error('props.wall "' + found.o.wall + '" does not exist on this floor');
-    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); if (found.o.elev != null) { const e = +found.o.elev || 0; if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm'); if (e) found.o.elev = e; else delete found.o.elev; } }
+    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); if (found.o.top === null) delete found.o.top; if (found.o.top != null) { const tp = cleanWallTop(found.o.top); if (!tp) throw new Error('top must be [[t, h], …]: t from 0 to 1 increasing, h 10–2000 cm (height above the wall base)'); found.o.top = tp; found.o.h = Math.max(...tp.map(p => p[1])); } if (found.o.elev != null) { const e = +found.o.elev || 0; if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm'); if (e) found.o.elev = e; else delete found.o.elev; } }
     if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
     if (found.kind === 'draft') { parsePts(found.o.pts, found.o.shape === 'arc' ? 3 : 2, 'pts'); if (!DRAFT_SHAPES.includes(found.o.shape)) found.o.shape = 'pline'; }
     if (found.kind === 'furn' && 'parts' in props) cleanParts(found.o);

@@ -219,6 +219,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | `E` | Eraser |
 | `X` | Trim — cut a crossing wall back to the intersection |
 | `L` | Section line — click both ends; then 3D cutaway or 2D section drawing from the panel |
+| `A` | Attach to surface — click a roof or tilted item, then the walls whose top should follow its slope |
 | `I` | Mirror — mirror the selection about an axis you click (keep or erase the original) |
 | `Shift+H` / `Shift+V` | Flip the selection horizontally / vertically |
 | `:` | **Command line** — type a tool or action by name in English or Turkish (*wall*, *duvar*, *aynala*, *print*, *undo* …; accents optional), see its shortcut, `↑↓` / `Tab` to pick, `Enter` to run. Works in 3D too: view, save and undo run there, drawing tools switch to 2D |

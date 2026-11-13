@@ -5,7 +5,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, wallTopSrc } = require('./helpers/repo');
 
 const src = read('app.js');
 const html = read('index.html');
@@ -89,6 +89,7 @@ const env = new Function(`
   ${fnSrc('jointsSvg')}
   ${fnSrc('wallHollowSvg')}
   ${src.match(/const WALL_ELEV_MAX\s*=[^;\n]+;/)[0]}
+  ${wallTopSrc(src)}
   ${fnSrc('wallTag')}
   ${fnSrc('wallDimSvg')}
   ${fnSrc('opSvg')}
