@@ -1238,6 +1238,11 @@ kbd {
   #props { width: 240px; }
 }
 
+/* 3B kat görünürlük listesi (#85) */
+.ctl3d #b3dFloors { min-width: 26px; height: 22px; padding: 0 5px; font-size: 12px; line-height: 1; }
+#v3dFloorList { top: 48px; z-index: 7; flex-direction: column; align-items: stretch; gap: 5px; padding: 8px 10px; max-height: 60%; overflow: auto; }
+#v3dFloorList label { display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+
 #bInspect { display: none; }
 .flbadge { margin: 0 0 8px; }
 

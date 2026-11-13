@@ -96,6 +96,7 @@ const env = new Function(`
   ${fnSrc('partShapeSvg')}
   ${fnSrc('partsSvg')}
   ${fnSrc('furnTiltSvg')}
+  const layersVis = { furnLabel: true, furnIcon: true }; // label / icon toggles (#84)
   ${fnSrc('furnSvg')}
   ${fnSrc('layerStrings')}
   return {
