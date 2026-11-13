@@ -183,7 +183,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, b3dLive, bInspect, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, modalbg, modal`.
+`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, bCad, b3d, b3dFit, b3dTop, b3dEye, b3dShot, b3dLive, bInspect, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, cOutline, lblOutline, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -522,6 +522,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/touch-zoom.test.js` | touch pinch / two-finger pan on the real pointer handlers: zoom anchored at the midpoint, a second finger cancels a drag or a wall start, **after a pinch the remaining finger pans** and later touches work normally |
 | `tests/walls-camera.test.js` | curtain mullion maths (#71), railing / fence types, defaults and posts (#73), perspective / orthographic wiring, aspect / frustum helpers and the iso preset (#74) |
 | `tests/ifc-import.test.js` | IFC import on the real parser: block parity with `mcp/server.js`, STEP value decoding, rejected formats, the `tests/fixtures/*.ifc` models (IFC4 / mm and IFC2x3 / feet: storeys, walls, curved and curtain walls, doors / windows, rooms, slabs, voids), corner cleanup, file-open / drop wiring and the MCP `import_ifc` tool |
+| `tests/outline-view.test.js` | 2D Outline / CAD wireframe view mode (`ui.outline`, `J`, `#bCad`, `#cOutline`): `pal()` dark/light adaptation, `wallHollowSvg()` double-line hollow walls and L/T joints, unfilled rooms/slabs/voids/openings/furniture with `furnCadSvg` block details and UI wiring |
 | `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed, walk mode collision: stops at closed doors, passes open ones, Q height locked, Esc restores orbit) |
 
 `browser-smoke.js` opens the app with `?bridge=off`, so it is safe to run while `mcp/bridge.js` is up. It skips itself (exit 0) when no Chromium is found; set `CHROME_BIN` to point at one. In CI it always runs.

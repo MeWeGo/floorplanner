@@ -49,8 +49,9 @@
     </div>
     <div class="spacer"></div>
     <div class="btn-group seg-switch" role="group" aria-label="View mode">
-      <button class="btn on" id="b2d">2B</button>
-      <button class="btn" id="b3d">3B</button>
+      <button class="btn on" id="b2d" title="2B Katı Görünüm">2B</button>
+      <button class="btn" id="bCad" title="2B Çizgisel (CAD) Görünüm (J)">CAD</button>
+      <button class="btn" id="b3d" title="3B Görünüm">3B</button>
     </div>
     <div class="sep"></div>
     <div class="btn-group">
@@ -118,6 +119,7 @@
       <label class="chk-pill"><input type="checkbox" id="cSnap" checked> <span id="lblSnap">Yakala (G)</span></label>
       <label class="chk-pill"><input type="checkbox" id="cAngle" checked> <span id="lblAngle">Açı 15°</span></label>
       <label class="chk-pill"><input type="checkbox" id="cDims" checked> <span id="lblDims">Duvar ölçüleri</span></label>
+      <label class="chk-pill" title="2B çizgisel / AutoCAD görünümü (J)"><input type="checkbox" id="cOutline"> <span id="lblOutline">Çizgisel</span></label>
       <label class="chk-pill"><input type="checkbox" id="cConn" checked title="Sürüklerken bitişik duvar uçları birlikte gelir (Alt basılıysa tersine döner)"> <span id="lblConn">Bitişik duvarlar</span></label>
       <label class="ctl-field"><span id="lblBoxSel">Kutu Seçim</span>
         <select id="sBoxSel">

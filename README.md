@@ -59,6 +59,8 @@ Tools: `new_project` · `load_project` / `import_ifc` / `save_project` / `get_pr
 
 ## ✨ Features
 
+- **2D Outline / AutoCAD View (`J` / `CAD`)** — switch between the default filled 2D plan (`2B`), a crisp CAD wireframe mode (`CAD` / footer `Outline` / key `J`) with hollow double-line walls, unfilled rooms/slabs, and architectural CAD furniture blocks (WC, sinks, stove burners, columns, trees, vehicles), and the interactive `3D` view. Exports (`SVG` / `PNG` / `PDF`) keep the active CAD style.
+
 ### 🧱 Drawing
 - **Free-form walls** with live length + angle read-out; type a number and press `Enter` for an exact length.
 - **Change a wall's length by number** later: select it and type the new length + `Enter`, click its length label on the canvas to edit it in place, or type a length while dragging one of its ends. The wall keeps its angle, connected corners stay joined and doors / windows stay put.
@@ -221,6 +223,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | `Ctrl+]` / `Ctrl+[` | Bring forward / send backward (`Shift`: to front / to back) |
 | `C` | Calibrate background scale |
 | `G` | Toggle snapping |
+| `J` | Toggle 2D Outline / CAD wireframe view (`CAD`) |
 | `Shift` | Hold to bypass snapping · multi-select |
 | `[` / `]` | Rotate selection −15° / +15° (multi-selections rotate as one rigid layout) |
 | `R` / `S` *(while placing)* | Rotate furniture / flip door hinge · flip swing side |

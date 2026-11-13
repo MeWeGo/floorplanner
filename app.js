@@ -118,7 +118,7 @@ const view = { x: 0, y: 0, z: 0.5 };
    planları, parsel sınırları ve çok binalı yerleşimler bütünüyle görülebilir. */
 const MIN_ZOOM = 0.002, MAX_ZOOM = 8;
 let tool = 'select', sel = [], placing = null;
-const ui = { snap: true, angle: true, dims: true, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
+const ui = { snap: true, angle: true, dims: true, outline: false, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true, underlay: true };
 // Kat izdüşümü (issue #26): hangi kat altlık olarak gösterilir ('prev' = bir alt kat) ve opaklığı — görünüm ayarı, projeye kaydedilmez
 const underlay = { floor: 'prev', op: 0.2 };
@@ -998,20 +998,21 @@ function fit() {
 const isLight = () => document.documentElement.dataset.theme === 'light';
 function pal(forceLight = ui.exporting) {
   const lt = forceLight || isLight();
+  const ol = !!(ui && ui.outline);
   const paper = forceLight ? '#ffffff' : '#faf8f5';
   return lt ? {
-    lt: true, bg: paper, wall: '#181d24', stroke: '#475569', furnStroke: '#334155',
+    lt: true, bg: paper, outline: ol, wall: '#181d24', stroke: '#475569', furnStroke: ol ? '#181d24' : '#334155',
     gMin: forceLight ? '#cbd5e1' : '#dcd6ca', gMaj: forceLight ? '#94a3b8' : '#b8b0a0', dotMaj: '#64748b',
     text: '#151921', sub: '#475569', halo: paper, accent: '#1d4ed8',
     dim: '#0f766e', glass: '#e0f2fe', swing: '#8696ab',
-    roomOp: 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280', marble: '#64748b', concrete: '#57534e', stone: '#78716c',
+    roomOp: ol ? 0 : 0.55, furnOp: 1, wood: '#92400e', tile: '#475569', carpet: '#6b7280', marble: '#64748b', concrete: '#57534e', stone: '#78716c',
     grass: '#3f6212', water: '#0369a1', gravel: '#57534e', deck: '#7c4a1e', asphalt: '#1f2937'
   } : {
-    lt: false, bg: '#0b0f14', wall: '#d5dee8', stroke: '#94a3b8', furnStroke: '#161e29',
+    lt: false, bg: '#0b0f14', outline: ol, wall: '#d5dee8', stroke: '#94a3b8', furnStroke: ol ? '#cbd5e1' : '#161e29',
     gMin: '#161f2c', gMaj: '#243244', dotMaj: '#475569',
     text: '#e6edf5', sub: '#b8c5d6', halo: '#0b0f14', accent: '#d99b26',
     dim: '#2dd4bf', glass: '#0369a1', swing: '#64748b',
-    roomOp: 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af', marble: '#cbd5e1', concrete: '#a8a29e', stone: '#a8a29e',
+    roomOp: ol ? 0 : 0.3, furnOp: 0.88, wood: '#d97706', tile: '#94a3b8', carpet: '#9ca3af', marble: '#cbd5e1', concrete: '#a8a29e', stone: '#a8a29e',
     grass: '#84cc16', water: '#38bdf8', gravel: '#d6d3d1', deck: '#f59e0b', asphalt: '#94a3b8'
   };
 }
@@ -1131,7 +1132,7 @@ function roomSvg(r, live) {
   }
   s += `<polygon points="${pts}" fill="${r.color}" fill-opacity="${C.roomOp}" ${polyHit}/>`;
   const fk = finishKind(r.floor);
-  if (fk) s += `<polygon points="${pts}" fill="url(#${finishPat(fk)})" pointer-events="none"/>`;
+  if (fk && !C.outline) s += `<polygon points="${pts}" fill="url(#${finishPat(fk)})" pointer-events="none"/>`;
   const t1 = esc(r.name), t2 = fmtArea(area);
   const bw = Math.max(t1.length, t2.length) * fs * 0.58 + 10;
   let badge = '';
@@ -1159,9 +1160,9 @@ function slabSvg(s, live) {
   if (!s.pts || s.pts.length < 3) return '';
   const C = pal(), z = view.z, pts = s.pts.map(p => p.x + ',' + p.y).join(' ');
   const hit = live ? `data-id="${s.id}" data-low="2" style="cursor:pointer"` : `pointer-events="none"`;
-  let out = `<polygon points="${pts}" fill="${s.color || C.sub}" fill-opacity="${s.color ? 0.35 : 0.12}" ${hit}/>`;
+  let out = `<polygon points="${pts}" fill="${s.color || C.sub}" fill-opacity="${C.outline ? 0 : (s.color ? 0.35 : 0.12)}" ${hit}/>`;
   const fk = finishKind(s.floor);
-  if (fk) out += `<polygon points="${pts}" fill="url(#${finishPat(fk)})" pointer-events="none"/>`;
+  if (fk && !C.outline) out += `<polygon points="${pts}" fill="url(#${finishPat(fk)})" pointer-events="none"/>`;
   out += `<polygon points="${pts}" fill="none" stroke="${C.sub}" stroke-width="${Math.max(1.5, 1.5 / z)}" stroke-dasharray="${6 / z} ${3 / z}" pointer-events="none"/>`;
   if (s.name) {
     const c = polyCentroid(s.pts), fs = clamp(Math.sqrt(Math.abs(polyArea(s.pts))) / 16, 12, 26);
@@ -1175,7 +1176,7 @@ function voidSvg(v, live) {
   const C = pal(), z = view.z, pts = v.pts.map(p => p.x + ',' + p.y).join(' '), bb = bboxOf('void', v), cid = 'vclip-' + v.id;
   const sw = Math.max(1.5, 1.5 / z), hit = live ? `data-id="${v.id}" data-low="1" style="cursor:pointer"` : `pointer-events="none"`;
   let s = `<clipPath id="${cid}"><polygon points="${pts}"/></clipPath>`;
-  s += `<polygon points="${pts}" fill="${C.bg}" fill-opacity=".6" ${hit}/>`;
+  s += `<polygon points="${pts}" fill="${C.bg}" fill-opacity="${C.outline ? 0 : 0.6}" ${hit}/>`;
   s += `<g clip-path="url(#${cid})" stroke="${C.sub}" stroke-width="${sw}" pointer-events="none"><line x1="${bb.x0}" y1="${bb.y0}" x2="${bb.x1}" y2="${bb.y1}"/><line x1="${bb.x1}" y1="${bb.y0}" x2="${bb.x0}" y2="${bb.y1}"/></g>`;
   s += `<polygon points="${pts}" fill="none" stroke="${C.text}" stroke-width="${sw}" stroke-dasharray="${5 / z} ${3 / z}" pointer-events="none"/>`;
   const t = v.name || L(...(VOID_TYPES[v.type] || VOID_TYPES.stair)), c = polyCentroid(v.pts);
@@ -1205,7 +1206,12 @@ function wallSvg(w, live, f) {
     const Lc = wLen(w) || 1, ux = (w.b.x - w.a.x) / Lc, uy = (w.b.y - w.a.y) / Lc, nx = -uy, ny = ux;
     const sw = Math.max(1.1, w.t * 0.12);
     s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
-    s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.glass}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="butt" pointer-events="none"/>`;
+    if (C.outline) {
+      s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.bg}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="butt" pointer-events="none"/>`;
+      s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.dim}" stroke-width="${Math.max(0.8, sw * 0.7)}" stroke-linecap="butt" pointer-events="none"/>`;
+    } else {
+      s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.glass}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="butt" pointer-events="none"/>`;
+    }
     const nTick = curtainBays(w);
     for (let i = 1; i < nTick; i++) {
       const px = w.a.x + ux * (Lc * i / nTick), py = w.a.y + uy * (Lc * i / nTick), hw2 = w.t / 2 - sw * 0.5;
@@ -1215,7 +1221,7 @@ function wallSvg(w, live, f) {
     s += lowWallSvg(w, C, f);
   } else {
     s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
-    if (w.color) s += wallPaintSvg(w);
+    if (w.color && !C.outline) s += wallPaintSvg(w);
   }
   if (hasPos) {
     const pv = w[wallPivot(w)], curIdx = clamp(w.posIdx ?? 0, 0, w.angles.length - 1);
@@ -1234,7 +1240,7 @@ function lowWallSvg(w, C, f) {
   const L = wLen(w); if (L < 1) return '';
   const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, nx = -uy, ny = ux, at = d => ({ x: w.a.x + ux * d, y: w.a.y + uy * d });
   const ops = f ? (f.ops || []).filter(o => o.wall === w.id) : [];
-  const sw = clamp(w.t * 0.22, 1, 3), ps = Math.max(w.t, 5), col = w.color || C.wall;
+  const sw = clamp(w.t * 0.22, 1, 3), ps = Math.max(w.t, 5), col = C.outline ? C.wall : (w.color || C.wall);
   let s = '';
   const ln = (p, q, o, wd) => `<line x1="${p.x + nx * o}" y1="${p.y + ny * o}" x2="${q.x + nx * o}" y2="${q.y + ny * o}" stroke="${col}" stroke-width="${wd}" stroke-linecap="butt" pointer-events="none"/>`;
   for (const [s0, e0] of lowWallSolid(L, ops)) {
@@ -1245,12 +1251,15 @@ function lowWallSvg(w, C, f) {
       for (let d = s0 + step / 2; d < e0; d += step) { const c = at(d), k = w.t * 0.35; s += `<line x1="${c.x - nx * k}" y1="${c.y - ny * k}" x2="${c.x + nx * k}" y2="${c.y + ny * k}" stroke="${col}" stroke-width="${sw * 0.6}" pointer-events="none"/>`; }
     } else {
       const st = railStyle(w), band = st === 'solid' ? col : st === 'glass' ? C.glass : C.bg, bop = st === 'solid' ? 1 : st === 'glass' ? 0.8 : 0.55;
-      s += `<line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" stroke="${band}" stroke-opacity="${bop}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
+      if (!C.outline) s += `<line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" stroke="${band}" stroke-opacity="${bop}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
+      else if (st === 'solid') s += ln(p, q, w.t / 2 - sw / 2, sw) + ln(p, q, -(w.t / 2 - sw / 2), sw)
+        + `<line x1="${p.x + nx * w.t / 2}" y1="${p.y + ny * w.t / 2}" x2="${p.x - nx * w.t / 2}" y2="${p.y - ny * w.t / 2}" stroke="${col}" stroke-width="${sw}" pointer-events="none"/>`
+        + `<line x1="${q.x + nx * w.t / 2}" y1="${q.y + ny * w.t / 2}" x2="${q.x - nx * w.t / 2}" y2="${q.y - ny * w.t / 2}" stroke="${col}" stroke-width="${sw}" pointer-events="none"/>`;
       if (st !== 'solid') s += ln(p, q, w.t / 2 - sw / 2, sw) + ln(p, q, -(w.t / 2 - sw / 2), sw);
       if (st === 'cable') s += ln(p, q, 0, sw * 0.5).replace('stroke-linecap="butt"', `stroke-linecap="butt" stroke-dasharray="${w.t * 1.5} ${w.t}"`);
     }
   }
-  if (railStyle(w) !== 'solid') for (const d of lowWallPosts(w, L, ops)) { const c = at(d); s += `<rect x="${c.x - ps / 2}" y="${c.y - ps / 2}" width="${ps}" height="${ps}" fill="${col}" transform="rotate(${Math.atan2(uy, ux) * 180 / Math.PI} ${c.x} ${c.y})" pointer-events="none"/>`; }
+  if (railStyle(w) !== 'solid') for (const d of lowWallPosts(w, L, ops)) { const c = at(d); s += `<rect x="${c.x - ps / 2}" y="${c.y - ps / 2}" width="${ps}" height="${ps}" fill="${C.outline ? C.bg : col}" stroke="${col}" stroke-width="${C.outline ? 1.2 : 0}" transform="rotate(${Math.atan2(uy, ux) * 180 / Math.PI} ${c.x} ${c.y})" pointer-events="none"/>`; }
   return s;
 }
 // Duvar boyası 2B: koyu duvar dolgusu korunur, iki yüzeyde ince boya şeridi (dışa aktarımda da okunur)
@@ -1266,6 +1275,38 @@ function wallPaintSvg(w) {
 function jointsSvg(f) {
   const C = pal();
   return wallJoints(f).map(j => `<polygon points="${j.poly.map(p => p.x + ',' + p.y).join(' ')}" fill="${C.wall}" pointer-events="none"/>`).join('');
+}
+// Çizgisel / CAD modu: dolu duvarların içini C.bg ile oyarak köşe ve T-birleşimlerde kesintisiz çift çizgi bırakır
+function wallHollowSvg(f) {
+  const C = pal();
+  if (!C.outline) return '';
+  const sw = 1.8;
+  const solids = (f.walls || []).filter(w => (!w.wt || w.wt === 'solid') && w.t > sw * 2 + 0.5);
+  if (!solids.length) return '';
+  let s = '';
+  for (const w of solids) {
+    const L = dist(w.a, w.b); if (L < 0.5) continue;
+    const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L;
+    const endOff = p => {
+      for (const o of solids) {
+        if (o === w) continue;
+        if (dist(p, o.a) <= 1 || dist(p, o.b) <= 1) return 0;
+        const pr = segProj(p, o.a, o.b);
+        if (pr.t > 0.01 && pr.t < 0.99 && pr.d <= o.t / 2 + 1) return -sw;
+      }
+      return Math.min(sw, L * 0.4);
+    };
+    const da = endOff(w.a), db = endOff(w.b);
+    if (L - da - db <= 0.1) continue;
+    const ax = w.a.x + ux * da, ay = w.a.y + uy * da;
+    const bx = w.b.x - ux * db, by = w.b.y - uy * db;
+    s += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="${C.bg}" stroke-width="${w.t - sw * 2}" stroke-linecap="butt" pointer-events="none"/>`;
+  }
+  const innerWalls = solids.map(w => ({ a: w.a, b: w.b, t: Math.max(0.5, w.t - sw * 2), wt: 'solid' }));
+  for (const j of wallJoints({ walls: innerWalls })) {
+    s += `<polygon points="${j.poly.map(p => p.x + ',' + p.y).join(' ')}" fill="${C.bg}" stroke="${C.bg}" stroke-width="0.6" stroke-linejoin="round" pointer-events="none"/>`;
+  }
+  return s;
 }
 function wallDimSvg(w) {
   const L = wLen(w); if (L < 30) return '';
@@ -1284,6 +1325,7 @@ function opSvg(op, live) {
   const dm = isDoorOp(op) ? doorMat(op) : 'wood';
   const leafLn = (x1, y1, x2, y2) => {
     const xy = `x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"`;
+    if (C.outline) return `<line ${xy} stroke="${C.wall}" fill="none" stroke-width="${dm === 'metal' ? 2.6 : 1.8}"/>`;
     if (dm === 'glass') return `<line ${xy} stroke="${C.glass}" stroke-width="5" stroke-opacity="${C.lt ? 1 : 0.8}"/><line ${xy} stroke="${C.stroke}" stroke-width="1"/>`;
     if (dm === 'paneled') return `<line ${xy} stroke="${C.stroke}" stroke-width="3.6"/><line ${xy} stroke="${C.glass}" stroke-width="1.6"/>`;
     return `<line ${xy} ${stk}${dm === 'metal' ? ' stroke-width="3.2"' : ''}/>`;
@@ -1302,12 +1344,14 @@ function opSvg(op, live) {
     s += `<path d="M0 0A${l} ${l} 0 0 ${sw} ${-hw} ${sd * l}M0 0A${l} ${l} 0 0 ${1 - sw} ${hw} ${sd * l}" stroke="${C.swing}" fill="none" stroke-width="1.2" stroke-dasharray="4 3"/>`;
   } else if (op.type === 'slide') {
     const sx = op.open ? -hw : -hw + w * 0.45;
-    const sf = dm === 'glass' || dm === 'paneled' ? ` fill="${C.glass}" fill-opacity="${C.lt ? 1 : 0.6}"` : '';
-    s += `<rect x="${-hw}" y="${-ht * 0.7}" width="${w * 0.55}" height="${ht * 0.7}" ${stk}${sf}/><rect x="${sx}" y="0" width="${w * 0.55}" height="${ht * 0.7}" ${stk}${sf}/>`;
+    const sf = C.outline ? ` fill="${C.bg}"` : (dm === 'glass' || dm === 'paneled' ? ` fill="${C.glass}" fill-opacity="${C.lt ? 1 : 0.6}"` : '');
+    const slideStk = C.outline ? `stroke="${C.wall}" fill="none" stroke-width="1.4"` : stk;
+    s += `<rect x="${-hw}" y="${-ht * 0.7}" width="${w * 0.55}" height="${ht * 0.7}" ${slideStk}${sf}/><rect x="${sx}" y="0" width="${w * 0.55}" height="${ht * 0.7}" ${slideStk}${sf}/>`;
   } else if (op.type === 'arch') {
     s += `<line x1="${-hw}" y1="${-ht}" x2="${hw}" y2="${-ht}" stroke="${C.swing}" stroke-dasharray="5 4" stroke-width="1.2"/><line x1="${-hw}" y1="${ht}" x2="${hw}" y2="${ht}" stroke="${C.swing}" stroke-dasharray="5 4" stroke-width="1.2"/>`;
   } else {
-    s += `<rect x="${-hw}" y="${-ht}" width="${w}" height="${t}" fill="${C.glass}" fill-opacity="${C.lt ? 1 : 0.45}" stroke="${C.stroke}" stroke-width="2"/><line x1="${-hw}" y1="0" x2="${hw}" y2="0" stroke="${C.stroke}" stroke-width="1.4"/>`;
+    if (C.outline) s += `<rect x="${-hw}" y="${-ht}" width="${w}" height="${t}" fill="${C.bg}" stroke="${C.wall}" stroke-width="1.5"/><line x1="${-hw}" y1="-1.5" x2="${hw}" y2="-1.5" stroke="${C.dim}" stroke-width="1.1"/><line x1="${-hw}" y1="1.5" x2="${hw}" y2="1.5" stroke="${C.dim}" stroke-width="1.1"/>`;
+    else s += `<rect x="${-hw}" y="${-ht}" width="${w}" height="${t}" fill="${C.glass}" fill-opacity="${C.lt ? 1 : 0.45}" stroke="${C.stroke}" stroke-width="2"/><line x1="${-hw}" y1="0" x2="${hw}" y2="0" stroke="${C.stroke}" stroke-width="1.4"/>`;
   }
   s += `</g>`;
   s += `<line x1="${-hw}" y1="${-ht}" x2="${-hw}" y2="${ht}" stroke="${C.wall}" stroke-width="2"/><line x1="${hw}" y1="${-ht}" x2="${hw}" y2="${ht}" stroke="${C.wall}" stroke-width="2"/>`;
@@ -1338,17 +1382,45 @@ function roofTopFaces(f) {
 }
 function roofSvg(f, col, fop, sk) {
   // yukarıdan bakış: en alçaktan en yükseğe, yalnızca görünen (üst) yüzler; mahya / kırma çizgileri kenarlardan okunur
-  const fs = roofTopFaces(f);
+  const fs = roofTopFaces(f), rop = pal().outline ? 0 : 0.07;
   // plan kuralı: çatı kesit düzleminin üstünde → çok hafif dolgu + kesikli kenarlar (mahya / kırma / saçak), alttaki plan okunur
   const dash = `stroke-dasharray="${Math.max(4, 8 / view.z)} ${Math.max(3, 5 / view.z)}"`;
-  return fs.map(q => `<polygon points="${q.map(p => p[0] + ',' + p[1]).join(' ')}" fill="${col}" fill-opacity="0.07" stroke="${sk}" stroke-width="1.4" ${dash} stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')
-    || `<rect x="${-f.w / 2}" y="${-f.d / 2}" width="${f.w}" height="${f.d}" fill="${col}" fill-opacity="0.07" stroke="${sk}" stroke-width="1.4" ${dash}/>`;
+  return fs.map(q => `<polygon points="${q.map(p => p[0] + ',' + p[1]).join(' ')}" fill="${col}" fill-opacity="${rop}" stroke="${sk}" stroke-width="1.4" ${dash} stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')
+    || `<rect x="${-f.w / 2}" y="${-f.d / 2}" width="${f.w}" height="${f.d}" fill="${col}" fill-opacity="${rop}" stroke="${sk}" stroke-width="1.4" ${dash}/>`;
+}
+// Çizgisel / CAD modu için mimari blok iç çizgileri (vitrifiye, tezgâh, kolon, bitki, araç, vb.)
+function furnCadSvg(f, hw, hd, sk) {
+  const t = f.type, w = f.w, d = f.d, at = `fill="none" stroke="${sk}" stroke-width="1.1" pointer-events="none"`;
+  if (t === 'wc') return `<rect x="${-hw + 2}" y="${-hd}" width="${w - 4}" height="${d * 0.28}" rx="3" ${at}/><ellipse cx="0" cy="${-hd + d * 0.62}" rx="${hw * 0.72}" ry="${d * 0.34}" ${at}/><ellipse cx="0" cy="${-hd + d * 0.62}" rx="${hw * 0.45}" ry="${d * 0.2}" ${at}/>`;
+  if (t === 'bidet') return `<ellipse cx="0" cy="${-hd + d * 0.56}" rx="${hw * 0.68}" ry="${d * 0.36}" ${at}/><circle cx="0" cy="${-hd + d * 0.16}" r="2.2" ${at}/>`;
+  if (t === 'basin') return `<rect x="${-hw * 0.72}" y="${-hd * 0.45}" width="${w * 0.72}" height="${d * 0.62}" rx="${Math.min(10, hw * 0.35)}" ${at}/><circle cx="0" cy="${hd * 0.12}" r="2.5" ${at}/><line x1="0" y1="${-hd + 2}" x2="0" y2="${-hd * 0.25}" ${at}/>`;
+  if (t === 'basin2') return [-hw / 2, hw / 2].map(cx => `<rect x="${cx - hw * 0.36}" y="${-hd * 0.45}" width="${hw * 0.72}" height="${d * 0.62}" rx="8" ${at}/><circle cx="${cx}" cy="${hd * 0.12}" r="2.4" ${at}/><line x1="${cx}" y1="${-hd + 2}" x2="${cx}" y2="${-hd * 0.25}" ${at}/>`).join('');
+  if (t === 'tub' && w > 18 && d > 18) return `<rect x="${-hw + 6}" y="${-hd + 6}" width="${w - 12}" height="${d - 12}" rx="10" ${at}/><circle cx="${-hw + 18}" cy="0" r="3" ${at}/>`;
+  if (t === 'shower' && w > 12 && d > 12) return `<rect x="${-hw + 4}" y="${-hd + 4}" width="${w - 8}" height="${d - 8}" ${at}/><line x1="${-hw + 4}" y1="${-hd + 4}" x2="${hw - 4}" y2="${hd - 4}" ${at}/><line x1="${hw - 4}" y1="${-hd + 4}" x2="${-hw + 4}" y2="${hd - 4}" ${at}/><circle cx="0" cy="0" r="3.5" fill="none" stroke="${sk}" stroke-width="1.2"/>`;
+  if (t === 'sinkK') return `<rect x="${-hw + 5}" y="${-hd + 5}" width="${w * 0.42}" height="${d - 10}" rx="4" ${at}/><circle cx="${-hw + 5 + w * 0.21}" cy="0" r="2.6" ${at}/>${[0.32, 0.48, 0.64, 0.8].map(p => `<line x1="${w * 0.04}" y1="${-hd + d * p * 0.8 + 4}" x2="${hw - 6}" y2="${-hd + d * p * 0.8 + 4}" ${at}/>`).join('')}`;
+  if (t === 'stove') {
+    const bx = hw * 0.42, by = hd * 0.42, r = Math.max(3, Math.min(hw, hd) * 0.26);
+    return [[-bx, -by], [bx, -by], [-bx, by], [bx, by]].map(([cx, cy]) => `<circle cx="${cx}" cy="${cy}" r="${r}" ${at}/><circle cx="${cx}" cy="${cy}" r="${r * 0.5}" ${at}/>`).join('');
+  }
+  if (t === 'wardrobe' || t === 'dresser' || t === 'cabU') return `<line x1="${-hw}" y1="0" x2="${hw}" y2="0" stroke="${sk}" stroke-width="0.9" stroke-dasharray="4 3" pointer-events="none"/><line x1="${-hw}" y1="${-hd}" x2="${hw}" y2="${hd}" stroke="${sk}" stroke-opacity="0.45" stroke-width="0.9" pointer-events="none"/>`;
+  if (t === 'chair' || t === 'ochair') return `<line x1="${-hw * 0.72}" y1="${-hd + 6}" x2="${hw * 0.72}" y2="${-hd + 6}" stroke="${sk}" stroke-width="1.3" pointer-events="none"/>`;
+  if (t === 'colSq') return `<line x1="${-hw}" y1="${-hd}" x2="${hw}" y2="${hd}" ${at}/><line x1="${hw}" y1="${-hd}" x2="${-hw}" y2="${hd}" ${at}/>`;
+  if (t === 'column') return `<line x1="${-hw * 0.7}" y1="${-hd * 0.7}" x2="${hw * 0.7}" y2="${hd * 0.7}" ${at}/><line x1="${hw * 0.7}" y1="${-hd * 0.7}" x2="${-hw * 0.7}" y2="${hd * 0.7}" ${at}/>`;
+  if (t === 'plant' || t === 'tree') {
+    const r = Math.min(hw, hd);
+    let out = `<circle cx="0" cy="0" r="${r * 0.34}" ${at}/>`;
+    for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; out += `<line x1="${Math.cos(a) * r * 0.28}" y1="${Math.sin(a) * r * 0.28}" x2="${Math.cos(a) * r * 0.88}" y2="${Math.sin(a) * r * 0.88}" ${at}/>`; }
+    return out;
+  }
+  if (t === 'car') return `<rect x="${-hw + 8}" y="${-hd + d * 0.28}" width="${w - 16}" height="${d * 0.44}" rx="6" ${at}/><line x1="${-hw + 5}" y1="${-hd + d * 0.2}" x2="${hw - 5}" y2="${-hd + d * 0.2}" ${at}/><line x1="${-hw + 5}" y1="${hd - d * 0.16}" x2="${hw - 5}" y2="${hd - d * 0.16}" ${at}/>`;
+  if (t === 'pool' && w > 30 && d > 30) return `<rect x="${-hw + 12}" y="${-hd + 12}" width="${w - 24}" height="${d - 24}" rx="4" ${at}/>`;
+  return '';
 }
 function furnBody(f) {
   if (Array.isArray(f.parts) && f.parts.length) return partsSvg(f); // çok parçalı mobilya (parts şeması v1)
-  const C = pal(), hw = f.w / 2, hd = f.d / 2, col = f.color, sk = C.furnStroke, fop = `fill-opacity="${C.furnOp}"`;
+  const C = pal(), hw = f.w / 2, hd = f.d / 2, col = f.color, sk = C.furnStroke, fop = `fill-opacity="${C.outline ? 0 : C.furnOp}"`;
   let s = '';
-  if (f.k === 'round') s += `<ellipse rx="${hw}" ry="${hd}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
+  if (f.k === 'round') s += `<ellipse rx="${hw}" ry="${hd}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>` + (C.outline ? furnCadSvg(f, hw, hd, sk) : '');
   else if (f.k === 'poly') s += `<polygon points="${(f.pts || []).map(p => p.x + ',' + p.y).join(' ')}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
   else if (f.k === 'roof') s += roofSvg(f, col, fop, sk);
   else if (f.k === 'stairs') {
@@ -1356,7 +1428,7 @@ function furnBody(f) {
     const st = stairSteps(f), R = Math.min(f.w, f.d) / 2;
     s += st.type === 'spiral' ? `<circle r="${R}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/><circle r="${R * 0.14}" fill="none" stroke="${sk}" stroke-width="1.5"/>`
       : `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
-    s += st.steps.map(q => `<polygon points="${stepCorners(q).map(p => p.x + ',' + p.y).join(' ')}" fill="${q.landing ? sk : 'none'}" fill-opacity="${q.landing ? 0.08 : 0}" stroke="${sk}" stroke-width="1.1"/>`).join('');
+    s += st.steps.map(q => `<polygon points="${stepCorners(q).map(p => p.x + ',' + p.y).join(' ')}" fill="${q.landing && !C.outline ? sk : 'none'}" fill-opacity="${q.landing && !C.outline ? 0.08 : 0}" stroke="${sk}" stroke-width="1.1"/>`).join('');
     const e = st.steps[st.steps.length - 1], b0 = st.steps[0], ux = e.dx, uy = e.dy;
     s += `<polyline points="${st.steps.map(q => q.x + ',' + q.y).join(' ')}" fill="none" stroke="${sk}" stroke-width="1.8"/><circle cx="${b0.x}" cy="${b0.y}" r="3" fill="${sk}"/>`
       + `<path d="M${e.x - ux * 10 - uy * 7} ${e.y - uy * 10 + ux * 7}L${e.x + ux * 4} ${e.y + uy * 4}L${e.x - ux * 10 + uy * 7} ${e.y - uy * 10 - ux * 7}" stroke="${sk}" stroke-width="2" fill="none"/>`;
@@ -1373,15 +1445,20 @@ function furnBody(f) {
       + `<path d="M${-aw} ${y1 + aw * 1.4}L0 ${y1}L${aw} ${y1 + aw * 1.4}" stroke="${sk}" stroke-width="2" fill="none"/>`;
     if (f.w >= 40 && f.d >= 80) s += `<text x="${tx}" y="0" font-size="${fs}" text-anchor="middle" dominant-baseline="central" fill="${C.text}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" transform="rotate(-90 ${tx} 0)">${pctTxt(sl.pct)} · ↑${Math.round(f.h)}</text>`;
   } else {
-    s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" rx="${Math.min(6, hw / 3)}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
+    s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" rx="${C.outline ? 0 : Math.min(6, hw / 3)}" fill="${col}" ${fop} stroke="${sk}" stroke-width="${C.outline ? 1.5 : 2}"/>`;
     if (f.k === 'bed') {
-      const two = f.w > 130, pw = two ? f.w / 2 - 12 : f.w - 16;
-      s += `<rect x="${-hw + 6}" y="${-hd + 6}" width="${pw}" height="${Math.min(40, f.d * 0.2)}" rx="6" fill="#fff" fill-opacity=".8" stroke="${sk}" stroke-width="1"/>`;
-      if (two) s += `<rect x="${6}" y="${-hd + 6}" width="${pw}" height="${Math.min(40, f.d * 0.2)}" rx="6" fill="#fff" fill-opacity=".8" stroke="${sk}" stroke-width="1"/>`;
+      const two = f.w > 130, pw = two ? f.w / 2 - 12 : f.w - 16, pFill = C.outline ? 'fill="none"' : 'fill="#fff" fill-opacity=".8"';
+      s += `<rect x="${-hw + 6}" y="${-hd + 6}" width="${pw}" height="${Math.min(40, f.d * 0.2)}" rx="${C.outline ? 2 : 6}" ${pFill} stroke="${sk}" stroke-width="1"/>`;
+      if (two) s += `<rect x="${6}" y="${-hd + 6}" width="${pw}" height="${Math.min(40, f.d * 0.2)}" rx="${C.outline ? 2 : 6}" ${pFill} stroke="${sk}" stroke-width="1"/>`;
       s += `<path d="M${-hw} ${-hd + f.d * 0.35}H${hw}" stroke="${sk}" stroke-width="1" fill="none"/>`;
     } else if (f.k === 'sofa') {
-      s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${Math.min(22, f.d * 0.25)}" rx="5" fill="#000" fill-opacity=".14" stroke="${sk}" stroke-width="1"/>`;
-    }
+      const sFill = C.outline ? 'fill="none"' : 'fill="#000" fill-opacity=".14"';
+      s += `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${Math.min(22, f.d * 0.25)}" rx="${C.outline ? 0 : 5}" ${sFill} stroke="${sk}" stroke-width="1"/>`;
+      if (C.outline) {
+        const arm = Math.min(18, f.w * 0.14), bh = Math.min(22, f.d * 0.25);
+        s += `<line x1="${-hw + arm}" y1="${-hd + bh}" x2="${-hw + arm}" y2="${hd}" stroke="${sk}" stroke-width="1"/><line x1="${hw - arm}" y1="${-hd + bh}" x2="${hw - arm}" y2="${hd}" stroke="${sk}" stroke-width="1"/>`;
+      }
+    } else if (C.outline) s += furnCadSvg(f, hw, hd, sk);
   }
   return s;
 }
@@ -2954,11 +3031,11 @@ function ifcJoinWalls(walls) {
 // Çok parçalı mobilya 2B: parçaların üstten görünüşü — yüksekte olan üstte çizilir, grup tek katman olarak saydamlaşır
 function partsSvg(f) {
   const C = pal(), s = partsScale(f), sk = C.furnStroke, hw = f.w / 2, hd = f.d / 2;
-  const ns = 'stroke="' + sk + '" stroke-width="1" vector-effect="non-scaling-stroke"';
+  const ns = 'stroke="' + sk + '" stroke-width="' + (C.outline ? 1.2 : 1) + '" vector-effect="non-scaling-stroke"';
   const top = p => partTilted(p) ? partBounds(p).z1 : p.z + p.h;
   const list = f.parts.map((p, i) => ({ p, i, t: top(p) })).sort((a, b) => a.t - b.t || a.i - b.i);
-  let out = `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="transparent"/><g opacity="${C.furnOp}" transform="scale(${s.sx} ${s.sy})">`;
-  for (const { p } of list) out += partShapeSvg(p, p.color || f.color || '#cbd5e1', ns);
+  let out = `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="transparent"/><g opacity="${C.outline ? 1 : C.furnOp}" transform="scale(${s.sx} ${s.sy})">`;
+  for (const { p } of list) out += partShapeSvg(p, C.outline ? 'none' : (p.color || f.color || '#cbd5e1'), ns);
   return out + '</g>';
 }
 // bir parçanın üstten şekli (öğe yerel cm); plan çizimi ve parça düzenleyici önizlemesi ortak kullanır
@@ -3010,7 +3087,7 @@ function furnTiltPts(f) {
 }
 function furnTiltSvg(f) {
   const C = pal();
-  return `<polygon points="${furnTiltPts(f).map(q => partR(q[0]) + ',' + partR(q[1])).join(' ')}" fill="${f.color || '#cbd5e1'}" fill-opacity="${C.furnOp}" stroke="${C.furnStroke}" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+  return `<polygon points="${furnTiltPts(f).map(q => partR(q[0]) + ',' + partR(q[1])).join(' ')}" fill="${f.color || '#cbd5e1'}" fill-opacity="${C.outline ? 0 : C.furnOp}" stroke="${C.furnStroke}" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
 }
 function furnSvg(f, live) {
   const C = pal(), fs = Math.max(12, Math.min(f.w, f.d) * 0.42);
@@ -3018,7 +3095,7 @@ function furnSvg(f, live) {
   const body = furnTilted(f) ? furnTiltSvg(f) : furnBody(f);
   let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${fe ? `<g stroke-dasharray="6 4">${body}</g>` : body}`;
   if (fe) s += `<text transform="translate(0 ${f.d / 2 + 9}) rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="11" fill="${C.sub}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">▲ +${Math.round(fe)}</text>`;
-  if (f.icon && f.k !== 'roof' && !(Array.isArray(f.parts) && f.parts.length)) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
+  if (!C.outline && f.icon && f.k !== 'roof' && !(Array.isArray(f.parts) && f.parts.length)) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
   if (f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="${C.text}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
   return s + '</g>';
 }
@@ -3215,7 +3292,7 @@ function layerStrings(f, live) {
     // döşemeler odaların altında, boşluklar oda dolgusunun üstünde (delik oda zeminini de keser)
     rooms: (f.slabs || []).map(s => slabSvg(s, live)).join('') + f.rooms.map(r => roomSvg(r, live)[0]).join('') + (f.voids || []).map(v => voidSvg(v, live)).join(''),
     roomLabels: f.rooms.map(r => roomSvg(r, live)[1]).join('') + groupVarsSvg(f, live),
-    walls: f.walls.map(w => wallSvg(w, live, f)).join('') + jointsSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
+    walls: jointsSvg(f) + f.walls.map(w => wallSvg(w, live, f)).join('') + wallHollowSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
     ops: f.ops.map(o => opSvg(o, live)).join(''),
     furn: f.furn.map(x => furnSvg(x, live)).join(''),
     dims: f.dims.map(d => dimSvg(d, live)).join('') + (f.sections || []).map(x => sectionSvg(x, live)).join(''),
@@ -3346,7 +3423,7 @@ function underlaySvg() {
   const uf = underlayFloor(); if (!uf) return '';
   const C = pal(), sw = Math.max(1.5, 1.5 / view.z);
   let s = (uf.slabs || []).filter(o => o.pts && o.pts.length > 2).map(o => `<polygon points="${o.pts.map(p => p.x + ',' + p.y).join(' ')}" fill="none" stroke="${C.text}" stroke-width="${sw * 1.5}" stroke-dasharray="${8 / view.z} ${4 / view.z}"/>`).join('');
-  s += jointsSvg(uf) + uf.walls.map(w => wallSvg(w, false, uf)).join('');
+  s += jointsSvg(uf) + uf.walls.map(w => wallSvg(w, false, uf)).join('') + wallHollowSvg(uf);
   s += (uf.voids || []).map(v => voidSvg(v, false)).join('');
   s += uf.furn.filter(isStructFurn).map(o => furnSvg(o, false)).join('');
   return `<g opacity="${underlay.op}" pointer-events="none" data-underlay="${uf.id}">${s}</g>`;
@@ -5808,7 +5885,8 @@ function cmdList() {
   return tools.concat([
     act('undo', '↶', 'Geri al', 'Undo', 'Ctrl+Z', undo, true),
     act('redo', '↷', 'Yinele', 'Redo', 'Ctrl+Y', redo, true),
-    act('2d', '▭', '2B görünüm', '2D view', 'Esc (3B)', () => show3D(false), true, 'plan'),
+    act('2d', '▭', '2B katı görünüm', '2D solid view', 'Esc (3B)', () => { ui.outline = false; show3D(false); syncViewSwitch(); render(); }, true, 'plan'),
+    act('outline', '⌗', '2B çizgisel / CAD görünümü', '2D outline / CAD view', 'J', () => setOutline(!ui.outline), true, 'cad wireframe çizgi outline'),
     act('3d', '🧊', '3B görünüm', '3D view', '', () => show3D(true), true, 'model'),
     act('fit', '⤢', 'Sığdır', 'Zoom to fit', '0', () => ui.view3d ? set3DCam('fit') : fit(), true, 'zoom extents yakınlaştır'),
     act('iso', '◇', 'İzometrik görünüş (3B)', 'Isometric view (3D)', '', () => { if (!ui.view3d) show3D(true); set3DCam('iso'); }, true, 'axonometric aksonometrik isometric parallel paralel'),
@@ -5993,6 +6071,7 @@ window.addEventListener('keydown', e => {
   if (e.shiftKey && (k === 'h' || k === 'v') && sel.length) { flipSel(k); return; } // Shift+H / Shift+V: aynala (#28)
   if (map[k]) { setTool(map[k]); return; }
   if (k === 'g') { $('#cSnap').click(); return; }
+  if (k === 'j') { setOutline(!ui.outline); return; }
   if (k === '0') fit(); else if (k === '+' || k === '=') zoomBtn(1.25); else if (k === '-') zoomBtn(0.8);
 });
 window.addEventListener('keyup', e => { if (e.key === ' ') ui.space = false; keys3D.delete(e.key.toLowerCase()); });
@@ -6034,6 +6113,7 @@ function aiSetupPrompt() {
 function helpModal() {
   const rows = isEN() ? [
     [':', 'Command line: run any tool or action by name (English or Turkish), shortcut keys shown'],
+    ['J', 'Toggle 2D Outline / CAD wireframe view (hollow walls, unfilled furniture CAD blocks)'],
     ['V / H', 'Select / Pan (hold Space for temporary pan)'],
     ['W', 'Draw wall (type number + Enter: exact length in cm)'],
     ['Q', 'Draw railing (balcony, terrace, stair opening; style in the panel)'],
@@ -6086,6 +6166,7 @@ function helpModal() {
     ['Ctrl+G / Ctrl+Shift+G', 'Group / ungroup selected objects'],
   ] : [
     [':', 'Komut satırı: araç ya da eylemi adıyla çalıştır (Türkçe veya İngilizce), kısayolları gösterir'],
+    ['J', '2B Çizgisel / AutoCAD görünümünü aç/kapa (içi boş duvarlar, dolgusuz CAD blokları)'],
     ['V / H', 'Seç / Kaydır (Boşluk basılı: geçici kaydır)'],
     ['W', 'Duvar çiz (rakam + Enter: tam uzunluk)'],
     ['Q', 'Korkuluk çiz (balkon, teras, merdiven boşluğu; stil panelden)'],
@@ -8402,9 +8483,20 @@ function orient3DFrom2D(fo) {
   T3.cam.position.set(tx + d * 0.62, elev + 80 + d * 0.92, tz + d * 0.9);
   T3.ctl.update(); fitOrtho();
 }
+function syncViewSwitch() {
+  $('#b2d').classList.toggle('on', !ui.view3d && !ui.outline);
+  const bCad = $('#bCad'); if (bCad) bCad.classList.toggle('on', !ui.view3d && !!ui.outline);
+  $('#b3d').classList.toggle('on', !!ui.view3d);
+  const chk = $('#cOutline'); if (chk) chk.checked = !!ui.outline;
+}
+function setOutline(on) {
+  ui.outline = !!on;
+  if (ui.view3d) show3D(false);
+  else { syncViewSwitch(); render(); }
+}
 function show3D(on) {
   if (on && (!window.THREE || !THREE.OrbitControls)) { toast(L('3B için internet bağlantısı gerekli (Three.js yüklenemedi)', 'Internet connection required for 3D (Three.js failed to load)')); return; }
-  ui.view3d = on; keys3D.clear(); $('#v3d').style.display = on ? 'block' : 'none'; $('#b2d').classList.toggle('on', !on); $('#b3d').classList.toggle('on', on);
+  ui.view3d = on; keys3D.clear(); $('#v3d').style.display = on ? 'block' : 'none'; syncViewSwitch();
   $('#zoomctl').style.display = on ? 'none' : ''; updateTools(); syncExportTitles();
   if (on) {
     init3D();
@@ -9844,6 +9936,11 @@ function applyLangUI() {
   $('#bRedo').title = L('Yinele (Ctrl+Y)', 'Redo (Ctrl+Y)');
   $('#bPrint').textContent = L('🖨 PDF / Yazdır', '🖨 PDF / Print');
   $('#b2d').textContent = L('2B', '2D');
+  $('#b2d').title = L('2B Katı Görünüm', '2D Solid View');
+  if ($('#bCad')) {
+    $('#bCad').textContent = 'CAD';
+    $('#bCad').title = L('2B Çizgisel (CAD) Görünüm (J)', '2D Outline (CAD) View (J)');
+  }
   $('#b3d').textContent = L('3B', '3D');
   $('#bLang').textContent = isEN() ? '🌐 EN' : '🌐 TR';
   $('#bLang').title = L('Switch to English', 'Türkçe diline geç');
@@ -9855,6 +9952,8 @@ function applyLangUI() {
   if ($('#bInspect')) $('#bInspect').title = L('Özellikler paneli', 'Properties panel');
   $('#lblSnap').textContent = L('Yakala (G)', 'Snap (G)');
   $('#lblDims').textContent = L('Duvar ölçüleri', 'Wall dimensions');
+  if ($('#lblOutline')) $('#lblOutline').textContent = L('Çizgisel', 'Outline');
+  if ($('#cOutline') && $('#cOutline').parentElement) $('#cOutline').parentElement.title = L('2B çizgisel / AutoCAD görünümü (J)', '2D outline / AutoCAD view (J)');
   $('#lblConn').textContent = L('Bitişik duvarlar', 'Connected walls');
   $('#cConn').title = L('Sürüklerken bitişik duvar uçları birlikte gelir (Alt basılıysa tersine döner)', 'Adjacent wall ends follow the drag (hold Alt to invert)');
   $('#lblBoxSel').textContent = L('Kutu Seçim', 'Box Select');
@@ -9914,7 +10013,9 @@ $('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpMo
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
 $('#bPng').onclick = e => (ui.view3d ? export3DRender(e && e.shiftKey) : exportPng()); $('#bPrint').onclick = exportPrint;
 $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { type: 'image/svg+xml' }));
-$('#b2d').onclick = () => show3D(false); $('#b3d').onclick = () => show3D(true);
+$('#b2d').onclick = () => { ui.outline = false; show3D(false); syncViewSwitch(); render(); };
+if ($('#bCad')) $('#bCad').onclick = () => setOutline(true);
+$('#b3d').onclick = () => show3D(true);
 $('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && T3.walk) walkToFloor(walkFloorIdx()); if (T3 && ui.view3d) build3D(true); };
 $('#b3dFit').onclick = () => set3DCam('fit');
 $('#b3dIso').onclick = () => set3DCam('iso');
@@ -9942,6 +10043,7 @@ $('#cConn').onchange = e => { ui.connWalls = e.target.checked; };
 $('#sBoxSel').onchange = e => { ui.boxSel = e.target.value; };
 $('#cAngle').onchange = e => { ui.angle = e.target.checked; };
 $('#cDims').onchange = e => { ui.dims = e.target.checked; render(); };
+if ($('#cOutline')) $('#cOutline').onchange = e => setOutline(e.target.checked);
 $('#sGrid').onchange = e => {
   if (e.target.value === 'custom') {
     $('#lblGridCustom').style.display = 'inline-flex';
