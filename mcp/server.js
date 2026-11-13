@@ -112,6 +112,118 @@ const ROOMCOL = ['#bfdbfe', '#fde68a', '#bbf7d0', '#fecaca', '#e9d5ff', '#fed7aa
 const FLOORPATS = ['none', 'wood', 'tile', 'carpet', 'marble', 'concrete', 'stone', 'grass', 'water', 'gravel', 'deck', 'asphalt', 'glass']; // + 'tex:<id>' custom textures (#40)
 // a finish is a built-in pattern or "tex:<id>" of a texture listed in project.textures (image data lives in the browser)
 const finishOk = v => FLOORPATS.includes(v) || (typeof v === 'string' && /^tex:/.test(v) && ((P && P.textures) || []).some(t => 'tex:' + t.id === v));
+/* TEXGEN:BEGIN — procedural floor textures. Pure JS (no DOM, no globals), pasted VERBATIM into
+   app.js and mcp/server.js; tests/texture-gen.test.js fails if the two copies differ.
+   texGen(spec) → { svg, w, h, name, spec }: a seamless SVG tile whose viewBox is in cm, so one
+   repeat is exactly w × h cm (that is what P.textures[].w / .h store). texGenUrl(svg) → data: URL. */
+const TEXGEN_PATTERNS = {
+  tile: ['Karo', 'Tiles'], brick: ['Tuğla', 'Brick'], plank: ['Parke / tahta', 'Planks'], basket: ['Hasır örgü parke', 'Basket weave'],
+  hex: ['Altıgen karo', 'Hex tiles'], checker: ['Dama', 'Checkerboard'], terrazzo: ['Terrazzo', 'Terrazzo'], stripe: ['Çizgili', 'Stripes'],
+};
+// w × h = one unit (tile, brick, plank) in cm; joint = grout / mortar / seam width in cm
+const TEXGEN_DEF = {
+  tile: { w: 60, h: 60, joint: 0.4, color: '#e7e5e4', color2: '#a8a29e' },
+  brick: { w: 24, h: 7, joint: 1, color: '#b45309', color2: '#d6d3d1' },
+  plank: { w: 120, h: 18, joint: 0.3, color: '#b08968', color2: '#6b4a2e' },
+  basket: { w: 30, h: 10, joint: 0.3, color: '#c8a27a', color2: '#6b4a2e' },
+  hex: { w: 20, h: 20, joint: 0.4, color: '#f5f5f4', color2: '#78716c' },
+  checker: { w: 40, h: 40, joint: 0, color: '#f5f5f4', color2: '#292524' },
+  terrazzo: { w: 60, h: 60, joint: 0, color: '#e7e5e4', color2: '#57534e' },
+  stripe: { w: 100, h: 10, joint: 0, color: '#e2e8f0', color2: '#94a3b8' },
+};
+const texgenHex = (c, d) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase()
+  : typeof c === 'string' && /^#[0-9a-f]{3}$/i.test(c) ? ('#' + c[1] + c[1] + c[2] + c[2] + c[3] + c[3]).toLowerCase() : d;
+function texgenMix(a, b, t) {
+  const p = s => [1, 3, 5].map(i => parseInt(s.slice(i, i + 2), 16)), A = p(a), B = p(b);
+  return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, '0')).join('');
+}
+const texgenShade = (c, k) => k >= 0 ? texgenMix(c, '#ffffff', Math.min(1, k)) : texgenMix(c, '#000000', Math.min(1, -k));
+function texgenRng(seed) { // mulberry32: same seed → same texture in the app and in the MCP server
+  let a = (seed >>> 0) || 1;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+function texGenClean(spec) {
+  const s = spec && typeof spec === 'object' ? spec : {};
+  const pattern = TEXGEN_PATTERNS[s.pattern] ? s.pattern : 'tile', d = TEXGEN_DEF[pattern];
+  const num = (v, def, lo, hi) => { const n = +v; return Number.isFinite(n) && v !== '' && v != null ? Math.min(hi, Math.max(lo, n)) : def; };
+  const w = num(s.w, d.w, 1, 500), h = num(s.h, d.h, 1, 500);
+  return {
+    pattern, w, h,
+    joint: num(s.joint, d.joint, 0, Math.min(w, h) / 3),
+    color: texgenHex(s.color, d.color), color2: texgenHex(s.color2, d.color2),
+    vary: num(s.vary, 0.12, 0, 0.6),
+    seed: Math.round(num(s.seed, 1, 0, 999999)),
+    name: typeof s.name === 'string' ? s.name.trim().slice(0, 60) : '',
+  };
+}
+function texGen(spec) {
+  const s = texGenClean(spec), { pattern, w, h, joint: j, color, color2, vary } = s, rnd = texgenRng(s.seed + 7);
+  const f = v => +v.toFixed(3), vc = () => texgenShade(color, (rnd() * 2 - 1) * vary);
+  let W, H, out = '';
+  const rect = (x, y, rw, rh, fill, op) => { if (rw > 0 && rh > 0) out += `<rect x="${f(x)}" y="${f(y)}" width="${f(rw)}" height="${f(rh)}" fill="${fill}"${op ? ` opacity="${op}"` : ''}/>`; };
+  // a unit that crosses the right / bottom edge is drawn again one period earlier, so the tile is seamless
+  const wrapRect = (x, y, rw, rh, fill, op) => {
+    for (const dx of x + rw > W + 1e-6 ? [0, -W] : [0]) for (const dy of y + rh > H + 1e-6 ? [0, -H] : [0]) rect(x + dx, y + dy, rw, rh, fill, op);
+  };
+  const unit = (x, y, uw, uh, fill) => wrapRect(x + j / 2, y + j / 2, uw - j, uh - j, fill);
+  const grain = (x, y, uw, uh, fill, along) => { // a few thin darker lines along the board
+    const n = 2 + Math.floor(rnd() * 2), gc = texgenShade(fill, -0.14);
+    for (let i = 0; i < n; i++) {
+      const t = 0.2 + rnd() * 0.6, len = 0.35 + rnd() * 0.55, st = rnd() * (1 - len);
+      if (along === 'x') wrapRect(x + j / 2 + (uw - j) * st, y + j / 2 + (uh - j) * t, (uw - j) * len, Math.max(0.08, (uh - j) * 0.02), gc, 0.55);
+      else wrapRect(x + j / 2 + (uw - j) * t, y + j / 2 + (uh - j) * st, Math.max(0.08, (uw - j) * 0.02), (uh - j) * len, gc, 0.55);
+    }
+  };
+  if (pattern === 'tile' || pattern === 'checker') {
+    W = 4 * w; H = 4 * h; rect(0, 0, W, H, j > 0 ? color2 : color);
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+      const base = pattern === 'checker' && (r + c) % 2 ? color2 : color;
+      const fill = pattern === 'checker' ? texgenShade(base, (rnd() * 2 - 1) * vary * 0.5) : vc();
+      if (j > 0) unit(c * w, r * h, w, h, fill); else rect(c * w, r * h, w, h, fill);
+    }
+  } else if (pattern === 'brick' || pattern === 'plank') {
+    const cols = pattern === 'brick' ? 4 : 2, offs = pattern === 'brick' ? [0, 0.5, 0, 0.5] : [0, 0.5, 0.25, 0.75];
+    W = cols * w; H = 4 * h; rect(0, 0, W, H, color2);
+    for (let r = 0; r < 4; r++) for (let c = 0; c < cols; c++) {
+      const x = c * w + offs[r] * w, fill = vc();
+      unit(x, r * h, w, h, fill);
+      if (pattern === 'plank') grain(x, r * h, w, h, fill, 'x');
+    }
+  } else if (pattern === 'basket') {
+    const n = Math.max(2, Math.round(w / h)), B = n * h; W = H = 2 * B; rect(0, 0, W, H, color2);
+    for (let bi = 0; bi < 2; bi++) for (let bj = 0; bj < 2; bj++) for (let k = 0; k < n; k++) {
+      const fill = vc(), bx = bi * B, by = bj * B;
+      if ((bi + bj) % 2 === 0) { unit(bx, by + k * h, B, h, fill); grain(bx, by + k * h, B, h, fill, 'x'); }
+      else { unit(bx + k * h, by, h, B, fill); grain(bx + k * h, by, h, B, fill, 'y'); }
+    }
+  } else if (pattern === 'hex') {
+    // pointy-top hexagons, w = across the flats; period w × √3·w
+    const sd = w / Math.sqrt(3), r0 = Math.max(0.01, sd - j / Math.sqrt(3)); W = w; H = 3 * sd; rect(0, 0, W, H, j > 0 ? color2 : color);
+    for (const [cx, cy] of [[0, 0], [W, 0], [0, H], [W, H], [W / 2, 1.5 * sd]]) {
+      const pts = []; for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; pts.push(f(cx + r0 * Math.cos(a)) + ',' + f(cy + r0 * Math.sin(a))); }
+      out += `<polygon points="${pts.join(' ')}" fill="${vc()}"/>`;
+    }
+  } else if (pattern === 'terrazzo') {
+    W = w; H = h; rect(0, 0, W, H, color);
+    const cols = [color2, texgenMix(color2, color, 0.5), texgenShade(color, -0.25), texgenShade(color, 0.6)];
+    const n = Math.min(500, Math.round(W * H / 30));
+    for (let i = 0; i < n; i++) {
+      const cx = rnd() * W, cy = rnd() * H, r = 0.4 + rnd() * rnd() * 2.2, k = 3 + Math.floor(rnd() * 3), a0 = rnd() * 6.283, fill = cols[Math.floor(rnd() * cols.length)];
+      const ring = []; for (let q = 0; q < k; q++) { const a = a0 + q * 6.283 / k + (rnd() - 0.5) * 0.8, rr = r * (0.6 + rnd() * 0.4); ring.push([Math.cos(a) * rr, Math.sin(a) * rr]); }
+      for (const dx of cx + r > W ? [0, -W] : [0]) for (const dy of cy + r > H ? [0, -H] : [0])
+        out += `<polygon points="${ring.map(p => f(cx + dx + p[0]) + ',' + f(cy + dy + p[1])).join(' ')}" fill="${fill}"/>`;
+    }
+  } else { // stripe: bands of height h, alternating colour / colour 2
+    W = w; H = 4 * h;
+    for (let r = 0; r < 4; r++) rect(0, r * h, W, h, texgenShade(r % 2 ? color2 : color, (rnd() * 2 - 1) * vary * 0.4));
+  }
+  const k = Math.min(16, 1024 / Math.max(W, H)), px = Math.max(1, Math.round(W * k)), py = Math.max(1, Math.round(H * k));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${py}" viewBox="0 0 ${f(W)} ${f(H)}" preserveAspectRatio="none">${out}</svg>`;
+  const nm = s.name || (TEXGEN_PATTERNS[pattern][1] + ' ' + (pattern === 'hex' ? f(w) : f(w) + '×' + f(h)));
+  return { svg, w: f(W), h: f(H), name: nm, spec: s };
+}
+const texGenUrl = svg => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+/* TEXGEN:END */
 const FINISH_DOC = FLOORPATS.join(' | ') + ' | "tex:<id>" (a custom texture from project.textures)';
 // door material / colours (#41), mirrors DOOR_MATS in app.js
 const DOOR_MATS = ['wood', 'glass', 'paneled', 'metal'];
@@ -2065,6 +2177,7 @@ function summarize() {
   const p = proj();
   const out = [];
   out.push('Project "' + p.name + '" — schema v' + p.v + ', grid ' + p.grid + ' cm (' + p.gridType + '), default wall ' + p.wallT + ' cm × ' + p.wallH + ' cm high, ' + p.floors.length + ' floor(s)');
+  if ((p.textures || []).length) out.push('Custom textures: ' + p.textures.map(t => 'tex:' + t.id + ' "' + t.name + '" ' + t.w + '×' + t.h + ' cm').join(', '));
   p.floors.forEach((f, i) => {
     out.push('');
     out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts, ' + (f.drafts || []).length + ' 2D drafting');
@@ -2254,7 +2367,10 @@ tool('pull_from_browser',
     const u = bridgeUrl(a);
     const j = await httpJson('GET', new URL('/__plan.json', u));
     if (!j || !j.plan) throw new Error('The bridge has no plan yet. Open ' + u.origin + '/ (the tab pushes your current plan automatically) or call push_to_browser first.');
+    // the app pushes plans without image data (it keeps images in IndexedDB); keep the images this server already has
+    const keep = P && P.texData && typeof P.texData === 'object' ? P.texData : null;
     P = normalizeProject(j.plan);
+    if (keep && !P.texData) { const td = {}; for (const t of P.textures) if (keep[t.id]) td[t.id] = keep[t.id]; if (Object.keys(td).length) P.texData = td; }
     return 'Pulled plan revision ' + j.rev + ' ("' + P.name + '") from the browser.\n\n' + summarize();
   });
 
@@ -2455,6 +2571,104 @@ tool('add_slab',
   a => {
     const s = mkSlab(floorOf(a), a);
     return 'Added slab ' + s.id + ' "' + s.name + '" — area ' + fmtArea(polyArea(s.pts)) + ', ' + s.t + ' cm thick.';
+  });
+
+// Custom textures (#40): metadata in project.textures, the image in project.texData[id] (a data: URL). The app moves
+// texData into its IndexedDB on push_to_browser / load / 📂 Open, exactly like a ⬇ JSON export, and strips it from the plan.
+const TEX_FILE_MAX = 4 * 1024 * 1024;
+const TEX_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml' };
+const TEX_URL_RX = /^data:image\/(png|jpeg|webp|gif|svg\+xml)[;,]/;
+const pngSize = b => b.length > 24 && b.readUInt32BE(0) === 0x89504e47 ? { w: b.readUInt32BE(16), h: b.readUInt32BE(20) } : null;
+const applyToArg = { type: 'array', items: { type: 'string' }, description: 'Optional: apply the texture right away. Room ids, slab ids, or "floorSlab:<floorIndex>" for a whole floor slab. Any floor.' };
+// resolve applyTo refs (throws on an unknown one, before anything changes); with id, sets the finish
+function texApply(id, refs) {
+  const p = proj(), k = 'tex:' + id, done = [];
+  for (const ref of refs || []) {
+    let hit = null;
+    p.floors.forEach((f, i) => {
+      if (hit) return;
+      if (ref === 'floorSlab:' + i || ref === 'floorSlab:' + f.id) { hit = 'floor slab of floor ' + i; if (id) f.slabFloor = k; return; }
+      const o = f.rooms.find(x => x.id === ref) || f.slabs.find(x => x.id === ref);
+      if (o) { hit = (f.rooms.includes(o) ? 'room ' : 'slab ') + o.id + (o.name ? ' "' + o.name + '"' : '') + ' (floor ' + i + ')'; if (id) o.floor = k; }
+    });
+    if (!hit) throw new Error('applyTo: "' + ref + '" is not a room id, slab id or "floorSlab:<floorIndex>" (see summarize)');
+    done.push(hit);
+  }
+  return done;
+}
+function addTex(name, w, h, data, refs) {
+  texApply(null, refs);
+  const p = proj(), id = uid();
+  p.textures.push({ id, name: String(name || 'Texture').slice(0, 60), w: clamp(+w || 60, 1, 5000), h: clamp(+h || +w || 60, 1, 5000) });
+  p.texData = Object.assign({}, p.texData && typeof p.texData === 'object' ? p.texData : {}, { [id]: data });
+  const t = p.textures[p.textures.length - 1], done = texApply(id, refs);
+  return 'Added texture ' + id + ' "' + t.name + '" — one repeat = ' + t.w + ' × ' + t.h + ' cm. Use it as floorPattern / floor "tex:' + id + '".'
+    + (done.length ? '\nApplied to: ' + done.join(', ') + '.' : '')
+    + '\nCall push_to_browser to show it in the app (the image travels with the plan).';
+}
+
+tool('create_texture',
+  'Create a seamless, tileable floor texture from a pattern generator (the same one as the app\'s 🎨 Create pattern dialog) and add it to the project. Works without any image tool. Pick the pattern and sizes that match the user\'s description: tile (square / rectangular tiles with grout), brick, plank (staggered floor boards / parquet), basket (basket-weave parquet, unitWidth ≈ n × unitHeight), hex (hexagon tiles, unitWidth = across the flats), checker, terrazzo, stripe. Then apply it with applyTo, or later with floorPattern "tex:<id>" on add_room / add_slab / update_object.',
+  {
+    pattern: { type: 'string', enum: Object.keys(TEXGEN_PATTERNS) },
+    color: { type: 'string', description: '#hex main colour (tile / board / brick / base).' },
+    color2: { type: 'string', description: '#hex grout / mortar / seam colour, second checker or stripe colour, or terrazzo chip colour.' },
+    unitWidth: { type: 'number', description: 'cm, 1..500: one tile / brick / board length (terrazzo, stripe: the repeat width). Defaults per pattern (tile 60, brick 24, plank 120, basket 30, hex 20).' },
+    unitHeight: { type: 'number', description: 'cm, 1..500: one tile / brick / board width (stripe: band width). Ignored for hex.' },
+    joint: { type: 'number', description: 'Grout / seam width in cm (0 = none). Default per pattern (0.3–1).' },
+    variation: { type: 'number', description: 'Shade variation between units, 0..0.6. Default 0.12 (0 = perfectly uniform).' },
+    seed: { type: 'integer', description: 'Random seed for the shade layout / terrazzo chips. Same seed = same texture.' },
+    name: { type: 'string', description: 'Texture name shown in the finish list. Default: pattern + size.' },
+    applyTo: applyToArg,
+  },
+  ['pattern'],
+  a => {
+    const g = texGen({ pattern: a.pattern, color: a.color, color2: a.color2, w: a.unitWidth, h: a.unitHeight, joint: a.joint, vary: a.variation, seed: a.seed, name: a.name });
+    return addTex(g.name, g.w, g.h, texGenUrl(g.svg), a.applyTo);
+  });
+
+tool('add_texture',
+  'Add a texture from an image you already have — e.g. one you generated with an image tool or that the user gave you (PNG, JPEG, WebP, GIF or SVG, ≤ 4 MB; make it seamless / tileable). Give the real-world size one copy of the image covers.',
+  {
+    path: { type: 'string', description: 'Image file path, relative to the server working directory or absolute.' },
+    dataUrl: { type: 'string', description: 'Alternative to path: a data:image/…;base64,… URL.' },
+    name: { type: 'string', description: 'Texture name. Default: the file name.' },
+    width: { type: 'number', description: 'Real-world repeat width in cm (what one copy of the image covers). Default 60.' },
+    height: { type: 'number', description: 'Repeat height in cm. Default: from the PNG aspect ratio, else = width.' },
+    applyTo: applyToArg,
+  },
+  [],
+  a => {
+    let data, name = a.name, aspect = null;
+    if (a.path) {
+      const p = path.resolve(String(a.path)), mime = TEX_MIME[path.extname(p).toLowerCase()];
+      if (!mime) throw new Error('Unsupported image type "' + path.extname(p) + '" — use ' + Object.keys(TEX_MIME).join(' '));
+      const buf = fs.readFileSync(p);
+      if (buf.length > TEX_FILE_MAX) throw new Error('Image is ' + Math.round(buf.length / 1024) + ' KB; the limit is 4 MB. Downscale it (1024 px on the long side is plenty).');
+      const sz = pngSize(buf); if (sz && sz.w) aspect = sz.h / sz.w;
+      data = 'data:' + mime + ';base64,' + buf.toString('base64');
+      name = name || path.basename(p).replace(/\.[^.]+$/, '');
+    } else if (typeof a.dataUrl === 'string') {
+      if (!TEX_URL_RX.test(a.dataUrl)) throw new Error('dataUrl must start with data:image/png|jpeg|webp|gif|svg+xml');
+      if (a.dataUrl.length > TEX_FILE_MAX * 1.4) throw new Error('dataUrl is larger than 4 MB of image data');
+      data = a.dataUrl;
+      const m = a.dataUrl.match(/^data:image\/png;base64,(.{0,64})/); if (m) { const s = pngSize(Buffer.from(m[1], 'base64')); if (s && s.w) aspect = s.h / s.w; }
+    } else throw new Error('Give path or dataUrl');
+    const w = +a.width > 0 ? +a.width : 60, h = +a.height > 0 ? +a.height : aspect ? Math.round(w * aspect * 10) / 10 : w;
+    return addTex(name || 'Texture', w, h, data, a.applyTo);
+  });
+
+tool('list_textures',
+  'List the project\'s custom textures (id, name, repeat size, where they are used). Use "tex:<id>" as a room / slab / floor slab finish.',
+  {}, [],
+  () => {
+    const p = proj(), ts = p.textures || [];
+    if (!ts.length) return 'No custom textures yet. Make one with create_texture (pattern generator) or add_texture (an image).';
+    return ts.map(t => {
+      const k = 'tex:' + t.id, used = [];
+      p.floors.forEach((f, i) => { if (f.slabFloor === k) used.push('floor slab ' + i); for (const o of [...f.rooms, ...f.slabs]) if (o.floor === k) used.push(o.id); });
+      return t.id + ' "' + t.name + '" — ' + t.w + ' × ' + t.h + ' cm repeat' + ((p.texData || {})[t.id] ? '' : ' (image lives in the browser)') + (used.length ? ' — used by ' + used.join(', ') : ' — unused');
+    }).join('\n');
   });
 
 tool('add_void',
@@ -2831,6 +3045,8 @@ const INSTRUCTIONS =
   'The user can queue natural-language instructions in the app\'s floating AI panel - read them with get_user_requests and mark them done with ack_user_requests. ' +
   'SAFETY: every push_to_browser is snapshotted (before + after) by the bridge; if the user says "go back" / "undo that" / "restore", call list_snapshots then restore_snapshot. ' +
   'Pass a short label to push_to_browser ("add a bathroom") so the history is readable. ' +
+  'TEXTURES: for a floor finish that is not built in (a specific tile, parquet, brick, terrazzo…) call create_texture (seamless pattern generator, no image tool needed) ' +
+  'or add_texture (an image file you generated / were given), with applyTo = room / slab ids; then push_to_browser. list_textures shows what exists. ' +
   'MULTI-PART FURNITURE: anything not in the catalogue (billiards table, bunk with desk, kitchen island…) is ONE item built from parts: ' +
   'get_furniture_schema → create_furniture → add_component (z = bottom elevation, item-local cm) → validate_furniture → save_furniture. ' +
   'Never fake one object with several add_furniture items: separate items all stand on the floor in 3D.';

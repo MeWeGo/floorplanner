@@ -1046,6 +1046,46 @@ check('outdoor finishes, custom textures and door materials (issues #39, #40, #4
   return `7 finish fills, texture in IndexedDB + JSON, ${d3.water} water surfaces, glass + metal doors in 3D`;
 });
 
+check('texture dialog: create a pattern, upload tab, AI tab, agent-made SVG texture in 2D + 3D', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 500, 400); const f = F();
+    f.rooms.push({ id: uid(), name: 'R', color: '#cbd5e1', floor: 'none', pts: [{ x: 0, y: 0 }, { x: 500, y: 0 }, { x: 500, y: 400 }, { x: 0, y: 400 }] });
+    commit(); sel = [f.rooms[0].id]; refresh();
+    const out = {};
+    const btn = document.querySelector('#props [data-act="texadd"]'); out.btn = !!btn; btn.click();
+    out.modal = ui.modal; out.prev = !!document.querySelector('#txPrev');
+    document.querySelector('[data-tx-pat="brick"]').click();
+    const c = document.querySelector('[data-tx="color"]'); c.value = '#7f1d1d'; c.dispatchEvent(new Event('input', { bubbles: true }));
+    out.spec = ui.tx.spec.pattern + ' ' + ui.tx.spec.color;
+    const n0 = P.textures.length; document.querySelector('[data-tx-go]').click();
+    for (let i = 0; i < 40 && P.textures.length === n0; i++) await new Promise(r => setTimeout(r, 50));
+    const t = P.textures[P.textures.length - 1]; out.added = P.textures.length - n0; out.size = t && t.w + 'x' + t.h;
+    out.applied = F().rooms[0].floor === 'tex:' + (t && t.id); out.closed = ui.modal === null;
+    await new Promise(r => setTimeout(r, 300));
+    out.png = (TEX.get(t.id) || {}).data.startsWith('data:image/png'); out.ready = (TEX.get(t.id) || {}).ready;
+    openTexDialog('up'); out.drop = !!document.querySelector('[data-tx-file]');
+    openTexDialog('ai'); out.ai = !!document.querySelector('[data-tx-aisetup]') || !!document.querySelector('[data-tx-ai]'); closeModal();
+    // an agent-made texture arrives as an SVG data URL inside texData (create_texture → push_to_browser)
+    const g = texGen({ pattern: 'hex', color: '#0e7490' }), proj = JSON.parse(JSON.stringify(P));
+    proj.textures.push({ id: 'agenthex', name: g.name, w: g.w, h: g.h }); proj.texData = { agenthex: texGenUrl(g.svg) };
+    proj.floors[0].rooms[0].floor = 'tex:agenthex'; loadProject(proj);
+    await new Promise(r => setTimeout(r, 400)); refresh();
+    out.svgReady = !!(TEX.get('agenthex') || {}).ready; out.svgFill = !!document.querySelector('#gRooms polygon[fill="url(#p-tex-agenthex)"]');
+    out.noTexData = !('texData' in P);
+    return out;
+  })()`);
+  if (!info.btn || info.modal !== 'tex' || !info.prev) throw new Error('texture dialog did not open from the room panel: ' + JSON.stringify(info));
+  if (info.spec !== 'brick #7f1d1d') throw new Error('pattern / colour controls did not update the spec: ' + JSON.stringify(info));
+  if (info.added !== 1 || !info.applied || !info.closed || !info.png || !info.ready) throw new Error('generated texture not added / applied / rasterised: ' + JSON.stringify(info));
+  if (!info.drop || !info.ai) throw new Error('upload or AI tab missing: ' + JSON.stringify(info));
+  if (!info.svgReady || !info.svgFill || !info.noTexData) throw new Error('agent SVG texture not loaded into 2D: ' + JSON.stringify(info));
+  await page.evaluate('show3D(true)');
+  await new Promise(r => setTimeout(r, 1500));
+  const d3 = await page.evaluate(`(() => { let n = 0; T3.scene.traverse(o => { if (o.isMesh && o.material && o.material.map && o.material.map.image && o.material.map.image.src && o.material.map.image.src.includes('svg')) n++; }); show3D(false); return n; })()`);
+  if (!d3) throw new Error('agent SVG texture not used on the 3D room floor');
+  return `brick ${info.size} cm added + applied as PNG, upload / AI tabs, agent hex SVG in 2D + ${d3} 3D mesh(es)`;
+});
+
 check('library presets: save a door, place it twice, delete + undo, JSON keeps them (issue #42)', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject()); addRectWalls(0, 0, 800, 500); const f = F();

@@ -687,7 +687,9 @@ function floorOpts() {
   return o;
 }
 function dataUrlBlob(d) {
-  const i = d.indexOf(','), mime = (d.slice(0, i).match(/data:([^;,]+)/) || [])[1] || 'image/png', bin = atob(d.slice(i + 1)), a = new Uint8Array(bin.length);
+  const i = d.indexOf(','), head = d.slice(0, i), mime = (head.match(/data:([^;,]+)/) || [])[1] || 'image/png';
+  if (!/;base64/i.test(head)) return new Blob([decodeURIComponent(d.slice(i + 1))], { type: mime }); // üretilen SVG dokular
+  const bin = atob(d.slice(i + 1)), a = new Uint8Array(bin.length);
   for (let j = 0; j < bin.length; j++) a[j] = bin.charCodeAt(j);
   return new Blob([a], { type: mime });
 }
@@ -743,24 +745,6 @@ function parseTexSize(s) {
   if (!m || !(+m[1] > 0)) return null;
   return { w: clamp(+m[1], 1, 5000), h: clamp(+(m[2] || m[1]), 1, 5000) };
 }
-function addTextureFlow() {
-  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
-  inp.onchange = () => {
-    const file = inp.files && inp.files[0]; if (!file) return;
-    const r = new FileReader();
-    r.onload = async () => {
-      try {
-        const img = await downscaleImage(r.result, TEX_MAX, file.type === 'image/png' ? 'image/png' : 'image/jpeg');
-        const name = (prompt(L('Doku adı', 'Texture name'), file.name.replace(/\.[^.]+$/, '')) || '').trim(); if (!name) return;
-        const sz = parseTexSize(prompt(L('Gerçek tekrar ölçüsü (cm): genişlik × yükseklik', 'Real-world repeat size (cm): width × height'), '60 × ' + Math.round(60 * img.h / img.w)));
-        if (!sz) return toast(L('Geçersiz ölçü', 'Invalid size'));
-        addTexture(name, sz.w, sz.h, img.data);
-      } catch (er) { toast(L('Doku eklenemedi: ', 'Could not add texture: ') + er.message); }
-    };
-    r.readAsDataURL(file);
-  };
-  inp.click();
-}
 function addTexture(name, w, h, data) {
   const id = uid(); cacheTex(id, data);
   dbPut('textures', { id, data }).catch(() => toast(L('Doku tarayıcıya kaydedilemedi', 'The texture could not be stored in the browser')));
@@ -795,7 +779,7 @@ function texPatterns() {
 function texturesPanelHtml() {
   const ts = P.textures || [];
   let h = `<h4>${L('Özel dokular', 'Custom textures')}</h4>`;
-  if (!ts.length) h += `<p class="muted" style="margin:0 0 6px">${L('Kendi karo / parke / taş görselini yükle; oda, döşeme ve kat döşemesi kaplama listesinde çıkar.', 'Upload your own tile / parquet / stone image; it shows up in the finish list of rooms, slabs and the floor slab.')}</p>`;
+  if (!ts.length) h += `<p class="muted" style="margin:0 0 6px">${L('Karo / parke / tuğla deseni oluştur, kendi görselini yükle ya da AI’dan iste; oda, döşeme ve kat döşemesi kaplama listesinde çıkar.', 'Create a tile / parquet / brick pattern, upload your own image or ask the AI; it shows up in the finish list of rooms, slabs and the floor slab.')}</p>`;
   for (const t of ts) {
     const e = TEX.get(t.id), thumb = e ? `<img src="${e.url}" alt="" style="width:26px;height:26px;object-fit:cover;border-radius:4px;flex:none">` : `<span style="width:26px;flex:none;text-align:center" title="${L('Görsel bu tarayıcıda yok', 'Image not in this browser')}">⚠</span>`;
     h += `<div class="row tex-row">${thumb}<input type="text" data-k="tex" data-p="name" data-tid="${t.id}" value="${esc(t.name)}">`
@@ -803,8 +787,120 @@ function texturesPanelHtml() {
       + `<input type="number" data-k="tex" data-p="h" data-tid="${t.id}" value="${t.h}" min="1" title="${L('Tekrar yüksekliği (cm)', 'Repeat height (cm)')}">`
       + `<button class="btn sm" data-act="texdel" data-tid="${t.id}" title="${L('Dokuyu sil', 'Delete texture')}">✕</button></div>`;
   }
-  return h + `<div class="row"><button class="btn sm" data-act="texadd">${L('🖼 Doku yükle…', '🖼 Upload texture…')}</button></div>`;
+  return h + `<div class="row"><button class="btn sm" data-act="texadd">${L('🎨 Doku oluştur / yükle…', '🎨 Create / upload texture…')}</button></div>`;
 }
+/* TEXGEN:BEGIN — procedural floor textures. Pure JS (no DOM, no globals), pasted VERBATIM into
+   app.js and mcp/server.js; tests/texture-gen.test.js fails if the two copies differ.
+   texGen(spec) → { svg, w, h, name, spec }: a seamless SVG tile whose viewBox is in cm, so one
+   repeat is exactly w × h cm (that is what P.textures[].w / .h store). texGenUrl(svg) → data: URL. */
+const TEXGEN_PATTERNS = {
+  tile: ['Karo', 'Tiles'], brick: ['Tuğla', 'Brick'], plank: ['Parke / tahta', 'Planks'], basket: ['Hasır örgü parke', 'Basket weave'],
+  hex: ['Altıgen karo', 'Hex tiles'], checker: ['Dama', 'Checkerboard'], terrazzo: ['Terrazzo', 'Terrazzo'], stripe: ['Çizgili', 'Stripes'],
+};
+// w × h = one unit (tile, brick, plank) in cm; joint = grout / mortar / seam width in cm
+const TEXGEN_DEF = {
+  tile: { w: 60, h: 60, joint: 0.4, color: '#e7e5e4', color2: '#a8a29e' },
+  brick: { w: 24, h: 7, joint: 1, color: '#b45309', color2: '#d6d3d1' },
+  plank: { w: 120, h: 18, joint: 0.3, color: '#b08968', color2: '#6b4a2e' },
+  basket: { w: 30, h: 10, joint: 0.3, color: '#c8a27a', color2: '#6b4a2e' },
+  hex: { w: 20, h: 20, joint: 0.4, color: '#f5f5f4', color2: '#78716c' },
+  checker: { w: 40, h: 40, joint: 0, color: '#f5f5f4', color2: '#292524' },
+  terrazzo: { w: 60, h: 60, joint: 0, color: '#e7e5e4', color2: '#57534e' },
+  stripe: { w: 100, h: 10, joint: 0, color: '#e2e8f0', color2: '#94a3b8' },
+};
+const texgenHex = (c, d) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase()
+  : typeof c === 'string' && /^#[0-9a-f]{3}$/i.test(c) ? ('#' + c[1] + c[1] + c[2] + c[2] + c[3] + c[3]).toLowerCase() : d;
+function texgenMix(a, b, t) {
+  const p = s => [1, 3, 5].map(i => parseInt(s.slice(i, i + 2), 16)), A = p(a), B = p(b);
+  return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, '0')).join('');
+}
+const texgenShade = (c, k) => k >= 0 ? texgenMix(c, '#ffffff', Math.min(1, k)) : texgenMix(c, '#000000', Math.min(1, -k));
+function texgenRng(seed) { // mulberry32: same seed → same texture in the app and in the MCP server
+  let a = (seed >>> 0) || 1;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+function texGenClean(spec) {
+  const s = spec && typeof spec === 'object' ? spec : {};
+  const pattern = TEXGEN_PATTERNS[s.pattern] ? s.pattern : 'tile', d = TEXGEN_DEF[pattern];
+  const num = (v, def, lo, hi) => { const n = +v; return Number.isFinite(n) && v !== '' && v != null ? Math.min(hi, Math.max(lo, n)) : def; };
+  const w = num(s.w, d.w, 1, 500), h = num(s.h, d.h, 1, 500);
+  return {
+    pattern, w, h,
+    joint: num(s.joint, d.joint, 0, Math.min(w, h) / 3),
+    color: texgenHex(s.color, d.color), color2: texgenHex(s.color2, d.color2),
+    vary: num(s.vary, 0.12, 0, 0.6),
+    seed: Math.round(num(s.seed, 1, 0, 999999)),
+    name: typeof s.name === 'string' ? s.name.trim().slice(0, 60) : '',
+  };
+}
+function texGen(spec) {
+  const s = texGenClean(spec), { pattern, w, h, joint: j, color, color2, vary } = s, rnd = texgenRng(s.seed + 7);
+  const f = v => +v.toFixed(3), vc = () => texgenShade(color, (rnd() * 2 - 1) * vary);
+  let W, H, out = '';
+  const rect = (x, y, rw, rh, fill, op) => { if (rw > 0 && rh > 0) out += `<rect x="${f(x)}" y="${f(y)}" width="${f(rw)}" height="${f(rh)}" fill="${fill}"${op ? ` opacity="${op}"` : ''}/>`; };
+  // a unit that crosses the right / bottom edge is drawn again one period earlier, so the tile is seamless
+  const wrapRect = (x, y, rw, rh, fill, op) => {
+    for (const dx of x + rw > W + 1e-6 ? [0, -W] : [0]) for (const dy of y + rh > H + 1e-6 ? [0, -H] : [0]) rect(x + dx, y + dy, rw, rh, fill, op);
+  };
+  const unit = (x, y, uw, uh, fill) => wrapRect(x + j / 2, y + j / 2, uw - j, uh - j, fill);
+  const grain = (x, y, uw, uh, fill, along) => { // a few thin darker lines along the board
+    const n = 2 + Math.floor(rnd() * 2), gc = texgenShade(fill, -0.14);
+    for (let i = 0; i < n; i++) {
+      const t = 0.2 + rnd() * 0.6, len = 0.35 + rnd() * 0.55, st = rnd() * (1 - len);
+      if (along === 'x') wrapRect(x + j / 2 + (uw - j) * st, y + j / 2 + (uh - j) * t, (uw - j) * len, Math.max(0.08, (uh - j) * 0.02), gc, 0.55);
+      else wrapRect(x + j / 2 + (uw - j) * t, y + j / 2 + (uh - j) * st, Math.max(0.08, (uw - j) * 0.02), (uh - j) * len, gc, 0.55);
+    }
+  };
+  if (pattern === 'tile' || pattern === 'checker') {
+    W = 4 * w; H = 4 * h; rect(0, 0, W, H, j > 0 ? color2 : color);
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+      const base = pattern === 'checker' && (r + c) % 2 ? color2 : color;
+      const fill = pattern === 'checker' ? texgenShade(base, (rnd() * 2 - 1) * vary * 0.5) : vc();
+      if (j > 0) unit(c * w, r * h, w, h, fill); else rect(c * w, r * h, w, h, fill);
+    }
+  } else if (pattern === 'brick' || pattern === 'plank') {
+    const cols = pattern === 'brick' ? 4 : 2, offs = pattern === 'brick' ? [0, 0.5, 0, 0.5] : [0, 0.5, 0.25, 0.75];
+    W = cols * w; H = 4 * h; rect(0, 0, W, H, color2);
+    for (let r = 0; r < 4; r++) for (let c = 0; c < cols; c++) {
+      const x = c * w + offs[r] * w, fill = vc();
+      unit(x, r * h, w, h, fill);
+      if (pattern === 'plank') grain(x, r * h, w, h, fill, 'x');
+    }
+  } else if (pattern === 'basket') {
+    const n = Math.max(2, Math.round(w / h)), B = n * h; W = H = 2 * B; rect(0, 0, W, H, color2);
+    for (let bi = 0; bi < 2; bi++) for (let bj = 0; bj < 2; bj++) for (let k = 0; k < n; k++) {
+      const fill = vc(), bx = bi * B, by = bj * B;
+      if ((bi + bj) % 2 === 0) { unit(bx, by + k * h, B, h, fill); grain(bx, by + k * h, B, h, fill, 'x'); }
+      else { unit(bx + k * h, by, h, B, fill); grain(bx + k * h, by, h, B, fill, 'y'); }
+    }
+  } else if (pattern === 'hex') {
+    // pointy-top hexagons, w = across the flats; period w × √3·w
+    const sd = w / Math.sqrt(3), r0 = Math.max(0.01, sd - j / Math.sqrt(3)); W = w; H = 3 * sd; rect(0, 0, W, H, j > 0 ? color2 : color);
+    for (const [cx, cy] of [[0, 0], [W, 0], [0, H], [W, H], [W / 2, 1.5 * sd]]) {
+      const pts = []; for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; pts.push(f(cx + r0 * Math.cos(a)) + ',' + f(cy + r0 * Math.sin(a))); }
+      out += `<polygon points="${pts.join(' ')}" fill="${vc()}"/>`;
+    }
+  } else if (pattern === 'terrazzo') {
+    W = w; H = h; rect(0, 0, W, H, color);
+    const cols = [color2, texgenMix(color2, color, 0.5), texgenShade(color, -0.25), texgenShade(color, 0.6)];
+    const n = Math.min(500, Math.round(W * H / 30));
+    for (let i = 0; i < n; i++) {
+      const cx = rnd() * W, cy = rnd() * H, r = 0.4 + rnd() * rnd() * 2.2, k = 3 + Math.floor(rnd() * 3), a0 = rnd() * 6.283, fill = cols[Math.floor(rnd() * cols.length)];
+      const ring = []; for (let q = 0; q < k; q++) { const a = a0 + q * 6.283 / k + (rnd() - 0.5) * 0.8, rr = r * (0.6 + rnd() * 0.4); ring.push([Math.cos(a) * rr, Math.sin(a) * rr]); }
+      for (const dx of cx + r > W ? [0, -W] : [0]) for (const dy of cy + r > H ? [0, -H] : [0])
+        out += `<polygon points="${ring.map(p => f(cx + dx + p[0]) + ',' + f(cy + dy + p[1])).join(' ')}" fill="${fill}"/>`;
+    }
+  } else { // stripe: bands of height h, alternating colour / colour 2
+    W = w; H = 4 * h;
+    for (let r = 0; r < 4; r++) rect(0, r * h, W, h, texgenShade(r % 2 ? color2 : color, (rnd() * 2 - 1) * vary * 0.4));
+  }
+  const k = Math.min(16, 1024 / Math.max(W, H)), px = Math.max(1, Math.round(W * k)), py = Math.max(1, Math.round(H * k));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${py}" viewBox="0 0 ${f(W)} ${f(H)}" preserveAspectRatio="none">${out}</svg>`;
+  const nm = s.name || (TEXGEN_PATTERNS[pattern][1] + ' ' + (pattern === 'hex' ? f(w) : f(w) + '×' + f(h)));
+  return { svg, w: f(W), h: f(H), name: nm, spec: s };
+}
+const texGenUrl = svg => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+/* TEXGEN:END */
 /* ---------- Kapı malzemesi ve rengi (issue #41) ----------
    op.mat: 'wood' | 'glass' | 'paneled' | 'metal'. Alan yoksa sürgülü kapı cam, diğer kapılar ahşap kalır,
    böylece eski projeler aynı görünür. op.color = kanat rengi (tam camda yok), op.frameCol = kasa / pervaz
@@ -5249,7 +5345,7 @@ function renderProps() {
     if (o.type !== 'shape' && n === 1) h += `<div class="row"><button class="btn sm" data-act="savepreset" title="${L('Bu ölçü ve rengi kütüphaneye kaydet, tekrar tekrar yerleştir', 'Save this size and colour to the library and place it again')}">💾 ${L('Kütüphaneye kaydet', 'Save to library')}</button></div>`;
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
-    h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: floorOpts() }) + glassFld('room', o) + (o.floor === 'glass' ? '' : fld(L('Döşeme kalınlığı (cm)', 'Slab thickness (cm)'), 'room', 'slabT', roomSlabT(o), { min: 0, max: 200, step: 5 })) + `<div class="row"><button class="btn sm" data-act="texadd">${L('🖼 Doku yükle…', '🖼 Upload texture…')}</button></div>`;
+    h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: floorOpts() }) + glassFld('room', o) + (o.floor === 'glass' ? '' : fld(L('Döşeme kalınlığı (cm)', 'Slab thickness (cm)'), 'room', 'slabT', roomSlabT(o), { min: 0, max: 200, step: 5 })) + `<div class="row"><button class="btn sm" data-act="texadd">${L('🎨 Doku oluştur / yükle…', '🎨 Create / upload texture…')}</button></div>`;
     if (n === 1) {
       const rb = bboxOf('room', o);
       if (rb) {
@@ -5265,7 +5361,7 @@ function renderProps() {
     // serbest döşeme (#22) / döşeme boşluğu (#23): ad, tür/malzeme, konum-boyut, alan
     h += fld(L('Ad', 'Name'), k, 'name', o.name || '', { type: 'text' });
     if (k === 'slab') {
-      h += fld(L('Kaplama', 'Finish'), 'slab', 'floor', o.floor || 'none', { sel: floorOpts() }) + glassFld('slab', o)
+      h += fld(L('Kaplama', 'Finish'), 'slab', 'floor', o.floor || 'none', { sel: floorOpts() }) + `<div class="row"><button class="btn sm" data-act="texadd">${L('🎨 Doku oluştur / yükle…', '🎨 Create / upload texture…')}</button></div>` + glassFld('slab', o)
         + fld(L('Renk', 'Color'), 'slab', 'color', o.color || '#cbd5e1', { type: 'color' })
         + fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'slab', 't', o.t ?? 20, { min: 5, max: 100 })
         + fld(L('Kot farkı (cm)', 'Level offset (cm)'), 'slab', 'off', o.off || 0, { min: -200, max: 200 });
@@ -5479,7 +5575,7 @@ $('#props').addEventListener('click', e => {
   if (a === 'savepreset') return savePresetSel();
   if (a === 'parts') { if (os.length === 1 && os[0].kind === 'furn') pbStart(os[0].o); return; }
   if (a === 'opcolreset') { os.forEach(x => { if (x.kind === 'op') { delete x.o.color; delete x.o.frameCol; } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
-  if (a === 'texadd') return addTextureFlow();
+  if (a === 'texadd') return openTexDialog();
   if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
@@ -6259,6 +6355,7 @@ function cmdList() {
     act('json', '⬇', 'JSON indir', 'Download JSON', '', () => downloadJson(P), true, 'export backup yedek'),
     act('open', '📂', 'Dosya aç (JSON / IFC)', 'Open file (JSON / IFC)', '', () => $('#fileOpen').click(), true, 'import ifc revit archicad bim içe aktar'),
     act('new', '＋', 'Yeni proje', 'New project', '', templatesModal, true, 'template şablon'),
+    act('texture', '🎨', 'Doku oluştur / yükle', 'Create / upload texture', '', () => openTexDialog(), true, 'texture pattern tile parquet brick image ai doku desen karo parke tuğla görsel'),
     act('furnstudio', '🧩', 'Mobilya stüdyosu: yeni mobilya', 'Furniture studio: new furniture', '', () => fsNew(), false, 'create furniture builder editor parts mobilya oluştur parça'),
     act('flipH', '⇋', 'Yatay aynala', 'Flip horizontal', 'Shift+H', () => flipSel('h'), false, 'mirror ayna'),
     act('flipV', '⇵', 'Dikey aynala', 'Flip vertical', 'Shift+V', () => flipSel('v'), false, 'mirror ayna'),
@@ -8074,6 +8171,148 @@ function studioHtml(preview) {
     <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm" data-rs-go="preview">👁 ${L('Önizle', 'Preview')}</button><button class="btn sm primary" data-rs-go="render">🎬 ${L('Render al ve indir', 'Render & download')}</button></div>`;
 }
 const studioOpts = () => ({ mood: ui.studio.mood || 'day', style: ui.studio.style, backdrop: studioBackdrop(), sun: { az: ui.studio.az, alt: ui.studio.alt }, longSide: RENDER_RES[ui.studio.res][2] || 0, format: ui.studio.format });
+/* ---------- Doku penceresi: oluştur / yükle / AI'dan iste ----------
+   Tek pencere (ui.modal === 'tex', durum ui.tx). Oluştur = paylaşılan TEXGEN bloğu (MCP create_texture ile aynı
+   desen), PNG'ye çevrilip yüklenen görseller gibi saklanır. Yükle = dosya seç / sürükle-bırak; ad ve tekrar ölçüsü
+   aynı pencerede (eski iki prompt() yerine). AI = isteği köprünün istek kuyruğuna yazar (aiSendRequest ile aynı uç).
+   Seçili oda / döşeme varsa yeni doku doğrudan ona uygulanır (addTexture). */
+function txState() {
+  if (!ui.tx) ui.tx = { mode: 'gen', spec: texGenClean({ pattern: 'tile' }), up: null, ai: '', aiMsg: '' };
+  return ui.tx;
+}
+function openTexDialog(mode) { const t = txState(); if (mode) t.mode = mode; openModal(texDialogHtml(), 'tex'); }
+const txTargets = () => selObjs().filter(x => x.kind === 'room' || x.kind === 'slab');
+const txDefName = s => L(...TEXGEN_PATTERNS[s.pattern]) + ' ' + (s.pattern === 'hex' ? s.w : s.w + '×' + s.h);
+// önizleme kutusu ≈ 2+ tekrar gösterir; w / h cm → px
+const txBg = (url, w, h) => { const k = 300 / Math.max(240, 2.2 * w); return `url('${url}') 0 0 / ${(w * k).toFixed(2)}px ${(h * k).toFixed(2)}px repeat`; };
+const TX_C2 = { tile: ['Derz rengi', 'Grout colour'], brick: ['Harç rengi', 'Mortar colour'], plank: ['Derz rengi', 'Seam colour'], basket: ['Derz rengi', 'Seam colour'], hex: ['Derz rengi', 'Grout colour'], checker: ['İkinci renk', 'Second colour'], terrazzo: ['Taneler', 'Chips'], stripe: ['İkinci renk', 'Second colour'] };
+function texDialogHtml() {
+  const t = txState(), n = txTargets().length;
+  const tabs = [['gen', L('🎨 Desen oluştur', '🎨 Create pattern')], ['up', L('🖼 Görsel yükle', '🖼 Upload image')], ['ai', L('🤖 AI ile', '🤖 With AI')]];
+  const num = (attr, k, v, lbl, o = {}) => `<label style="display:flex;flex-direction:column;gap:2px;font-size:12px">${lbl}<input type="number" ${attr}="${k}" value="${v}" min="${o.min ?? 1}" max="${o.max ?? 500}" step="${o.step ?? 1}" style="width:90px"></label>`;
+  let h = `<h2>${L('Doku ekle', 'Add texture')} <button class="btn sm" data-close>✕</button></h2>
+    <div class="row" style="gap:6px;margin:0 0 10px;flex-wrap:wrap">${tabs.map(([k, v]) => `<button class="btn sm${k === t.mode ? ' primary' : ''}" data-tx-mode="${k}">${v}</button>`).join('')}</div>`;
+  const target = n ? `<p class="muted" style="margin:8px 0 0">${L(`Seçili ${n} oda / döşemeye uygulanır.`, `Will be applied to the ${n} selected room(s) / slab(s).`)}</p>` : '';
+  if (t.mode === 'gen') {
+    const s = t.spec, g = texGen(s), joint = !['checker', 'terrazzo', 'stripe'].includes(s.pattern);
+    const wl = s.pattern === 'terrazzo' ? L('Tekrar genişliği (cm)', 'Repeat width (cm)') : s.pattern === 'hex' ? L('Karo genişliği (cm)', 'Tile width (cm)') : s.pattern === 'stripe' ? L('Tekrar genişliği (cm)', 'Repeat width (cm)') : L('Birim genişliği (cm)', 'Unit width (cm)');
+    const hl = s.pattern === 'terrazzo' ? L('Tekrar yüksekliği (cm)', 'Repeat height (cm)') : s.pattern === 'stripe' ? L('Şerit genişliği (cm)', 'Stripe width (cm)') : L('Birim yüksekliği (cm)', 'Unit height (cm)');
+    h += `<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:10px">${Object.entries(TEXGEN_PATTERNS).map(([k, v]) => `<button class="btn sm${k === s.pattern ? ' primary' : ''}" data-tx-pat="${k}">${L(...v)}</button>`).join('')}</div>
+      <div id="txPrev" style="height:170px;border-radius:8px;border:1px solid var(--line);margin-bottom:6px;background:${txBg(texGenUrl(g.svg), g.w, g.h)}"></div>
+      <p class="muted" id="txInfo" style="margin:0 0 10px">${L('Bir tekrar', 'One repeat')}: ${g.w} × ${g.h} cm</p>
+      <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <label style="display:flex;flex-direction:column;gap:2px;font-size:12px">${L('Renk', 'Colour')}<input type="color" data-tx="color" value="${s.color}"></label>
+        <label style="display:flex;flex-direction:column;gap:2px;font-size:12px">${L(...TX_C2[s.pattern])}<input type="color" data-tx="color2" value="${s.color2}"></label>
+        ${num('data-tx', 'w', s.w, wl)}${s.pattern === 'hex' ? '' : num('data-tx', 'h', s.h, hl)}
+        ${joint ? num('data-tx', 'joint', s.joint, L('Derz (cm)', 'Joint (cm)'), { min: 0, max: 10, step: 0.1 }) : ''}
+        <label style="display:flex;flex-direction:column;gap:2px;font-size:12px">${L('Ton farkı', 'Shade variation')}<input type="range" data-tx="vary" min="0" max="0.6" step="0.02" value="${s.vary}"></label>
+        <button class="btn sm" data-tx-seed title="${L('Ton dağılımını değiştir', 'Shuffle the shade pattern')}">🎲 ${L('Karıştır', 'Shuffle')}</button>
+      </div>
+      <label style="display:flex;flex-direction:column;gap:2px;font-size:12px;margin-top:10px">${L('Ad', 'Name')}<input type="text" data-tx="name" value="${esc(s.name)}" placeholder="${esc(txDefName(s))}" maxlength="60"></label>
+      ${target}<div class="row" style="gap:8px;margin-top:12px"><button class="btn primary" data-tx-go>${L('＋ Dokuyu ekle', '＋ Add texture')}</button></div>`;
+  } else if (t.mode === 'up') {
+    const u = t.up;
+    if (!u) h += `<div data-tx-file style="border:2px dashed var(--line-strong);border-radius:10px;padding:34px 16px;text-align:center;cursor:pointer">📂 ${L('Bir görsel seç ya da buraya bırak', 'Choose an image or drop it here')}<br><span class="muted" style="font-size:12px">${L('Karo, parke, taş, halı fotoğrafı… (en uzun kenar 1024 px’e küçültülür)', 'A tile, parquet, stone or carpet photo… (scaled to 1024 px on the long side)')}</span></div>`;
+    else h += `<div id="txPrev" style="height:170px;border-radius:8px;border:1px solid var(--line);margin-bottom:10px;background:${txBg(u.data, u.w, u.h)}"></div>
+      <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <label style="display:flex;flex-direction:column;gap:2px;font-size:12px;flex:1;min-width:150px">${L('Ad', 'Name')}<input type="text" data-txu="name" value="${esc(u.name)}" maxlength="60"></label>
+        ${num('data-txu', 'w', u.w, L('Tekrar genişliği (cm)', 'Repeat width (cm)'), { max: 5000 })}${num('data-txu', 'h', u.h, L('Tekrar yüksekliği (cm)', 'Repeat height (cm)'), { max: 5000 })}
+        <button class="btn sm" data-tx-file>📂 ${L('Başka görsel', 'Other image')}</button>
+      </div><p class="muted" style="margin:6px 0 0;font-size:12px">${L('Tekrar ölçüsü = görselin gerçekte kapladığı alan (ör. 4 karoluk bir fotoğraf için 120 × 120).', 'Repeat size = the real area the image covers (e.g. 120 × 120 for a photo of four 60 cm tiles).')}</p>
+      ${target}<div class="row" style="gap:8px;margin-top:12px"><button class="btn primary" data-tx-go>${L('＋ Dokuyu ekle', '＋ Add texture')}</button></div>`;
+  } else {
+    const on = typeof brgConnected !== 'undefined' && brgConnected;
+    h += `<p style="margin:0 0 8px">${L('Dokuyu tarif et; bağlı AI ajanın onu desen üreticisiyle ya da kendi çizdiği bir görselle oluşturup projeye ekler', 'Describe the texture; your connected AI agent creates it with the pattern generator or an image it makes, and adds it to the project')}${n ? L(' ve seçili odaya / döşemeye uygular.', ' and applies it to the selected room / slab.') : '.'}</p>
+      <textarea data-tx="ai" rows="3" style="width:100%;box-sizing:border-box" placeholder="${L('ör. sıcak meşe balıksırtı parke, 10 × 60 cm tahtalar', 'e.g. warm oak herringbone parquet, 10 × 60 cm boards')}">${esc(t.ai)}</textarea>
+      ${on ? `<div class="row" style="gap:8px;margin-top:10px;align-items:center"><button class="btn primary" data-tx-ai>🤖 ${L('Ajana gönder', 'Send to agent')}</button><span class="muted" id="txAiMsg">${esc(t.aiMsg)}</span></div>`
+        : `<p class="muted" style="margin:10px 0 6px">${L('Bağlı bir AI ajanı yok. Kurulum bir kez yapılır; o zamana kadar “Desen oluştur” sekmesi çevrimdışı çalışır.', 'No AI agent is connected. Setup is a one-time step; until then the “Create pattern” tab works offline.')}</p><button class="btn sm" data-tx-aisetup>🤖 ${L('AI kurulumu…', 'Set up AI…')}</button>`}`;
+  }
+  return `<div class="txdlg">${h}</div>`;
+}
+function txRefreshPreview() {
+  const t = txState(), el = $('#txPrev'); if (!el) return;
+  if (t.mode === 'gen') { const g = texGen(t.spec); el.style.background = txBg(texGenUrl(g.svg), g.w, g.h); const i = $('#txInfo'); if (i) i.textContent = `${L('Bir tekrar', 'One repeat')}: ${g.w} × ${g.h} cm`; }
+  else if (t.mode === 'up' && t.up) el.style.background = txBg(t.up.data, t.up.w, t.up.h);
+}
+function txLoadFile(file) {
+  if (!file || !/^image\//.test(file.type)) return toast(L('Bir görsel dosyası seçin', 'Choose an image file'));
+  const r = new FileReader();
+  r.onload = async () => {
+    try {
+      const img = await downscaleImage(r.result, TEX_MAX, file.type === 'image/png' ? 'image/png' : 'image/jpeg');
+      txState().up = { data: img.data, iw: img.w, ih: img.h, name: file.name.replace(/\.[^.]+$/, '').slice(0, 60), w: 60, h: Math.max(1, Math.round(60 * img.h / img.w)) };
+      openTexDialog('up');
+    } catch (er) { toast(L('Doku eklenemedi: ', 'Could not add texture: ') + er.message); }
+  };
+  r.readAsDataURL(file);
+}
+function txPickFile() {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = () => txLoadFile(inp.files && inp.files[0]); inp.click();
+}
+async function txAdd() {
+  const t = txState();
+  if (t.mode === 'gen') {
+    const s = t.spec, g = texGen(s), url = texGenUrl(g.svg);
+    let data = url; // PNG'ye çevir: yüklenen görsellerle aynı yol (3B doku, dışa aktarım); olmazsa SVG kalır
+    try { data = (await downscaleImage(url, TEX_MAX, 'image/png')).data; } catch (e) { }
+    addTexture(s.name || txDefName(s), g.w, g.h, data);
+  } else if (t.mode === 'up' && t.up) {
+    const u = t.up, w = clamp(+u.w || 60, 1, 5000), h = clamp(+u.h || w, 1, 5000);
+    addTexture((u.name || '').trim() || L('Doku', 'Texture'), w, h, u.data); t.up = null;
+  } else return;
+  closeModal();
+}
+async function txAskAi() {
+  const t = txState(), d = (t.ai || '').trim(); if (!d) return;
+  const tg = txTargets().map(x => x.o.id);
+  const text = 'Create a floor texture: "' + d + '". Use the create_texture tool (seamless pattern generator) or add_texture with an image you make'
+    + (tg.length ? ', and apply it to ' + tg.join(', ') + ' (applyTo)' : '') + '. Pull the plan from the browser first, then push_to_browser.';
+  try {
+    const res = await brgFetch('/__requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }, 5000);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    t.ai = ''; t.aiMsg = L('Gönderildi ✓ — ajan dokuyu ekleyince burada görünür', 'Sent ✓ — the texture appears here when the agent adds it');
+    if (typeof brgRefreshPending === 'function') brgRefreshPending();
+  } catch (e) { t.aiMsg = L('Gönderilemedi — köprü kapalı', 'Could not send — bridge offline'); }
+  if (ui.modal === 'tex') openTexDialog();
+}
+$('#modal').addEventListener('input', e => {
+  if (ui.modal !== 'tex') return;
+  const t = txState(), a = e.target.closest('[data-tx]'), b = e.target.closest('[data-txu]');
+  if (a) {
+    const k = a.dataset.tx;
+    if (k === 'ai') { t.ai = a.value; return; }
+    if (k === 'name') { t.spec.name = a.value.slice(0, 60); return; }
+    if (a.value === '' && a.type === 'number') return; // yarım yazılmış sayı
+    t.spec = texGenClean({ ...t.spec, [k]: a.type === 'number' || a.type === 'range' ? +a.value : a.value });
+    txRefreshPreview();
+  } else if (b && t.up) {
+    const k = b.dataset.txu;
+    if (k === 'name') { t.up.name = b.value; return; }
+    if (!(+b.value > 0)) return;
+    t.up[k] = +b.value;
+    if (k === 'w' && t.up.iw) { t.up.h = Math.max(1, Math.round(t.up.w * t.up.ih / t.up.iw)); const hi = $('[data-txu="h"]'); if (hi) hi.value = t.up.h; } // oran korunur
+    txRefreshPreview();
+  }
+});
+$('#modal').addEventListener('click', e => {
+  if (ui.modal !== 'tex') return;
+  const t = txState(), m = e.target.closest('[data-tx-mode]');
+  if (m) return openTexDialog(m.dataset.txMode);
+  const p = e.target.closest('[data-tx-pat]');
+  if (p) { t.spec = texGenClean({ pattern: p.dataset.txPat, seed: t.spec.seed, vary: t.spec.vary }); return openTexDialog(); }
+  if (e.target.closest('[data-tx-seed]')) { t.spec.seed = Math.floor(Math.random() * 999999); return txRefreshPreview(); }
+  if (e.target.closest('[data-tx-file]')) return txPickFile();
+  if (e.target.closest('[data-tx-go]')) return txAdd();
+  if (e.target.closest('[data-tx-ai]')) return txAskAi();
+  if (e.target.closest('[data-tx-aisetup]')) return aiModal();
+});
+$('#modal').addEventListener('dragover', e => { if (ui.modal === 'tex') e.preventDefault(); });
+$('#modal').addEventListener('drop', e => {
+  if (ui.modal !== 'tex') return;
+  e.preventDefault(); e.stopPropagation();
+  txLoadFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+});
 function openRenderStudio(preview) {
   if (!ui.view3d) show3D(true);
   if (!ui.view3d) return;

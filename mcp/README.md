@@ -103,6 +103,9 @@ The agent runs `node mcp/bridge.js` and the app tab connects automatically; afte
 | :-- | :-- |
 | `new_project` | Start an empty project (name, grid, wall thickness/height) |
 | `load_project` / `save_project` | Read / write the app's `.json` project files |
+| `create_texture` | Make a seamless floor texture with the pattern generator (tile, brick, plank, basket, hex, checker, terrazzo, stripe; colours, unit size, joint, variation, seed) and optionally apply it (`applyTo`: room / slab ids, `floorSlab:<i>`) |
+| `add_texture` | Add an image file or `data:image/…` URL (≤ 4 MB) as a texture with its real-world repeat size, optionally applied |
+| `list_textures` | Custom textures, their repeat size and where they are used |
 | `import_ifc` | Import a Revit / ArchiCAD / BIM model exported as `.ifc` (IFC2x3 / IFC4): storeys, walls, doors & windows, rooms, slabs, slab openings, columns, railings, roofs, stairs, ramps, components, colours & materials |
 | `get_project` / `set_project` | Get or replace the full working project JSON |
 | `summarize` | Floors, wall ids & lengths, openings, room areas, furniture — with ids |
