@@ -3,7 +3,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, wallTopSrc } = require('./helpers/repo');
 
 const src = read('app.js');
 const start = src.indexOf('/* ---------- Duvar kırpma / bölme (issue #15) ---------- */');
@@ -19,6 +19,7 @@ function load(walls, ops = []) {
     function segProj(p, a, b) { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1e-9; const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0, 1); const q = { x: a.x + dx * t, y: a.y + dy * t }; return { t, q, d: dist(p, q) }; }
     const mkWall = (a, b) => ({ id: uid(), a: { ...a }, b: { ...b }, t: 20, h: 270, wt: 'solid' });
     function deleteIds(ids) { const s = new Set(ids); f.ops = f.ops.filter(o => !s.has(o.id)); }
+    ${wallTopSrc(src)}
     ${src.slice(start, end)}
     return { wallCuts, trimWall, splitWallAt, joinCorner, trimPlan };`)(f);
   return { f, ...api };

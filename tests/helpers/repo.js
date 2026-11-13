@@ -148,7 +148,17 @@ function fnSrcOf(src, name) {
   throw new Error('Unterminated function ' + name);
 }
 
+/** The sloped wall top block of app.js (#96: cleanWallTop … detachWallTop) plus isSolidWall, for sandboxes that run wall code. */
+function wallTopSrc(js) {
+  js = js.replace(/\r\n/g, '\n');
+  const a = js.indexOf('// eğimli duvar üstü (#96)'), b = js.indexOf('// yukarıdan görünen yüzler');
+  if (a < 0 || b < a) throw new Error('sloped wall top block missing from app.js');
+  const s = js.indexOf('function isSolidWall');
+  return js.slice(s, js.indexOf('\n', s)) + '\n' + js.slice(a, b);
+}
+
 module.exports = {
+  wallTopSrc,
   ROOT, read, exists, parseJsonc, fnSrcOf,
   htmlIds, runtimeIds, domLookups, domContractViolations, fatalBindings,
 };
