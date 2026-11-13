@@ -100,6 +100,9 @@ test('5: tests/fixtures/two-storey.ifc (IFC4, mm): stats, levels, walls rectangl
     stairs: 0,
     ramps: 0,
     skipped: 0,
+    matched: 0, // no catalogue passed
+    roomsDetected: 0,
+    rotated: 0,
   });
 
   // project name contains "Test House"
@@ -582,4 +585,120 @@ test('19: a component made of separate solids imports as one multi-part item, no
   const byZ = o.parts.slice().sort((a, b) => a.z - b.z);
   assert.deepStrictEqual(byZ.map(p => [p.type, p.z, p.h, p.w, p.d]), [['box', 0, 60, 600, 50], ['box', 300, 60, 200, 50]], 'each band keeps its own height and length');
   assert.strictEqual(byZ[1].x, -200, 'the short band sits at its own place (x 0..200 of 0..600)');
+});
+
+/* ---------- Revit fidelity (issue #88): tests/fixtures/revit-fidelity.ifc ---------- */
+// eslint-disable-next-line no-new-func
+const fidelity = new Function(blockSource + '; return { ifcOutline, ifcArc3, ifcRooms, ifcCatKey };')();
+const miniCat = Object.fromEntries([['wc', 40, 65, 'rect'], ['basin', 60, 45, 'rect'], ['sofa2', 150, 85, 'sofa'], ['sofa3', 210, 90, 'sofa'], ['armchair', 85, 85, 'sofa'],
+  ['bed1', 100, 200, 'bed'], ['bed2', 160, 200, 'bed'], ['fridge', 70, 70, 'rect'], ['table4', 120, 80, 'rect']]
+  .map(([id, w, d, k]) => [id, { id, name: id, en: id, w, d, h: 80, icon: '?', k, color: '#abcdef' }]));
+const polyArea = pts => { let t = 0; for (let i = 0; i < pts.length; i++) { const q = pts[(i + 1) % pts.length]; t += pts[i].x * q.y - q.x * pts[i].y; } return Math.abs(t / 2); };
+const near = (v, want, tol, msg) => assert.ok(Math.abs(v - want) <= tol, `${msg}: ${v} (want ${want} ± ${tol})`);
+const fidelityIfc = () => read('tests/fixtures/revit-fidelity.ifc');
+
+test('88-1: face sets keep concave outlines, profile inner loops become voids, arc segments are tessellated', () => {
+  const { project, stats } = ifcToProject(fidelityIfc(), { catalog: miniCat });
+  const [f1, f2] = project.floors;
+  const slab = n => f1.slabs.find(x => x.name === n);
+  assert.strictEqual(slab('L Slab').pts.length, 6, 'IfcPolygonalFaceSet L slab keeps its 6 corners');
+  near(polyArea(slab('L Slab').pts), 180000, 1, 'L slab area (a convex hull would be 210000)');
+  const hall = f2.rooms.find(r => r.name === 'Hall');
+  assert.strictEqual(hall.pts.length, 6, 'IfcTriangulatedFaceSet L space: the triangulated bottom becomes one 6-corner outline');
+  near(polyArea(hall.pts), 120000, 1, 'L space area');
+  assert.strictEqual(f1.voids.length, 1, 'IfcArbitraryProfileDefWithVoids inner loop becomes a void');
+  near(polyArea(f1.voids[0].pts), 10000, 1, 'void area');
+  assert.strictEqual(stats.voids, 1);
+  assert.ok(slab('Half Disc').pts.length > 8, 'IfcArcIndex segment is tessellated');
+  near(polyArea(slab('Half Disc').pts), Math.PI * 100 * 100 / 2, 200, 'half-disc area');
+});
+
+test('88-2: door swing side and hinge follow the placement and OperationType; curtain wall gets mullions and its door', () => {
+  const { project } = ifcToProject(fidelityIfc(), { catalog: miniCat });
+  const f = project.floors[0], cw = f.walls.find(w => w.wt === 'curtain');
+  assert.ok(cw, 'curtain wall imported');
+  assert.strictEqual(cw.mulN, 3, 'three interior IfcMember mullions (end mullions excluded)');
+  const on = wt => f.ops.filter(o => f.walls.find(w => w.id === o.wall).wt === wt).sort((p, q) => p.d - q.d);
+  const [left, mirrored] = on('solid');
+  assert.deepStrictEqual([left.type, left.side, left.flip], ['door', -1, 0], 'SINGLE_SWING_LEFT with local +Y on the −normal side of the wall');
+  assert.deepStrictEqual([mirrored.side, mirrored.flip], [1, 1], 'mirrored placement swings to the other side with the hinge at the other end');
+  const [cd] = on('curtain');
+  assert.ok(cd, 'door aggregated in the curtain wall (no opening element) lands on the curtain wall');
+  assert.deepStrictEqual([cd.side, cd.flip], [-1, 1], 'SINGLE_SWING_RIGHT hinge');
+});
+
+test('88-3: fixtures and furniture match the catalogue; unknown flow terminals are skipped; proxies stay shapes', () => {
+  const { project, stats } = ifcToProject(fidelityIfc(), { catalog: miniCat });
+  const by = Object.fromEntries(project.floors[0].furn.map(o => [o.type, o]));
+  for (const t of ['wc', 'basin', 'sofa2', 'bed2', 'fridge']) assert.ok(by[t], t + ' matched from its Revit name / PredefinedType');
+  assert.strictEqual(stats.matched, 5);
+  assert.deepStrictEqual([by.sofa2.w, by.sofa2.d, by.sofa2.rot], [183, 90, 270], 'sofa: true size, rotation from the placement (back = IFC +Y)');
+  assert.deepStrictEqual([by.bed2.w, by.bed2.d], [152.5, 203.2], 'queen bed: width picks bed2, real size kept');
+  assert.strictEqual(by.wc.k, 'rect');
+  assert.strictEqual(by.wc.icon, '?', 'shape kind and icon come from the catalogue');
+  assert.ok(by.shape && /Custom Table/.test(by.shape.name), 'IfcBuildingElementProxy stays a custom shape even when its name says table');
+  assert.ok(!project.floors[0].furn.some(o => /Diffuser/.test(o.name)), 'unrecognised IfcFlowTerminal is not imported');
+  // without a catalogue nothing is matched and the same elements come in as shapes
+  const plain = ifcToProject(fidelityIfc());
+  assert.strictEqual(plain.stats.matched, 0);
+  assert.ok(plain.project.floors[0].furn.every(o => o.type === 'shape'));
+});
+
+test('88-4: room finishes from Pset / IfcCovering; a storey without IfcSpace gets detected rooms', () => {
+  const { project, stats } = ifcToProject(fidelityIfc(), { catalog: miniCat });
+  const [f1, f2] = project.floors, fin = n => f2.rooms.find(r => r.name === n).floor;
+  assert.strictEqual(fin('Bedroom'), 'wood', 'Pset_SpaceCommon.FloorFinish "Parke 12mm"');
+  assert.strictEqual(fin('Bath'), 'tile', 'IfcRelCoversSpaces → IfcCovering FLOORING "Seramik Karo"');
+  assert.strictEqual(fin('Hall'), 'marble', 'unrelated flooring covering found by position');
+  assert.strictEqual(f1.rooms.length, 1, 'Level 1 has walls but no IfcSpace: one enclosed room is detected');
+  assert.strictEqual(stats.roomsDetected, 1);
+  near(polyArea(f1.rooms[0].pts), 580 * 380, 50, 'detected room = wall centrelines inset by half a wall');
+  assert.strictEqual(f2.rooms.length, 3, 'storeys that have IfcSpace are left alone');
+});
+
+test('88-5: a rotated model is aligned with the plan axes', () => {
+  const txt = fidelityIfc(), line = /#\d+=IFCDIRECTION\(\(1\.,0\.,0\.\)\);/.exec(txt);
+  assert.ok(line, 'building x-direction line present in the fixture');
+  const rot = txt.replace(line[0], line[0].replace('(1.,0.,0.)', '(0.8660254,0.5,0.)'));
+  const a = ifcToProject(txt, { catalog: miniCat }), b = ifcToProject(rot, { catalog: miniCat });
+  assert.strictEqual(a.stats.rotated, 0, 'axis-aligned model is not touched');
+  assert.strictEqual(Math.abs(b.stats.rotated), 30, 'the 30° building rotation is detected');
+  for (const w of b.project.floors[0].walls) assert.ok(Math.abs(w.a.x - w.b.x) < 0.5 || Math.abs(w.a.y - w.b.y) < 0.5, 'walls are horizontal or vertical after alignment');
+  near(polyArea(b.project.floors[0].rooms[0].pts), polyArea(a.project.floors[0].rooms[0].pts), 200, 'same room after alignment');
+  assert.deepStrictEqual({ ...b.stats, rotated: 0 }, a.stats, 'same content either way');
+  const off = ifcToProject(rot, { catalog: miniCat, align: false });
+  assert.strictEqual(off.stats.rotated, 0, 'align: false keeps the model as exported');
+});
+
+test('88-6: helpers — boundary of a triangulated region, 3-point arc, room detection, name matching', () => {
+  const { ifcOutline, ifcArc3, ifcRooms, ifcCatKey } = fidelity;
+  // two triangles of a square share the diagonal: one 4-point loop; a face plus an inner bound gives two loops
+  const sq = ifcOutline([[[0, 0], [10, 0], [10, 10]], [[0, 0], [10, 10], [0, 10]]], 100);
+  assert.strictEqual(sq.length, 1);
+  assert.strictEqual(sq[0].length, 4);
+  const ring = ifcOutline([[[0, 0], [30, 0], [30, 30], [0, 30]], [[10, 10], [20, 10], [20, 20], [10, 20]]], 100);
+  assert.strictEqual(ring.length, 2, 'inner bound is a separate loop');
+  const arc = ifcArc3([100, 0, 0], [0, 100, 0], [-100, 0, 0], Math.PI / 18);
+  assert.ok(arc.length >= 15 && arc.every(q => Math.abs(Math.hypot(q[0], q[1]) - 100) < 1e-6), 'arc points lie on the circle');
+  assert.ok(arc.every(q => q[1] > 0), 'arc runs on the side of the middle point');
+  const W = (ax, ay, bx, by) => ({ a: { x: ax, y: ay }, b: { x: bx, y: by }, t: 20, wt: 'solid' });
+  const boxW = [W(0, 0, 800, 0), W(800, 0, 800, 400), W(800, 400, 0, 400), W(0, 400, 0, 0)];
+  const two = ifcRooms([...boxW, W(400, 0, 400, 400)]);
+  assert.strictEqual(two.length, 2, 'a partition (T junctions) splits the box into two rooms');
+  near(polyArea(two[0]) + polyArea(two[1]), 2 * 380 * 380, 100, 'both rooms inset by half a wall');
+  assert.strictEqual(ifcRooms([W(0, 0, 800, 0), W(800, 0, 800, 400), W(0, 400, 0, 0)]).length, 0, 'an open U encloses nothing');
+  assert.strictEqual(ifcRooms([...boxW, W(400, 10, 400, 390)]).length, 2, 'a partition that stops at the face of the through walls still closes the rooms');
+  assert.strictEqual(ifcRooms([...boxW, W(400, 0, 400, 200)]).length, 1, 'a stub wall that ends in the room does not split it');
+  assert.strictEqual(ifcCatKey('Coffee Table'), 'coffee');
+  assert.strictEqual(ifcCatKey('Dining Table'), 'table', 'last matching word wins');
+  assert.strictEqual(ifcCatKey('Yatak Odası Dolabı'), 'wardrobe', 'Turkish head noun comes last');
+  assert.strictEqual(ifcCatKey('Bulaşık Makinesi'), 'dish');
+  assert.strictEqual(ifcCatKey('M_Sink Vanity-Round'), 'basin');
+  assert.strictEqual(ifcCatKey('Kitchen Sink'), 'sinkK');
+  assert.strictEqual(ifcCatKey('Generic Model 12'), null);
+});
+
+test('88-7: both importers pass the catalogue', () => {
+  assert.match(appJs, /ifcToProject\(text,\s*\{[^}]*catalog:\s*BYID/, 'app passes BYID');
+  assert.match(serverJs, /ifcToProject\(fs\.readFileSync\([^)]*\),\s*\{[^}]*catalog:\s*BYID/, 'MCP import_ifc passes BYID');
 });

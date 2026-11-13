@@ -2162,7 +2162,26 @@ const ifcNeutral = hex => { const n = parseInt(String(hex).slice(1), 16), r = n 
 // korkuluk stili (rs) adı / malzemesinden: cam panel, yatay çubuk / halat, dolu parapet; yoksa dikmeli
 const IFC_RAIL_STYLE = [[/^(glass|glazed|glazing|cam|camli|camlı)$/, 'glass'], [/^(cable|wire|kablo|halat|horizontal|yatay|rod)$/, 'cable'], [/^(parapet|solid|dolu|concrete|beton|betonarme|masonry|duvar|brick|tugla|tuğla)$/, 'solid']];
 const IFC_ROOF_MAX_FACES = 600; // çatı yüzü sınırı: üstü taban izinden düz çatıya düşer (proje / geri al hafif kalsın)
-const IFC_COMPONENTS = new Set(['IFCBUILDINGELEMENTPROXY', 'IFCFURNISHINGELEMENT', 'IFCFURNITURE', 'IFCSYSTEMFURNITUREELEMENT', 'IFCSANITARYTERMINAL', 'IFCELEMENTASSEMBLY']);
+const IFC_COMPONENTS = new Set(['IFCBUILDINGELEMENTPROXY', 'IFCFURNISHINGELEMENT', 'IFCFURNITURE', 'IFCSYSTEMFURNITUREELEMENT', 'IFCSANITARYTERMINAL', 'IFCELEMENTASSEMBLY', 'IFCFLOWTERMINAL', 'IFCELECTRICAPPLIANCE', 'IFCAUDIOVISUALAPPLIANCE']);
+// Revit ailesi → katalog öğesi (#88). Önce bileşik adlar (tam metinde), sonra tek sözcükler: SON eşleşen sözcük kazanır
+// ("Dining Table" → table, "Yatak Odası Dolabı" → dolap). sofa / bed / table boyuta göre katalog çeşidine çevrilir.
+const IFC_CAT_PHRASE = [[/coffee\s*table|sehpa/, 'coffee'], [/bedside|night\s*stand|komodin/, 'night'], [/office\s*chair|task\s*chair|ofis\s*(sandalye|koltu)|çalışma\s*(sandalye|koltu)/, 'ochair'],
+  [/dish\s*washer|bulaşık|bulasik/, 'dish'], [/washing|washer|tumble|çamaşır|camasir/, 'wm'], [/arm\s*chair|berjer/, 'armchair'], [/water\s*closet/, 'wc'],
+  [/book\s*(case|shelf)|kitapl[ıi]k/, 'bookcase'], [/sink\s*vanity|vanity\s*sink|pedestal|wash\s*(hand\s*)?basin/, 'basin'], [/bath\s*tub/, 'tub'], [/bunk|ranza/, 'bunk']];
+const IFC_CAT_WORD = [[/^(wc|toilet|toilets|klozet[a-z0-9çğıöşü]*|tuvalet[a-z0-9çğıöşü]*|toiletpan|wcseat|alafranga)$/, 'wc'], [/^(bidet|bide)$/, 'bidet'], [/^(bath|tub|küvet[a-z0-9çğıöşü]*|kuvet[a-z0-9çğıöşü]*|jakuzi|jacuzzi)$/, 'tub'],
+  [/^(shower|duş[a-z0-9çğıöşü]*|dus|dusakabin)$/, 'shower'], [/^(basin|lavabo[a-z0-9çğıöşü]*|lavatory)$/, 'basin'], [/^(sink|evye[a-z0-9çğıöşü]*|eviye[a-z0-9çğıöşü]*)$/, 'sinkK'],
+  [/^(refrigerator|fridge|freezer|fridgefreezer|buzdolab[a-z0-9çğıöşü]*)$/, 'fridge'], [/^(cooker|stove|ocak[a-z0-9çğıöşü]*|range|hob|cooktop|oven|fırın[a-z0-9çğıöşü]*|firin[a-z0-9çğıöşü]*|electriccooker)$/, 'stove'],
+  [/^(tv|television|televizyon[a-z0-9çğıöşü]*|display)$/, 'tv'], [/^(crib|cot|beşik[a-z0-9çğıöşü]*|besik[a-z0-9çğıöşü]*)$/, 'crib'], [/^(bed|beds|yata[kğ][a-z0-9çğıöşü]*|karyola[a-z0-9çğıöşü]*|baza)$/, 'bed'],
+  [/^(sofa|sofas|couch|kanepe[a-z0-9çğıöşü]*|koltu[kğ][a-z0-9çğıöşü]*|settee|loveseat)$/, 'sofa'], [/^(wardrobe|gardrop[a-z0-9çğıöşü]*|gardırop[a-z0-9çğıöşü]*|dola[bp][a-z0-9çğıöşü]*|closet)$/, 'wardrobe'], [/^(dresser|şifonyer[a-z0-9çğıöşü]*|sifonyer[a-z0-9çğıöşü]*)$/, 'dresser'],
+  [/^(desk|desks|workstation)$/, 'desk'], [/^(table|tables|masa[a-z0-9çğıöşü]*|dining)$/, 'table'], [/^(chair|chairs|sandalye[a-z0-9çğıöşü]*|stool|tabure[a-z0-9çğıöşü]*)$/, 'chair'],
+  [/^(car|cars|otomobil[a-z0-9çğıöşü]*|araba[a-z0-9çğıöşü]*|sedan)$/, 'car'], [/^(tree|trees|ağa[cç][a-z0-9çğıöşü]*|agac[a-z0-9çğıöşü]*)$/, 'tree'], [/^(plant|planter|bitki[a-z0-9çğıöşü]*|saks[ıi][a-z0-9çğıöşü]*)$/, 'plant'], [/^(fireplace|şömine[a-z0-9çğıöşü]*|somine[a-z0-9çğıöşü]*)$/, 'fireplace']];
+const ifcCatKey = names => {
+  const s = String(names || '').toLowerCase(); for (const [rx, v] of IFC_CAT_PHRASE) if (rx.test(s)) return v;
+  let hit = null; for (const w of ifcWords(s)) for (const [rx, v] of IFC_CAT_WORD) if (rx.test(w)) { hit = v; break; }
+  return hit;
+};
+// oda zemin kaplaması özelliği (Pset_SpaceCommon.FloorFinish, Revit "Floor Finish" / "Zemin Kaplaması")
+const IFC_FLOOR_PROP = /^(floor\s*finish|floorfinish|floor\s*covering|floorcovering|finish\s*floor|zemin\s*kaplama[a-z0-9çğıöşü]*|d[öo][şs]eme\s*kaplama[a-z0-9çğıöşü]*|zemin)$/i;
 // STEP metnini varlıklara böler; parametreler ilk erişimde (ifcArgs) ayrıştırılır, büyük dosyalar hızlı açılır
 function ifcParse(text) {
   text = String(text || '');
@@ -2254,7 +2273,8 @@ function ifcToProject(text, opts = {}) {
   const R = v => (v && v.r) || 0;
   const num = v => (typeof v === 'number' ? v : v && typeof v.v === 'number' ? v.v : NaN);
   const ids = set => { const out = []; for (const t of set) out.push(...(db.byType.get(t) || [])); return out; };
-  const stats = { schema: db.schema, floors: 0, walls: 0, ops: 0, rooms: 0, slabs: 0, voids: 0, columns: 0, railings: 0, components: 0, roofs: 0, stairs: 0, ramps: 0, skipped: 0 };
+  const stats = { schema: db.schema, floors: 0, walls: 0, ops: 0, rooms: 0, slabs: 0, voids: 0, columns: 0, railings: 0, components: 0, roofs: 0, stairs: 0, ramps: 0, skipped: 0, matched: 0, roomsDetected: 0, rotated: 0 };
+  const cat = opts.catalog || null; // katalog (id → { id, name, en, w, d, h, icon, k, color }): verilirse tanınan aileler katalog öğesi olur
 
   /* --- Birimler: uzunluk → cm, düzlem açı → radyan --- */
   const PREFIX = { EXA: 1e18, PETA: 1e15, TERA: 1e12, GIGA: 1e9, MEGA: 1e6, KILO: 1e3, HECTO: 100, DECA: 10, DECI: 0.1, CENTI: 0.01, MILLI: 1e-3, MICRO: 1e-6, NANO: 1e-9 };
@@ -2311,7 +2331,13 @@ function ifcToProject(text, opts = {}) {
     if (t === 'IFCINDEXEDPOLYCURVE') {
       const P0 = (A(R(a[0]))[0] || []).map(c => [+c[0] || 0, +c[1] || 0, +c[2] || 0]);
       if (!Array.isArray(a[1]) || !a[1].length) return P0;
-      const out = []; for (const sg of a[1]) for (const k of (sg && sg.v) || []) { const p = P0[k - 1]; if (p && out[out.length - 1] !== p) out.push(p); }
+      const out = [], push = p => { if (p && out[out.length - 1] !== p) out.push(p); };
+      for (const sg of a[1]) {
+        const ix = (sg && sg.v) || [];
+        if (sg && sg.tv === 'IFCARCINDEX' && ix.length === 3 && P0[ix[0] - 1] && P0[ix[1] - 1] && P0[ix[2] - 1]) { // üç noktalı yay: dilimlenir (#88)
+          push(P0[ix[0] - 1]); out.push(...ifcArc3(P0[ix[0] - 1], P0[ix[1] - 1], P0[ix[2] - 1], ARC_STEP)); push(P0[ix[2] - 1]);
+        } else for (const k of ix) push(P0[k - 1]);
+      }
       return out;
     }
     if (t === 'IFCCOMPOSITECURVE') {
@@ -2365,6 +2391,16 @@ function ifcToProject(text, opts = {}) {
     return [];
   };
   const loopPts = id => { const a = A(id); return T(id) === 'IFCPOLYLOOP' ? (a[0] || []).map(pt) : []; };
+  // tabandaki yatay yüzlerin birleşimi → dış hat (her bağımsız bölge bir taban poligonu) + içteki halkalar (foot.holes): içbükey L / U
+  // döşemeler dışbükey zarfa düşmez, üçgenlenmiş tabanlar tek poligon olur, profil içi boşluklar kaybolmaz (#88)
+  const footFrom = (faces, foot) => {
+    let z0 = Infinity; for (const f of faces) for (const p of f) z0 = Math.min(z0, p[2]);
+    const bot = faces.filter(f => f.length >= 3 && f.every(p => Math.abs(p[2] - z0) < 0.5 / cm)); if (!bot.length) return;
+    const loops = ifcOutline(bot, cm * 50).sort((p, q) => Math.abs(ifcArea(q)) - Math.abs(ifcArea(p))), outers = [];
+    for (const lp of loops) {
+      if (outers.some(o => ifcInPoly(lp[0], o))) (foot.holes = foot.holes || []).push(lp); else { outers.push(lp); foot.push(lp); }
+    }
+  };
   // Katı → dünya noktaları (out) ve, düşey çekilmişse, taban poligonları (foot)
   // fc (isteğe bağlı): yüz çokgenleri (dünya koordinatı) — yalnızca çatılar için toplanır
   const solid = (id, M, out, foot, depth = 0, fc = null) => {
@@ -2375,6 +2411,16 @@ function ifcToProject(text, opts = {}) {
       for (const p of pr) { const b = app(m, p), tp = app(m, [p[0] + d[0] * h, p[1] + d[1] * h, (p[2] || 0) + d[2] * h]); base.push(b); top.push(tp); out.push(b, tp); }
       if (fc && base.length >= 3) { fc.push(base.slice().reverse(), top); for (let i = 0; i < base.length; i++) { const j = (i + 1) % base.length; fc.push([base[i], base[j], top[j], top[i]]); } }
       const wd = norm(rot(m, d)); if (foot && Math.abs(wd[2]) > 0.9 && base.length >= 3) foot.push(wd[2] > 0 ? base : base.map(p => [p[0], p[1], p[2] + rot(m, d)[2] * h]));
+      if (foot && Math.abs(wd[2]) > 0.9 && T(R(a[0])) === 'IFCARBITRARYPROFILEDEFWITHVOIDS') for (const ic of A(R(a[0]))[3] || []) { // profilin iç halkaları: döşeme boşluğu
+        const hp = curve(R(ic)).map(p => app(m, p)); if (hp.length >= 3) (foot.holes = foot.holes || []).push(hp);
+      }
+    } else if (t === 'IFCREVOLVEDAREASOLID' || t === 'IFCREVOLVEDAREASOLIDTAPERED') { // döndürülmüş katı: profil eksen etrafında dilimlenir
+      const m = R(a[1]) ? mul(M, place(R(a[1]))) : M, ax = A(R(a[2])), o = pt(ax[0]), d = dir(ax[1], [0, 0, 1]);
+      const ang = (num(a[3]) || 0) * rad, n = Math.max(1, Math.ceil(Math.abs(ang) / ARC_STEP));
+      for (const p of profile(R(a[0]))) for (let k = 0; k <= n; k++) {
+        const g = ang * k / n, c = Math.cos(g), sn = Math.sin(g), v = [p[0] - o[0], p[1] - o[1], (p[2] || 0) - o[2]], dt = v[0] * d[0] + v[1] * d[1] + v[2] * d[2], cr = cross(d, v);
+        out.push(app(m, [0, 1, 2].map(i => o[i] + v[i] * c + cr[i] * sn + d[i] * dt * (1 - c))));
+      }
     } else if (t === 'IFCBOOLEANCLIPPINGRESULT' || t === 'IFCBOOLEANRESULT') {
       solid(R(a[1]), M, out, foot, depth + 1, fc);
       if (a[0] && a[0].e === 'UNION') solid(R(a[2]), M, out, foot, depth + 1, fc);
@@ -2389,16 +2435,15 @@ function ifcToProject(text, opts = {}) {
         const bs = A(R(f))[0] || [], hasOuter = bs.some(b => T(R(b)) === 'IFCFACEOUTERBOUND');
         for (const b of bs) { const lp = loopPts(R(A(R(b))[0])).map(p => app(M, p)); if (!lp.length) continue; faces.push(lp); out.push(...lp); if (fc && lp.length >= 3 && (!hasOuter || T(R(b)) === 'IFCFACEOUTERBOUND')) fc.push(lp); } // çatı yüzü: delikler (iç sınır) atlanır
       }
-      if (foot && faces.length) { // tabandaki en geniş yatay yüz = taban poligonu
-        let z0 = Infinity; for (const f of faces) for (const p of f) z0 = Math.min(z0, p[2]);
-        let best = null, ba = 0; for (const f of faces) if (f.length >= 3 && f.every(p => Math.abs(p[2] - z0) < 0.5 / cm)) { const ar = Math.abs(ifcArea(f)); if (ar > ba) { ba = ar; best = f; } }
-        if (best) foot.push(best);
-      }
+      if (foot && faces.length) footFrom(faces, foot); // tabandaki yatay yüzler = taban poligonu (iç sınırlar delik)
     } else if (t === 'IFCPOLYGONALFACESET' || t === 'IFCTRIANGULATEDFACESET') {
       const cs = (A(R(a[0]))[0] || []).map(c => app(M, [+c[0] || 0, +c[1] || 0, +c[2] || 0])); out.push(...cs);
-      if (fc) {
-        const idx = t === 'IFCTRIANGULATEDFACESET' ? a[3] || [] : (a[2] || []).map(f => A(R(f))[0] || []);
-        for (const ix of idx) { const f = (ix || []).map(i => cs[(+i || 0) - 1]).filter(Boolean); if (f.length >= 3) fc.push(f); }
+      if (fc || foot) {
+        const tri = t === 'IFCTRIANGULATEDFACESET', idx = tri ? a[3] || [] : (a[2] || []).map(f => A(R(f))[0] || []), faces = [];
+        const loop = ix => (ix || []).map(i => cs[(+i || 0) - 1]).filter(Boolean);
+        for (const ix of idx) { const f = loop(ix); if (f.length >= 3) { faces.push(f); if (fc) fc.push(f); } }
+        if (!tri) for (const f of a[2] || []) if (T(R(f)) === 'IFCINDEXEDPOLYGONALFACEWITHVOIDS') for (const ix of A(R(f))[1] || []) { const h = loop(ix); if (h.length >= 3) faces.push(h); } // iç halkalar
+        if (foot && faces.length) footFrom(faces, foot);
       }
     } else if (t === 'IFCBOUNDINGBOX') {
       const c = pt(a[0]), x = +a[1] || 0, y = +a[2] || 0, z = +a[3] || 0;
@@ -2423,6 +2468,7 @@ function ifcToProject(text, opts = {}) {
     }
     g.body = (raw.length ? raw : box).map(toPlan);
     g.foot = (fp.length ? fp : foot).map(f => f.map(toPlan));
+    g.holes = (foot.holes || []).map(f => f.map(toPlan));
     geomCache.set(pid, g); return g;
   };
 
@@ -2479,6 +2525,20 @@ function ifcToProject(text, opts = {}) {
   for (const r of db.byType.get('IFCRELFILLSELEMENT') || []) { const a = A(r); fillOf.set(R(a[5]), R(a[4])); }
   for (const r of db.byType.get('IFCRELASSOCIATESMATERIAL') || []) { const a = A(r); for (const e of a[4] || []) matOf.set(R(e), R(a[5])); }
   for (const r of db.byType.get('IFCRELDEFINESBYTYPE') || []) { const a = A(r); for (const e of a[4] || []) typeOf.set(R(e), R(a[5])); }
+  const allKids = id => { const out = []; for (const c of kids.get(id) || []) out.push(c, ...allKids(c)); return out; };
+  // özellik kümeleri (Pset): nesne → küme kimlikleri; propOf(id, /ad/) = ilk eşleşen tekil değer (metin)
+  const psets = new Map();
+  for (const r of db.byType.get('IFCRELDEFINESBYPROPERTIES') || []) { const a = A(r); for (const e of a[4] || []) { let l = psets.get(R(e)); if (!l) psets.set(R(e), l = []); l.push(R(a[5])); } }
+  const propOf = (id, rx) => {
+    for (const ps of psets.get(id) || []) {
+      if (T(ps) !== 'IFCPROPERTYSET') continue;
+      for (const pr of A(ps)[4] || []) { const pa = A(R(pr)); if (T(R(pr)) !== 'IFCPROPERTYSINGLEVALUE' || !rx.test(String(pa[0] || '').trim())) continue; const v = pa[2], sv = v && typeof v === 'object' ? v.v : v; if (sv != null && sv !== '') return String(sv); }
+    }
+    return '';
+  };
+  // zemin kaplamaları (IfcCovering FLOORING): mekâna ilişkiyle (IfcRelCoversSpaces / içerme) ya da konumla bağlanır
+  const coverOf = new Map();
+  for (const r of db.byType.get('IFCRELCOVERSSPACES') || []) { const a = A(r); for (const c of a[5] || []) { let l = coverOf.get(R(a[4])); if (!l) coverOf.set(R(a[4]), l = []); l.push(R(c)); } }
   const layerThick = id => {
     const m = matOf.get(id) || matOf.get(typeOf.get(id)); if (!m) return 0;
     let set = m; if (T(set) === 'IFCMATERIALLAYERSETUSAGE') set = R(A(set)[0]);
@@ -2631,6 +2691,21 @@ function ifcToProject(text, opts = {}) {
         b.walls.push(w); segs.push(w);
       }
     }
+    if (curtain && segs.length) { // kayıtlar (#71): düşey IfcMember'lar duvar boyunca sayılır → mulN (varsayılan 120 cm modülden farklıysa)
+      const ms = [];
+      for (const c of allKids(id)) {
+        if (T(c) !== 'IFCMEMBER') continue; const mb = geom(c).body; if (!mb.length) continue;
+        const [m0, m1] = zr(mb); let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, cx = 0, cy = 0;
+        for (const p of mb) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); cx += p[0]; cy += p[1]; }
+        if (m1 - m0 > 1.5 * Math.max(x1 - x0, y1 - y0)) ms.push([cx / mb.length, cy / mb.length]); // düşey kayıt
+      }
+      if (ms.length) for (const w of segs) {
+        const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1, ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, pos = [];
+        for (const c of ms) { const sp = (c[0] - w.a.x) * ux + (c[1] - w.a.y) * uy, off = Math.abs((c[0] - w.a.x) * uy - (c[1] - w.a.y) * ux); if (off < 40 && sp > 12 && sp < L - 12) pos.push(sp); }
+        pos.sort((p, q) => p - q); let n = 0, last = -Infinity; for (const sp of pos) if (sp - last > 5) { n++; last = sp; }
+        if (n !== Math.max(1, Math.round(L / 120)) - 1) w.mulN = n;
+      }
+    }
     if (segs.length) { wallsOf.set(id, segs); if (rail) stats.railings += segs.length; else stats.walls += segs.length; } else stats.skipped++;
   }
   for (const b of bucket.values()) ifcJoinWalls(b.walls);
@@ -2641,11 +2716,14 @@ function ifcToProject(text, opts = {}) {
     for (const w of walls) { const dx = w.b.x - w.a.x, dy = w.b.y - w.a.y, L2 = dx * dx + dy * dy || 1; const u = Math.max(0, Math.min(1, ((cx - w.a.x) * dx + (cy - w.a.y) * dy) / L2)); const d = Math.hypot(w.a.x + dx * u - cx, w.a.y + dy * u - cy); if (d < bd) { bd = d; best = w; } }
     return { w: best, d: bd };
   };
-  const opTypeOf = (fid, width) => {
-    if (IFC_WINDOWS.has(T(fid))) return 'window';
+  const doorOps = fid => { // OperationType: kapının kendisinde (IFC4) ve tipinde / stilinde
     const ops = []; const a = A(fid); if (a[11] && a[11].e) ops.push(a[11].e);
     const ty = typeOf.get(fid); if (ty) { const ta = A(ty); for (const v of [ta[8], ta[10]]) if (v && v.e) ops.push(v.e); }
-    const s = ops.join(' ');
+    return ops.join(' ');
+  };
+  const opTypeOf = (fid, width) => {
+    if (IFC_WINDOWS.has(T(fid))) return 'window';
+    const s = doorOps(fid);
     if (/SLIDING/.test(s)) return 'slide';
     if (/DOUBLE/.test(s)) return 'double';
     return width >= 150 ? 'double' : 'door';
@@ -2681,6 +2759,7 @@ function ifcToProject(text, opts = {}) {
     const [z0, z1] = zr(pts);
     let cand = wallsOf.get(host);
     if (cand && cand.length > 1) { const inZ = cand.filter(w => z0 >= w._z0 - 30 && z0 < w._z0 + w.h); if (inZ.length) cand = inZ; }
+    if (!cand && fid) { const cw = under(fid, IFC_WALLS); if (cw) cand = wallsOf.get(cw); } // giydirme cephenin içindeki (açıklıksız) kapı / pencere
     if (!cand) { const st = storeyOf(fid || oid, z0); cand = fl(st).walls; }
     const { w, d: dd } = nearestWall(cand, cx, cy);
     if (!w || dd > w.t / 2 + 60) { stats.skipped++; continue; }
@@ -2697,7 +2776,15 @@ function ifcToProject(text, opts = {}) {
     const type = fid ? opTypeOf(fid, ow) : px ? (pxDoor || (!pxWin && sill <= 5) ? (ow >= 150 ? 'double' : 'door') : 'window') : sill > 5 ? 'window' : 'arch';
     const d = Math.max(ow / 2, Math.min(L - ow / 2, (mn + mx) / 2));
     const st = storeyOf(fid || oid, z0), bk = [...bucket.values()].find(b => b.walls.includes(w)) || fl(st);
-    const op = { id: uid(), wall: w.id, d: r1(d), w: ow, h: oh, sill, type, flip: 0, side: 1, open: 0 };
+    // açılış yönü (#88): kapının yerel +Y ekseni = açıldığı taraf; SOL / SAĞ = +Y yönüne bakınca menteşenin tarafı (sol = yerel −X)
+    let side = 1, flip = 0;
+    if (fid && type !== 'window') {
+      const Md = geom(fid).M, sy = Md.y[0] * -uy - Md.y[1] * ux; // plan: (X, −Y); duvar normali (−uy, ux)
+      if (Math.abs(sy) > 0.3) side = sy > 0 ? 1 : -1;
+      const os = doorOps(fid), lr = /LEFT/.test(os) && !/RIGHT/.test(os) ? -1 : /RIGHT/.test(os) && !/LEFT/.test(os) ? 1 : 0;
+      if (lr) { const hx = (Md.x[0] * ux - Md.x[1] * uy) * lr; if (Math.abs(hx) > 0.3) flip = hx > 0 ? 1 : 0; } // menteşe b ucundaysa çevrik
+    }
+    const op = { id: uid(), wall: w.id, d: r1(d), w: ow, h: oh, sill, type, flip, side, open: 0 };
     if (fid || px) { // kapı / pencere malzemesi ve renkleri (#41 alanları)
       const lk = looksOf(fid || px);
       if (type !== 'window' && type !== 'arch') { const m = ifcPick(IFC_DOOR_MAT, lk.names) || (lk.glass && !lk.col ? 'glass' : null); if (m) op.mat = m; if (lk.col && m !== 'glass') op.color = lk.col; }
@@ -2708,19 +2795,46 @@ function ifcToProject(text, opts = {}) {
   }
 
   /* --- Odalar, döşemeler, döşeme boşlukları --- */
+  const isFlooring = c => T(c) === 'IFCCOVERING' && ((A(c)[8] || {}).e === 'FLOORING' || ((A(typeOf.get(c) || 0)[9] || {}).e === 'FLOORING'));
+  const finishOfCover = c => { const lk = looksDeep(c); return ifcPick(IFC_FINISH, nameOf(c) + ' ' + typeName(c) + ' ' + lk.names) || (lk.glass ? 'glass' : null); };
+  for (const c of db.byType.get('IFCCOVERING') || []) { const sp = parent.get(c); if (sp && T(sp) === 'IFCSPACE') { let l = coverOf.get(sp); if (!l) coverOf.set(sp, l = []); if (!l.includes(c)) l.push(c); } }
+  const slabVoided = new Set(); for (const [oid, host] of voidHost) if (IFC_SLABS.has(T(host))) slabVoided.add(host);
   for (const id of db.byType.get('IFCSPACE') || []) {
     const g = geom(id), pts = polyOf(g);
     if (!pts || pts.length < 3 || Math.abs(ifcArea(pts.map(p => [p.x, p.y]))) < 1000) { stats.skipped++; continue; }
     const a = A(id), b = fl(storeyOf(id, g.body.length ? zr(g.body)[0] : 0));
     const nm = String(a[7] || a[2] || '').trim() || tr('Oda ', 'Room ') + (b.rooms.length + 1);
-    b.rooms.push({ id: uid(), name: nm.slice(0, 80), color: colors[b.rooms.length % colors.length], floor: 'none', pts }); stats.rooms++;
+    // zemin kaplaması (#88): özellik kümesi (FloorFinish), sonra mekâna bağlı döşeme kaplaması (IfcCovering FLOORING)
+    let fin = ifcPick(IFC_FINISH, propOf(id, IFC_FLOOR_PROP));
+    if (!fin) for (const c of coverOf.get(id) || []) { if (!isFlooring(c)) continue; fin = finishOfCover(c); if (fin) break; }
+    b.rooms.push({ id: uid(), name: nm.slice(0, 80), color: colors[b.rooms.length % colors.length], floor: fin || 'none', pts }); stats.rooms++;
+  }
+  // IfcSpace'siz dışa aktarım (Revit'te "Export rooms" kapalı): duvarların çevrelediği kapalı alanlar oda olur
+  for (const b of bucket.values()) {
+    if (b.rooms.length || b.walls.length < 3) continue;
+    for (const pts of ifcRooms(b.walls.filter(w => w.wt === 'solid' || w.wt === 'curtain'))) {
+      b.rooms.push({ id: uid(), name: tr('Oda ', 'Room ') + (b.rooms.length + 1), color: colors[b.rooms.length % colors.length], floor: 'none', pts }); stats.rooms++; stats.roomsDetected++;
+    }
+  }
+  // ilişkisiz zemin kaplamaları: merkezi hangi odanın içindeyse o odanın kaplaması
+  for (const c of db.byType.get('IFCCOVERING') || []) {
+    if (!isFlooring(c)) continue; const g = geom(c); if (!g.body.length) continue;
+    const fin = finishOfCover(c); if (!fin) continue;
+    let cx = 0, cy = 0; for (const p of g.body) { cx += p[0]; cy += p[1]; } cx /= g.body.length; cy /= g.body.length;
+    const rm = fl(storeyOf(c, zr(g.body)[1])).rooms.find(r => r.floor === 'none' && ifcInPoly([cx, cy], r.pts.map(p => [p.x, p.y])));
+    if (rm) rm.floor = fin;
   }
   for (const id of ids(IFC_SLABS)) {
     const a = A(id); if ((a[8] && a[8].e === 'ROOF') || under(id, STAIRISH) || under(id, ROOFISH)) continue; // çatı / merdiven sahanlığı: aşağıda
     let g = geom(id);
-    if (!g.body.length) { const body = [], foot = []; for (const c of kids.get(id) || []) { const cg = geom(c); body.push(...cg.body); foot.push(...cg.foot); } g = { body, foot, axis: [] }; }
+    if (!g.body.length) { const body = [], foot = [], holes = []; for (const c of kids.get(id) || []) { const cg = geom(c); body.push(...cg.body); foot.push(...cg.foot); holes.push(...(cg.holes || [])); } g = { body, foot, holes, axis: [] }; }
     const pts = polyOf(g); if (!pts || pts.length < 3) { stats.skipped++; continue; }
     const [z0, z1] = zr(g.body), st = storeyOf(id, z1), b = fl(st);
+    // profilin / tabanın iç halkaları (#88): IfcRelVoidsElement yoksa merdiven / şaft boşluğu buradan gelir
+    if (!slabVoided.has(id)) for (const hp of g.holes || []) {
+      const vp = ifcCleanPoly(hp.map(p => ({ x: r1(p[0]), y: r1(p[1]) }))); if (vp.length < 3 || Math.abs(ifcArea(vp.map(p => [p.x, p.y]))) < 400) continue;
+      b.voids.push({ id: uid(), name: '', type: 'shaft', pts: vp }); stats.voids++;
+    }
     let off = Math.round(z1 - (st ? st.z : 0)); if (Math.abs(off) < 3) off = 0;
     const lk = looksOf(id), fin = ifcPick(IFC_FINISH, lk.names) || (lk.glass ? 'glass' : 'concrete');
     b.slabs.push({ id: uid(), name: String(a[2] || '').slice(0, 80) || tr('Döşeme ', 'Slab ') + (b.slabs.length + 1), floor: fin, color: lk.col && !ifcNeutral(lk.col) ? lk.col : null, t: Math.max(1, Math.min(200, Math.round(z1 - z0) || 20)), off: Math.max(-1000, Math.min(1000, off)), pts });
@@ -2796,6 +2910,30 @@ function ifcToProject(text, opts = {}) {
     const w = Math.max(1, r1(rc.w)), d = Math.max(1, r1(rc.d)), h = Math.max(1, Math.round(z1 - z0));
     return elevOf(Object.assign(base, { k: 'rect', w, d, h, x: r1(rc.cx), y: r1(rc.cy), rot: r1(((rc.rot % 360) + 360) % 360), parts, pbase: { w, d, h }, partsV: 1 }), z0, st); // partsV = PARTS_V
   };
+  // katalog eşleme (#88): ad / tip / PredefinedType sözcükleri → katalog öğesi; sofa / bed / table boyuta göre çeşitlenir
+  const catFor = (id, ft) => {
+    if (!cat) return null;
+    const en = [...A(id), ...A(typeOf.get(id) || 0)].filter(v => v && v.e && !/^(NOTDEFINED|USERDEFINED)$/.test(v.e)).map(v => v.e).join(' ');
+    let key = ifcCatKey(nameOf(id) + ' ' + typeName(id) + ' ' + String(A(id)[4] || '') + ' ' + en); if (!key) return null;
+    const rc = ifcRect(ft.pts.map(p => [p.x, p.y])) || { w: ft.x1 - ft.x0, d: ft.y1 - ft.y0 }, lg = Math.max(rc.w, rc.d), sh = Math.min(rc.w, rc.d);
+    const round = ft.pts.length >= 8 && Math.abs(rc.w - rc.d) <= Math.max(2, rc.w * 0.06) && ft.ar / (Math.PI * rc.w * rc.d / 4) > 0.9;
+    if (key === 'sofa') key = lg >= 190 ? 'sofa3' : lg >= 130 ? 'sofa2' : 'armchair';
+    else if (key === 'bed') key = sh >= 170 && cat.bedK ? 'bedK' : sh >= 125 ? 'bed2' : 'bed1';
+    else if (key === 'table') key = round ? 'tableR' : lg >= 170 ? 'table6' : 'table4';
+    return cat[key] || null;
+  };
+  // katalog öğesi: yön ürünün yerleşim ekseninden (IFC +Y = arka = uygulamada yerel −y), ölçüler gövdenin o eksendeki uzanımı
+  const catItem = (id, g, def, z0, z1, st) => {
+    const th = Math.atan2(-g.M.x[1], g.M.x[0]), c = Math.cos(th), sn = Math.sin(th); let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+    for (const p of g.body) { const s1 = p[0] * c + p[1] * sn, s2 = -p[0] * sn + p[1] * c; a0 = Math.min(a0, s1); a1 = Math.max(a1, s1); b0 = Math.min(b0, s2); b1 = Math.max(b1, s2); }
+    let w = a1 - a0, d = b1 - b0, sm = (a0 + a1) / 2, tm = (b0 + b1) / 2, x = sm * c - tm * sn, y = sm * sn + tm * c, rot = th * 180 / Math.PI;
+    const rc = ifcRect(g.body.map(p => [p[0], p[1]]));
+    if (rc && w * d > rc.w * rc.d * 1.15) { w = rc.w; d = rc.d; x = rc.cx; y = rc.cy; rot = rc.rot; } // yerleşim ekseni gövdeyle hizalı değil: en küçük dikdörtgen
+    if ((w < d) !== (def.w < def.d) && Math.max(w, d) > Math.min(w, d) * 1.25 && Math.max(def.w, def.d) > Math.min(def.w, def.d) * 1.25) { [w, d] = [d, w]; rot += 90; } // uzun kenar katalogdaki uzun kenara
+    const lk = looksDeep(id);
+    return elevOf({ id: uid(), type: def.id, name: (nameOf(id) || tr(def.name, def.en || def.name)).slice(0, 80), icon: def.icon, k: def.k, w: Math.max(5, r1(w)), d: Math.max(5, r1(d)), h: Math.max(1, Math.min(5000, Math.round(z1 - z0))),
+      color: lk.col && !ifcNeutral(lk.col) ? lk.col : def.color, x: r1(x), y: r1(y), rot: r1(((rot % 360) + 360) % 360), label: '' }, z0, st);
+  };
   const compIds = ids(IFC_COMPONENTS), compSet = new Set(compIds);
   for (const id of compIds) {
     let up = false; for (let p = parent.get(id), k = 0; p && k < 30; p = parent.get(p), k++) if (compSet.has(p)) { up = true; break; }
@@ -2805,6 +2943,9 @@ function ifcToProject(text, opts = {}) {
     const ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 0.5 || ft.ar > 4e6) { stats.skipped++; continue; } // ince profiller (5 cm T) de gelir
     const [z0, z1] = zr(g.body), st = storeyOf(id, z0), t = T(id), furnish = t !== 'IFCBUILDINGELEMENTPROXY' && t !== 'IFCELEMENTASSEMBLY';
     const nm = nameOf(id);
+    const def = furnish ? catFor(id, ft) : null; // özel mimari elemanlar (proxy / montaj) şekil olarak kalır
+    if (def) { fl(st).furn.push(catItem(id, g, def, z0, z1, st)); stats.components++; stats.matched++; continue; }
+    if (t === 'IFCFLOWTERMINAL') { stats.skipped++; continue; } // tanınmayan tesisat ucu (menfez, sprinkler …) plana eklenmez
     const base = { id: uid(), type: 'shape', name: (nm || tr('Bileşen', 'Component')).slice(0, 80), icon: '⬡', h: Math.max(1, Math.min(5000, Math.round(z1 - z0))), color: looksDeep(id).col || (furnish ? '#bcaaa4' : '#94a3b8'), label: '' };
     const lv = leavesOf(id), multi = lv.length >= 2 && lv.length <= 64 ? partsItem(lv, base, st) : null; // en çok PARTS_MAX parça
     fl(st).furn.push(multi || elevOf(polyItem(ft, base), z0, st)); stats.components++;
@@ -2813,7 +2954,6 @@ function ifcToProject(text, opts = {}) {
   /* --- Çatılar: IfcRoof (+ parçaları) ve ROOF tipli döşemeler → yüzleriyle 'roof' öğesi --- */
   const roofIds = ids(new Set(['IFCROOF'])).filter(id => !under(id, ROOFISH));
   for (const id of ids(IFC_SLABS)) { const a = A(id); if (a[8] && a[8].e === 'ROOF' && !under(id, ROOFISH)) roofIds.push(id); }
-  const allKids = id => { const out = []; for (const c of kids.get(id) || []) out.push(c, ...allKids(c)); return out; };
   for (const id of roofIds) {
     let faces = facesOf(id); if (!faces.length) for (const c of allKids(id)) faces.push(...facesOf(c));
     let g = geom(id); if (!g.body.length) { const body = []; for (const c of allKids(id)) body.push(...geom(c).body); g = { body, foot: [], axis: [] }; }
@@ -2917,6 +3057,18 @@ function ifcToProject(text, opts = {}) {
   if (!floors.length) throw new Error('no walls, rooms or slabs found in the IFC file');
   let mnx = Infinity, mny = Infinity;
   const eachPt = fn => { for (const { f } of floors) { for (const w of f.walls) { fn(w.a); fn(w.b); } for (const k of ['rooms', 'slabs', 'voids']) for (const o of f[k]) o.pts.forEach(fn); for (const o of f.furn) fn(o); } };
+  // döndürülmüş model (#88: ortak koordinat / gerçek kuzey): baskın duvar doğrultusu plan eksenlerine hizalanır
+  if (opts.align !== false) {
+    let sC = 0, sS = 0, sL = 0;
+    for (const { f } of floors) for (const w of f.walls) { if (w.wt !== 'solid' && w.wt !== 'curtain') continue; const dx = w.b.x - w.a.x, dy = w.b.y - w.a.y, L = Math.hypot(dx, dy), th = Math.atan2(dy, dx) * 4; sC += L * Math.cos(th); sS += L * Math.sin(th); sL += L; }
+    const ang = sL ? Math.atan2(sS, sC) / 4 : 0, deg = ang * 180 / Math.PI;
+    if (sL && Math.hypot(sC, sS) / sL > 0.6 && Math.abs(deg) >= 0.5) {
+      const c = Math.cos(-ang), sn = Math.sin(-ang);
+      eachPt(p => { const x = p.x, y = p.y; p.x = x * c - y * sn; p.y = x * sn + y * c; });
+      for (const { f } of floors) for (const o of f.furn) o.rot = r1((((o.rot || 0) - deg) % 360 + 360) % 360);
+      stats.rotated = r1(deg);
+    }
+  }
   eachPt(p => { mnx = Math.min(mnx, p.x); mny = Math.min(mny, p.y); });
   const sx = Math.floor(mnx / 100) * 100, sy = Math.floor(mny / 100) * 100;
   eachPt(p => { p.x = r1(p.x - sx); p.y = r1(p.y - sy); });
@@ -3026,6 +3178,108 @@ function ifcJoinWalls(walls) {
     }
   }
   return walls;
+}
+// Nokta poligonun içinde mi ([x, y] dizileri)
+function ifcInPoly(p, poly) {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = poly[i], b = poly[j]; if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c; }
+  return c;
+}
+// Aynı düzlemdeki yüzlerin birleşiminin sınır halkaları: yalnızca tek yüzde geçen kenarlar zincirlenir (q: koordinat → tam sayı çarpanı)
+function ifcOutline(faces, q) {
+  const K = p => Math.round(p[0] * q) + ',' + Math.round(p[1] * q), edges = new Map();
+  for (const f of faces) for (let i = 0; i < f.length; i++) {
+    const a = f[i], b = f[(i + 1) % f.length], ka = K(a), kb = K(b); if (ka === kb) continue;
+    const k = ka < kb ? ka + '|' + kb : kb + '|' + ka, e = edges.get(k);
+    if (e) e.n++; else edges.set(k, { a, b, ka, kb, n: 1 });
+  }
+  const adj = new Map(), link = (k, e) => { let l = adj.get(k); if (!l) adj.set(k, l = []); l.push(e); };
+  for (const e of edges.values()) if (e.n === 1) { link(e.ka, e); link(e.kb, e); }
+  const loops = [], used = new Set();
+  for (const e0 of edges.values()) {
+    if (e0.n !== 1 || used.has(e0)) continue;
+    const loop = [e0.a]; let at = e0.kb, pt = e0.b; used.add(e0);
+    for (let guard = 0; guard < 200000 && at !== e0.ka; guard++) {
+      loop.push(pt);
+      const nx = (adj.get(at) || []).find(x => !used.has(x)); if (!nx) break;
+      used.add(nx); if (nx.ka === at) { at = nx.kb; pt = nx.b; } else { at = nx.ka; pt = nx.a; }
+    }
+    if (loop.length >= 3) loops.push(loop);
+  }
+  return loops;
+}
+// Üç noktadan geçen yayın ara noktaları (uçlar hariç); doğrusal noktalar → orta nokta
+function ifcArc3(a, m, b, step) {
+  const d = 2 * (a[0] * (m[1] - b[1]) + m[0] * (b[1] - a[1]) + b[0] * (a[1] - m[1])); if (Math.abs(d) < 1e-12) return [m];
+  const a2 = a[0] * a[0] + a[1] * a[1], m2 = m[0] * m[0] + m[1] * m[1], b2 = b[0] * b[0] + b[1] * b[1];
+  const cx = (a2 * (m[1] - b[1]) + m2 * (b[1] - a[1]) + b2 * (a[1] - m[1])) / d, cy = (a2 * (b[0] - m[0]) + m2 * (a[0] - b[0]) + b2 * (m[0] - a[0])) / d;
+  const r = Math.hypot(a[0] - cx, a[1] - cy), g1 = Math.atan2(a[1] - cy, a[0] - cx); let g2 = Math.atan2(b[1] - cy, b[0] - cx);
+  if ((m[0] - a[0]) * (b[1] - m[1]) - (m[1] - a[1]) * (b[0] - m[0]) > 0) { while (g2 <= g1) g2 += 2 * Math.PI; } else { while (g2 >= g1) g2 -= 2 * Math.PI; }
+  const n = Math.max(2, Math.ceil(Math.abs(g2 - g1) / step)), out = [];
+  for (let k = 1; k < n; k++) { const g = g1 + (g2 - g1) * k / n; out.push([cx + r * Math.cos(g), cy + r * Math.sin(g), a[2] || 0]); }
+  return out;
+}
+// Poligonu içe doğru d kadar öteler (köşeler gönye); sonuç bozulursa poligon olduğu gibi döner
+function ifcInset(pts, d) {
+  const n = pts.length, ar = ifcArea(pts.map(p => [p.x, p.y])), sg = ar > 0 ? 1 : -1, out = [];
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i + n - 1) % n], p1 = pts[i], p2 = pts[(i + 1) % n];
+    const l1 = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1, l2 = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+    const n1 = { x: -(p1.y - p0.y) / l1 * sg, y: (p1.x - p0.x) / l1 * sg }, n2 = { x: -(p2.y - p1.y) / l2 * sg, y: (p2.x - p1.x) / l2 * sg };
+    const k = 1 + n1.x * n2.x + n1.y * n2.y; // gönye: (n1 + n2) / (1 + n1·n2)
+    if (k < 0.2) out.push({ x: p1.x + (n1.x + n2.x) / 2 * d, y: p1.y + (n1.y + n2.y) / 2 * d });
+    else out.push({ x: p1.x + (n1.x + n2.x) / k * d, y: p1.y + (n1.y + n2.y) / k * d });
+  }
+  const a2 = ifcArea(out.map(p => [p.x, p.y]));
+  return a2 * sg > 0 && Math.abs(a2) < Math.abs(ar) && Math.abs(a2) > Math.abs(ar) * 0.3 ? out : pts;
+}
+// Duvar orta çizgilerinin çevrelediği kapalı alanlar (IfcSpace yoksa oda algılama): parçalar kesişimlerde bölünür,
+// açıkta kalan uçlar budanır, düzlemsel grafın iç yüzleri izlenir; her yüz yarım duvar kalınlığı içe alınır → [{x, y}, …] listesi
+function ifcRooms(walls) {
+  const segs = walls.filter(w => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) > 1);
+  if (segs.length < 3 || segs.length > 1500) return [];
+  const nodes = new Map();
+  const node = (x, y) => { // 2 cm ızgara, komşu hücrelerde 1,5 cm içindeki düğüm aynı sayılır
+    const gx = Math.round(x / 2), gy = Math.round(y / 2);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) { const o = nodes.get((gx + i) + ',' + (gy + j)); if (o && Math.hypot(o.x - x, o.y - y) < 1.5) return o; }
+    const o = { x, y, out: [] }; nodes.set(gx + ',' + gy, o); return o;
+  };
+  const link = (p, q) => { if (p === q || p.out.some(e => e.to === q)) return; p.out.push({ to: q, ang: Math.atan2(q.y - p.y, q.x - p.x) }); q.out.push({ to: p, ang: Math.atan2(p.y - q.y, p.x - q.x) }); };
+  for (const s of segs) {
+    const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y, L = Math.hypot(dx, dy), ts = [0, 1];
+    for (const o of segs) {
+      if (o === s) continue;
+      const ex = o.b.x - o.a.x, ey = o.b.y - o.a.y, Lo = Math.hypot(ex, ey), den = dx * ey - dy * ex;
+      if (Math.abs(den) < 0.02 * L * Lo) continue; // paralel
+      const t = ((o.a.x - s.a.x) * ey - (o.a.y - s.a.y) * ex) / den, u = ((o.a.x - s.a.x) * dy - (o.a.y - s.a.y) * dx) / den;
+      const tt = (o.t / 2 + 3) / L, tu = (s.t / 2 + 3) / Lo; // uç, diğer duvarın gövdesine değiyorsa birleşmiş say
+      if (t > -tt && t < 1 + tt && u > -tu && u < 1 + tu) ts.push(t);
+    }
+    ts.sort((p, q) => p - q);
+    let prev = null;
+    for (const t of ts) { const nd = node(s.a.x + dx * t, s.a.y + dy * t); if (prev) link(prev, nd); prev = nd; }
+  }
+  const all = [...nodes.values()];
+  for (let ch = true; ch;) { ch = false; for (const nd of all) if (nd.out.length === 1) { const o = nd.out[0].to; o.out = o.out.filter(e => e.to !== nd); nd.out = []; ch = true; } } // açık uçlar
+  for (const nd of all) nd.out.sort((p, q) => p.ang - q.ang);
+  const seen = new Set(), rooms = [], ts2 = segs.map(w => w.t).sort((p, q) => p - q), half = (ts2[ts2.length >> 1] || 20) / 2;
+  for (const nd of all) for (const e0 of nd.out) {
+    if (seen.has(e0)) continue;
+    const face = []; let from = nd, e = e0, ok = true;
+    for (let guard = 0; guard < 5000; guard++) {
+      seen.add(e); face.push(from);
+      const v = e.to, i = v.out.findIndex(x => x.to === from); if (i < 0) { ok = false; break; }
+      const nx = v.out[(i - 1 + v.out.length) % v.out.length]; // ters kenardan saat yönünde sonraki = yüz solda kalır
+      from = v; e = nx;
+      if (from === nd && e === e0) break;
+      if (guard === 4999) ok = false;
+    }
+    if (!ok || face.length < 3) continue;
+    const ar = ifcArea(face.map(p => [p.x, p.y])); if (ar < 10000) continue; // iç yüzler pozitif; dış sınır negatif; 1 m² altı atılır
+    const pts = ifcCleanPoly(ifcInset(ifcCleanPoly(face.map(p => ({ x: p.x, y: p.y }))), half).map(p => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 })));
+    if (pts.length >= 3) rooms.push(pts);
+  }
+  return rooms;
 }
 /* IFC-IMPORT:END */
 // Çok parçalı mobilya 2B: parçaların üstten görünüşü — yüksekte olan üstte çizilir, grup tek katman olarak saydamlaşır
@@ -10472,12 +10726,13 @@ function openPlanFile(file) {
   r.readAsText(file);
 }
 function importIfcText(text, fileName = '') {
-  const { project, stats } = ifcToProject(text, { uid, L, colors: ROOMCOL, name: String(fileName).replace(/\.ifc$/i, '') || 'IFC' });
+  const { project, stats } = ifcToProject(text, { uid, L, colors: ROOMCOL, catalog: BYID, name: String(fileName).replace(/\.ifc$/i, '') || 'IFC' });
   newTabSlot(); loadProject(project);
   closeModal();
   toast(L(`IFC içe aktarıldı: ${stats.floors} kat, ${stats.walls} duvar, ${stats.ops} kapı/pencere, ${stats.rooms} oda, ${stats.slabs} döşeme`,
     `IFC imported: ${stats.floors} floor(s), ${stats.walls} walls, ${stats.ops} doors/windows, ${stats.rooms} rooms, ${stats.slabs} slabs`)
-    + (stats.columns ? L(`, ${stats.columns} kolon`, `, ${stats.columns} column(s)`) : '') + (stats.railings ? L(`, ${stats.railings} korkuluk`, `, ${stats.railings} railing(s)`) : '') + (stats.components ? L(`, ${stats.components} bileşen`, `, ${stats.components} component(s)`) : '') + (stats.roofs ? L(`, ${stats.roofs} çatı`, `, ${stats.roofs} roof(s)`) : '') + (stats.stairs ? L(`, ${stats.stairs} merdiven`, `, ${stats.stairs} stair(s)`) : '') + (stats.ramps ? L(`, ${stats.ramps} rampa`, `, ${stats.ramps} ramp(s)`) : '') + (stats.skipped ? L(` · ${stats.skipped} öğe atlandı`, ` · ${stats.skipped} item(s) skipped`) : ''));
+    + (stats.columns ? L(`, ${stats.columns} kolon`, `, ${stats.columns} column(s)`) : '') + (stats.railings ? L(`, ${stats.railings} korkuluk`, `, ${stats.railings} railing(s)`) : '') + (stats.components ? L(`, ${stats.components} bileşen`, `, ${stats.components} component(s)`) : '') + (stats.roofs ? L(`, ${stats.roofs} çatı`, `, ${stats.roofs} roof(s)`) : '') + (stats.stairs ? L(`, ${stats.stairs} merdiven`, `, ${stats.stairs} stair(s)`) : '') + (stats.ramps ? L(`, ${stats.ramps} rampa`, `, ${stats.ramps} ramp(s)`) : '') + (stats.roomsDetected ? L(` · ${stats.roomsDetected} oda duvarlardan algılandı`, ` · ${stats.roomsDetected} room(s) detected from walls`) : '') + (stats.rotated ? L(` · plan ${Math.abs(stats.rotated)}° döndürülüp eksenlere hizalandı`, ` · plan turned ${Math.abs(stats.rotated)}° to align with the axes`) : '')
+    + (stats.skipped ? L(` · ${stats.skipped} öğe atlandı`, ` · ${stats.skipped} item(s) skipped`) : ''));
   return stats;
 }
 // Dosya sürükle-bırak: tuvale .json / .ifc bırakmak onu açar (mobilya stüdyosunun blok sürüklemesi metin taşır, etkilenmez)

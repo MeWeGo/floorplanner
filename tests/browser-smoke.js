@@ -1734,6 +1734,31 @@ check('realistic look: physically based materials, same render in dark and light
   return 'brightness ' + info.light.toFixed(0) + ' light / ' + info.dark.toFixed(0) + ' dark, ' + info.live.std + ' physical meshes, ' + info.live.dec + ' contact decals';
 });
 
+check('IFC fidelity: Revit fixtures become catalogue items, rooms are detected, concave outlines survive (#88)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    const text = await (await fetch('tests/fixtures/revit-fidelity.ifc')).text();
+    const stats = importIfcText(text, 'revit-fidelity.ifc');
+    const f = P.floors[0], types = f.furn.map(o => o.type).sort();
+    const out = { stats, types, icons: f.furn.filter(o => o.type !== 'shape').every(o => o.icon && BYID[o.type]),
+      rooms: f.rooms.length, lslab: (f.slabs.find(x => x.name === 'L Slab') || { pts: [] }).pts.length, voids: f.voids.length,
+      mulN: (f.walls.find(w => w.wt === 'curtain') || {}).mulN, sides: f.ops.map(o => o.side + ':' + o.flip).sort().join(' '),
+      fin: P.floors[1].rooms.map(r => r.floor).sort().join(','), furn2d: document.querySelectorAll('#gFurn [data-id]').length };
+    show3D(true); await new Promise(r => setTimeout(r, 500));
+    out.view3d = !!ui.view3d; out.meshes = 0; if (T3 && T3.scene) T3.scene.traverse(o => { if (o.isMesh) out.meshes++; });
+    show3D(false);
+    return out;
+  })()`);
+  for (const t of ['basin', 'bed2', 'fridge', 'sofa2', 'wc']) if (!info.types.includes(t)) throw new Error(t + ' was not matched to the catalogue: ' + info.types);
+  if (!info.icons) throw new Error('matched items are not real catalogue items');
+  if (info.rooms !== 1 || info.stats.roomsDetected !== 1) throw new Error('room not detected on the storey without IfcSpace');
+  if (info.lslab !== 6 || info.voids !== 1) throw new Error('concave slab / profile void lost: ' + info.lslab + ' corners, ' + info.voids + ' voids');
+  if (info.mulN !== 3 || info.sides !== '-1:0 -1:1 1:1') throw new Error('curtain mullions / door swing wrong: mulN ' + info.mulN + ', doors ' + info.sides);
+  if (info.fin !== 'marble,tile,wood') throw new Error('room finishes not imported: ' + info.fin);
+  if (!info.view3d || info.meshes < 30) throw new Error('imported model did not build in 3D');
+  return info.stats.matched + ' catalogue items, 1 detected room, finishes ' + info.fin + ', 3D ' + info.meshes + ' meshes';
+});
+
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();
   if (!browserPath) {
