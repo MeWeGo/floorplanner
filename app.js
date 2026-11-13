@@ -118,8 +118,8 @@ const view = { x: 0, y: 0, z: 0.5 };
    planları, parsel sınırları ve çok binalı yerleşimler bütünüyle görülebilir. */
 const MIN_ZOOM = 0.002, MAX_ZOOM = 8;
 let tool = 'select', sel = [], placing = null;
-const ui = { snap: true, angle: true, dims: true, outline: false, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, v3dFloor: 'all', dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
-const layersVis = { bg: true, rooms: true, walls: true, furn: true, dims: true, sketch: true, underlay: true };
+const ui = { snap: true, angle: true, dims: true, outline: false, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
+const layersVis = { bg: true, rooms: true, walls: true, furn: true, furnLabel: true, furnIcon: true, dims: true, sketch: true, underlay: true }; // furnLabel / furnIcon (#84): yalnızca görünüm, veriye dokunmaz
 // Kat izdüşümü (issue #26): hangi kat altlık olarak gösterilir ('prev' = bir alt kat) ve opaklığı — görünüm ayarı, projeye kaydedilmez
 const underlay = { floor: 'prev', op: 0.2 };
 
@@ -3095,8 +3095,8 @@ function furnSvg(f, live) {
   const body = furnTilted(f) ? furnTiltSvg(f) : furnBody(f);
   let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${fe ? `<g stroke-dasharray="6 4">${body}</g>` : body}`;
   if (fe) s += `<text transform="translate(0 ${f.d / 2 + 9}) rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="11" fill="${C.sub}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">▲ +${Math.round(fe)}</text>`;
-  if (!C.outline && f.icon && f.k !== 'roof' && !(Array.isArray(f.parts) && f.parts.length)) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
-  if (f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="${C.text}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
+  if (layersVis.furnIcon && !C.outline && f.icon && f.k !== 'roof' && !(Array.isArray(f.parts) && f.parts.length)) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
+  if (layersVis.furnLabel && f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="${C.text}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
   return s + '</g>';
 }
 function dimSvg(d, live) {
@@ -5089,7 +5089,7 @@ function projectPanel() {
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
   h += `<div class="row"><button class="btn sm" data-act="wallhall" title="${L('Tüm katlardaki mevcut duvarları bu yüksekliğe getirir; kat bazlı yükseklikler sıfırlanır', 'Sets every existing wall on every floor to this height; per-floor heights are cleared')}">⬆ ${L('Mevcut tüm duvarlara uygula', 'Apply to all existing walls')}</button></div>`;
   h += layersPanelHtml();
-  h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['dims', L('Ölçüler', 'Dimensions')], ['sketch', L('Çizimler (kalem & 2B çizim)', 'Sketches & 2D drafting')]].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
+  h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['furnLabel', L('　↳ Mobilya yazıları', '　↳ Furniture labels')], ['furnIcon', L('　↳ Mobilya simgeleri (emoji)', '　↳ Furniture icons (emoji)')], ['dims', L('Ölçüler', 'Dimensions')], ['sketch', L('Çizimler (kalem & 2B çizim)', 'Sketches & 2D drafting')]].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
   if (P.floors.length > 1) {
     // Kat izdüşümü (issue #26): aç/kapa, referans kat, opaklık
     const opts = [['prev', L('Bir alt kat', 'Floor below')], ...P.floors.filter(x => x !== f).map(x => [x.id, x.name])];
@@ -5137,6 +5137,7 @@ function applyProp(t, final) {
   const render = final ? window.render : scheduleRender; // canlı giriş: karede bir çizim
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
+  if (k === 'grplink') { if (final && v) linkGroupTo(v); return; }
   if (k === 'lyr') {
     const l = layerById(t.dataset.lid); if (!l) return;
     if (p === 'active') { if (t.checked) P.activeLayer = l.id; } else l[p] = v;
@@ -5281,6 +5282,7 @@ $('#props').addEventListener('click', e => {
     for (const { o } of ws) { if (b.dataset.c) o.color = b.dataset.c; else delete o.color; }
     commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
   }
+  if (a === 'grpUnlink') { const c = varContainer(); if (c && c.type === 'group') unlinkGroup(c.rec); return; }
   if (a === 'group') return groupSel();
   if (a === 'ungroup') return ungroupSel();
   if (a === 'grpJoin') { const c = varContainer(); if (c && c.type === 'join') { joinGroup(c.rec, c.os); sel = groupMemberIds(c.rec.id); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L('Gruba eklendi – düzenler korundu', 'Added to the group – layouts kept')); } return; }
@@ -5451,7 +5453,7 @@ $('#floors').addEventListener('click', e => {
   const t = e.target.closest('[data-fl]'); if (t) { fi = +t.dataset.fl; sel = []; refresh(); return; }
   const a = e.target.closest('[data-fa]'); if (!a) return;
   if (a.dataset.fa === 'add') { P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length)); fi = P.floors.length - 1; sel = []; commit(); fit(); refresh(); }
-  if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); c.groups = []; c.rooms.forEach(r => { delete r.vars; delete r.vIdx; }); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
+  if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); const gm = {}; for (const k in KINDS) c[k].forEach(o => { if (o.grp) o.grp = gm[o.grp] || (gm[o.grp] = uid()); }); c.groups = Object.values(gm).map(id => ({ id, vars: [], idx: 0 })); c.rooms.forEach(r => { delete r.vars; delete r.vIdx; }); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
   if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
 });
 $('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) { const f = P.floors[+t.dataset.fl], n = prompt(L('Kat adı:', 'Floor name:'), f.name); if (n) { f.name = n; commit(); refresh(); } } });
@@ -5542,6 +5544,105 @@ function pruneGroups() {
   const f = F(); if (!f.groups) return;
   const alive = gid => { for (const k in KINDS) if (f[k].some(o => o.grp === gid)) return true; return false; };
   f.groups = f.groups.filter(g => alive(g.id));
+}
+
+/* ---------- Katlar arası gruplar (#86) ----------
+   Kayıt modeli değişmez: her katın kendi Floor.groups kaydı vardır ve yalnızca o kattaki üyelerin pozlarını tutar.
+   Aynı id'yi taşıyan kayıtlar "bağlı"dır: düzen sayısı, etiketleri ve etkin düzen (idx) birlikte değişir.
+   Kat başına işler withFloor() ile o kat etkinmiş gibi çalıştırılır (find / F() tabanlı tüm yardımcılar aynen kullanılır).
+   Eski projelerde her grup tek kattadır, yani hiçbir şey değişmez. */
+function grpLinked(gid) {
+  const out = [];
+  P.floors.forEach((f, i) => { const rec = (f.groups || []).find(g => g.id === gid); if (rec) out.push({ i, rec }); });
+  return out;
+}
+function withFloor(i, fn) { const s = fi; fi = i; try { return fn(); } finally { fi = s; } }
+const grpCount = (fl, gid) => { let n = 0; for (const k in KINDS) for (const o of fl[k] || []) if (o.grp === gid) n++; return n; };
+// bağlı kayıtları hizala: eksik düzenler o katın mevcut pozuyla doldurulur, etiketler ve etkin düzen ortaklaşır
+function grpAlignVars(gid) {
+  const links = grpLinked(gid); if (links.length < 2) return;
+  const n = Math.max(...links.map(l => (l.rec.vars || []).length)); if (!n) return;
+  const lead = (links.find(l => l.i === fi && (l.rec.vars || []).length === n) || links.find(l => (l.rec.vars || []).length === n)).rec;
+  const idx = clamp(lead.idx ?? 0, 0, n - 1);
+  for (const l of links) withFloor(l.i, () => {
+    const r = l.rec; r.vars = r.vars || [];
+    const cur = groupPoses(groupMemberIds(gid), gid), had = r.vars.length, old = clamp(r.idx ?? 0, 0, Math.max(0, had - 1));
+    if (had && old !== idx) r.vars[old].poses = clonePoses(cur); // etkin düzen değişmeden önce mevcut konum kaydedilir
+    while (r.vars.length < n) r.vars.push({ label: '', poses: clonePoses(cur), base: clonePoses(cur) });
+    r.vars.forEach((v, k) => v.label = lead.vars[k].label);
+    r.idx = idx;
+    if (had && old !== idx) applyVarPoses(r.vars[idx].poses);
+  });
+}
+// düzen işlemi (ilk / kaydet / yeni / sil) bağlı katlara da uygulanır: her kat kendi üyelerinin pozunu saklar
+function grpMirror(a, rec, delIdx) {
+  for (const l of grpLinked(rec.id)) {
+    if (l.rec === rec) continue;
+    withFloor(l.i, () => {
+      const r = l.rec, vars = r.vars = r.vars || [], cur = groupPoses(groupMemberIds(r.id), r.id), i = clamp(r.idx ?? 0, 0, Math.max(0, vars.length - 1));
+      if (a === 'varSave') { if (vars[i]) vars[i] = { label: vars[i].label, poses: clonePoses(cur), base: clonePoses(cur) }; }
+      else if (a === 'varNew') {
+        if (vars[i]) { vars[i].poses = clonePoses(cur); vars[i].base = clonePoses(cur); delete vars[i].draft; }
+        vars.push({ label: '', poses: clonePoses(cur), base: clonePoses(cur), draft: true }); r.idx = vars.length - 1;
+      } else if (a === 'varDel' && vars.length) {
+        vars.splice(clamp(delIdx, 0, vars.length - 1), 1);
+        if (!vars.length) { delete r.idx; r.vars = []; }
+        else { r.idx = clamp(delIdx, 0, vars.length - 1); applyVarPoses(vars[r.idx].poses); }
+      }
+    });
+  }
+  grpAlignVars(rec.id); // varInit ve eksik kalan düzenler burada tamamlanır
+}
+// seçimi (grup ya da gruplanmamış nesneler) başka kattaki bir gruba bağla
+function linkGroupTo(gid) {
+  const c = varContainer(), f = F(); if (!c || (c.type !== 'group' && c.type !== 'potential')) return false;
+  if (!grpLinked(gid).some(l => l.i !== fi) || (f.groups || []).some(g => g.id === gid)) return false;
+  f.groups = f.groups || [];
+  if (c.type === 'group') {
+    for (const id of groupMemberIds(c.rec.id)) find(id).o.grp = gid;
+    c.rec.id = gid;
+  } else {
+    dropPoseOrphans(c.os.map(x => x.o.id));
+    c.os.forEach(({ o }) => o.grp = gid);
+    f.groups.push({ id: gid, vars: [], idx: 0 });
+  }
+  pruneGroups();
+  _switchingVar = true;
+  try { grpAlignVars(gid); commit(); } finally { _switchingVar = false; }
+  sel = groupMemberIds(gid); refresh(); if (ui.view3d && T3) schedBuild3D();
+  toast(L('Katlar bağlandı – düzenler birlikte değişir', 'Floors linked – layouts now switch together'));
+  return true;
+}
+// bu kattaki grubu diğer katlardan ayır (grup ve düzenleri bu katta kalır)
+function unlinkGroup(rec) {
+  if (!rec || grpLinked(rec.id).length < 2) return false;
+  const nid = uid();
+  for (const id of groupMemberIds(rec.id)) find(id).o.grp = nid;
+  rec.id = nid;
+  commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+  toast(L('Kat bağlantısı koparıldı', 'Floors unlinked'));
+  return true;
+}
+function grpLinkHtml() {
+  if (!P || P.floors.length < 2) return '';
+  const c = varContainer(); if (!c || (c.type !== 'group' && c.type !== 'potential')) return '';
+  const here = c.type === 'group' ? c.rec.id : null, local = new Set((F().groups || []).map(g => g.id)), seen = new Set();
+  let h = '';
+  const others = here ? grpLinked(here).filter(l => l.i !== fi) : [];
+  if (others.length) h += `<p class="muted" style="margin:6px 0 4px">🔗 ${L('Bağlı katlar', 'Linked floors')}: <b>${others.map(l => esc(P.floors[l.i].name)).join(', ')}</b> — ${L('düzenler birlikte değişir', 'layouts switch together')}</p><div class="row"><button class="btn sm" data-act="grpUnlink">🔗✕ ${L('Kat bağlantısını kopar', 'Unlink floors')}</button></div>`;
+  let opts = '';
+  P.floors.forEach((fl, i) => {
+    if (i === fi) return;
+    for (const g of fl.groups || []) {
+      if (local.has(g.id) || seen.has(g.id)) continue;
+      const n = grpCount(fl, g.id); if (!n) continue;
+      seen.add(g.id);
+      const lbl = g.vars && g.vars.length ? L('Düzen ', 'Layout ') + g.vars[clamp(g.idx ?? 0, 0, g.vars.length - 1)].label + ' · ' : '';
+      opts += `<option value="${esc(g.id)}">${esc(fl.name)} · ${esc(lbl)}${n} ${L('nesne', n === 1 ? 'object' : 'objects')}</option>`;
+    }
+  });
+  if (opts && !others.length) h += `<label class="f" title="${L('Seçili nesneler başka kattaki grupla birlikte ayarlanabilir olur: bir düzen değişince iki kat da değişir', 'The selection becomes adjustable together with a group on another floor: switching a layout changes both floors')}"><span>🔗 ${L('Başka kattaki gruba bağla', 'Link to a group on another floor')}</span><select data-k="grplink" data-p="gid"><option value="">${L('Grup seç…', 'Choose a group…')}</option>${opts}</select></label>`;
+  return h;
 }
 
 /* ---------- Ayarlanabilir düzenler (1a → 1b → 1c döngüsü) ---------- */
@@ -5679,18 +5780,22 @@ function syncActiveVars() {
 }
 function switchGroupVarTo(rec, nextIdx) {
   if (!rec || !rec.vars || !rec.vars.length) return false;
-  const mids = groupMemberIds(rec.id); if (!mids.length) return false;
-  const curIdx = clamp(rec.idx ?? 0, 0, rec.vars.length - 1), curV = rec.vars[curIdx];
-  const curSnap = groupPoses(mids, rec.id);
-  if (rec.vars.length >= 2 || curV.draft) {
-    curV.poses = clonePoses(curSnap);
-    if (!curV.base || !posesEqual(curSnap, curV.base)) { curV.base = clonePoses(curSnap); delete curV.draft; }
-  }
-  rec.idx = clamp(nextIdx, 0, rec.vars.length - 1);
+  // bağlı katlar (#86): aynı id'li her kayıt kendi katında aynı düzene geçer; tek kat = eski davranış
+  const links = grpLinked(rec.id).filter(l => l.rec.vars && l.rec.vars.length && withFloor(l.i, () => groupMemberIds(rec.id).length));
+  if (!links.some(l => l.rec === rec)) return false;
+  for (const l of links) withFloor(l.i, () => {
+    const r = l.rec, curIdx = clamp(r.idx ?? 0, 0, r.vars.length - 1), curV = r.vars[curIdx];
+    const curSnap = groupPoses(groupMemberIds(r.id), r.id);
+    if (r.vars.length >= 2 || curV.draft) {
+      curV.poses = clonePoses(curSnap);
+      if (!curV.base || !posesEqual(curSnap, curV.base)) { curV.base = clonePoses(curSnap); delete curV.draft; }
+    }
+    r.idx = clamp(nextIdx, 0, r.vars.length - 1);
+    if (!r.vars[r.idx].base) r.vars[r.idx].base = clonePoses(r.vars[r.idx].poses);
+  });
   const v = rec.vars[rec.idx];
-  if (!v.base) v.base = clonePoses(v.poses);
   _switchingVar = true;
-  try { applyVarPoses(v.poses); commit(); } finally { _switchingVar = false; }
+  try { for (const l of links) withFloor(l.i, () => applyVarPoses(l.rec.vars[l.rec.idx].poses)); commit(); } finally { _switchingVar = false; }
   refresh(); if (ui.view3d && T3) build3D(true);
   toast(L(`Düzen ${v.label} (${rec.idx + 1}/${rec.vars.length})`, `Layout ${v.label} (${rec.idx + 1}/${rec.vars.length})`));
   return true;
@@ -5760,6 +5865,7 @@ function varAction(a, targetIdx) {
   const setIdx = i => { if (isRoom) c.o.vIdx = i; else c.rec.idx = i; };
   const snap = () => isRoom ? roomPoses(c.o) : groupPoses(groupMemberIds(c.rec.id), c.rec.id);
   const pfx = vars.length ? (parseInt(vars[0].label) || 1) : nextVarPrefix();
+  const idx0 = clamp(idx(), 0, Math.max(0, vars.length - 1)); // silinen düzenin sırası: bağlı katlarda da aynısı silinir (#86)
   if (a === 'varInit') {
     if (vars.length) return;
     const s0 = snap();
@@ -5817,7 +5923,7 @@ function varAction(a, targetIdx) {
     }
   }
   _switchingVar = true;
-  try { commit(); } finally { _switchingVar = false; }
+  try { if (!isRoom) grpMirror(a, c.rec, idx0); commit(); } finally { _switchingVar = false; }
   refresh(); renderProps();
   if (ui.view3d && T3) schedBuild3D();
 }
@@ -5828,7 +5934,8 @@ function grpEditHtml(c) {
     ? `<div class="row"><button class="btn sm primary" data-act="grpEdit">✓ ${L('Düzenlemeyi bitir', 'Done editing')}</button></div><p class="muted" style="margin:0 0 6px">✏️ ${L('Üyeye tıklayın: tek başına seçilir, taşınır, boyutlanır (aktif düzene kaydedilir). Yeni çizdiğiniz duvar ve nesneler bu gruba katılır. Düzen değiştirmek için aşağıdaki düğmeleri kullanın.', 'Click a member to select, move or resize it on its own (saved to the active layout). New walls and objects you draw join this group. Switch layouts with the buttons below.')}</p>`
     : `<div class="row"><button class="btn sm" data-act="grpEdit" title="${L('Gruba duvar/nesne ekleyin veya üyeleri düzen başına tek tek konumlayın', 'Add walls/objects to the group, or place members one by one per layout')}">✏️ ${L('Üyeleri düzenle', 'Edit members')}</button></div>`;
 }
-function variantUIHtml() {
+function variantUIHtml() { return variantBodyHtml() + grpLinkHtml(); } // + başka kattaki gruba bağlama (#86)
+function variantBodyHtml() {
   const c = varContainer(); if (!c) return '';
   if (c.type === 'join') return `<div class="row"><button class="btn sm primary" data-act="grpJoin">➕ ${L('Gruba ekle', 'Add to group')} (${c.os.length})</button></div><p class="muted" style="margin:0 0 6px">${L('Seçili nesneler mevcut gruba katılır; kayıtlı düzenler korunur.', 'The selected objects join the existing group; saved layouts are kept.')}</p>`;
   if (c.type === 'group' && !(c.rec.vars || []).length) return grpEditHtml(c) + `<div class="row"><button class="btn sm primary" data-act="varInit">🔄 ${L('Ayarlanabilir Yap', 'Make Adjustable')}</button></div><p class="muted" style="margin:0 0 6px">${L('Mevcut düzeni 1a olarak kaydeder; sonraki düzenleri ➕ ile ekleyin, kanvasta tıklayarak geçin.', 'Saves the current layout as 1a; add more with ➕, cycle by clicking on canvas.')}</p>`;
@@ -5908,9 +6015,12 @@ function cmdList() {
     act('group', '⛓', 'Grupla', 'Group', 'Ctrl+G', groupSel, false),
     act('ungroup', '⛓', 'Grubu çöz', 'Ungroup', 'Ctrl+Shift+G', ungroupSel, false),
     act('elev', '📐', 'Görünüşler ve kesitler', 'Elevations & sections', '', () => archModal('elev:south'), true, 'facade cephe drawing çizim'),
+    act('furnLabel', '🔤', 'Mobilya yazılarını göster / gizle', 'Show / hide furniture labels', '', () => { layersVis.furnLabel = !layersVis.furnLabel; refresh(); }, false, 'etiket label text yazı tefriş'),
+    act('furnIcon', '🙂', 'Mobilya simgelerini (emoji) göster / gizle', 'Show / hide furniture icons (emoji)', '', () => { layersVis.furnIcon = !layersVis.furnIcon; refresh(); }, false, 'emoji icon simge ikon tefriş'),
     act('layers', '🗂', 'Katmanlar', 'Layers', '', () => { sel = []; refresh(); const h = [...document.querySelectorAll('#props h4')].find(x => /Çizim katmanları|Drawing layers/.test(x.textContent)); if (h) h.scrollIntoView({ block: 'start' }); }, false, 'layer'),
     act('addlayer', '🗂', 'Katman ekle', 'Add layer', '', () => layerAct('lyradd'), false, 'new layer yeni'),
     act('studio', '🎨', 'Render stüdyosu', 'Render studio', '', () => openRenderStudio(), true, '3d image'),
+    act('floors3d', '☰', '3B: katları ayrı ayrı göster / gizle', '3D: show / hide individual floors', '', () => { if (!ui.view3d) show3D(true); if (ui.view3d) v3dListToggle(true); }, true, 'kat floor storey gizle hide roof çatı'),
     act('live3d', '🌤', 'Canlı gerçekçi 3B görünüm (aç / kapat)', 'Live realistic 3D view (on / off)', '', () => { if (!ui.view3d) show3D(true); if (ui.view3d) setLive3D(!ui.live3d); }, true, 'render sky gökyüzü walk yürü realistic gerçekçi cad'),
     act('snap', '🧲', 'Yakalama aç/kapa', 'Toggle snap', 'G', () => $('#cSnap').click(), true, 'osnap'),
     act('theme', '🌓', 'Tema değiştir', 'Toggle theme', '', () => $('#bTheme').click(), true, 'dark light koyu açık'),
@@ -8437,14 +8547,60 @@ function syncExportTitles() {
 
 /* ---------- 3B Görünüm ---------- */
 let T3 = null;
+/* 3B kat görünürlüğü (#85): her kat ayrı ayrı açılıp kapanır. ui.v3dHide = gizlenen kat kimlikleri (yalnızca görünüm;
+   P'ye yazılmaz, geri alma geçmişine girmez). Görünen katlar birbirine göre gerçek kotlarında durur ve en alttaki
+   görünen kat zemine oturur — tek kat seçiliyken eskisi gibi zeminde incelenir. */
+ui.v3dHide = new Set();
+const v3dShown = f => !ui.v3dHide.has(f.id);
+function v3dBase() { const i = P.floors.findIndex(v3dShown); return i < 0 ? 0 : i; }
+function v3dElev(i) { return floorElev(i) - floorElev(v3dBase()); }
+// kat listesi değişince (ekle / sil / geri al) eski kimlikler düşer; hiçbir kat görünmüyorsa hepsi açılır
+function v3dPrune() {
+  const fl = P && P.floors ? P.floors : [], ids = new Set(fl.map(f => f.id));
+  for (const id of [...ui.v3dHide]) if (!ids.has(id)) ui.v3dHide.delete(id);
+  if (fl.length && !fl.some(v3dShown)) ui.v3dHide.clear();
+}
+function v3dOnly(id) { ui.v3dHide = new Set(id === 'all' ? [] : P.floors.filter(f => f.id !== id).map(f => f.id)); v3dPrune(); }
+function v3dToggle(id, on) {
+  if (on) ui.v3dHide.delete(id);
+  else if (P.floors.filter(v3dShown).length > 1) ui.v3dHide.add(id); // son görünen kat kapatılamaz
+  v3dPrune();
+}
+// görünürlük değişti: yürüyen gizlenen kattaysa görünen bir kata geçer, sahne yeniden kurulur
+function v3dApply() {
+  sync3DFloors();
+  if (T3 && T3.walk && !v3dShown(P.floors[T3.walk.fi] || {})) walkToFloor(walkFloorIdx());
+  if (T3 && ui.view3d) build3D(true);
+}
+function v3dListHtml() {
+  const fl = P.floors, one = fl.filter(v3dShown).length < 2;
+  return fl.map((f, i) => ({ f, i })).reverse().map(({ f, i }) => `<label><input type="checkbox" data-vf="${esc(f.id)}" ${v3dShown(f) ? 'checked' : ''} ${one && v3dShown(f) ? 'disabled' : ''}> ${esc(f.name || L('Kat', 'Floor') + ' ' + (i + 1))}</label>`).join('')
+    + `<button class="btn sm" type="button" data-vfall>${L('🏢 Tümünü göster', '🏢 Show all')}</button>`;
+}
+function v3dListToggle(open) {
+  let el = document.getElementById('v3dFloorList');
+  if (open == null) open = !el || el.style.display === 'none';
+  if (!open) { if (el) el.style.display = 'none'; return; }
+  if (!el) {
+    el = document.createElement('div'); el.id = 'v3dFloorList'; el.className = 'ctl3d'; $('#v3d').appendChild(el);
+    el.addEventListener('change', e => { const t = e.target.closest('[data-vf]'); if (t) { v3dToggle(t.dataset.vf, t.checked); v3dApply(); } });
+    el.addEventListener('click', e => { if (e.target.closest('[data-vfall]')) { v3dOnly('all'); v3dApply(); } });
+    window.addEventListener('pointerdown', e => { if (!e.target.closest('#v3dFloorList, #b3dFloors')) v3dListToggle(false); });
+  }
+  el.innerHTML = v3dListHtml(); el.style.display = '';
+}
 function sync3DFloors() {
   const lbl = $('#lbl3dFloor'), selEl = $('#s3dFloor'); if (!lbl || !selEl) return;
   lbl.textContent = L('Kat', 'Floor');
   const fl = P && P.floors ? P.floors : [];
-  const opts = `<option value="all">${L('🏢 Tüm katlar', '🏢 All floors')}</option>` + fl.map((f, i) => `<option value="${f.id}">${esc(f.name || L('Kat', 'Floor') + ' ' + (i + 1))}</option>`).join('');
+  v3dPrune();
+  const shown = fl.filter(v3dShown), custom = shown.length > 1 && shown.length < fl.length;
+  const opts = `<option value="all">${L('🏢 Tüm katlar', '🏢 All floors')}</option>` + (custom ? `<option value="custom">☑ ${shown.length} / ${fl.length} ${L('kat', 'floors')}</option>` : '')
+    + fl.map((f, i) => `<option value="${f.id}">${esc(f.name || L('Kat', 'Floor') + ' ' + (i + 1))}</option>`).join('');
   if (selEl.dataset.opts !== opts) { selEl.dataset.opts = opts; selEl.innerHTML = opts; }
-  if (ui.v3dFloor !== 'all' && !fl.some(x => x.id === ui.v3dFloor)) ui.v3dFloor = 'all';
-  selEl.value = ui.v3dFloor;
+  selEl.value = shown.length === fl.length ? 'all' : custom ? 'custom' : shown[0].id; // tek kat görünüyorsa o kat seçili
+  const lst = document.getElementById('v3dFloorList'); if (lst && lst.style.display !== 'none') lst.innerHTML = v3dListHtml();
+  if ($('#b3dFloors')) $('#b3dFloors').classList.toggle('on', shown.length !== fl.length);
 }
 /* 2B ⇄ 3B kamera hafızası (issue #37). 2B'de aynı yere bakıyorsak kullanıcının
    bıraktığı 3B kamera korunur; belirgin biçimde başka bir yere kaydıysa ya da
@@ -8478,7 +8634,7 @@ function orient3DFrom2D(fo) {
   const span = f.sel ? Math.max(f.span, 240) : clamp(f.span * 0.85, 200, Math.max(300, (fit.sz || 2000) * 2.2));
   const d = clamp(span * 1.55, 300, 6000);
   // 2B'de hangi kattaysak 3B'de de o seviyeye bak (kat seçici tek katı zemine indirir)
-  const elev = ui.v3dFloor === 'all' ? floorElev(fi) : 0;
+  const elev = v3dElev(fi);
   T3.ctl.target.set(tx, elev + 80, tz);
   T3.cam.position.set(tx + d * 0.62, elev + 80 + d * 0.92, tz + d * 0.9);
   T3.ctl.update(); fitOrtho();
@@ -8702,7 +8858,7 @@ function init3D() {
       if (fd && fd.kind === 'wall' && (e.altKey || grpEditing(fd.o) || (!fd.o.grp && !(Array.isArray(fd.o.angles) && fd.o.angles.length >= 2)))) {
         followSelFloor(fd); sel = [fd.o.id]; refresh(); refreshSel3D(); // düz duvar (veya Alt+tık): seç → yan panelde yükseklik/kalınlık/tür/boya (#29)
       } else if (fd && fd.kind === 'wall' && fd.o.grp) {
-        if (fd.floorIdx === fi && cycleGroupVars(fd.o.grp)) { sel = groupMemberIds(fd.o.grp); build3D(true); }
+        followSelFloor(fd); if (cycleGroupVars(fd.o.grp)) { sel = groupMemberIdsAny(fd.o.grp); build3D(true); }
       } else if (fd && fd.kind === 'wall' && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
         cycleWallPos(fd.o); sel = [fd.o.id]; commit(); refresh(); build3D(true);
         toast(L(`Duvar: Konum ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`, `Wall: Position ${fd.o.posIdx + 1}/${fd.o.angles.length} (${fd.o.angles[fd.o.posIdx]}°)`));
@@ -8875,9 +9031,9 @@ function walkMove(p, mv, segs, r) {
   }
   return { x, y };
 }
-// yürüyenin katı: 3B'de tek kat seçiliyse o, yoksa 2B'deki kat; kotu build3D ile aynı
-function walkFloorIdx() { const i = ui.v3dFloor === 'all' ? -1 : P.floors.findIndex(f => f.id === ui.v3dFloor); return i >= 0 ? i : fi; }
-function walkElev(i) { return ui.v3dFloor === 'all' ? floorElev(i) : 0; }
+// yürüyenin katı: 2B'deki kat 3B'de görünüyorsa o, yoksa görünen en alt kat (#85); kotu build3D ile aynı
+function walkFloorIdx() { return P.floors[fi] && v3dShown(P.floors[fi]) ? fi : v3dBase(); }
+function walkElev(i) { return v3dElev(i); }
 function walkSegsAt(i) { const f = P.floors[i]; return f ? walkSegs(visFloor(f)) : []; }
 function enterWalk() {
   if (!T3) return;
@@ -9594,7 +9750,7 @@ function build3D(keepCam = false) {
   // sahne sınırları (ışık gölge kamerası ve kamera sığdırma için) — çizimden ÖNCE hesaplanır
   let all = null;
   P.floors.forEach(f => {
-    if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return;
+    if (!v3dShown(f)) return;
     const b = contentBounds(f);
     if (b) all = all ? { x0: Math.min(all.x0, b.x0), y0: Math.min(all.y0, b.y0), x1: Math.max(all.x1, b.x1), y1: Math.max(all.y1, b.y1) } : b;
   });
@@ -9602,7 +9758,7 @@ function build3D(keepCam = false) {
   const cx = (all.x0 + all.x1) / 2, cz = (all.y0 + all.y1) / 2, sz = Math.max(all.x1 - all.x0, all.y1 - all.y0, 400);
   // detay seviyesi: çok yoğun planlarda parça kenarları/kasa/gölge detayı otomatik azaltılır
   let nObj = 0;
-  P.floors.forEach(f => { if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return; nObj += f.walls.length * 5 + f.ops.length * 6 + f.furn.length * 8 + f.rooms.length; });
+  P.floors.forEach(f => { if (!v3dShown(f)) return; nObj += f.walls.length * 5 + f.ops.length * 6 + f.furn.length * 8 + f.rooms.length; });
   const det = nObj < 3000 ? 1 : 0;
 
   S.add(new THREE.HemisphereLight(0xffffff, lt ? 0x667788 : 0x1e293b, lt ? 0.32 : 0.5));
@@ -9646,7 +9802,8 @@ function build3D(keepCam = false) {
   const furnCtx = { box, cyl, sph, mat, det, pmat, unit: { box: unitBox, cyl: unitCyl, sph: unitSph } };
   let elev = 0;
   P.floors.forEach((f, fidx) => {
-    if (ui.v3dFloor !== 'all' && f.id !== ui.v3dFloor) return;
+    if (!v3dShown(f)) return;
+    elev = v3dElev(fidx); // görünen katlar gerçek kotunda; en alttaki görünen kat zeminde (#85)
     f = visFloor(f); // gizli katmanlar 3B'de de yok (#32) // kat seçici: yalnızca seçili kat çizilir
     // zemin plakası: duvarların dış konturunu izleyen poligon — açılı planlarda AABB gibi taşmaz
     const slabCol = lt ? 0xded8cc : (fidx === 0 ? 0x171e29 : 0x232b38);
@@ -10005,6 +10162,7 @@ function applyLangUI() {
   if ($('#b3dEye')) $('#b3dEye').title = L('Yürüme modu: göz hizasında gez (Esc: çık)', 'Walk mode: walk through at eye level (Esc: exit)');
   syncWalkUI();
   if ($('#lblLayer')) $('#lblLayer').textContent = L('Katman', 'Layer');
+  if ($('#b3dFloors')) $('#b3dFloors').title = L('Katları ayrı ayrı göster / gizle', 'Show / hide individual floors');
   if ($('#b3dLive')) $('#b3dLive').title = L('🌤 Canlı gerçekçi görünüm: gökyüzü, güneş ve gölgeyle gez / yürü (güneş: 🎨 Render stüdyosu)', '🌤 Live realistic view: orbit / walk with sky, sun and shadows (sun: 🎨 Render studio)');
   if ($('#b3dStudio')) $('#b3dStudio').title = L('🎨 Render stüdyosu: stil, güneş, çözünürlük', '🎨 Render studio: style, sun, resolution');
   for (const [id, k, tr, en] of [['b3dN', 'north', 'K', 'N'], ['b3dE', 'east', 'D', 'E'], ['b3dS', 'south', 'G', 'S'], ['b3dW', 'west', 'B', 'W']]) if ($('#' + id)) { $('#' + id).textContent = L(tr, en); $('#' + id).title = L(...ELEV_NAMES[k]); }
@@ -10038,7 +10196,8 @@ $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { 
 $('#b2d').onclick = () => { ui.outline = false; show3D(false); syncViewSwitch(); render(); };
 if ($('#bCad')) $('#bCad').onclick = () => setOutline(true);
 $('#b3d').onclick = () => show3D(true);
-$('#s3dFloor').onchange = () => { ui.v3dFloor = $('#s3dFloor').value; if (T3 && T3.walk) walkToFloor(walkFloorIdx()); if (T3 && ui.view3d) build3D(true); };
+$('#s3dFloor').onchange = () => { const v = $('#s3dFloor').value; if (v !== 'custom') v3dOnly(v); sync3DFloors(); if (T3 && T3.walk) walkToFloor(v3dShown(P.floors[T3.walk.fi] || {}) ? T3.walk.fi : walkFloorIdx()); if (T3 && ui.view3d) build3D(true); };
+if ($('#b3dFloors')) $('#b3dFloors').onclick = () => v3dListToggle();
 $('#b3dFit').onclick = () => set3DCam('fit');
 $('#b3dIso').onclick = () => set3DCam('iso');
 $('#b3dProj').onclick = () => { if (T3) setProjection(!(T3.ortho || T3.orthoAfterWalk)); };

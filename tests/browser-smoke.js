@@ -641,7 +641,7 @@ check('glass floor: 2D pattern, slab hole under it and transparent panel in 3D (
     commit(); sel = [F().rooms[0].id]; refresh();
     const out = { pat: !!document.querySelector('#defs pattern#p-glass') || defsSvg().includes('id="p-glass"'), used: document.querySelector('#gRooms').innerHTML.includes('url(#p-glass)'),
       field: !!document.querySelector('#props [data-p="glass"]'), opt: !!document.querySelector('#props [data-p="floor"] option[value="glass"]') };
-    ui.v3dFloor = 'all';
+    v3dOnly('all');
     document.getElementById('b3d').click();
     if (ui.view3d) {
       const gl = []; T3.scene.traverse(o => { if (o.userData && o.userData.glassFloor) gl.push(o); });
@@ -1587,6 +1587,108 @@ check('live realistic 3D view: sky on, CAD edges hidden, walk mode works, CAD vi
   if (info.e3 !== info.e0) throw new Error('edge lines not restored: ' + info.e3 + ' vs ' + info.e0);
   if (info.bg1 !== info.bg0 || info.g1 !== info.g0 || info.gm1 !== info.gm0) throw new Error('background / ground not restored');
   return info.e0 + ' edges hidden and restored, sky follows the walker';
+});
+
+check('furniture labels and icons toggle separately, without touching the plan (#84)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F(), o = mkFurn(BYID.wc, 200, 200); o.label = 'Tuvalet-A'; f.furn.push(o); commit(); refresh();
+    const g = () => document.getElementById('gFurn').innerHTML, has = () => ({ icon: g().includes(o.icon), label: g().includes('Tuvalet-A') });
+    const r = { both: has(), hi0: hi, json0: JSON.stringify(P) };
+    const cb = k => document.querySelector('#props input[data-k="layer"][data-p="' + k + '"]');
+    if (!cb('furnLabel') || !cb('furnIcon')) return { err: 'label / icon toggles are missing from Project > Layers' };
+    cb('furnLabel').click(); r.noLabel = has(); r.expNoLabel = exportSvg().svg.includes('Tuvalet-A');
+    cb('furnIcon').click(); r.none = has(); r.body = g().includes('data-id="' + o.id + '"');
+    r.same = JSON.stringify(P) === r.json0 && hi === r.hi0;
+    cb('furnLabel').click(); r.iconOff = has();
+    cb('furnIcon').click(); r.back = has();
+    delete r.json0;
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  const ok = (v, i, l) => v && v.icon === i && v.label === l;
+  if (!ok(info.both, true, true)) throw new Error('icon and label should both show by default');
+  if (!ok(info.noLabel, true, false) || info.expNoLabel) throw new Error('label toggle did not hide only the label (canvas / export)');
+  if (!ok(info.none, false, false) || !info.body) throw new Error('with both off the furniture body must stay, icon and label go');
+  if (!ok(info.iconOff, false, true)) throw new Error('icon toggle is not independent of the label toggle');
+  if (!ok(info.back, true, true)) throw new Error('turning the toggles back on did not restore icon and label');
+  if (!info.same) throw new Error('toggling changed the plan or added undo history');
+  return 'label only, icon only, neither, both; plan and history untouched';
+});
+
+check('3D: floors toggle individually and keep their relative heights (#85)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    addRectWalls(0, 0, 400, 300);
+    for (const n of ['Kat 1', 'Kat 2']) { P.floors.push(newFloor(n)); fi = P.floors.length - 1; addRectWalls(0, 0, 400, 300); }
+    fi = 0; sel = []; commit(); refresh();
+    const ids = P.floors.map(f => f.id), hi0 = hi, json0 = JSON.stringify(P);
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { err: '3D did not open' };
+    const ys = () => ids.map(id => { const w = P.floors.find(f => f.id === id).walls[0], g = T3.scene.children.find(c => c.userData && c.userData.wallId === w.id && !c.isMesh); return g ? Math.round(g.position.y) : null; });
+    const r = { all: ys(), pitch: floorElev(1) };
+    document.getElementById('b3dFloors').click();
+    const box = id => document.querySelector('#v3dFloorList input[data-vf="' + id + '"]');
+    if (!box(ids[2])) return { err: 'the floor checklist did not open' };
+    box(ids[2]).click(); r.noTop = ys(); r.sel1 = document.getElementById('s3dFloor').value;
+    box(ids[0]).click(); r.mid = ys(); r.sel2 = document.getElementById('s3dFloor').value;
+    r.lastLocked = box(ids[1]).disabled;
+    document.querySelector('#v3dFloorList [data-vfall]').click(); r.back = ys();
+    v3dOnly(ids[2]); v3dApply();
+    document.getElementById('b3dEye').click(); r.walkFi = T3.walk ? T3.walk.fi : -1; exitWalk(true);
+    P.floors.splice(2, 1); commit(); refresh(); sync3DFloors(); r.afterDelete = P.floors.every(v3dShown) && ui.v3dHide.size === 0;
+    undo(); v3dOnly('all');
+    r.same = JSON.stringify(P) === json0;
+    show3D(false);
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b), p = info.pitch;
+  if (!eq(info.all, [0, p, 2 * p])) throw new Error('all floors should stack at their real heights: ' + info.all);
+  if (!eq(info.noTop, [0, p, null]) || info.sel1 !== 'custom') throw new Error('hiding the top floor: ' + info.noTop + ' / selector ' + info.sel1);
+  if (!eq(info.mid, [null, 0, null])) throw new Error('a single visible floor should sit on the ground: ' + info.mid);
+  if (!info.lastLocked) throw new Error('the last visible floor could be switched off');
+  if (!eq(info.back, [0, p, 2 * p])) throw new Error('Show all did not restore every floor: ' + info.back);
+  if (info.walkFi !== 2) throw new Error('walk mode started on a hidden floor: ' + info.walkFi);
+  if (!info.afterDelete) throw new Error('deleting the only visible floor left nothing visible');
+  if (!info.same) throw new Error('floor visibility changed the plan');
+  return 'subset ' + info.noTop + ', single floor grounded, walk on the visible floor';
+});
+
+check('adjustable group across two floors: link from the panel, layouts switch together, undo, unlink (#86)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f0 = F(), a = mkFurn(BYID.wc, 100, 100), b = mkFurn(BYID.wc, 300, 100); f0.furn.push(a, b);
+    sel = [a.id, b.id]; groupSel(); varAction('varInit'); varAction('varNew');
+    a.x = 500; commit();                                   // layout 2 on the ground floor: a moved
+    const rec0 = f0.groups[0];
+    P.floors.push(newFloor('Ust Kat')); fi = 1;
+    const c = mkFurn(BYID.wc, 100, 400); F().furn.push(c); sel = [c.id]; commit(); refresh();
+    const pick = document.querySelector('#props select[data-k="grplink"]'); if (!pick) return { err: 'no link field in the panel' };
+    pick.value = rec0.id; pick.dispatchEvent(new Event('change', { bubbles: true }));
+    const rec1 = F().groups.find(g => g.id === rec0.id); if (!rec1) return { err: 'linking did not create the group on the upper floor' };
+    const r = { linked: c.grp === rec0.id, vars: rec1.vars.length, idx: rec1.idx, labels: rec1.vars.map(v => v.label).join() === rec0.vars.map(v => v.label).join() };
+    c.x = 700; commit();                                   // upper floor, layout 2: c moved
+    switchGroupVarTo(rec1, 0);
+    r.first = [a.x, c.x, rec0.idx, rec1.idx];
+    fi = 0; sel = []; refresh(); cycleGroupVars(rec0.id);
+    r.second = [a.x, c.x, rec0.idx, rec1.idx];
+    undo(); const fa = P.floors[0].furn.find(o => o.id === a.id), fc = P.floors[1].furn.find(o => o.id === c.id);
+    r.undone = [fa.x, fc.x]; redo();
+    fi = 1; sel = [c.id]; refresh();
+    r.info = /Zemin|Ground/.test((document.getElementById('props').textContent));
+    const ub = document.querySelector('#props [data-act="grpUnlink"]'); if (!ub) return { err: 'no unlink button' };
+    ub.click(); r.unlinked = grpLinked(rec0.id).length === 1 && F().groups.length === 1 && F().groups[0].vars.length === 2;
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  const eq = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+  if (!info.linked || info.vars !== 2 || info.idx !== 1 || !info.labels) throw new Error('link did not align the layouts: ' + JSON.stringify(info));
+  if (!eq(info.first, [100, 100, 0, 0])) throw new Error('switching to layout 1 did not move both floors: ' + info.first);
+  if (!eq(info.second, [500, 700, 1, 1])) throw new Error('cycling on the ground floor did not move the upper floor: ' + info.second);
+  if (!eq(info.undone, [100, 100])) throw new Error('undo did not restore both floors: ' + info.undone);
+  if (!info.info || !info.unlinked) throw new Error('linked-floor info / unlink failed: ' + JSON.stringify(info));
+  return 'two floors switch together, undo restores both, unlink keeps the layouts';
 });
 
 /* ---------- main ---------- */(async () => {
