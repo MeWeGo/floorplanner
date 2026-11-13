@@ -90,7 +90,9 @@ const CATALOG = CAT_DEFS.map(a => ({ id: a[0], cat: a[1], name: a[2], w: a[3], d
 const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
 // yerden yükseklik (#61): duvara asılan eşyalar bu yükseklikte gelir; alan isteğe bağlı, yoksa 0 (yerde)
 const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110 };
-const FURN_ELEV_MAX = 500, furnElev = o => (o && +o.elev > 0 ? Math.min(FURN_ELEV_MAX, +o.elev) : 0);
+const FURN_ELEV_MAX = 500, furnElev = o => (o && +o.elev ? Math.max(-FURN_ELEV_MAX, Math.min(FURN_ELEV_MAX, +o.elev)) : 0); // eksi: döşemenin altında (IFC'de birleşen alt seviye)
+// duvar taban kotu: kata göre cm (eksi olabilir, yoksa 0). Tek okuyucu; IFC'de birleşen yardımcı seviyelerin kotunu korur
+const WALL_ELEV_MAX = 500, wallElev = w => (w && +w.elev ? Math.max(-WALL_ELEV_MAX, Math.min(WALL_ELEV_MAX, +w.elev)) : 0);
 // tüm eksenlerde döndürme: eşyanın isteğe bağlı rx / ry eğimi (derece; yok = dik). Merdiven, rampa ve çatı eğilmez
 const NO_TILT_K = new Set(['stairs', 'ramp', 'roof']), furnTilted = o => !!(o && !NO_TILT_K.has(o.k) && (+o.rx || +o.ry));
 const OPENINGS = [
@@ -1411,8 +1413,10 @@ function wallDimSvg(w) {
   let ang = wAng(w) * 180 / Math.PI; const mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2;
   let flip = 1; if (ang > 90 || ang <= -90) { ang += 180; flip = -1; }
   const fs = clamp(13 / view.z, 9, 40), off = w.t / 2 + fs * 0.9;
-  return `<text transform="translate(${mx} ${my}) rotate(${ang}) translate(0 ${-off})" text-anchor="middle" font-size="${fs}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" ${hit}>${fmtLen(L)}</text>`;
+  return `<text transform="translate(${mx} ${my}) rotate(${ang}) translate(0 ${-off})" text-anchor="middle" font-size="${fs}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" ${hit}>${fmtLen(L)}${wallTag(w)}</text>`;
 }
+// taban kotu etiketi: ▲ +220 / ▼ −50 (kat döşemesinden başlamayan duvar; IFC'de birleşen seviyeler)
+function wallTag(w) { const e = Math.round(wallElev(w)); return e ? ` · ${e > 0 ? '▲ +' : '▼ −'}${Math.abs(e)}` : ''; }
 function opSvg(op, live) {
   const p = opPos(op); if (!p) return '';
   const C = pal(), w = op.w, t = p.t, hw = w / 2, ht = t / 2, sd = op.side || 1, sw = sd > 0 ? 1 : 0;
@@ -2257,6 +2261,7 @@ const ifcPick = (table, names) => { for (const w of ifcWords(names)) for (const 
 const ifcNeutral = hex => { const n = parseInt(String(hex).slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255; return Math.max(r, g, b) - Math.min(r, g, b) < 14; };
 // korkuluk stili (rs) adı / malzemesinden: cam panel, yatay çubuk / halat, dolu parapet; yoksa dikmeli
 const IFC_RAIL_STYLE = [[/^(glass|glazed|glazing|cam|camli|camlı)$/, 'glass'], [/^(cable|wire|kablo|halat|horizontal|yatay|rod)$/, 'cable'], [/^(parapet|solid|dolu|concrete|beton|betonarme|masonry|duvar|brick|tugla|tuğla)$/, 'solid']];
+const IFC_LEVEL_MERGE = 100; // bundan yakın seviyeler (Revit yardımcı / referans seviyeleri) tek kat olur; = FLOOR_H_MIN
 const IFC_ROOF_MAX_FACES = 600; // çatı yüzü sınırı: üstü taban izinden düz çatıya düşer (proje / geri al hafif kalsın)
 const IFC_COMPONENTS = new Set(['IFCBUILDINGELEMENTPROXY', 'IFCFURNISHINGELEMENT', 'IFCFURNITURE', 'IFCSYSTEMFURNITUREELEMENT', 'IFCSANITARYTERMINAL', 'IFCELEMENTASSEMBLY', 'IFCFLOWTERMINAL', 'IFCELECTRICAPPLIANCE', 'IFCAUDIOVISUALAPPLIANCE']);
 // Revit ailesi → katalog öğesi (#88). Önce bileşik adlar (tam metinde), sonra tek sözcükler: SON eşleşen sözcük kazanır
@@ -2499,6 +2504,23 @@ function ifcToProject(text, opts = {}) {
   };
   // Katı → dünya noktaları (out) ve, düşey çekilmişse, taban poligonları (foot)
   // fc (isteğe bağlı): yüz çokgenleri (dünya koordinatı) — yalnızca çatılar için toplanır
+  // DIFFERENCE ile yarım uzay (IfcHalfSpaceSolid / IfcPolygonalBoundedHalfSpace): out[i0..] içinde silinen tarafta kalan
+  // noktalar düşey olarak kesme düzlemine indirilir (Revit'te çatıya bağlanan duvar üstleri). Düşey düzlemler ve sınır dışı noktalar dokunulmaz.
+  const clipHalf = (hid, M, out, i0) => {
+    const t = T(hid); if (t !== 'IFCHALFSPACESOLID' && t !== 'IFCPOLYGONALBOUNDEDHALFSPACE' && t !== 'IFCBOXEDHALFSPACE') return;
+    const h = A(hid), pl = R(h[0]); if (T(pl) !== 'IFCPLANE') return;
+    const P = mul(M, place(R(A(pl)[0]))), n = norm(P.z); if (Math.abs(n[2]) < 0.05) return;
+    const sgn = h[1] && h[1].e === 'F' ? 1 : -1; // AgreementFlag T: normal malzemeden dışarı bakar → malzeme (silinen) normalin tersi
+    let B = null, poly = null;
+    if (t === 'IFCPOLYGONALBOUNDEDHALFSPACE') { B = mul(M, place(R(h[2]))); poly = curve(R(h[3])).map(p => [p[0], p[1]]); if (poly.length < 3) return; }
+    const dt = (v, w) => v[0] * w[0] + v[1] * w[1] + v[2] * w[2];
+    for (let i = i0; i < out.length; i++) {
+      const p = out[i], d = dt([p[0] - P.o[0], p[1] - P.o[1], p[2] - P.o[2]], n);
+      if (d * sgn <= 0.01) continue;
+      if (B) { const v = [p[0] - B.o[0], p[1] - B.o[1], p[2] - B.o[2]]; if (!ifcInPoly([dt(v, B.x) / (dt(B.x, B.x) || 1), dt(v, B.y) / (dt(B.y, B.y) || 1)], poly)) continue; }
+      out[i] = [p[0], p[1], p[2] - d / n[2]];
+    }
+  };
   const solid = (id, M, out, foot, depth = 0, fc = null) => {
     const t = T(id), a = A(id); if (!t || depth > 10) return;
     if (t === 'IFCEXTRUDEDAREASOLID' || t === 'IFCEXTRUDEDAREASOLIDTAPERED') {
@@ -2518,8 +2540,10 @@ function ifcToProject(text, opts = {}) {
         out.push(app(m, [0, 1, 2].map(i => o[i] + v[i] * c + cr[i] * sn + d[i] * dt * (1 - c))));
       }
     } else if (t === 'IFCBOOLEANCLIPPINGRESULT' || t === 'IFCBOOLEANRESULT') {
+      const i0 = out.length;
       solid(R(a[1]), M, out, foot, depth + 1, fc);
       if (a[0] && a[0].e === 'UNION') solid(R(a[2]), M, out, foot, depth + 1, fc);
+      else if (a[0] && a[0].e === 'DIFFERENCE') clipHalf(R(a[2]), M, out, i0); // Revit: duvar üstü çatıya / eğik düzleme kırpılır
     } else if (t === 'IFCMAPPEDITEM') {
       const src = A(R(a[0])), m = mul(mul(M, place(R(a[1]))), place(R(src[0])));
       for (const it of A(R(src[1]))[3] || []) solid(R(it), m, out, foot, depth + 1, fc);
@@ -2694,12 +2718,19 @@ function ifcToProject(text, opts = {}) {
   const looksDeep = id => { let l = looksOf(id); if (l.col) return l; for (const c of kids.get(id) || []) { const k = looksDeep(c); if (k.col) return k; } return l; };
 
   /* --- Katlar --- */
-  const storeys = (db.byType.get('IFCBUILDINGSTOREY') || []).map(id => {
+  const allStoreys = (db.byType.get('IFCBUILDINGSTOREY') || []).map(id => {
     const a = A(id); return { id, name: String(a[2] || a[7] || ''), z: place(R(a[5])).o[2] * cm, elev: num(a[9]) * cm };
   });
-  if (storeys.length > 1 && storeys.every(s => Math.abs(s.z - storeys[0].z) < 1) && storeys.some(s => !isNaN(s.elev) && Math.abs(s.elev - storeys[0].elev) > 1)) storeys.forEach(s => { s.z = isNaN(s.elev) ? 0 : s.elev; });
-  storeys.sort((p, q) => p.z - q.z);
-  const SBY = new Map(storeys.map(s => [s.id, s]));
+  if (allStoreys.length > 1 && allStoreys.every(s => Math.abs(s.z - allStoreys[0].z) < 1) && allStoreys.some(s => !isNaN(s.elev) && Math.abs(s.elev - allStoreys[0].elev) > 1)) allStoreys.forEach(s => { s.z = isNaN(s.elev) ? 0 : s.elev; });
+  allStoreys.sort((p, q) => p.z - q.z);
+  // yardımcı seviyeler: IFC_LEVEL_MERGE'den yakın seviyeler tek kat olur (uygulamada kat ≥ 100 cm). Kotu ve adı grupta en çok eleman
+  // barındıran seviyeden gelir; elemanlar gerçek kotlarını duvar / mobilya elev'i ve döşeme off'u olarak taşır, mesafe kaybolmaz.
+  const nIn = new Map(); for (const p of parent.values()) nIn.set(p, (nIn.get(p) || 0) + 1);
+  const groups = [];
+  for (const s of allStoreys) { const g = groups[groups.length - 1]; if (opts.mergeLevels !== false && g && s.z - g[g.length - 1].z < IFC_LEVEL_MERGE) g.push(s); else groups.push([s]); }
+  const storeys = groups.map(g => g.reduce((m, s) => ((nIn.get(s.id) || 0) > (nIn.get(m.id) || 0) ? s : m), g[0]));
+  const SBY = new Map(); groups.forEach((g, i) => g.forEach(s => SBY.set(s.id, storeys[i])));
+  const merged = allStoreys.length - storeys.length;
   const topOf = s => { const i = storeys.indexOf(s); return i >= 0 && i + 1 < storeys.length ? storeys[i + 1].z : Infinity; };
   const storeyAt = z => { if (!storeys.length) return null; let best = storeys[0]; for (const s of storeys) if (s.z <= z + 30) best = s; return best; };
   // kat: önce içerme ilişkisi; ama geometri o katın kot aralığı dışındaysa (Revit'te üst kata bağlı, eksi ofsetli eleman) gerçek kota göre
@@ -2712,7 +2743,7 @@ function ifcToProject(text, opts = {}) {
   const spanOf = (id, z0, z1, h) => {
     const sp = storeys.filter(s => Math.min(z1, topOf(s)) - Math.max(z0, s.z) > 30);
     if (sp.length < 2) return [{ s: storeyOf(id, z0), z0, h }];
-    return sp.map(s => { const b0 = Math.max(z0, s.z), top = topOf(s), t1 = top < Infinity && z1 > top - 20 ? top - 20 : z1; return { s, z0: b0, h: Math.max(10, Math.min(5000, Math.round(t1 - b0))) }; });
+    return sp.map((s, i) => { const b0 = i ? Math.max(z0, s.z) : z0, top = topOf(s), t1 = top < Infinity && z1 > top - 20 ? top - 20 : z1; return { s, z0: b0, h: Math.max(10, Math.min(5000, Math.round(t1 - b0))) }; });
   };
   const bucket = new Map(); // storey id (ya da 0) → { walls, ops, rooms, slabs, voids, furn }
   const fl = s => { const k = s ? s.id : 0; let b = bucket.get(k); if (!b) bucket.set(k, b = { s, walls: [], ops: [], rooms: [], slabs: [], voids: [], furn: [] }); return b; };
@@ -2783,6 +2814,7 @@ function ifcToProject(text, opts = {}) {
         const w = { id: uid(), a: { x: r1(a0.x), y: r1(a0.y) }, b: { x: r1(b0.x), y: r1(b0.y) }, t: th, h: pc.h, wt: rail || (curtain ? 'curtain' : 'solid') };
         if (rstyle && rstyle !== 'bars') w.rs = rstyle;
         if (look.col && (rail || (!curtain && !ifcNeutral(look.col)))) w.color = look.col; // boya: gri / beyaz duvar varsayılan kalır
+        const we = Math.round(pc.z0 - (pc.s ? pc.s.z : 0)); if (Math.abs(we) >= 3) w.elev = Math.max(-500, Math.min(500, we)); // taban kotu (kata göre)
         Object.defineProperty(w, '_z0', { value: pc.z0, enumerable: false, writable: true });
         b.walls.push(w); segs.push(w);
       }
@@ -2956,7 +2988,7 @@ function ifcToProject(text, opts = {}) {
     return Object.assign(base, { k: 'poly', w: Math.max(1, r1(rc.w)), d: Math.max(1, r1(rc.d)), x: r1(rc.cx), y: r1(rc.cy), rot: r1(((rc.rot % 360) + 360) % 360),
       pts: ft.pts.map(p => { const dx = p.x - rc.cx, dy = p.y - rc.cy; return { x: r1(dx * c + dy * sn), y: r1(-dx * sn + dy * c) }; }) });
   };
-  const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (el >= 3) o.elev = Math.min(500, el); return o; }; // 0..500 = FURN_ELEV_MAX (#61)
+  const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (Math.abs(el) >= 3) o.elev = Math.max(-500, Math.min(500, el)); return o; }; // ±500 = FURN_ELEV_MAX (#61); eksi = birleşen alt seviye
   for (const id of ids(IFC_COLUMNS)) {
     const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 0.5) { stats.skipped++; continue; }
     const [z0, z1] = zr(g.body), h0 = Math.max(10, Math.min(5000, Math.round(z1 - z0)));
@@ -3178,7 +3210,7 @@ function ifcToProject(text, opts = {}) {
     const fh = Math.round(nx.b.s.z - b.s.z - 20);
     if (fh >= 100 && fh <= 800 && fh !== wallH) f.wallH = fh;
   });
-  stats.floors = floors.length;
+  stats.floors = floors.length; stats.levelsMerged = merged;
   const pa = proj ? A(proj) : [];
   const nm = String(pa[5] || pa[2] || '').trim();
   const name = (!nm || /^(project name|proje ad[ıi]|default)$/i.test(nm) ? String(opts.name || 'IFC') : nm).slice(0, 80);
@@ -3444,7 +3476,7 @@ function furnSvg(f, live) {
   const fe = f.k === 'roof' ? 0 : furnElev(f); // yerden yükseklik (#61): asılı eşya kesikli çizilir + ▲ etiketi
   const body = furnTilted(f) ? furnTiltSvg(f) : furnBody(f);
   let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${fe ? `<g stroke-dasharray="6 4">${body}</g>` : body}`;
-  if (fe) s += `<text transform="translate(0 ${f.d / 2 + 9}) rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="11" fill="${C.sub}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">▲ +${Math.round(fe)}</text>`;
+  if (fe) s += `<text transform="translate(0 ${f.d / 2 + 9}) rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="11" fill="${C.sub}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${fe > 0 ? '▲ +' : '▼ −'}${Math.abs(Math.round(fe))}</text>`;
   if (layersVis.furnIcon && !C.outline && f.icon && f.k !== 'roof' && !(Array.isArray(f.parts) && f.parts.length)) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
   if (layersVis.furnLabel && f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="${C.text}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
   return s + '</g>';
@@ -5240,7 +5272,7 @@ function renderProps() {
   let h = `<h3>${(isEN() ? KIND_EN : KIND_TR)[k]}${n > 1 ? ` <span class="muted">(${n})</span>` : ''}</h3>`;
   if (k === 'wall') {
     if (n === 1) h += fld(L('Uzunluk (cm)', 'Length (cm)'), 'wall', 'len', wLen(o), { step: 1, min: 1 });
-    h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 });
+    h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 }) + fld(L('Taban kotu (cm)', 'Base offset (cm)'), 'wall', 'elev', wallElev(o), { min: -WALL_ELEV_MAX, max: WALL_ELEV_MAX, step: 5 });
     if (F().walls.length > 1 && os.every(x => x.o.h === o.h)) h += `<div class="row"><button class="btn sm" data-act="wallhfloor" title="${L('Bu yüksekliği kattaki tüm duvarlara ve katın varsayılanına uygula', 'Apply this height to every wall on the floor and make it the floor default')}">⬆ ${L('Kattaki tüm duvarlara uygula', 'Apply to all walls on floor')}</button></div>`;
     h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall'), railing: L('🛡 Korkuluk', '🛡 Railing / Balustrade'), fence: L('🌿 Bahçe çiti', '🌿 Garden Fence') } });
     if (os.every(x => x.o.wt === 'railing')) h += fld(L('Korkuluk stili', 'Railing style'), 'wall', 'rs', railStyle(o), { sel: Object.fromEntries(Object.entries(RAIL_STYLES).map(([k, v]) => [k, L(...v)])) });
@@ -5308,7 +5340,7 @@ function renderProps() {
   } else if (k === 'furn') {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 }) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
-    if (o.k !== 'stairs' && o.k !== 'ramp') h += fld(L('Yerden yükseklik (cm)', 'Height above floor (cm)'), 'furn', 'elev', furnElev(o), { min: 0, max: FURN_ELEV_MAX, step: 5 }); // duvara asılan eşya (#61)
+    if (o.k !== 'stairs' && o.k !== 'ramp') h += fld(L('Yerden yükseklik (cm)', 'Height above floor (cm)'), 'furn', 'elev', furnElev(o), { min: -FURN_ELEV_MAX, max: FURN_ELEV_MAX, step: 5 }); // duvara asılan eşya (#61)
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button>`);
     if (!NO_TILT_K.has(o.k)) { // tüm eksenlerde döndürme: öne / arkaya (X) ve yana (Y) yatırma; 3B'de en alt nokta zemine oturur
       h += fld(L('Öne / arkaya yatır X (°)', 'Tilt forward / back X (°)'), 'furn', 'rx', +o.rx || 0, { min: 0, max: 360, step: 15 }) + fld(L('Yana yatır Y (°)', 'Tilt sideways Y (°)'), 'furn', 'ry', +o.ry || 0, { min: 0, max: 360, step: 15 });
@@ -5505,7 +5537,8 @@ function applyProp(t, final) {
     if (p === 'name') { if (String(v).trim()) tm.name = String(v).trim().slice(0, 60); } else tm[p] = clamp(v, 1, 5000);
     render(); if (p !== 'name' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
   }
-  if (k === 'furn' && p === 'elev') v = clamp(+v || 0, 0, FURN_ELEV_MAX); // yerden yükseklik (#61)
+  if (k === 'furn' && p === 'elev') v = clamp(+v || 0, -FURN_ELEV_MAX, FURN_ELEV_MAX); // yerden yükseklik (#61)
+  if (k === 'wall' && p === 'elev') v = clamp(Math.round(+v || 0), -WALL_ELEV_MAX, WALL_ELEV_MAX); // duvar taban kotu
   if (k === 'room' && p === 'slabT') v = clamp(v, 0, 200); // 0 = ince yüzey (eski görünüm) (#63)
   if (k === 'floor' && p === 'wallH') { const n = +v; if (!(n > 0)) return; const hv = clamp(n, FLOOR_H_MIN, FLOOR_H_MAX); if (hv === P.wallH) delete F().wallH; else F().wallH = hv; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
@@ -7466,7 +7499,7 @@ function archPrims(spec) {
     // duvarlar (+ kapı/pencereler)
     for (const w of f.walls) {
       const L = wLen(w); if (L < 1) continue;
-      const wx = (w.b.x - w.a.x) / L, wy = (w.b.y - w.a.y) / L, nx = -wy * w.t / 2, ny = wx * w.t / 2, H = +w.h || floorH(f);
+      const wx = (w.b.x - w.a.x) / L, wy = (w.b.y - w.a.y) / L, nx = -wy * w.t / 2, ny = wx * w.t / 2, H = +w.h || floorH(f), WE = E + wallElev(w);
       const at = t => ({ x: w.a.x + (w.b.x - w.a.x) * t, y: w.a.y + (w.b.y - w.a.y) * t });
       const A = pr(w.a), B = pr(w.b), ops = f.ops.filter(o => o.wall === w.id);
       const curtain = w.wt === 'curtain', rail = isLowWall(w) ? w.wt : null;
@@ -7475,18 +7508,18 @@ function archPrims(spec) {
         const corners = [{ x: p0.x + nx, y: p0.y + ny }, { x: p0.x - nx, y: p0.y - ny }, { x: p1.x + nx, y: p1.y + ny }, { x: p1.x - nx, y: p1.y - ny }];
         const holes = ops.filter(o => o.d / L >= t0 && o.d / L <= t1).map(o => {
           const q0 = pr(at(clamp((o.d - o.w / 2) / L, t0, t1))), q1 = pr(at(clamp((o.d + o.w / 2) / L, t0, t1)));
-          return { s0: Math.min(q0.s, q1.s), s1: Math.max(q0.s, q1.s), z0: E + (+o.sill || 0), z1: E + (+o.sill || 0) + (+o.h || 0), type: o.type };
+          return { s0: Math.min(q0.s, q1.s), s1: Math.max(q0.s, q1.s), z0: WE + (+o.sill || 0), z1: WE + (+o.sill || 0) + (+o.h || 0), type: o.type };
         }).filter(hh => hh.s1 - hh.s0 > 1);
-        face(corners, E, E + H, rail ? { rail, rs: railStyle(w) } : { holes, curtain });
+        face(corners, WE, WE + H, rail ? { rail, rs: railStyle(w) } : { holes, curtain });
       };
       if (cut && (A.d > 0) !== (B.d > 0)) {
         const t = A.d / (A.d - B.d), sc = A.s + (B.s - A.s) * t, sin = Math.abs(B.d - A.d) / L, cw = w.t / Math.max(sin, 0.2);
         const pos = t * L, op = ops.find(o => Math.abs(pos - o.d) < o.w / 2);
         const [c0, c1] = inCrop(sc - cw / 2, sc + cw / 2);
         if (c1 - c0 > 0.2) {
-          const bands = op ? [[E, E + (+op.sill || 0)], [E + (+op.sill || 0) + (+op.h || 0), E + H]] : [[E, E + H]];
+          const bands = op ? [[WE, WE + (+op.sill || 0)], [WE + (+op.sill || 0) + (+op.h || 0), WE + H]] : [[WE, WE + H]];
           for (const [z0, z1] of bands) if (z1 - z0 > 0.5) prims.push({ t: 'cut', s0: c0, s1: c1, z0, z1, depth: 0, curtain });
-          if (op && op.type === 'window') prims.push({ t: 'glass', s0: c0, s1: c1, z0: E + (+op.sill || 0), z1: E + (+op.sill || 0) + (+op.h || 0), depth: 0 });
+          if (op && op.type === 'window') prims.push({ t: 'glass', s0: c0, s1: c1, z0: WE + (+op.sill || 0), z1: WE + (+op.sill || 0) + (+op.h || 0), depth: 0 });
         }
         if (A.d > 0) faceOf(0, t); else faceOf(t, 1);
       } else if (!cut || (A.d > 0 && B.d > 0)) faceOf(0, 1);
@@ -9504,6 +9537,7 @@ function walkSegs(f) {
   const out = [];
   for (const w of (f && f.walls) || []) {
     const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y); if (L < 1) continue;
+    const wb = wallElev(w); if (wb >= WALK.eye || (+w.h > 0 && wb + +w.h <= 30)) continue; // baş üstünde başlayan / döşeme altında kalan duvar engellemez
     const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, h = (w.t || 20) / 2;
     const at = t => ({ x: w.a.x + ux * t, y: w.a.y + uy * t });
     const gaps = ((f.ops) || []).filter(o => o.wall === w.id && walkPassable(o))
@@ -9767,9 +9801,9 @@ function realLook(S, sv, opts = {}) {
     for (const c of kids) {
       const fd = findAnyFloor(c.userData.furnId || c.userData.wallId); if (!fd) continue;
       if (fd.kind === 'furn') {
-        const o = fd.o; if (furnElev(o) > 0 || o.k === 'roof' || o.type === 'rug' || o.type === 'pool') continue;
+        const o = fd.o; if (furnElev(o) !== 0 || o.k === 'roof' || o.type === 'rug' || o.type === 'pool') continue;
         decals.push(add(S, blob, c.position.x, c.position.y + 1.6, c.position.z, o.w + 26, o.d + 26, c.rotation.y));
-      } else if (fd.kind === 'wall' && !isLowWall(fd.o)) {
+      } else if (fd.kind === 'wall' && !isLowWall(fd.o) && !wallElev(fd.o)) {
         const w = fd.o, Ln = wLen(w); if (Ln < 1) continue;
         const nx = -(w.b.y - w.a.y) / Ln, ny = (w.b.x - w.a.x) / Ln, mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2, off = w.t / 2 + 9;
         const hold = new THREE.Group(); hold.position.copy(c.position); hold.rotation.y = c.rotation.y; hold.userData.fpDecal = true;
@@ -10605,11 +10639,11 @@ function build3D(keepCam = false) {
       }
     });
     f.walls.forEach(w => {
-      const L = wLen(w), H = w.h, g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, elev, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
+      const L = wLen(w), H = w.h, we = elev + wallElev(w), g = new THREE.Group(); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, we, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
       const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
       const wCol = w.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
       const curt = w.wt === 'curtain', rail = 5, frameCol = lt ? 0x8fa3b8 : 0x7c8a9c;
-      const pin3 = () => { if (!hasPos) return; const pv = w[wallPivot(w)], pin = new THREE.Mesh(new THREE.CylinderGeometry(w.t * 0.55, w.t * 0.55, H + 4, 20), mat(lt ? 0x1d4ed8 : 0xd99b26)); pin.position.set(pv.x, elev + H / 2, pv.y); pin.userData = { wallId: w.id }; S.add(pin); };
+      const pin3 = () => { if (!hasPos) return; const pv = w[wallPivot(w)], pin = new THREE.Mesh(new THREE.CylinderGeometry(w.t * 0.55, w.t * 0.55, H + 4, 20), mat(lt ? 0x1d4ed8 : 0xd99b26)); pin.position.set(pv.x, we + H / 2, pv.y); pin.userData = { wallId: w.id }; S.add(pin); };
       if (isLowWall(w)) { lowWall3D(g, w, L, H, f.ops.filter(o => o.wall === w.id), box, det, lt); pin3(); return; } // korkuluk / çit (#73)
       if (curt) { box(g, L, rail, w.t, frameCol, 0, rail / 2, 0); box(g, L, rail, w.t, frameCol, 0, H - rail / 2, 0); } // alt & üst kuşak
       const seg = (s, e, y0, y1) => {
@@ -10624,7 +10658,7 @@ function build3D(keepCam = false) {
         const span = e - s, xm = (s + e) / 2 - L / 2;
         if (span >= 1) {
           // her açıklık kendi grubunda: opId taşır ki 3B'de tıklanıp seçilebilsin, vurgulansın ve duvar boyunca sürüklenebilsin (#29)
-          const og = new THREE.Group(); og.userData = { opId: o.id, elev }; g.add(og);
+          const og = new THREE.Group(); og.userData = { opId: o.id, elev: we }; g.add(og);
           const fCol = o.frameCol || shade(wCol, -0.22), fr = Math.min(6, Math.max(2, span * 0.07)); // kasa rengi (#41)
           if (det && !curt) {
             // kasa: söveler + üst lento (+ pencere denizliği)
@@ -10692,12 +10726,12 @@ function build3D(keepCam = false) {
     // köşe birleşim dolgusu (issue #14): duvar kutuları birleşimde düz biter, dış köşe yarığını bu prizma kapatır
     for (const j of wallJoints(f)) {
       const solid = j.walls.filter(isSolidWall); if (!solid.length) continue;
-      const w0 = solid[0], H = Math.min(...solid.map(w => w.h)), hasPos = Array.isArray(w0.angles) && w0.angles.length > 0;
+      const w0 = solid[0], jb = Math.max(...solid.map(wallElev)), H = Math.min(...solid.map(w => wallElev(w) + w.h)) - jb, hasPos = Array.isArray(w0.angles) && w0.angles.length > 0;
       const jCol = w0.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
       const geo = new THREE.ExtrudeGeometry(new THREE.Shape(j.poly.map(p => new THREE.Vector2(p.x, p.y))), { depth: H, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
       const m = new THREE.Mesh(geo, mat(jCol));
-      m.position.y = elev + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
+      if (H < 1) { geo.dispose(); continue; } m.position.y = elev + jb + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
       S.add(m);
     }
     f.furn.forEach((o, fi3) => {

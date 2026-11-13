@@ -47,10 +47,12 @@ test('(1) furnElev defaults and bounds clamping on real source', () => {
   assert.strictEqual(furnElev({ elev: 0 }), 0);
   assert.strictEqual(furnElev({ elev: '0' }), 0);
 
-  // negative -> 0
-  assert.strictEqual(furnElev({ elev: -1 }), 0);
-  assert.strictEqual(furnElev({ elev: -50 }), 0);
-  assert.strictEqual(furnElev({ elev: '-10' }), 0);
+  // negative -> kept and clamped to -FURN_ELEV_MAX (-500)
+  assert.strictEqual(furnElev({ elev: -1 }), -1);
+  assert.strictEqual(furnElev({ elev: -50 }), -50);
+  assert.strictEqual(furnElev({ elev: '-10' }), -10);
+  assert.strictEqual(furnElev({ elev: -900 }), -FURN_ELEV_MAX);
+  assert.strictEqual(furnElev({ elev: -900 }), -500);
 
   // NaN -> 0
   assert.strictEqual(furnElev({ elev: NaN }), 0);
@@ -238,5 +240,5 @@ test('(6) MCP round trip: elevation defaults, overrides, and bounds check', asyn
   // add_furniture with elev 900 -> isError
   const bad = await c.call('tools/call', { name: 'add_furniture', arguments: { catalogId: 'tvw', x: 400, y: 400, elev: 900 } });
   assert.strictEqual(bad.result.isError, true, 'add_furniture with elev 900 must return isError: true');
-  assert.match(text(bad), /elev must be between 0 and 500 cm/, 'error message must explain valid elev bounds');
+  assert.match(text(bad), /elev must be between -500 and 500 cm/, 'error message must explain valid elev bounds');
 });

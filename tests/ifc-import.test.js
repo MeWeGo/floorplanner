@@ -88,6 +88,7 @@ test('5: tests/fixtures/two-storey.ifc (IFC4, mm): stats, levels, walls rectangl
   assert.deepStrictEqual(stats, {
     schema: 'IFC4',
     floors: 2,
+    levelsMerged: 0,
     walls: 5,
     ops: 2,
     rooms: 1,
