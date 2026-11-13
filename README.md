@@ -53,7 +53,7 @@ In Chrome/Edge the first connection may ask once for **local network** permissio
 - **Opt out of syncing:** open the app with `?bridge=off` to use it without connecting to a bridge.
 
 ### Tools
-Tools: `new_project` · `load_project` / `import_ifc` / `save_project` / `get_project` / `set_project` · `add_wall` / `add_rect_walls` · `add_opening` · `add_furniture` · **multi-part furniture:** `get_furniture_schema` / `create_furniture` / `add_component` / `update_component` / `remove_component` / `set_material` / `set_transform` / `validate_furniture` / `save_furniture` / `place_furniture` · `add_room` · `add_slab` / `add_void` · `add_text` · `update_object` / `delete_objects` · `add_floor` · `summarize` / `list_catalog` · `browser_status` / `push_to_browser` / `pull_from_browser` / `get_user_requests` / `ack_user_requests` · `list_snapshots` / `restore_snapshot`. Client configuration (Claude Desktop, OpenCode, Cursor / VS Code) and the full workflow are in [`mcp/README.md`](mcp/README.md).
+Tools: `new_project` · `load_project` / `import_ifc` / `save_project` / `get_project` / `set_project` · `add_wall` / `add_rect_walls` · `add_opening` · `add_draft` (2D-only lines / circles / arcs) · `add_furniture` · **multi-part furniture:** `get_furniture_schema` / `create_furniture` / `add_component` / `update_component` / `remove_component` / `set_material` / `set_transform` / `validate_furniture` / `save_furniture` / `place_furniture` · `add_room` · `add_slab` / `add_void` · `add_text` · `update_object` / `delete_objects` · `add_floor` · `summarize` / `list_catalog` · `browser_status` / `push_to_browser` / `pull_from_browser` / `get_user_requests` / `ack_user_requests` · `list_snapshots` / `restore_snapshot`. Client configuration (Claude Desktop, OpenCode, Cursor / VS Code) and the full workflow are in [`mcp/README.md`](mcp/README.md).
 
 ---
 
@@ -95,6 +95,7 @@ Tools: `new_project` · `load_project` / `import_ifc` / `save_project` / `get_pr
 - **Room drag moves contents** — dragging a single room takes the furniture and text labels inside it along (the panel's X/Y fields behave the same); room resize only reshapes the polygon.
 - Resize / rotate with on-canvas handles; edit numeric properties in the side panel.
 - Dimension lines, text labels, and live wall-length labels.
+- **📐 Draft tool (2D only)** — precise drafting geometry that never becomes a wall, slab or furniture in 3D: pick **Line / Polyline / Rectangle / Circle / Arc** in the bar above the canvas and click point by point with the usual snapping (grid, ends, midpoints, centres, angle lock, tracking). Type a number + `Enter` for an exact length or radius (`300x200` for a rectangle). The side panel sets line weight, line type (solid / dashed / dotted / centre), colour and an optional fill or hatch for closed shapes, and shows length, radius / diameter and area. Move, mirror, scale, copy, layer and reorder them like any other object; they export to SVG / PNG / PDF.
 - **✏️ Pen tool** — freehand sketches anywhere on the plan: hold and drag to draw any shape, arrow or note stroke; the stroke is simplified to few points, and you can move it, restyle it (stroke width & color in the side panel), copy/paste or delete it like any object. Shown as a line on the floor in 3D and included in SVG/PNG/PDF exports.
 
 - **⬡ Shape tool (`S`)** — draw anything the catalogue doesn't have: **triangle**, **quad**, **N-gon** (3–24 sides, adjustable in the top bar), **circle/ellipse** (drag corner to corner) or **freeform** (hold-drag-release). Two modes: **Object** creates a nameable custom item (move/rotate/resize like furniture, extruded in 3D); **Walls** draws the same outline as real walls you can attach doors to and auto-detect a room inside. Press **💾 Save shape to library** in the side panel to name it and reuse it from the **⬡ My Library** category (✕ removes a saved shape).
@@ -147,6 +148,10 @@ One click turns the plan into an interactive 3D model — walls with real door/w
 **Walk mode (👁):** click the **👁** eye button to explore at eye level (165 cm). Walk with **`WASD` / Arrow keys** and hold **`Shift`** to run (movement is time-based); drag the mouse to look around in yaw and pitch (`Q`/`E` height keys are disabled). Collision detection stops you at walls and closed doors while sliding along them; open doors and arches are passable. Click any door to open or close it (or `Alt`+click to select). Press **`Esc`** to return to the saved orbit camera.
 
 **Detail comes from the plan, not from extra settings:** furniture is modelled per catalogue item (sofa cushions, table legs, wardrobe doors and handles, fridge panels, WC bowl and tank, basin and faucet, plant foliage, TV screen, car wheels, stairs with a handrail …) purely from its type, size and colour, so existing plans and saved JSON improve with no migration. Openings get frames, sills and handles, solid walls get skirting boards and a top cap, `wood`/`tile`/`carpet`/`marble`/`concrete`/`stone` plus outdoor `grass`/`water`/`gravel`/`deck`/`asphalt` (or custom textures) room floors and floor slabs become tiled textures tinted with the room colour (water draws as a translucent shiny surface), and a soft-shadowed sun lights the scene.
+
+**Live realistic view (🌤):** the **🌤** button switches the 3D viewport between the CAD look and a live rendered look — sky, sunlight and shadows from the Render studio sun, clean surfaces without edge lines — while you orbit or walk. Click it again for the CAD view.
+
+**Selecting in 3D:** clicking a wall, door, window, furniture item or free slab shows it in the side panel, on any visible floor (the active floor follows the selection; `Alt`+click selects a room). On narrow screens the **ℹ️** button opens the panel.
 
 **Camera presets:** three small buttons next to the floor selector give **fit**, **top-down** and **walk mode (👁 eye level, 1.65 m)** views. The **🎬** button beside them renders the current view to a high-resolution PNG (the top-bar **🖼 PNG** does the same while you are in 3D; hold **Shift** for a quick capture). **◇** jumps to an **isometric** view, and **△ / ▱** switches between **perspective** and **parallel (orthographic)** projection at any time, keeping the view direction; facade views (K/D/G/B), section cutaways and renders work in both, while walk mode always uses perspective.
 
@@ -204,6 +209,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | `M` | Dimension line |
 | `T` | Text |
 | `B` | Pen – freehand sketch (drag to draw, release to finish) |
+| `U` | Draft – 2D-only line, polyline, rectangle, circle, arc (type a length / radius + `Enter`) |
 | `E` | Eraser |
 | `X` | Trim — cut a crossing wall back to the intersection |
 | `L` | Section line — click both ends; then 3D cutaway or 2D section drawing from the panel |

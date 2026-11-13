@@ -1472,6 +1472,116 @@ check('3D walk mode: W stops at a wall, passes an open door, Esc restores the or
   return 'blocked at x=' + blocked.camX.toFixed(0) + ', through the open door to x=' + passed.toFixed(0);
 });
 
+check('2D drafting: line, rectangle, circle and arc; styled in the panel, undo / redo, exported, never in 3D (#83)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    document.getElementById('b3d').click();
+    let empty = 0; if (ui.view3d) T3.scene.traverse(o => { if (o.isMesh) empty++; });
+    show3D(false);
+    setTool('draft');
+    const bar = document.querySelectorAll('#shapeBar [data-dm]').length;
+    draftUi().mode = 'line'; draftClick({ x: 0, y: 0 }); draftClick({ x: 300, y: 0 }); finishDraft();
+    draftUi().mode = 'rect'; draftClick({ x: 0, y: 100 }); draftClick({ x: 200, y: 250 });
+    draftUi().mode = 'circle'; draftClick({ x: 500, y: 200 }); draftClick({ x: 600, y: 200 });
+    draftUi().mode = 'arc'; draftClick({ x: -100, y: 400 }); draftClick({ x: 0, y: 300 }); draftClick({ x: 100, y: 400 });
+    const f = F(), n = f.drafts.length, paths = document.querySelectorAll('#gSketch path[data-id]').length;
+    const circ = f.drafts.find(d => d.shape === 'circle'); if (!circ) return { err: 'no circle was created' };
+    setTool('select'); sel = [circ.id]; refresh();
+    const handles = document.querySelectorAll('#gSel [data-h]').length;
+    const sl = document.querySelector('#props select[data-k="draft"][data-p="dash"]'); if (!sl) return { err: 'no line type field in the panel' };
+    sl.value = 'dashed'; sl.dispatchEvent(new Event('change', { bubbles: true }));
+    const dashed = /stroke-dasharray/.test(document.getElementById('gSketch').innerHTML);
+    undo(); const undone = (F().drafts.find(d => d.id === circ.id) || {}).dash || 'solid';
+    redo(); const redone = (F().drafts.find(d => d.id === circ.id) || {}).dash || 'solid';
+    const svg = exportSvg().svg, bb = bboxOf('draft', F().drafts.find(d => d.id === circ.id));
+    document.getElementById('b3d').click();
+    let meshes = 0; if (ui.view3d) T3.scene.traverse(o => { if (o.isMesh) meshes++; });
+    const view3d = !!ui.view3d; show3D(false);
+    return { bar, n, paths, handles, dashed, undone, redone, exp: /stroke-dasharray/.test(svg) && / A| a|A\\d|a\\d/.test(svg), bbw: bb.x1 - bb.x0, view3d, empty, meshes };
+  })()`);
+  if (info.err) throw new Error(info.err);
+  if (info.bar !== 5) throw new Error('the draft tool bar should offer 5 shapes, got ' + info.bar);
+  if (info.n !== 4 || info.paths !== 4) throw new Error('expected 4 drafting entities drawn, got ' + info.n + ' / ' + info.paths + ' paths');
+  if (info.handles < 2) throw new Error('a selected circle has no handles');
+  if (!info.dashed || info.redone !== 'dashed' || info.undone !== 'solid') throw new Error('line type edit / undo / redo failed: ' + JSON.stringify(info));
+  if (!info.exp) throw new Error('drafting entities are missing from the SVG export');
+  if (Math.abs(info.bbw - 200) > 0.5) throw new Error('circle bounding box is not its diameter: ' + info.bbw);
+  if (!info.view3d) throw new Error('3D did not open');
+  if (info.meshes !== info.empty) throw new Error('2D drafting leaked into 3D: ' + info.meshes + ' meshes vs ' + info.empty + ' in an empty plan');
+  return '4 entities, panel edit undone / redone, 3D unchanged (' + info.meshes + ' meshes)';
+});
+
+check('3D selection on another floor fills the side panel; free slabs are pickable (#82)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    addRectWalls(0, 0, 400, 300);
+    P.floors.push(newFloor('Ust Kat')); fi = 1; addRectWalls(0, 0, 400, 300);
+    const up = F(), w = up.walls[0], sl = mkSlab([{ x: 400, y: 0 }, { x: 650, y: 0 }, { x: 650, y: 300 }, { x: 400, y: 300 }]);
+    up.slabs.push(sl); fi = 0; sel = []; commit(); refresh();
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { err: '3D did not open' };
+    const g = T3.scene.children.find(c => c.userData && c.userData.wallId === w.id && !c.isMesh);
+    if (!g) return { err: 'upper-floor wall is not in the scene' };
+    walkClick(g, false);
+    const r = { fi, sel: sel.slice(), h3: document.querySelector('#props h3') ? document.querySelector('#props h3').textContent : '', badge: (document.querySelector('#props .flbadge') || {}).textContent || '', hl: h3.length };
+    const inp = document.querySelector('#props input[data-k="wall"][data-p="h"]'); if (!inp) return { err: 'wall height field missing for a wall on another floor: ' + r.h3 };
+    inp.value = '200'; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    r.h = w.h;
+    const sm = T3.scene.children.find(c => c.userData && c.userData.slabId === sl.id);
+    if (!sm) return { err: 'free slab has no pick metadata in 3D' };
+    walkClick(sm, false);
+    r.slabSel = sel[0] === sl.id; r.slabPanel = !!document.querySelector('#props [data-k="slab"]'); r.slabHl = h3.length;
+    r.inspect = !!document.getElementById('bInspect');
+    show3D(false);
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  if (info.fi !== 1) throw new Error('the active floor did not follow the 3D selection');
+  if (!/Duvar|Wall/.test(info.h3)) throw new Error('side panel does not show the wall: "' + info.h3 + '"');
+  if (!/Ust Kat/.test(info.badge)) throw new Error('floor badge missing: "' + info.badge + '"');
+  if (info.h !== 200) throw new Error('editing the height of a wall on another floor did not apply: ' + info.h);
+  if (!info.hl) throw new Error('selected wall is not highlighted in 3D');
+  if (!info.slabSel || !info.slabPanel || !info.slabHl) throw new Error('free slab was not selected / shown / highlighted: ' + JSON.stringify(info));
+  if (!info.inspect) throw new Error('#bInspect is missing');
+  return 'wall on floor 2 edited from 3D, slab selected';
+});
+
+check('live realistic 3D view: sky on, CAD edges hidden, walk mode works, CAD view restored (#81)', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    addRectWalls(0, 0, 500, 400); sel = []; commit(); refresh();
+    if (ui.live3d) setLive3D(false);
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { err: '3D did not open' };
+    const edges = () => { let n = 0; T3.scene.traverse(o => { if (o.isLineSegments && o.type !== 'BoxHelper' && o.visible) n++; }); return n; };
+    const r = { e0: edges(), bg0: T3.scene.background.getHex(), g0: T3.ground.material.color.getHex() };
+    document.getElementById('b3dLive').click();
+    r.live = !!T3.live; r.e1 = edges(); r.fog = !!T3.scene.fog; r.sky = !!(T3.live && T3.scene.children.includes(T3.live.sky));
+    r.on = document.getElementById('b3dLive').classList.contains('on');
+    document.getElementById('b3dEye').click();
+    r.walk = !!T3.walk && !!T3.live;
+    draw3D(performance.now());
+    r.follow = !!T3.live && T3.live.sky.position.distanceTo(T3.cam.position) < 0.01;
+    build3D(true);                                   // an edit while live: the look must survive the rebuild
+    r.e2 = edges(); r.live2 = !!T3.live;
+    exitWalk(true);
+    document.getElementById('b3dLive').click();
+    r.off = !T3.live && !T3.scene.fog; r.e3 = edges(); r.bg1 = T3.scene.background.getHex(); r.g1 = T3.ground.material.color.getHex();
+    r.skyLeft = T3.scene.children.some(c => c.material && c.material.isShaderMaterial);
+    show3D(false);
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  if (!info.e0) throw new Error('the CAD view has no edge lines to hide (test plan too simple?)');
+  if (!info.live || !info.on || !info.fog || !info.sky) throw new Error('live realistic view did not turn on: ' + JSON.stringify(info));
+  if (info.e1 !== 0 || info.e2 !== 0 || !info.live2) throw new Error('CAD edges are visible in the live view (' + info.e1 + ' / after rebuild ' + info.e2 + ')');
+  if (!info.walk || !info.follow) throw new Error('walk mode + live view: walk=' + info.walk + ', sky follows camera=' + info.follow);
+  if (!info.off || info.skyLeft) throw new Error('live view left sky / fog behind');
+  if (info.e3 !== info.e0) throw new Error('edge lines not restored: ' + info.e3 + ' vs ' + info.e0);
+  if (info.bg1 !== info.bg0 || info.g1 !== info.g0) throw new Error('background / ground not restored');
+  return info.e0 + ' edges hidden and restored, sky follows the walker';
+});
+
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();
   if (!browserPath) {

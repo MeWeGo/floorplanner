@@ -115,7 +115,7 @@ const finishOk = v => FLOORPATS.includes(v) || (typeof v === 'string' && /^tex:/
 const FINISH_DOC = FLOORPATS.join(' | ') + ' | "tex:<id>" (a custom texture from project.textures)';
 // door material / colours (#41), mirrors DOOR_MATS in app.js
 const DOOR_MATS = ['wood', 'glass', 'paneled', 'metal'];
-const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', dims: 'dim', texts: 'text', sketches: 'sketch' };
+const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', dims: 'dim', texts: 'text', sketches: 'sketch', drafts: 'draft' };
 
 /* ---------- Small helpers (mirror app.js) ---------- */
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -1632,7 +1632,7 @@ const CAT_PARTS = { billiard: billiardParts }; // mirror of CAT_PARTS in app.js
 /* ---------- Project state ---------- */
 let P = null; // working project (same schema the app saves/loads)
 
-function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], dims: [], texts: [], sketches: [], groups: [], slabFloor: 'none', slabColor: null }; }
+function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], dims: [], texts: [], sketches: [], drafts: [], groups: [], slabFloor: 'none', slabColor: null }; }
 function newProject(a) {
   a = a || {};
   return {
@@ -1813,7 +1813,8 @@ function summarize() {
   out.push('Project "' + p.name + '" — schema v' + p.v + ', grid ' + p.grid + ' cm (' + p.gridType + '), default wall ' + p.wallT + ' cm × ' + p.wallH + ' cm high, ' + p.floors.length + ' floor(s)');
   p.floors.forEach((f, i) => {
     out.push('');
-    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts');
+    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts, ' + (f.drafts || []).length + ' 2D drafting');
+    for (const d of f.drafts || []) out.push('  draft ' + d.id + ' ' + (d.shape === 'pline' ? (d.closed ? 'closed polyline' : d.pts.length === 2 ? 'line' : 'polyline') : d.shape) + ' pts ' + d.pts.map(q => '(' + q.x + ',' + q.y + ')').join(' ') + (d.dash ? ' ' + d.dash : ''));
     for (const w of f.walls)
       out.push('  wall ' + w.id + ': (' + w.a.x + ',' + w.a.y + ') → (' + w.b.x + ',' + w.b.y + ')  length ' + Math.round(wLen(w)) + ' cm, t=' + w.t + ', h=' + w.h + (w.wt !== 'solid' ? ', ' + w.wt : ''));
     for (const o of f.ops)
@@ -2216,6 +2217,38 @@ tool('add_void',
     return 'Added ' + v.type + ' void ' + v.id + ' — area ' + fmtArea(polyArea(v.pts)) + '.';
   });
 
+// 2D drafting (#83): mirrors addDraft() in app.js; stored as pts so the app's move / mirror / scale work unchanged
+const DRAFT_SHAPES = ['pline', 'circle', 'arc'], DRAFT_DASHES = ['solid', 'dashed', 'dotted', 'center'], DRAFT_FILLS = ['none', 'solid', 'hatch'];
+tool('add_draft',
+  'Add 2D-only drafting geometry (site / parcel boundaries, setback lines, parking stalls, symbols, reference lines). It is drawn in 2D and in exports but NEVER becomes a wall, slab or furniture in 3D. shape: line / polyline (2+ points), rect (2 opposite corners), circle (centre, then any point on the circle), arc (start, a point on the arc, end).',
+  {
+    shape: { type: 'string', enum: ['line', 'polyline', 'rect', 'circle', 'arc'] },
+    pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: 'Points in cm (Y down); count depends on shape.' },
+    closed: { type: 'boolean', description: 'Polyline only: join the last point to the first.' },
+    w: { type: 'number', description: 'Line weight in cm (0.5-60). Default 2.' },
+    dash: { type: 'string', enum: DRAFT_DASHES, description: 'Line type. Default solid.' },
+    color: { type: 'string', description: '#hex stroke colour. Default dark ink (follows the theme).' },
+    fill: { type: 'string', enum: DRAFT_FILLS, description: 'Closed shapes and circles only. Default none.' },
+    fillColor: { type: 'string', description: '#hex fill / hatch colour. Default = stroke colour.' },
+    floorIndex: floorArg,
+  },
+  ['shape', 'pts'],
+  a => {
+    if (!['line', 'polyline', 'rect', 'circle', 'arc'].includes(a.shape)) throw new Error('Unknown shape "' + a.shape + '"');
+    const f = floorOf(a), pts = parsePts(a.pts, a.shape === 'arc' ? 3 : 2, 'pts');
+    if ((a.shape === 'rect' || a.shape === 'circle') && pts.length !== 2) throw new Error(a.shape + ' needs exactly 2 points');
+    if (a.shape === 'arc' && pts.length !== 3) throw new Error('arc needs exactly 3 points');
+    const o = { id: uid(), shape: a.shape === 'circle' || a.shape === 'arc' ? a.shape : 'pline', pts, w: Math.max(0.5, Math.min(60, num(a.w, 2, 'w'))) };
+    if (a.shape === 'rect') { const [p, q] = pts; o.pts = [{ x: p.x, y: p.y }, { x: q.x, y: p.y }, { x: q.x, y: q.y }, { x: p.x, y: q.y }]; o.closed = true; }
+    else if (o.shape === 'pline' && a.closed && pts.length > 2) o.closed = true;
+    if (a.dash && a.dash !== 'solid') { if (!DRAFT_DASHES.includes(a.dash)) throw new Error('Unknown dash "' + a.dash + '"'); o.dash = a.dash; }
+    if (a.color) o.color = String(a.color);
+    if (a.fill && a.fill !== 'none') { if (!DRAFT_FILLS.includes(a.fill)) throw new Error('Unknown fill "' + a.fill + '"'); if (o.closed || o.shape === 'circle') o.fill = a.fill; }
+    if (a.fillColor) o.fillCol = String(a.fillColor);
+    (f.drafts = f.drafts || []).push(o);
+    return 'Added 2D ' + a.shape + ' ' + o.id + ' (' + o.pts.length + ' points). It is 2D only and does not appear in 3D.';
+  });
+
 tool('add_text',
   'Add a text label at (x, y).',
   {
@@ -2257,6 +2290,7 @@ tool('update_object',
       throw new Error('props.wall "' + found.o.wall + '" does not exist on this floor');
     if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); }
     if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
+    if (found.kind === 'draft') { parsePts(found.o.pts, found.o.shape === 'arc' ? 3 : 2, 'pts'); if (!DRAFT_SHAPES.includes(found.o.shape)) found.o.shape = 'pline'; }
     if (found.kind === 'furn' && 'parts' in props) cleanParts(found.o);
     return 'Updated ' + found.kind + ' ' + found.o.id + ':\n' + JSON.stringify(found.o, null, 2);
   });
@@ -2276,7 +2310,7 @@ tool('delete_objects',
     f.walls = f.walls.filter(w => !s.has(w.id));
     const wl = new Set(f.walls.map(w => w.id));
     f.ops = f.ops.filter(o => !s.has(o.id) && wl.has(o.wall));
-    for (const k of ['furn', 'rooms', 'slabs', 'voids', 'dims', 'texts', 'sketches']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
+    for (const k of ['furn', 'rooms', 'slabs', 'voids', 'dims', 'texts', 'sketches', 'drafts']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
     const cascaded = opsBefore - f.ops.length;
     return 'Deleted ' + a.ids.length + ' object(s)' + (cascaded ? ' and ' + cascaded + ' opening(s) on deleted walls' : '') + '.';
   });

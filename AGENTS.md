@@ -85,7 +85,8 @@ Floor = {
   "sections": [ { id, name:"A", a:{x,y}, b:{x,y}, dir:1|-1 } ],                            // section lines (issue #30); view direction = normal of a→b × dir
   "dims":   [ { id, a:{x,y}, b:{x,y}, off } ],
   "texts":  [ { id, x, y, text, size, color, rot } ],
-  "sketches": [ { id, pts:[{x,y},…], w, color } ]   // pen tool: freehand strokes (already simplified)
+  "sketches": [ { id, pts:[{x,y},…], w, color } ],  // pen tool: freehand strokes (already simplified)
+  "drafts": [ { id, shape:"pline|circle|arc", pts:[{x,y},…], closed?, w, dash?:"dashed|dotted|center", color?, fill?:"solid|hatch", fillCol? } ]   // 2D-only drafting (#83): never built in 3D
 }
 ```
 `Floor.groups` = `[ { id, vars: [{ label, poses: {id: pose}, base?, draft? }], idx } ]` — adjustable layout records for grouped objects (see §8).
@@ -128,7 +129,7 @@ Key semantics:
 | `tabs[]`, `tabIdx` | Open project tabs (issue #17): `{ id, P, hist, hi, fi, view, sel }` per tab; the **active** tab's live state is the globals above |
 | `T3` | Three.js context `{r, scene, cam, ctl, run}` (lazy-created) |
 
-`tool` values: `select pan wall rect room poly slab void place dim text pen eraser trim mirror section calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
+`tool` values: `select pan wall rect room poly slab void place dim text pen draft eraser trim mirror section calib` (`door`/`window`/`furn` toolbar buttons map to `tool='place'` with `placing`).
 
 ---
 
@@ -182,7 +183,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, modalbg, modal`.
+`pname, ptabs, bNew, bProjects, bSave, bJson, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, b3d, b3dFit, b3dTop, b3dEye, b3dShot, b3dLive, bInspect, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -246,6 +247,21 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - **Railings / fences:** `lowWallSolid(L, ops)` = the runs between openings (a door on a fence is a gate gap), `lowWallPosts(w, L, ops)` = posts every ≤ `LOW_WALL[wt].post` (120 / 200 cm). 2D `lowWallSvg(w, C, f)` (two thin rails / a centre line with pickets + square posts, `pal()` or the wall paint), 3D `lowWall3D()` (posts, handrail + bottom rail + balusters, or posts + two rails + pickets; no skirting / cap), sections and elevations `railElevSvg()` (open rails, posts and bars). `wallJoints()` skips low walls, so they get no corner fillers. `wallSvg(w, live, f)` now takes the floor so railings can leave gaps at openings. MCP `add_wall` / `update_object` accept `wt` railing / fence, `mul` / `mulN` and `rs` (`cleanMullions`).
 - **Railing styles.** `RAIL_STYLES` / `railStyle(o)` (the only reader; absent = `bars`) for railing walls **and** stairs / ramps: `bars` (posts + balusters), `glass` (shoe, glass panel, handrail), `cable` (handrail + horizontal bars), `solid` (parapet + cap, no posts). Drawn by `lowWallSvg` / `lowWall3D` / `railElevSvg` (the face prim carries `rs`), the stair rails in `furn3D` (`piece()` along each flight) and the ramp rails (`slope()`). Panel field `rs` for railings and for stairs / ramps that have a railing; the last style picked is remembered in `ui.railRs` for the next drawn railing.
 - **Railing tool** (`Q`, `TOOLS` entry `railing`): `setTool('railing')` sets `tool = 'wall'` and keeps `ui.btn = 'railing'`, so the wall tool's snapping, typed lengths and preview are reused; new pieces come from `toolWall()`, which turns them into railings. The HUD shows `HINTS.railing`.
+
+### 2D drafting (issue #83)
+- Kind `draft` in `Floor.drafts` (`KINDS`, `PTS_KINDS`, `XFORM_KINDS`, `LAYER_ARR`, `GRESIZE`): **2D only** — `build3D`, `archPrims` and `slabPolys` never read it (a wall-less floor gets no automatic slab from drafting lines). Every shape is stored as `pts` so move / rotate / mirror / scale / paste / nudge come from the `PTS_KINDS` paths: `pline` = corners (+ `closed`; a rectangle is a closed 4-point polyline), `circle` = `[centre, point on the circle]`, `arc` = `[start, point on the arc, end]`. `mirrorObjs` keeps the circle's point order (other shapes are reversed).
+- Pure helpers (before `sketchSvg`): `draftArc(o)` (circumcentre, radius, SVG `large` / `sweep` flags, angle; `null` when collinear → drawn as a polyline), `draftOutline(o)` (what `bboxOf` uses: 4 extremes of a circle, 24 samples of an arc), `draftLen`, `draftArea`, `draftClosed`, `draftPathD`, `draftDashArr` (dash lengths scale with `w`), `draftSvg(o, live)` (ink colour follows the theme like sketches; hatch = an inline `<pattern id="dh-<id>">`; a stroke-wide transparent hit path, filled shapes hit on their area too). Drawn in `layerStrings().sketches` under the pen strokes, so it shares the `layersVis.sketch` toggle and every export.
+- Tool `draft` (`U`): `draftUi()` = `ui.draft { mode, w, dash, color }` (mode picked in `#shapeBar` via `buildDraftBar()`, `data-dm`; the last panel style is reused for the next entity), in-progress points in `ui.dr`. `draftClick(p)` adds a snapped point and creates the entity when the shape is complete (`line` chains, a second click on the same point / `Enter` / double-click finishes, clicking the first point closes a polyline). `setCursor` angle-locks from the last point (not for rect / arc) and applies `draftTypedPt()` for typed sizes (`ui.typed`: length, radius, or `300x200`). Handles: one `v<i>` per point; dragging a circle's centre keeps its radius. Wall ends, room corners and draft points all snap to draft points (`snapPt`, `trackRefs`).
+- Panel (`k === 'draft'`): type, radius (editable for circles), length / circumference, area, closed, line weight, line type, colour, fill + fill colour. MCP: `add_draft` (`line | polyline | rect | circle | arc`), `summarize` lists drafts, `delete_objects` / `update_object` handle them. Not built: ellipse, trim / extend / offset / fillet, DXF. Guard: `tests/features-81-83.test.js` + a smoke check.
+
+### 3D selection → side panel (issue #82)
+- `followSelFloor(fd)`: when a 3D pick (`findAnyFloor`) is on another floor, the **active floor follows it** (`fi = fd.floorIdx`, then `render()` / `renderFloors()`), so `selObjs()`, `applyProp()`, panel actions and delete all work unchanged on `F()`. Called from the 3D pointerdown (openings, furniture), the click handler (walls, slabs, `Alt` + room on any floor) and `walkClick`. `floorBadgeHtml()` (inside `acts()`) shows the floor name in the panel while in 3D with more than one floor. `pickable(id)` falls back to `findAnyFloor`, so locked / hidden layers are respected on every floor.
+- Free slabs carry `userData.slabId` (glass slabs too) and are selected by a plain click in orbit and walk mode; rooms by `Alt`+click. `refreshSel3D` highlights slabs and rooms as well.
+- Narrow screens (≤ 700 px hide `#props`): `#bInspect` (ℹ️, top-right of the stage) toggles `body.props-open`, which shows the panel as a fixed drawer; the button is highlighted while something is selected.
+
+### Live realistic 3D view (issue #81)
+- `ui.live3d` (`#b3dLive` 🌤, command `live3d`, remembered in `localStorage['fp_live3d']`) → `setLive3D(on)`. `applyLive3D()` runs at the end of **every** `build3D`: it first clears the previous live state (`T3.live = { sky, fog, mats }`: removes and disposes the sky, the two materials, `scene.fog`), then, when on, hides the CAD `LineSegments` (never `BoxHelper` selection boxes), swaps the ground and default slabs (`userData.slab`) to the studio materials, moves the shadow lights to `sunVector(ui.studio.az, ui.studio.alt)` (warm below 20°) and adds `makeSky()` + its fog. Turning it **off rebuilds** (`build3D(true)`), which is what restores edges, materials, lights and background.
+- Single pass and still on demand: `draw3D` only adds `liveSkyFollow()` (sky follows the camera, fog range follows the orbit distance; no allocation). Walk mode, picking and collisions are untouched. The render studio's sun sliders / presets call `applyLive3D()`; `render3DHQ` hides the live sky and fog for its own passes and restores them in `finally`. Guard: `tests/features-81-83.test.js` + a smoke check (edges hidden, survives a rebuild and walk mode, everything restored when off).
 
 ### Ramps (issue #58)
 - Catalogue item `ramp` (`k: 'ramp'`): `w` = width, `d` = horizontal length, `h` = rise. Like stairs it climbs toward local −y (low end at +d/2). `rampType(o)` (`RAMP_TYPES`: accessible / vehicle / landscape, default accessible) and `rampRail(o)` (`railing`, default `both`, `none` for vehicle ramps) are the only readers of the optional fields, so legacy-free defaults need no `normalizeProject` work.
@@ -502,6 +518,8 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/furn-elev.test.js` | height above floor (#61) on the real functions: `furnElev` defaults / cap, `CAT_ELEV` items and the app ↔ MCP mirror, catalogue default only when unset, dashed + tagged 2D, panel / clamp / preset / 3D wiring, the TV unit's 16:9 screen, MCP `elev` round trip and range |
 | `tests/room-slab-variants.test.js` | room slab thickness and room layouts (#63, #66) on the real functions: `roomSlabT` defaults / caps, room poses carrying finish / colour / glass / thickness, slab and void poses unchanged, guarded restore, clickable room bodies, 3D room picking, MCP `slabThickness` range |
 | `tests/axis-rotation.test.js` | all-axis rotation: part `rx` / `ry` cleaning, `partRotM` order, the Three.js `YZX` mapping equal to the plan matrix, tilted bounds (box / sphere / cylinder) and validation, hull, app / studio / MCP wiring |
+| `tests/features-81-83.test.js` | live realistic 3D view wiring (#81), 3D selection following the floor, slab picking and the inspector drawer (#82), 2D drafting geometry on the real functions: arc through 3 points, lengths / areas / bounds, typed sizes, mirror keeping circles, 2D-only wiring and the MCP mirror (#83) |
+| `tests/touch-zoom.test.js` | touch pinch / two-finger pan on the real pointer handlers: zoom anchored at the midpoint, a second finger cancels a drag or a wall start, **after a pinch the remaining finger pans** and later touches work normally |
 | `tests/walls-camera.test.js` | curtain mullion maths (#71), railing / fence types, defaults and posts (#73), perspective / orthographic wiring, aspect / frustum helpers and the iso preset (#74) |
 | `tests/ifc-import.test.js` | IFC import on the real parser: block parity with `mcp/server.js`, STEP value decoding, rejected formats, the `tests/fixtures/*.ifc` models (IFC4 / mm and IFC2x3 / feet: storeys, walls, curved and curtain walls, doors / windows, rooms, slabs, voids), corner cleanup, file-open / drop wiring and the MCP `import_ifc` tool |
 | `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed, walk mode collision: stops at closed doors, passes open ones, Q height locked, Esc restores orbit) |
@@ -616,4 +634,4 @@ gh issue create --title "..." \
 
 ## 14. Roadmap Ideas (not implemented)
 
-Imperial units · roof & terrain in 3D · cost / materials list · wall-linked room polygons (auto-update) · PWA / offline caching of Three.js · custom user templates · touch-gesture pinch-zoom · curved walls · LICENSE file.
+Imperial units · roof & terrain in 3D · cost / materials list · wall-linked room polygons (auto-update) · PWA / offline caching of Three.js · custom user templates · curved walls · LICENSE file.
