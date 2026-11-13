@@ -1458,6 +1458,62 @@ check('3D: Ctrl+Z / Ctrl+Y undo the plan without leaving the 3D view', async pag
   return 'undo/redo work in 3D (' + before.walls + ' walls)';
 });
 
+check('3D walk mode: climb a stair to the upper floor and walk back down through its void', async page => {
+  const ok = await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 800, 600);
+    const pitch = floorH(F()) + 20;
+    F().furn.push(Object.assign(mkFurn(BYID.stairs, 400, 300, 0), { w: 100, d: 450, h: pitch, stepN: 16 })); // climbs toward −y
+    P.floors.push(newFloor('Ust')); fi = 1; addRectWalls(0, 0, 800, 600);
+    F().voids.push(mkVoid([{ x: 345, y: 70 }, { x: 455, y: 70 }, { x: 455, y: 530 }, { x: 345, y: 530 }]));
+    fi = 0; commit(); refresh();
+    document.getElementById('b3d').click(); return true;
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!ok || !in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(() => {
+    document.getElementById('b3dEye').click();
+    const w = T3.walk; if (!w) return { err: 'no walk mode' };
+    const run = (yaw, secs) => { w.yaw = yaw; keys3D.add('w'); for (let i = 0; i < secs * 60; i++) walkStep(1 / 60); keys3D.delete('w'); for (let i = 0; i < 30; i++) walkStep(1 / 60); };
+    w.x = 400; w.y = 570; w.yaw = -Math.PI / 2; applyWalkCam();
+    const y0 = T3.cam.position.y;
+    run(-Math.PI / 2, 2.2); const mid = { fi: w.fi, z: w.gz };           // ~300 cm: on the stair
+    run(-Math.PI / 2, 4); const top = { fi: w.fi, z: w.gz, y: w.y, camY: T3.cam.position.y };
+    run(Math.PI / 2, 6); const back = { fi: w.fi, z: w.gz, y: w.y, camY: T3.cam.position.y };
+    exitWalk(true); show3D(false);
+    return { y0, mid, top, back };
+  })()`);
+  if (r.err) throw new Error(r.err);
+  if (!(r.mid.fi === 0 && r.mid.z > 60)) throw new Error('did not climb the stair: ' + JSON.stringify(r.mid));
+  if (r.top.fi !== 1 || Math.abs(r.top.z) > 1) throw new Error('did not reach the upper floor: ' + JSON.stringify(r.top));
+  if (r.top.camY < r.y0 + 250) throw new Error('eye did not rise with the floor change');
+  if (r.back.fi !== 0 || Math.abs(r.back.z) > 1 || r.back.y < 540) throw new Error('could not walk back down: ' + JSON.stringify(r.back));
+  return 'up to floor 1 (eye +' + (r.top.camY - r.y0).toFixed(0) + ' cm) and back down';
+});
+
+check('3D wheel zoom keeps moving toward the cursor instead of stalling at the orbit target', async page => {
+  await page.evaluate(`(() => { show3D(false); closeModal(); loadProject(newProject()); addRectWalls(0, 0, 800, 600); commit(); refresh(); document.getElementById('b3d').click(); })()`);
+  await sleep(1200);
+  const r = await page.evaluate(`(() => {
+    if (!(ui.view3d && T3 && T3.fit) || !T3.cam.isPerspectiveCamera) return null;
+    const el = T3.r.domElement, b = el.getBoundingClientRect(), cx = b.left + b.width / 2, cy = b.top + b.height / 2;
+    const tgt = T3.ctl.target.clone(), d0 = T3.cam.position.distanceTo(tgt), dir = new THREE.Vector3(); T3.cam.getWorldDirection(dir);
+    for (let i = 0; i < 80; i++) el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: cx, clientY: cy, bubbles: true, cancelable: true }));
+    const past = T3.cam.position.clone().sub(tgt).dot(dir);   // > 0: the camera went past the old orbit target
+    const d1 = T3.ctl.target.distanceTo(T3.cam.position);
+    for (let i = 0; i < 80; i++) el.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, clientX: cx, clientY: cy, bubbles: true, cancelable: true }));
+    const back = T3.cam.position.distanceTo(tgt);
+    show3D(false);
+    return { d0, past, d1, back };
+  })()`);
+  if (!r) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable or parallel camera'; }
+  if (!(r.past > 0)) throw new Error('80 wheel notches did not pass the orbit target: ' + JSON.stringify(r));
+  if (!(r.d1 >= 29)) throw new Error('orbit pivot collapsed onto the camera: ' + r.d1);
+  if (!(r.back > r.d0 * 0.5)) throw new Error('zooming out did not come back: ' + JSON.stringify(r));
+  return 'passed the old target by ' + r.past.toFixed(0) + ' cm, pivot ' + r.d1.toFixed(0) + ' cm ahead';
+});
+
 check('3D walk mode: W stops at a wall, passes an open door, Esc restores the orbit camera (issue #46)', async page => {
   // two rooms split by a partition at x = 400 with a closed door in the middle
   const setup = await page.evaluate(`(() => {

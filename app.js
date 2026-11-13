@@ -118,7 +118,7 @@ let hist = [], hi = -1;
 const view = { x: 0, y: 0, z: 0.5 };
 /* Uzaklaştırma sınırı (issue #38): 0.002 · ~1000 px = ~5 km. Böylece vaziyet
    planları, parsel sınırları ve çok binalı yerleşimler bütünüyle görülebilir. */
-const MIN_ZOOM = 0.002, MAX_ZOOM = 8;
+const MIN_ZOOM = 0.002, MAX_ZOOM = 40; // 40 px/cm: 1 mm = 4 px (detay çizimi); sınırda kısa bir uyarı çıkar
 let tool = 'select', sel = [], placing = null;
 const ui = { snap: true, angle: true, dims: true, outline: false, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
 const layersVis = { bg: true, rooms: true, walls: true, furn: true, furnLabel: true, furnIcon: true, dims: true, sketch: true, underlay: true }; // furnLabel / furnIcon (#84): yalnızca görünüm, veriye dokunmaz
@@ -1078,8 +1078,13 @@ function applyView() {
     gl.textContent = (P.gridType || 'square') === 'none' ? '' : L('Izgara', 'Grid') + ' ' + gridStepLabel(G.minor || G.major);
   }
 }
+let zoomLimT = 0;
 function zoomAt(f, sx, sy) {
   const nz = clamp(view.z * f, MIN_ZOOM, MAX_ZOOM), wx = (sx - view.x) / view.z, wy = (sy - view.y) / view.z;
+  if (nz === view.z && f !== 1 && Date.now() - zoomLimT > 2500) { // sınırda tekerlek boşa dönmesin: ne olduğunu söyle
+    zoomLimT = Date.now();
+    toast(f > 1 ? L('En yakın yakınlaştırma (1 mm = 4 px) · 0: sığdır', 'Maximum zoom (1 mm = 4 px) · 0: fit') : L('En uzak görünüm · 0: sığdır', 'Minimum zoom · 0: fit'));
+  }
   view.z = nz; view.x = sx - wx * nz; view.y = sy - wy * nz; scheduleRender();
 }
 function fit() {
@@ -9527,6 +9532,35 @@ function init3D() {
       schedBuild3D(); // tutkal/rotasyon/pin değişimi olabilir -> sahne tazelensin
     } else { if (fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
   });
+  // Tekerlek (perspektif): imlecin altındaki yüzeye doğru yaklaş. OrbitControls hedefe uzaklığı oranla küçültür; yakında
+  // adım sıfıra yaklaşır ve "sonsuz yakınlaştırma"da takılır. Burada adım imleçteki yüzeye uzaklıktan gelir, dönüş merkezi
+  // aynı bakış çizgisinde öne taşınır (görüntü dönmez), en az birkaç cm ilerlenir: duvara kadar ve içinden geçilebilir.
+  // OrbitControls'ten ÖNCE kaydedilir ki onun tekerlek işleyicisi çalışmasın. Paralel izdüşümde OrbitControls zoom'u kalır.
+  let zHit = null;
+  r.domElement.addEventListener('wheel', e => {
+    if (!T3 || T3.walk || !T3.cam.isPerspectiveCamera || !ui.view3d || !e.deltaY) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const cam = T3.cam, t = T3.ctl.target, now = performance.now(), rc = ray3(e), dir = rc.ray.direction.clone();
+    let dh = null;
+    if (zHit && now - zHit.t < 150 && Math.hypot(e.clientX - zHit.x, e.clientY - zHit.y) < 4) dh = zHit.d; // tekerlek patlaması: tek ışın
+    else {
+      const h = rc.intersectObjects(scene.children, true).find(q => q.object.isMesh && q.object.visible && !q.object.userData.fpDecal && !(q.object.material && q.object.material.isShaderMaterial));
+      dh = h ? h.distance : null;
+    }
+    const dT = cam.position.distanceTo(t), ref = dh !== null ? (e.deltaY > 0 ? Math.max(dh, dT) : dh) : dT; // uzaklaşırken en az merkeze uzaklık kadar
+    const n = clamp(e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1) / 100, -3, 3); // + = uzaklaş
+    let mv = n < 0 ? Math.max(ref * (1 - Math.pow(0.82, -n)), 8 * -n) : -Math.min(ref * (Math.pow(1 / 0.82, n) - 1), Math.max(0, 40000 - dT));
+    if (n < 0 && dh !== null && dh > 30) mv = Math.min(mv, dh - 20); // yüzeyin önünde dur; çok yakındaysa içinden geç
+    if (dir.y < 0 && cam.position.y + dir.y * mv < 10) mv = Math.max(0, (cam.position.y - 10) / -dir.y); // zeminin altına inme
+    const fwd = new THREE.Vector3(); cam.getWorldDirection(fwd);
+    const cos = Math.max(0.05, dir.dot(fwd));
+    cam.position.addScaledVector(dir, mv);
+    let nd = Math.max(30, dT - mv * cos);                                  // dönüş merkezi: aynı dünya noktası…
+    if (mv > 0 && dh !== null) nd = Math.max(30, Math.min(nd, (dh - mv) * cos)); // …ya da imleçteki yüzeyin derinliği
+    t.copy(cam.position).addScaledVector(fwd, nd);
+    zHit = dh === null ? null : { t: now, x: e.clientX, y: e.clientY, d: Math.max(0, dh - mv) };
+    T3.ctl.update(); req3D();
+  }, { passive: false });
   const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = ORBIT_MAX_POLAR;
   let downPt = null;
   // 3B dokunmatik iki parmak (#80): ikinci parmak indiğinde tek parmakla başlamış mobilya/açıklık sürüklemesini iptal et ki OrbitControls yakınlaştırabilsin
@@ -9713,15 +9747,16 @@ function eyeRoom() {
 /* ---------- Yürüme modu (#46) ---------- */
 const ORBIT_MAX_POLAR = Math.PI / 2.02;
 // göz yüksekliği, gövde yarıçapı (cm), yürüme / koşma hızı (cm/s), bakış hassasiyeti (rad/px), bakış sınırı (rad)
-const WALK = { eye: 165, r: 20, speed: 140, run: 320, look: 0.004, pitch: 1.35 };
+// stepUp: en yüksek tek adım (basamak / rampa / platform), head: altı bu yüksekliğin altında kalan merdiven / platform yandan geçişi engeller
+const WALK = { eye: 165, r: 20, speed: 140, run: 320, look: 0.004, pitch: 1.35, stepUp: 45, head: 180 };
 /** Kemerler ve açık kapılar geçit verir; kapalı kapı ve pencere duvar sayılır. */
 function walkPassable(o) { return o.type === 'arch' || (isDoorOp(o) && !!o.open); }
 /** Bir katın yürürken geçilemeyen duvar parçaları: { a, b, h } (h = yarım kalınlık), geçit veren açıklıklar çıkarılmış. */
-function walkSegs(f) {
+function walkSegs(f, z = 0) {
   const out = [];
   for (const w of (f && f.walls) || []) {
     const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y); if (L < 1) continue;
-    const wb = wallElev(w); if (wb >= WALK.eye || (+w.h > 0 && wb + +w.h <= 30)) continue; // baş üstünde başlayan / döşeme altında kalan duvar engellemez
+    const wb = wallElev(w) - z; if (wb >= WALK.eye || (+w.h > 0 && wb + +w.h <= 30)) continue; // baş üstünde başlayan / ayak altında kalan duvar engellemez (z = merdivende ayak kotu)
     const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, h = (w.t || 20) / 2;
     const at = t => ({ x: w.a.x + ux * t, y: w.a.y + uy * t });
     const gaps = ((f.ops) || []).filter(o => o.wall === w.id && walkPassable(o))
@@ -9762,13 +9797,59 @@ function walkMove(p, mv, segs, r) {
 // yürüyenin katı: 2B'deki kat 3B'de görünüyorsa o, yoksa görünen en alt kat (#85); kotu build3D ile aynı
 function walkFloorIdx() { return P.floors[fi] && v3dShown(P.floors[fi]) ? fi : v3dBase(); }
 function walkElev(i) { return v3dElev(i); }
-function walkSegsAt(i) { const f = P.floors[i]; return f ? walkSegs(visFloor(f)) : []; }
+function walkSegsAt(i, z = 0) { const f = P.floors[i]; return f ? walkSegs(visFloor(f), z) : []; }
+/* --- Merdiven / rampa tırmanma: yürüyenin ayağı basamak, rampa ve platformların üstüne çıkar, katlar arasında geçer ---
+   Merdivenin üst basamağı üst kat kotuna ulaşınca yürüyen üst kata geçer; aşağı inmek için üst katta merdivenin üstünde
+   bir döşeme boşluğu (Y aracı) olmalı — boşluk yoksa döşeme orada kapalıdır (3B'de de öyle görünür). */
+/** Merdiven / rampa öğesinin (x, y) noktasındaki basılan yüzey kotu (cm, katın döşemesinden); üstünde değilse null. */
+function walkSurfAt(o, x, y) {
+  const r = (+o.rot || 0) * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), dx = x - o.x, dy = y - o.y;
+  const lx = dx * c + dy * s, ly = -dx * s + dy * c, e = furnElev(o); // furnCorners'ın tersi
+  if (Math.abs(lx) > o.w / 2 + 0.5 || Math.abs(ly) > o.d / 2 + 0.5) return null;
+  if (o.k === 'ramp') return e + Math.max(0, +o.h || 0) * clamp((o.d / 2 - ly) / Math.max(1, o.d), 0, 1); // alt uç +d/2
+  let z = null;
+  for (const st of stairSteps(o).steps) if ((z === null || st.z > z) && pointInPoly({ x: lx, y: ly }, stepCorners(st))) z = st.z;
+  return z === null ? null : e + z;
+}
+/** Yürüyenin katı ve komşu katları: [{ f, base }] (base = o katın döşemesinin yürüyenin katına göre kotu). */
+function walkLevels(i) {
+  const f = P.floors[i]; if (!f) return [];
+  const out = [{ f: visFloor(f), base: 0 }], dn = P.floors[i - 1], up = P.floors[i + 1];
+  if (dn && v3dShown(dn)) out.push({ f: visFloor(dn), base: -(floorH(dn) + 20) });
+  if (up && v3dShown(up)) out.push({ f: visFloor(up), base: floorH(f) + 20 });
+  return out;
+}
+/** p noktasında, ayak kotu z olan yürüyenin basacağı yüzey: g = adım yüksekliği içindeki en yüksek yüzey;
+    block = yandan çarpılan yüksek yüzey (merdivenin yanı, yüksek platform). Döşeme kendi boşluklarında yoktur.
+    Gövde tek noktada durmaz: merkez + 4 yan nokta (0.75·r) taranır, basamak eki / boşluk kenarındaki küçük aralıktan düşülmez. */
+function walkGround(lv, p, z) {
+  const k = WALK.r * 0.75, c = walkGroundAt(lv, p, z);
+  let g = c.g;
+  for (const [dx, dy] of [[k, 0], [-k, 0], [0, k], [0, -k]]) { const q = walkGroundAt(lv, { x: p.x + dx, y: p.y + dy }, z).g; if (q > g) g = q; }
+  return { g: g === -Infinity ? z : g, block: c.block };
+}
+function walkGroundAt(lv, p, z) {
+  let g = -Infinity, block = false;
+  const take = (h, bot) => { // bot: katı gövdenin altı (merdiven / rampa / platform döşemeden yükselir); null = yalnızca yüzey
+    if (h <= z + WALK.stepUp) { if (h > g) g = h; }
+    else if (bot !== null && bot < z + WALK.head) block = true;
+  };
+  for (const { f, base } of lv) {
+    if (!(f.voids || []).some(v => v.pts && v.pts.length > 2 && pointInPoly(p, v.pts))) take(base, null);
+    for (const s of f.slabs || []) if (s.pts && s.pts.length > 2 && +s.off && pointInPoly(p, s.pts)) take(base + +s.off, +s.off > 0 ? base + +s.off - (+s.t || 20) : null);
+    for (const o of f.furn || []) {
+      if (o.k !== 'stairs' && o.k !== 'ramp') continue;
+      const h = walkSurfAt(o, p.x, p.y); if (h !== null) take(base + h, base + furnElev(o));
+    }
+  }
+  return { g, block };
+}
 function enterWalk() {
   if (!T3) return;
   const c = T3.cam.position.clone(), t = T3.ctl.target.clone(), i = walkFloorIdx(); // göz noktası: izdüşüm değişmeden önce
   if (T3.ortho) { T3.orthoAfterWalk = true; setProjection(false); } // yürüme hep perspektif (#74); çıkınca paralele döner
   const p = walkMove({ x: c.x, y: c.z }, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); // duvarın içinde başlamasın
-  T3.walk = { fi: i, x: p.x, y: p.y, yaw: Math.atan2(t.z - c.z, t.x - c.x), pitch: -0.15, drag: null };
+  T3.walk = { fi: i, x: p.x, y: p.y, z: 0, gz: 0, yaw: Math.atan2(t.z - c.z, t.x - c.x), pitch: -0.15, drag: null };
   T3.ctl.enabled = false; T3.ctl.maxPolarAngle = Math.PI; // yukarı bakınca render'daki ctl.update() bakışı kırpmasın
   applyWalkCam(); syncWalkUI();
 }
@@ -9780,12 +9861,12 @@ function exitWalk(restore) {
   if (T3.orthoAfterWalk) { T3.orthoAfterWalk = false; setProjection(true); fitOrtho(); }
 }
 function walkToFloor(i) {
-  const w = T3.walk; w.fi = i;
+  const w = T3.walk; w.fi = i; w.z = w.gz = 0;
   const p = walkMove(w, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); w.x = p.x; w.y = p.y;
 }
 // kamera + hedef (render ve 2B dönüşü hedefi okur): hedef 1 m ileride
 function applyWalkCam() {
-  const w = T3.walk, y = walkElev(w.fi) + WALK.eye, cp = Math.cos(w.pitch);
+  const w = T3.walk, y = walkElev(w.fi) + (+w.z || 0) + WALK.eye, cp = Math.cos(w.pitch);
   T3.cam.position.set(w.x, y, w.y);
   T3.ctl.target.set(w.x + Math.cos(w.yaw) * cp * 100, y + Math.sin(w.pitch) * 100, w.y + Math.sin(w.yaw) * cp * 100);
   T3.cam.lookAt(T3.ctl.target);
@@ -9799,10 +9880,29 @@ function walkStep(dt) {
   const w = T3.walk, k = keys3D;
   const f = (k.has('w') || k.has('arrowup') ? 1 : 0) - (k.has('s') || k.has('arrowdown') ? 1 : 0);
   const s = (k.has('d') || k.has('arrowright') ? 1 : 0) - (k.has('a') || k.has('arrowleft') ? 1 : 0);
+  if (!Number.isFinite(w.gz)) w.gz = w.z = 0;
+  const lv = walkLevels(w.fi);
   if (f || s) { // Q / E (uçma) yürürken yok sayılır
     const sp = (k.has('shift') ? WALK.run : WALK.speed) * dt / Math.hypot(f, s), cy = Math.cos(w.yaw), sy = Math.sin(w.yaw);
-    const p = walkMove(w, { x: (cy * f - sy * s) * sp, y: (sy * f + cy * s) * sp }, walkSegsAt(w.fi), WALK.r);
+    const mv = { x: (cy * f - sy * s) * sp, y: (sy * f + cy * s) * sp }, segs = walkSegsAt(w.fi, w.gz);
+    let p = walkMove(w, mv, segs, WALK.r);
+    if (walkGround(lv, p, w.gz).block) { // merdivenin yanı / yüksek platform: boyunca kay, yoksa dur
+      const px = walkMove(w, { x: mv.x, y: 0 }, segs, WALK.r), py = walkMove(w, { x: 0, y: mv.y }, segs, WALK.r);
+      p = !walkGround(lv, px, w.gz).block ? px : !walkGround(lv, py, w.gz).block ? py : { x: w.x, y: w.y };
+    }
     w.x = p.x; w.y = p.y;
+  }
+  w.gz = walkGround(lv, w, w.gz).g; // ayak: basılan yüzey; kamera yumuşak izler (basamaklarda sarsılmasın)
+  w.z = Math.abs(w.gz - w.z) < 0.5 ? w.gz : w.z + (w.gz - w.z) * Math.min(1, dt * 12);
+  // kat geçişi: üst kat kotuna çıkınca / alt kata inince yürüyen o kata geçer (aynı dünya kotu)
+  const cur = P.floors[w.fi], up = P.floors[w.fi + 1], dn = P.floors[w.fi - 1], pitch = floorH(cur) + 20;
+  let nf = -1, dz = 0;
+  if (up && v3dShown(up) && w.gz >= pitch - 0.5) { nf = w.fi + 1; dz = -pitch; }
+  else if (dn && v3dShown(dn) && w.gz <= -0.5) { nf = w.fi - 1; dz = floorH(dn) + 20; }
+  if (nf >= 0) {
+    w.fi = nf; w.gz += dz; w.z += dz;
+    if (fi !== nf) { fi = nf; sel = []; refresh(); refreshSel3D(); } // 2B'deki etkin kat yürüyeni izler
+    toast('🚶 ' + (P.floors[nf].name || L('Kat', 'Floor') + ' ' + nf));
   }
   applyWalkCam();
 }
@@ -9831,8 +9931,8 @@ function syncWalkUI() {
   let h = document.getElementById('walkHint');
   if (!on) { if (h) h.style.display = 'none'; return; }
   if (!h) { h = document.createElement('div'); h.id = 'walkHint'; $('#v3d').appendChild(h); }
-  h.textContent = L('🚶 Yürüme modu · WASD / oklar: yürü · Shift: koş · sürükle: etrafa bak · kapıya tıkla: aç / kapa · Esc: çık',
-    '🚶 Walk mode · WASD / arrows: walk · Shift: run · drag: look around · click a door: open / close · Esc: exit');
+  h.textContent = L('🚶 Yürüme modu · WASD / oklar: yürü · Shift: koş · merdiven / rampa: üstüne yürü, katlar arası geçilir · sürükle: etrafa bak · kapıya tıkla: aç / kapa · Esc: çık',
+    '🚶 Walk mode · WASD / arrows: walk · Shift: run · stairs / ramps: walk onto them to change floors · drag: look around · click a door: open / close · Esc: exit');
   h.style.display = '';
 }
 function loop3D() {

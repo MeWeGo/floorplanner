@@ -147,9 +147,9 @@ Tools: `new_project` · `load_project` / `import_ifc` / `save_project` / `get_pr
 - **3D render:** while the 3D view is open, the **🖼 PNG** button renders the scene (and the **🎬** button in the 3D overlay does the same from inside the view). This is a real render, not a screenshot: the camera outlines are removed, the backdrop becomes a studio white, shadows are rebuilt at high resolution and several supersampled passes are averaged, so edges come out smooth instead of jagged. Files are named `<project>-3d-render.png`. **Shift-click** either button for a quick capture of exactly what is on screen (`-3d-view.png`). SVG and PDF always describe the **2D plan**.
 
 ### 🧊 3D View & WASD Walk
-One click turns the plan into an interactive 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors. Orbit/zoom with the mouse, or fly around with **`WASD` / Arrow keys** (`Q`/`E` for down/up, `Shift` for faster travel).
+One click turns the plan into an interactive 3D model — walls with real door/window openings, furniture, stairs, room floors and stacked floors. Orbit/zoom with the mouse (the wheel zooms toward the point under the cursor and keeps going — it never stalls at the orbit centre, and you can zoom through a wall into the room behind it), or fly around with **`WASD` / Arrow keys** (`Q`/`E` for down/up, `Shift` for faster travel).
 
-**Walk mode (👁):** click the **👁** eye button to explore at eye level (165 cm). Walk with **`WASD` / Arrow keys** and hold **`Shift`** to run (movement is time-based); drag the mouse to look around in yaw and pitch (`Q`/`E` height keys are disabled). Collision detection stops you at walls and closed doors while sliding along them; open doors and arches are passable. Click any door to open or close it (or `Alt`+click to select). Press **`Esc`** to return to the saved orbit camera.
+**Walk mode (👁):** click the **👁** eye button to explore at eye level (165 cm). Walk with **`WASD` / Arrow keys** and hold **`Shift`** to run (movement is time-based); drag the mouse to look around in yaw and pitch (`Q`/`E` height keys are disabled). Collision detection stops you at walls and closed doors while sliding along them; open doors and arches are passable. Click any door to open or close it (or `Alt`+click to select). Press **`Esc`** to return to the saved orbit camera. **Stairs and ramps can be climbed:** walk onto them and you go up step by step; at the top you arrive on the floor above. To walk back down, draw a floor void (**Y**) over the stairwell on the upper floor — without one the slab is closed there, just as it looks in 3D.
 
 **Detail comes from the plan, not from extra settings:** furniture is modelled per catalogue item (sofa cushions, table legs, wardrobe doors and handles, fridge panels, WC bowl and tank, basin and faucet, plant foliage, TV screen, car wheels, stairs with a handrail …) purely from its type, size and colour, so existing plans and saved JSON improve with no migration. Openings get frames, sills and handles, solid walls get skirting boards and a top cap, `wood`/`tile`/`carpet`/`marble`/`concrete`/`stone` plus outdoor `grass`/`water`/`gravel`/`deck`/`asphalt` (or custom textures) room floors and floor slabs become tiled textures tinted with the room colour (water draws as a translucent shiny surface), and a soft-shadowed sun lights the scene.
 
@@ -234,11 +234,11 @@ python -m http.server 8080      # then open http://localhost:8080
 | `R` / `S` *(while placing)* | Rotate furniture / flip door hinge · flip swing side |
 | Arrow keys | Nudge selection / background image 1 cm (`Shift` = 10 cm) |
 | `WASD` / `Q` / `E` *(in 3D orbit)* | Fly / move camera in 3D orbit (`Q`/`E`: down/up, `Shift`: faster) |
-| `👁` *(in 3D)* | **Walk mode** — walk at eye level: `WASD` / Arrow keys walk, `Shift` runs, drag to look around, collision blocks walls/closed doors, open doors pass, click door to open/close, `Esc` returns to orbit |
+| `👁` *(in 3D)* | **Walk mode** — walk at eye level: `WASD` / Arrow keys walk, `Shift` runs, drag to look around, collision blocks walls/closed doors, open doors pass, click door to open/close, walk onto stairs / ramps to climb to the next floor, `Esc` returns to orbit |
 | `Ctrl+C / V / D` | Copy / Paste / Duplicate |
 | `Ctrl+Z / Ctrl+Y` | Undo / Redo (also works while the 3D view is open) |
 | `Ctrl+A` · `Ctrl+S` · `Del` | Select all · Save to browser · Delete |
-| `0` · `+` · `−` | Fit view · Zoom in · Zoom out |
+| `0` · `+` · `−` | Fit view · Zoom in · Zoom out (2D zooms in to 1 mm = 4 px; a short note tells you when the limit is reached) |
 | Double-click | Rename room / edit text |
 
 ---
