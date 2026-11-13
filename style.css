@@ -882,6 +882,30 @@ main {
   color: inherit;
 }
 
+/* doku penceresi: girdiler panel girdileriyle aynı görünsün */
+.txdlg input[type=number],
+.txdlg input[type=text],
+.txdlg textarea {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: inherit;
+  font-family: inherit;
+}
+
+.txdlg input[type=number] {
+  font-family: var(--font-mono);
+}
+
+.txdlg input:focus,
+.txdlg textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+  background: var(--bg);
+}
+
 /* çizim katmanı satırı (#32): ad alanı panel girdileriyle aynı görünsün */
 .lyr input[type=text] {
   background: var(--panel2);
