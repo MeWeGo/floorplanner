@@ -8990,10 +8990,11 @@ function liveSkyFollow() {
 let _grassGroundTex = null;
 function grassGroundMat() {
   if (!_grassGroundTex) {
-    _grassGroundTex = floorTexture('grass', '#7cb342', true, { floorTex: {}, texs: [] });
-    _grassGroundTex.repeat.set(40000 / 120, 40000 / 120);
+    _grassGroundTex = floorTexture('grass', '#6fb33b', true, { floorTex: {}, texs: [] });
+    _grassGroundTex.anisotropy = 8;
+    _grassGroundTex.repeat.set(40000 / 240, 40000 / 240);
   }
-  return new THREE.MeshLambertMaterial({ map: _grassGroundTex, side: THREE.DoubleSide });
+  return new THREE.MeshPhongMaterial({ map: _grassGroundTex, bumpMap: _grassGroundTex, bumpScale: 1.4, shininess: 4, specular: 0x142008, side: THREE.DoubleSide });
 }
 function applyLive3D() {
   if (!T3 || !T3.scene) return;
@@ -9099,8 +9100,21 @@ function floorTexture(kind, color, lt, C) {
     let sd = kind === 'grass' ? 11 : kind === 'gravel' ? 23 : 5;
     const rnd01 = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
     if (kind === 'grass') {
-      g.lineWidth = 1.4;
-      for (let i = 0; i < 1400; i++) { const x = rnd01() * px, y = rnd01() * px, l = 3 + rnd01() * 5; g.strokeStyle = shade(base, (rnd01() - 0.5) * (lt ? 0.5 : 0.6)); g.globalAlpha = 0.5 + rnd01() * 0.4; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (rnd01() - 0.5) * 3, y - l); g.stroke(); }
+      // çok ölçekli çim dokusu: uzaktan da okunabilen kesintisiz yamalar + öbekler + ince saplar
+      for (let i = 0; i < 36; i++) {
+        const cx = rnd01() * px, cy = rnd01() * px, r = 22 + rnd01() * 34;
+        g.fillStyle = shade(base, i % 2 ? (lt ? 0.22 : 0.26) : (lt ? -0.24 : -0.28));
+        g.globalAlpha = 0.26 + rnd01() * 0.16;
+        for (const ox of [-px, 0, px]) for (const oy of [-px, 0, px]) { g.beginPath(); g.arc(cx + ox, cy + oy, r, 0, 6.2832); g.fill(); }
+      }
+      for (let i = 0; i < 260; i++) {
+        const x = rnd01() * px, y = rnd01() * px, r = 3 + rnd01() * 4;
+        g.fillStyle = shade(base, -0.35); g.globalAlpha = 0.35; g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.fill();
+        g.strokeStyle = shade(base, (rnd01() > 0.35 ? 0.32 : -0.32)); g.lineWidth = 2.2; g.globalAlpha = 0.55;
+        for (let b = -1; b <= 1; b++) { const l = 7 + rnd01() * 7; g.beginPath(); g.moveTo(x, y); g.lineTo(x + b * 3.5 + (rnd01() - 0.5) * 2, y - l); g.stroke(); }
+      }
+      g.lineWidth = 1.6;
+      for (let i = 0; i < 1800; i++) { const x = rnd01() * px, y = rnd01() * px, l = 4 + rnd01() * 6; g.strokeStyle = shade(base, (rnd01() - 0.48) * (lt ? 0.75 : 0.85)); g.globalAlpha = 0.65 + rnd01() * 0.3; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (rnd01() - 0.5) * 4, y - l); g.stroke(); }
     } else if (kind === 'asphalt') {
       for (let i = 0; i < 2600; i++) { g.fillStyle = rnd01() > 0.5 ? shade(base, 0.35) : shade(base, -0.35); g.globalAlpha = 0.2 + rnd01() * 0.35; g.fillRect(rnd01() * px, rnd01() * px, 1.6, 1.6); }
     } else {

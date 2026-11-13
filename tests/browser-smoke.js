@@ -1557,7 +1557,12 @@ check('live realistic 3D view: sky on, CAD edges hidden, walk mode works, CAD vi
     const r = { e0: edges(), bg0: T3.scene.background.getHex(), g0: T3.ground.material.color.getHex(), gm0: !!T3.ground.material.map };
     document.getElementById('b3dLive').click();
     r.live = !!T3.live; r.e1 = edges(); r.fog = !!T3.scene.fog; r.sky = !!(T3.live && T3.scene.children.includes(T3.live.sky));
-    r.gmLive = !!(T3.ground && T3.ground.material && T3.ground.material.map);
+    r.gmLive = !!(T3.ground && T3.ground.material && T3.ground.material.map && T3.ground.material.bumpMap);
+    if (r.gmLive && T3.ground.material.map.image) {
+      const im = T3.ground.material.map.image, px = im.getContext('2d').getImageData(0, 0, im.width, im.height).data;
+      let mn = 255, mx = 0; for (let i = 1; i < px.length; i += 4) { if (px[i] < mn) mn = px[i]; if (px[i] > mx) mx = px[i]; }
+      r.grassContrast = mx - mn;
+    }
     r.on = document.getElementById('b3dLive').classList.contains('on');
     document.getElementById('b3dEye').click();
     r.walk = !!T3.walk && !!T3.live;
@@ -1575,7 +1580,7 @@ check('live realistic 3D view: sky on, CAD edges hidden, walk mode works, CAD vi
   if (info.err) throw new Error(info.err);
   if (!info.e0) throw new Error('the CAD view has no edge lines to hide (test plan too simple?)');
   if (!info.live || !info.on || !info.fog || !info.sky) throw new Error('live realistic view did not turn on: ' + JSON.stringify(info));
-  if (!info.gmLive || !info.gmRebuild) throw new Error('live realistic view did not apply grass texture to ground: ' + JSON.stringify(info));
+  if (!info.gmLive || !info.gmRebuild || !(info.grassContrast > 40)) throw new Error('live realistic view did not apply textured grass to ground: ' + JSON.stringify(info));
   if (info.e1 !== 0 || info.e2 !== 0 || !info.live2) throw new Error('CAD edges are visible in the live view (' + info.e1 + ' / after rebuild ' + info.e2 + ')');
   if (!info.walk || !info.follow) throw new Error('walk mode + live view: walk=' + info.walk + ', sky follows camera=' + info.follow);
   if (!info.off || info.skyLeft) throw new Error('live view left sky / fog behind');
