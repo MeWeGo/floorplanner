@@ -97,7 +97,7 @@ const CATALOG = [
 const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
 // height above the floor (cm) that wall-mounted catalogue items get by default — mirror of app.js CAT_ELEV (#61)
 const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110 };
-const FURN_ELEV_MAX = 500;
+const FURN_ELEV_MAX = 500, WALL_ELEV_MAX = 500; // duvar taban kotu (app.js wallElev ile aynı aralık)
 const OPENINGS = [
   { id: 'door', name: 'Kapı', en: 'Door', w: 90, h: 210, sill: 0 },
   { id: 'double', name: 'Çift Kanatlı Kapı', en: 'Double Door', w: 160, h: 210, sill: 0 },
@@ -872,6 +872,7 @@ const ifcPick = (table, names) => { for (const w of ifcWords(names)) for (const 
 const ifcNeutral = hex => { const n = parseInt(String(hex).slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255; return Math.max(r, g, b) - Math.min(r, g, b) < 14; };
 // korkuluk stili (rs) adı / malzemesinden: cam panel, yatay çubuk / halat, dolu parapet; yoksa dikmeli
 const IFC_RAIL_STYLE = [[/^(glass|glazed|glazing|cam|camli|camlı)$/, 'glass'], [/^(cable|wire|kablo|halat|horizontal|yatay|rod)$/, 'cable'], [/^(parapet|solid|dolu|concrete|beton|betonarme|masonry|duvar|brick|tugla|tuğla)$/, 'solid']];
+const IFC_LEVEL_MERGE = 100; // bundan yakın seviyeler (Revit yardımcı / referans seviyeleri) tek kat olur; = FLOOR_H_MIN
 const IFC_ROOF_MAX_FACES = 600; // çatı yüzü sınırı: üstü taban izinden düz çatıya düşer (proje / geri al hafif kalsın)
 const IFC_COMPONENTS = new Set(['IFCBUILDINGELEMENTPROXY', 'IFCFURNISHINGELEMENT', 'IFCFURNITURE', 'IFCSYSTEMFURNITUREELEMENT', 'IFCSANITARYTERMINAL', 'IFCELEMENTASSEMBLY', 'IFCFLOWTERMINAL', 'IFCELECTRICAPPLIANCE', 'IFCAUDIOVISUALAPPLIANCE']);
 // Revit ailesi → katalog öğesi (#88). Önce bileşik adlar (tam metinde), sonra tek sözcükler: SON eşleşen sözcük kazanır
@@ -1114,6 +1115,23 @@ function ifcToProject(text, opts = {}) {
   };
   // Katı → dünya noktaları (out) ve, düşey çekilmişse, taban poligonları (foot)
   // fc (isteğe bağlı): yüz çokgenleri (dünya koordinatı) — yalnızca çatılar için toplanır
+  // DIFFERENCE ile yarım uzay (IfcHalfSpaceSolid / IfcPolygonalBoundedHalfSpace): out[i0..] içinde silinen tarafta kalan
+  // noktalar düşey olarak kesme düzlemine indirilir (Revit'te çatıya bağlanan duvar üstleri). Düşey düzlemler ve sınır dışı noktalar dokunulmaz.
+  const clipHalf = (hid, M, out, i0) => {
+    const t = T(hid); if (t !== 'IFCHALFSPACESOLID' && t !== 'IFCPOLYGONALBOUNDEDHALFSPACE' && t !== 'IFCBOXEDHALFSPACE') return;
+    const h = A(hid), pl = R(h[0]); if (T(pl) !== 'IFCPLANE') return;
+    const P = mul(M, place(R(A(pl)[0]))), n = norm(P.z); if (Math.abs(n[2]) < 0.05) return;
+    const sgn = h[1] && h[1].e === 'F' ? 1 : -1; // AgreementFlag T: normal malzemeden dışarı bakar → malzeme (silinen) normalin tersi
+    let B = null, poly = null;
+    if (t === 'IFCPOLYGONALBOUNDEDHALFSPACE') { B = mul(M, place(R(h[2]))); poly = curve(R(h[3])).map(p => [p[0], p[1]]); if (poly.length < 3) return; }
+    const dt = (v, w) => v[0] * w[0] + v[1] * w[1] + v[2] * w[2];
+    for (let i = i0; i < out.length; i++) {
+      const p = out[i], d = dt([p[0] - P.o[0], p[1] - P.o[1], p[2] - P.o[2]], n);
+      if (d * sgn <= 0.01) continue;
+      if (B) { const v = [p[0] - B.o[0], p[1] - B.o[1], p[2] - B.o[2]]; if (!ifcInPoly([dt(v, B.x) / (dt(B.x, B.x) || 1), dt(v, B.y) / (dt(B.y, B.y) || 1)], poly)) continue; }
+      out[i] = [p[0], p[1], p[2] - d / n[2]];
+    }
+  };
   const solid = (id, M, out, foot, depth = 0, fc = null) => {
     const t = T(id), a = A(id); if (!t || depth > 10) return;
     if (t === 'IFCEXTRUDEDAREASOLID' || t === 'IFCEXTRUDEDAREASOLIDTAPERED') {
@@ -1133,8 +1151,10 @@ function ifcToProject(text, opts = {}) {
         out.push(app(m, [0, 1, 2].map(i => o[i] + v[i] * c + cr[i] * sn + d[i] * dt * (1 - c))));
       }
     } else if (t === 'IFCBOOLEANCLIPPINGRESULT' || t === 'IFCBOOLEANRESULT') {
+      const i0 = out.length;
       solid(R(a[1]), M, out, foot, depth + 1, fc);
       if (a[0] && a[0].e === 'UNION') solid(R(a[2]), M, out, foot, depth + 1, fc);
+      else if (a[0] && a[0].e === 'DIFFERENCE') clipHalf(R(a[2]), M, out, i0); // Revit: duvar üstü çatıya / eğik düzleme kırpılır
     } else if (t === 'IFCMAPPEDITEM') {
       const src = A(R(a[0])), m = mul(mul(M, place(R(a[1]))), place(R(src[0])));
       for (const it of A(R(src[1]))[3] || []) solid(R(it), m, out, foot, depth + 1, fc);
@@ -1309,12 +1329,19 @@ function ifcToProject(text, opts = {}) {
   const looksDeep = id => { let l = looksOf(id); if (l.col) return l; for (const c of kids.get(id) || []) { const k = looksDeep(c); if (k.col) return k; } return l; };
 
   /* --- Katlar --- */
-  const storeys = (db.byType.get('IFCBUILDINGSTOREY') || []).map(id => {
+  const allStoreys = (db.byType.get('IFCBUILDINGSTOREY') || []).map(id => {
     const a = A(id); return { id, name: String(a[2] || a[7] || ''), z: place(R(a[5])).o[2] * cm, elev: num(a[9]) * cm };
   });
-  if (storeys.length > 1 && storeys.every(s => Math.abs(s.z - storeys[0].z) < 1) && storeys.some(s => !isNaN(s.elev) && Math.abs(s.elev - storeys[0].elev) > 1)) storeys.forEach(s => { s.z = isNaN(s.elev) ? 0 : s.elev; });
-  storeys.sort((p, q) => p.z - q.z);
-  const SBY = new Map(storeys.map(s => [s.id, s]));
+  if (allStoreys.length > 1 && allStoreys.every(s => Math.abs(s.z - allStoreys[0].z) < 1) && allStoreys.some(s => !isNaN(s.elev) && Math.abs(s.elev - allStoreys[0].elev) > 1)) allStoreys.forEach(s => { s.z = isNaN(s.elev) ? 0 : s.elev; });
+  allStoreys.sort((p, q) => p.z - q.z);
+  // yardımcı seviyeler: IFC_LEVEL_MERGE'den yakın seviyeler tek kat olur (uygulamada kat ≥ 100 cm). Kotu ve adı grupta en çok eleman
+  // barındıran seviyeden gelir; elemanlar gerçek kotlarını duvar / mobilya elev'i ve döşeme off'u olarak taşır, mesafe kaybolmaz.
+  const nIn = new Map(); for (const p of parent.values()) nIn.set(p, (nIn.get(p) || 0) + 1);
+  const groups = [];
+  for (const s of allStoreys) { const g = groups[groups.length - 1]; if (opts.mergeLevels !== false && g && s.z - g[g.length - 1].z < IFC_LEVEL_MERGE) g.push(s); else groups.push([s]); }
+  const storeys = groups.map(g => g.reduce((m, s) => ((nIn.get(s.id) || 0) > (nIn.get(m.id) || 0) ? s : m), g[0]));
+  const SBY = new Map(); groups.forEach((g, i) => g.forEach(s => SBY.set(s.id, storeys[i])));
+  const merged = allStoreys.length - storeys.length;
   const topOf = s => { const i = storeys.indexOf(s); return i >= 0 && i + 1 < storeys.length ? storeys[i + 1].z : Infinity; };
   const storeyAt = z => { if (!storeys.length) return null; let best = storeys[0]; for (const s of storeys) if (s.z <= z + 30) best = s; return best; };
   // kat: önce içerme ilişkisi; ama geometri o katın kot aralığı dışındaysa (Revit'te üst kata bağlı, eksi ofsetli eleman) gerçek kota göre
@@ -1327,7 +1354,7 @@ function ifcToProject(text, opts = {}) {
   const spanOf = (id, z0, z1, h) => {
     const sp = storeys.filter(s => Math.min(z1, topOf(s)) - Math.max(z0, s.z) > 30);
     if (sp.length < 2) return [{ s: storeyOf(id, z0), z0, h }];
-    return sp.map(s => { const b0 = Math.max(z0, s.z), top = topOf(s), t1 = top < Infinity && z1 > top - 20 ? top - 20 : z1; return { s, z0: b0, h: Math.max(10, Math.min(5000, Math.round(t1 - b0))) }; });
+    return sp.map((s, i) => { const b0 = i ? Math.max(z0, s.z) : z0, top = topOf(s), t1 = top < Infinity && z1 > top - 20 ? top - 20 : z1; return { s, z0: b0, h: Math.max(10, Math.min(5000, Math.round(t1 - b0))) }; });
   };
   const bucket = new Map(); // storey id (ya da 0) → { walls, ops, rooms, slabs, voids, furn }
   const fl = s => { const k = s ? s.id : 0; let b = bucket.get(k); if (!b) bucket.set(k, b = { s, walls: [], ops: [], rooms: [], slabs: [], voids: [], furn: [] }); return b; };
@@ -1398,6 +1425,7 @@ function ifcToProject(text, opts = {}) {
         const w = { id: uid(), a: { x: r1(a0.x), y: r1(a0.y) }, b: { x: r1(b0.x), y: r1(b0.y) }, t: th, h: pc.h, wt: rail || (curtain ? 'curtain' : 'solid') };
         if (rstyle && rstyle !== 'bars') w.rs = rstyle;
         if (look.col && (rail || (!curtain && !ifcNeutral(look.col)))) w.color = look.col; // boya: gri / beyaz duvar varsayılan kalır
+        const we = Math.round(pc.z0 - (pc.s ? pc.s.z : 0)); if (Math.abs(we) >= 3) w.elev = Math.max(-500, Math.min(500, we)); // taban kotu (kata göre)
         Object.defineProperty(w, '_z0', { value: pc.z0, enumerable: false, writable: true });
         b.walls.push(w); segs.push(w);
       }
@@ -1571,7 +1599,7 @@ function ifcToProject(text, opts = {}) {
     return Object.assign(base, { k: 'poly', w: Math.max(1, r1(rc.w)), d: Math.max(1, r1(rc.d)), x: r1(rc.cx), y: r1(rc.cy), rot: r1(((rc.rot % 360) + 360) % 360),
       pts: ft.pts.map(p => { const dx = p.x - rc.cx, dy = p.y - rc.cy; return { x: r1(dx * c + dy * sn), y: r1(-dx * sn + dy * c) }; }) });
   };
-  const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (el >= 3) o.elev = Math.min(500, el); return o; }; // 0..500 = FURN_ELEV_MAX (#61)
+  const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (Math.abs(el) >= 3) o.elev = Math.max(-500, Math.min(500, el)); return o; }; // ±500 = FURN_ELEV_MAX (#61); eksi = birleşen alt seviye
   for (const id of ids(IFC_COLUMNS)) {
     const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 0.5) { stats.skipped++; continue; }
     const [z0, z1] = zr(g.body), h0 = Math.max(10, Math.min(5000, Math.round(z1 - z0)));
@@ -1793,7 +1821,7 @@ function ifcToProject(text, opts = {}) {
     const fh = Math.round(nx.b.s.z - b.s.z - 20);
     if (fh >= 100 && fh <= 800 && fh !== wallH) f.wallH = fh;
   });
-  stats.floors = floors.length;
+  stats.floors = floors.length; stats.levelsMerged = merged;
   const pa = proj ? A(proj) : [];
   const nm = String(pa[5] || pa[2] || '').trim();
   const name = (!nm || /^(project name|proje ad[ıi]|default)$/i.test(nm) ? String(opts.name || 'IFC') : nm).slice(0, 80);
@@ -2085,6 +2113,7 @@ function mkWall(f, a) {
     h: num(a.h, +f.wallH > 0 ? +f.wallH : P.wallH, 'h'),
     wt: WALL_TYPES.includes(a.wt) ? a.wt : 'solid',
   };
+  if (a.elev != null && +a.elev) { const e = num(a.elev, 0, 'elev'); if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm (got ' + e + ')'); w.elev = e; }
   if (a.color) w.color = String(a.color);
   if (LOW_WALL[w.wt]) { if (a.h == null) w.h = LOW_WALL[w.wt].h; if (a.t == null) w.t = LOW_WALL[w.wt].t; }
   cleanMullions(w, a);
@@ -2124,8 +2153,8 @@ function mkFurn(f, a) {
   };
   const e = a.elev != null ? num(a.elev, 0, 'elev') : CAT_ELEV[def.id];
   if (e != null) {
-    if (e < 0 || e > FURN_ELEV_MAX) throw new Error('elev must be between 0 and ' + FURN_ELEV_MAX + ' cm (got ' + e + ')');
-    if (e > 0 || a.elev != null) o.elev = e;
+    if (e < -FURN_ELEV_MAX || e > FURN_ELEV_MAX) throw new Error('elev must be between -' + FURN_ELEV_MAX + ' and ' + FURN_ELEV_MAX + ' cm (got ' + e + ')');
+    if (e !== 0 || a.elev != null) o.elev = e;
   }
   if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } // multi-part catalogue item
   f.furn.push(o);
@@ -2183,7 +2212,7 @@ function summarize() {
     out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts, ' + (f.drafts || []).length + ' 2D drafting');
     for (const d of f.drafts || []) out.push('  draft ' + d.id + ' ' + (d.shape === 'pline' ? (d.closed ? 'closed polyline' : d.pts.length === 2 ? 'line' : 'polyline') : d.shape) + ' pts ' + d.pts.map(q => '(' + q.x + ',' + q.y + ')').join(' ') + (d.dash ? ' ' + d.dash : ''));
     for (const w of f.walls)
-      out.push('  wall ' + w.id + ': (' + w.a.x + ',' + w.a.y + ') → (' + w.b.x + ',' + w.b.y + ')  length ' + Math.round(wLen(w)) + ' cm, t=' + w.t + ', h=' + w.h + (w.wt !== 'solid' ? ', ' + w.wt : ''));
+      out.push('  wall ' + w.id + ': (' + w.a.x + ',' + w.a.y + ') → (' + w.b.x + ',' + w.b.y + ')  length ' + Math.round(wLen(w)) + ' cm, t=' + w.t + ', h=' + w.h + (w.elev ? ', base ' + (w.elev > 0 ? '+' : '') + w.elev : '') + (w.wt !== 'solid' ? ', ' + w.wt : ''));
     for (const o of f.ops)
       out.push('  ' + o.type + ' ' + o.id + ': w=' + o.w + ' h=' + o.h + ' sill=' + o.sill + ', centre ' + Math.round(o.d) + ' cm from wall ' + o.wall + ' end A' + (o.open ? ' [open]' : ''));
     for (const r of f.rooms)
@@ -2459,6 +2488,7 @@ tool('add_wall',
     mulN: { type: 'integer', description: 'Curtain walls only: number of intermediate vertical mullions (0 = one uninterrupted pane; overrides mul).' },
     rs: { type: 'string', enum: ['bars', 'glass', 'cable', 'solid'], description: 'Railings only: style - "bars" (vertical balusters, default), "glass" (glass panel), "cable" (horizontal bars / cable) or "solid" (parapet).' },
     color: { type: 'string', description: 'Optional wall paint colour (#hex). Omit for the default wall colour.' },
+    elev: { type: 'number', description: 'Optional base offset in cm relative to the floor level (-500..500, default 0): a wall that starts below or above its floor.' },
     floorIndex: floorArg,
   },
   ['x1', 'y1', 'x2', 'y2'],
@@ -2531,7 +2561,7 @@ tool('add_furniture',
     d: { type: 'number', description: 'Override depth (cm).' },
     h: { type: 'number', description: 'Override height (cm, 3D).' },
     color: { type: 'string', description: 'Override color (#hex).' },
-    elev: { type: 'number', description: 'Height above the floor in cm (0..500), for wall-mounted items (TV, cabinet, mirror, shelf). Wall items (tvw, art, shelfW, ac, cabU, wmirror) default to a typical height; everything else defaults to 0.' },
+    elev: { type: 'number', description: 'Height above the floor in cm (-500..500; negative = below the floor), for wall-mounted items (TV, cabinet, mirror, shelf). Wall items (tvw, art, shelfW, ac, cabU, wmirror) default to a typical height; everything else defaults to 0.' },
     floorIndex: floorArg,
   },
   ['catalogId', 'x', 'y'],
@@ -2756,7 +2786,7 @@ tool('update_object',
     // sanity checks after merge
     if (found.kind === 'op' && found.o.wall && !f.walls.some(w => w.id === found.o.wall))
       throw new Error('props.wall "' + found.o.wall + '" does not exist on this floor');
-    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); }
+    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); if (found.o.elev != null) { const e = +found.o.elev || 0; if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm'); if (e) found.o.elev = e; else delete found.o.elev; } }
     if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
     if (found.kind === 'draft') { parsePts(found.o.pts, found.o.shape === 'arc' ? 3 : 2, 'pts'); if (!DRAFT_SHAPES.includes(found.o.shape)) found.o.shape = 'pline'; }
     if (found.kind === 'furn' && 'parts' in props) cleanParts(found.o);

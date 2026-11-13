@@ -88,6 +88,8 @@ const env = new Function(`
   ${fnSrc('lowWallSvg')}
   ${fnSrc('jointsSvg')}
   ${fnSrc('wallHollowSvg')}
+  ${src.match(/const WALL_ELEV_MAX\s*=[^;\n]+;/)[0]}
+  ${fnSrc('wallTag')}
   ${fnSrc('wallDimSvg')}
   ${fnSrc('opSvg')}
   ${fnSrc('roofSvg')}

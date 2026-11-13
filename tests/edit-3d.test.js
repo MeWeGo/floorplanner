@@ -24,7 +24,7 @@ const fnSrc = name => {
 test('(a) in build3D every opening gets its own THREE.Group with userData { opId: o.id, elev } and no isLeaf', () => {
   const b3d = fnSrc('build3D');
   assert.strictEqual(src.includes('isLeaf'), false, 'expected no isLeaf in app.js');
-  assert.ok(b3d.includes('og.userData = { opId: o.id, elev }'), 'expected og.userData = { opId: o.id, elev } in build3D');
+  assert.match(b3d, /og\.userData\s*=\s*\{\s*opId:\s*o\.id,\s*elev(?::\s*we)?\s*\}/, 'expected og.userData = { opId: o.id, elev: we } in build3D');
 });
 
 test('(b) opDragHit builds vertical plane from wall normal (-uy, 0, ux), falls back to horizontal plane, returns t along wall from a', () => {

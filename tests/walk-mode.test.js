@@ -20,11 +20,14 @@ const fnSrc = name => {
 
 const isDoorOpSrc = src.match(/const isDoorOp\s*=[^;\n]+;/)[0];
 const walkConstSrc = src.match(/const WALK\s*=[^;\n]+;/)[0];
+const wallElevSrc = src.match(/const WALL_ELEV_MAX\s*=[^;\n]+;/)[0];
 
 const { WALK } = new Function(walkConstSrc + '\nreturn { WALK };')();
 
 const { walkPassable, walkSegs, walkMove } = new Function(
   isDoorOpSrc + '\n' +
+  walkConstSrc + '\n' +
+  wallElevSrc + '\n' +
   fnSrc('walkPassable') + '\n' +
   fnSrc('walkSegs') + '\n' +
   fnSrc('walkMove') + '\n' +
