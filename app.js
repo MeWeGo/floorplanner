@@ -7557,13 +7557,16 @@ async function render3DHQ(opts) {
     const ink = new THREE.LineBasicMaterial({ color: 0x111827 }); styleMats.push(ink);
     scene.traverse(o => { if (o.isLineSegments) { swapped.push({ m: o, mat: o.material }); o.material = ink; } });
   } else if (style !== 'realistic') {
-    const solid = new THREE.MeshLambertMaterial({ color: style === 'clay' ? 0xefe9df : 0xfbfbfb, side: THREE.DoubleSide });
+    const solid = new THREE.MeshLambertMaterial({ color: style === 'clay' ? 0xefe9df : style === 'maquette' ? 0xf6f3ec : 0xfbfbfb, side: THREE.DoubleSide });
+    // maket (#87): beyaz karton gövde, ahşap tonlu zeminler
+    const woodM = style === 'maquette' ? new THREE.MeshLambertMaterial({ color: 0xd9c3a0, side: THREE.DoubleSide }) : null; if (woodM) styleMats.push(woodM);
+    const isFloor = (o, m0) => !!(woodM && ((m0 && m0.map) || o.userData.roomId || o.userData.slabId || o.userData.slab));
     const glassM = new THREE.MeshLambertMaterial({ color: 0xdbe7ef, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
     styleMats.push(solid, glassM);
     scene.traverse(o => {
       if (!o.isMesh || o === T3.ground || (sky && o === sky.mesh)) return;
       const m0 = Array.isArray(o.material) ? o.material[0] : o.material;
-      swapped.push({ m: o, mat: o.material }); o.material = m0 && m0.transparent ? glassM : solid;
+      swapped.push({ m: o, mat: o.material }); o.material = m0 && m0.transparent && !o.userData.roomId ? glassM : isFloor(o, m0) ? woodM : solid;
     });
     if (inkStyle) { const ink = new THREE.LineBasicMaterial({ color: 0x1f2937 }); styleMats.push(ink); scene.traverse(o => { if (o.isLineSegments) { swapped.push({ m: o, mat: o.material }); o.material = ink; } }); }
   }
@@ -7575,6 +7578,12 @@ async function render3DHQ(opts) {
     l.position.set(tg.x + v.x * d0, tg.y + v.y * d0, tg.z + v.z * d0);
     if (opts.sun.alt < 20) l.color.setHex(0xffc58a);
   }
+  // gerçekçi katman (#87): fiziksel malzemeler, yansıma, güneşe bağlı ışık, temas gölgesi. Maket: yalnızca ışık + temas gölgesi.
+  // Canlı gerçekçi görünüm açıksa malzemeler ve temas gölgeleri zaten sahnededir.
+  const liveReal = !!(T3.live && T3.live.real);
+  const real = style === 'realistic' || style === 'maquette'
+    ? realLook(scene, opts.sun ? sunVector(opts.sun.az, opts.sun.alt) : lightSunVector(lights), { mats: style === 'realistic', mood: opts.mood, contact: !liveReal })
+    : null;
   const fit = T3.fit, mime = opts.format === 'jpeg' ? 'image/jpeg' : 'image/png';
   let url = '';
   try {
@@ -7645,6 +7654,7 @@ async function render3DHQ(opts) {
   } finally {
     if (r.shadowMap) { r.shadowMap.autoUpdate = true; r.shadowMap.needsUpdate = true; }
     for (const e of edges) e.visible = true;
+    if (real) { real.restore(); real.dispose(); }
     if (oldBg !== null) scene.background = oldBg;
     scene.fog = oldFog;
     if (liveSky) liveSky.visible = true;
@@ -7727,7 +7737,7 @@ function export3DRender(quick, opts) {
 /* ---------- Render stüdyosu (issue #34) ----------
    render3DHQ() üzerine stil, güneş ve çözünürlük seçenekleri: gerçekçi (mevcut stüdyo), teknik (beyaz yüzey +
    siyah kenar), eskiz (teknik + kurşun kalem son işlem), kil (tek renk mat malzeme). Hepsi tarayıcıda, ek kütüphane yok. */
-const RENDER_STYLES = { realistic: ['🌅 Gerçekçi', '🌅 Realistic'], technical: ['📐 Gölgeli teknik', '📐 Shaded technical'], sketch: ['✏️ Kurşun kalem eskiz', '✏️ Pencil sketch'], clay: ['🏺 Beyaz kil', '🏺 White clay'], toon: ['🖍 Çizgi film (toon)', '🖍 Toon / cel'] };
+const RENDER_STYLES = { realistic: ['🌅 Gerçekçi', '🌅 Realistic'], technical: ['📐 Gölgeli teknik', '📐 Shaded technical'], sketch: ['✏️ Kurşun kalem eskiz', '✏️ Pencil sketch'], clay: ['🏺 Beyaz kil', '🏺 White clay'], maquette: ['🏛 Maket', '🏛 Maquette'], toon: ['🖍 Çizgi film (toon)', '🖍 Toon / cel'] };
 const RENDER_BACKDROPS = { studio: ['⬜ Stüdyo', '⬜ Studio'], sky: ['🌤 Gökyüzü', '🌤 Sky'] };
 /* ---------- Gökyüzü arka planı (issue #45) ----------
    Yalnızca render ve önizlemede: kamerayı ortalayan büyük bir küre + satır içi ShaderMaterial (resim dosyası,
@@ -7777,7 +7787,7 @@ function makeSky(sv, cam, fit) {
 }
 const SUN_PRESETS = { morning: [['Sabah', 'Morning'], 100, 20], noon: [['Öğle', 'Noon'], 180, 68], golden: [['Altın saat', 'Golden hour'], 255, 12] };
 const RENDER_RES = { view: ['Ekran ×2–3', 'Viewport ×2–3', 0], hd: ['1080p (1920 px)', '1080p (1920 px)', 1920], qhd: ['2K (2560 px)', '2K (2560 px)', 2560], uhd: ['4K (3840 px)', '4K (3840 px)', 3840] };
-ui.studio = { style: 'realistic', az: 215, alt: 42, res: 'view', format: 'png', backdrop: null }; // backdrop null = stile göre (#45)
+ui.studio = { style: 'realistic', az: 215, alt: 42, res: 'view', format: 'png', backdrop: null, mood: 'day' }; // backdrop null = stile göre (#45)
 const studioBackdrop = () => ui.studio.backdrop || (ui.studio.style === 'realistic' ? 'sky' : 'studio');
 // güneş yönü (az: kuzeyden saat yönünde, plan kuzeyi = −y = 3B −z; alt: ufuktan yükseklik)
 function sunVector(az, alt) {
@@ -7804,11 +7814,12 @@ function studioHtml(preview) {
       <span>⛰ ${L('Güneş yüksekliği', 'Sun altitude')}</span><input type="range" min="10" max="85" step="1" value="${st.alt}" data-rs="alt"><b>${st.alt}°</b>
     </div>
     <div class="row" style="gap:6px;margin-bottom:8px">${Object.entries(SUN_PRESETS).map(([k, v]) => `<button class="btn sm" data-rs-sun="${k}">${L(...v[0])}</button>`).join('')}</div>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 8px;align-items:center" title="${L('Gerçekçi ve Maket stillerinde ışık dengesi', 'Light balance for the Realistic and Maquette styles')}"><span>${L('Atmosfer', 'Atmosphere')}</span>${Object.entries(RENDER_MOODS).map(([k, v]) => `<button class="btn sm${k === (st.mood || 'day') ? ' primary' : ''}" data-rs-mood="${k}">${L(...v)}</button>`).join('')}</div>
     <div class="row" style="gap:10px;margin-bottom:10px;flex-wrap:wrap"><label>${L('Çözünürlük', 'Resolution')} <select data-rs="res">${opt(RENDER_RES, st.res)}</select></label><label>${L('Biçim', 'Format')} <select data-rs="format"><option value="png" ${st.format === 'png' ? 'selected' : ''}>PNG</option><option value="jpeg" ${st.format === 'jpeg' ? 'selected' : ''}>JPEG</option></select></label></div>
     <div class="rs-prev" style="background:${studioBackdrop() === 'sky' ? '#d6e8f5' : '#fff'};border-radius:8px;min-height:120px;display:flex;align-items:center;justify-content:center;overflow:hidden">${preview ? `<img src="${preview}" style="max-width:100%;max-height:40vh;display:block">` : `<span class="muted" style="color:#64748b">${L('Önizleme için 👁 Önizle', 'Press 👁 Preview to see it')}</span>`}</div>
     <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm" data-rs-go="preview">👁 ${L('Önizle', 'Preview')}</button><button class="btn sm primary" data-rs-go="render">🎬 ${L('Render al ve indir', 'Render & download')}</button></div>`;
 }
-const studioOpts = () => ({ style: ui.studio.style, backdrop: studioBackdrop(), sun: { az: ui.studio.az, alt: ui.studio.alt }, longSide: RENDER_RES[ui.studio.res][2] || 0, format: ui.studio.format });
+const studioOpts = () => ({ mood: ui.studio.mood || 'day', style: ui.studio.style, backdrop: studioBackdrop(), sun: { az: ui.studio.az, alt: ui.studio.alt }, longSide: RENDER_RES[ui.studio.res][2] || 0, format: ui.studio.format });
 function openRenderStudio(preview) {
   if (!ui.view3d) show3D(true);
   if (!ui.view3d) return;
@@ -7826,6 +7837,12 @@ $('#modal').addEventListener('click', async e => {
   const s = e.target.closest('[data-rs-style]'); if (s) { ui.studio.style = s.dataset.rsStyle; openRenderStudio(); return; }
   const bg = e.target.closest('[data-rs-bg]'); if (bg) { ui.studio.backdrop = bg.dataset.rsBg; openRenderStudio(); return; }
   const p = e.target.closest('[data-rs-sun]'); if (p) { const v = SUN_PRESETS[p.dataset.rsSun]; ui.studio.az = v[1]; ui.studio.alt = v[2]; applyLive3D(); openRenderStudio(); return; }
+  const md = e.target.closest('[data-rs-mood]');
+  if (md) { // sıcak akşam: alçak güneş + sıcak iç dolgu; gün ışığına dönünce güneş yeniden yükselir
+    const st = ui.studio; st.mood = md.dataset.rsMood;
+    if (st.mood === 'evening') { st.az = 285; st.alt = 10; } else if (st.alt < 20) st.alt = 42;
+    applyLive3D(); openRenderStudio(); return;
+  }
   const g = e.target.closest('[data-rs-go]'); if (!g || ui.shot) return;
   if (g.dataset.rsGo === 'render') { closeModal(); export3DRender(false, studioOpts()); return; }
   ui.shot = true; g.disabled = true;
@@ -9152,9 +9169,138 @@ function grassGroundMat() {
   }
   return new THREE.MeshPhongMaterial({ map: _grassGroundTex, bumpMap: _grassGroundTex, bumpScale: 1.4, shininess: 4, specular: 0x142008, side: THREE.DoubleSide });
 }
+/* ---------- Gerçekçi görünüm katmanı (#87) ----------
+   CAD görünümü ucuz Lambert malzemelerle kalır. Gerçekçi render ve canlı gerçekçi görünüm (#81) sahneyi bu katmandan
+   geçirir: her malzemenin fiziksel tabanlı (MeshStandardMaterial) karşılığı yüzey türüne göre pürüzlülük / metal değeri
+   alır, zemin dokuları temadan bağımsız açık hâline + kabartma ve pürüzlülük haritalarına geçer, gökyüzünden üretilen
+   ortam haritası yansıma verir, ışıklar güneş yüksekliğine bağlanır, duvar dipleri ve mobilya altları hafifçe koyulur.
+   Hiçbir şey P'ye yazılmaz; restore() sahneyi olduğu gibi geri verir, dispose() üretilen her şeyi bırakır. */
+const REAL_FLOOR = { wood: [0.5, 0.6], tile: [0.22, 1.2], marble: [0.12, 0.25], carpet: [0.97, 0.8], concrete: [0.85, 0.5], stone: [0.8, 1.4], grass: [0.95, 1.2], gravel: [0.95, 1.2], deck: [0.7, 1.2], asphalt: [0.9, 0.6] }; // [pürüzlülük, kabartma]
+const REAL_FURN = [[/^(wc|bidet|basin|tub|shower|sinkK)/, 0.14, 0], [/^(fridge|dish|wm|stove|ac|printer)/, 0.34, 0.65], [/^(sofa|armchair|bed|bunk|crib|rug|chair|ochair)/, 0.96, 0], [/^car$/, 0.28, 0.55], [/^(plant|tree)$/, 0.9, 0], [/^(tv|wmirror)/, 0.25, 0.2]]; // porselen, beyaz eşya, kumaş, oto boyası, bitki, ekran / ayna
+const RENDER_MOODS = { day: ['☀ Gün ışığı', '☀ Daylight'], evening: ['🌇 Sıcak akşam', '🌇 Warm evening'] };
+// gökyüzünden ortam (yansıma) haritası; güneş yüksekliği değişmedikçe yeniden üretilmez
+function realEnv(sv) {
+  if (!T3 || !T3.r || !THREE.PMREMGenerator) return null;
+  const key = Math.round(Math.asin(clamp(sv.y, -1, 1)) * 180 / Math.PI / 4);
+  if (T3.env && T3.env.key === key) return T3.env.rt.texture;
+  try {
+    const pm = new THREE.PMREMGenerator(T3.r), sc = new THREE.Scene(), sky = makeSky(sv, T3.cam, T3.fit);
+    // PMREM hedefi RGBE kodludur: gökyüzü gölgelendiricisi ham (sRGB) renk yazar, burada doğrusala çevrilip kodlanmalı
+    // (yoksa değerler 2^127 ile çarpılmış gibi okunur ve bütün yüzeyler kararır)
+    const skyM = sky.mesh.material;
+    skyM.fragmentShader = skyM.fragmentShader.replace(/gl_FragColor\.rgb \+=[^\n]*/, 'gl_FragColor = linearToOutputTexel(vec4(pow(max(gl_FragColor.rgb, 0.0), vec3(2.2)), 1.0));');
+    sky.mesh.position.set(0, 0, 0); sc.add(sky.mesh);
+    const rt = pm.fromScene(sc, 0.03, 1, 50000);
+    pm.dispose(); sky.mesh.geometry.dispose(); sky.mesh.material.dispose();
+    if (T3.env) T3.env.rt.dispose();
+    T3.env = { key, rt };
+    return rt.texture;
+  } catch (_) { return null; }
+}
+function realClass(o, furnCls) {
+  for (let p = o; p; p = p.parent) {
+    const u = p.userData || {};
+    if (u.opId) return 'op';
+    if (u.furnId) {
+      if (!furnCls.has(u.furnId)) { const fd = findAnyFloor(u.furnId), t = (fd && fd.o.type) || ''; furnCls.set(u.furnId, REAL_FURN.find(r => r[0].test(t)) || null); }
+      return furnCls.get(u.furnId) || 'furn';
+    }
+    if (u.wallId) return 'wall';
+    if (u.roomId) return 'room';
+    if (u.slabId || u.slab) return 'slab';
+  }
+  return 'misc';
+}
+function contactTex(radial) {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), gd = radial ? g.createRadialGradient(32, 32, 8, 32, 32, 32) : g.createLinearGradient(0, 0, 0, 64);
+  gd.addColorStop(0, 'rgba(0,0,0,0.85)'); if (radial) gd.addColorStop(0.62, 'rgba(0,0,0,0.5)'); gd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gd; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+function realLook(S, sv, opts = {}) {
+  const alt = Math.asin(clamp(sv.y, -1, 1)) * 180 / Math.PI, sinA = Math.sin(clamp(alt, 2, 89) * Math.PI / 180);
+  const swaps = [], made = [], texs = [], decals = [], C = { floorTex: {}, texs }, cache = new Map(), furnCls = new Map();
+  const std = (m, cls, mesh) => {
+    if (!m || !m.color || m.isMeshStandardMaterial || m.isShaderMaterial) return m;
+    const key = m.uuid + '|' + (Array.isArray(cls) ? cls[1] + ',' + cls[2] : cls);
+    if (cache.has(key)) return cache.get(key);
+    let r = 0.78, mt = 0, map = m.map, bump = null, bs = 0, rough = null, color = m.color, tr = m.transparent, op = m.opacity, env = 0.3;
+    if (map && map.fpKind) {
+      if (map.fpKind === 'water') { r = 0.06; env = 1.1; }
+      else {
+        [r, bs] = REAL_FLOOR[map.fpKind] || [0.8, 0.6];
+        if (!map.fpLt || !map.fpReal) map = floorTexture(map.fpKind, map.fpColor, true, C, true); // temadan bağımsız, malzeme tonu baskın doku
+        bump = map.fpBump; rough = map.fpRough; if (rough) r = Math.min(1, r / 0.55);
+      }
+    } else if (cls === 'room' && !map && !mesh.userData.glassFloor) {
+      // kaplaması seçilmemiş oda: saydam pastel yerine nötr, hafif renkli şap
+      map = floorTexture('concrete', mixHex('#' + m.color.getHexString(), '#e9e4da', 0.72), true, C);
+      color = new THREE.Color(0xffffff); r = 0.82; bump = map.fpBump; bs = 0.4; tr = false; op = 1;
+    } else if (tr) { r = 0.05; env = 1; }                                                   // cam
+    else if (m.isMeshPhongMaterial) { if (m.shininess >= 80) { r = 0.3; mt = 0.85; env = 0.9; } else { r = 0.25; env = 0.7; } } // parça: metal / parlak
+    else if (Array.isArray(cls)) { r = cls[1]; mt = cls[2]; if (r < 0.4) env = 0.8; }
+    else if (cls === 'wall') r = 0.92;
+    else if (cls === 'op') r = 0.5;                                                         // doğrama: saten
+    else if (cls === 'slab') r = 0.88;
+    else if (cls === 'furn') r = 0.55;                                                      // ahşap mobilya: saten
+    const n = new THREE.MeshStandardMaterial({ color, map, roughness: r, metalness: mt, transparent: tr, opacity: op, side: m.side, depthWrite: m.depthWrite, bumpMap: bump, bumpScale: bs, roughnessMap: rough, envMapIntensity: env });
+    made.push(n); cache.set(key, n);
+    return n;
+  };
+  if (opts.mats !== false) S.traverse(o => {
+    if (!o.isMesh || o === T3.ground || o.userData.fpDecal || !o.material) return;
+    const cls = realClass(o, furnCls), nm = Array.isArray(o.material) ? o.material.map(m => std(m, cls, o)) : std(o.material, cls, o);
+    swaps.push({ o, mat: o.material }); o.material = nm;
+  });
+  // ışık dengesi: güneş yüksekliğine bağlı gökyüzü / zemin yansıması, sıcak dolgu (kapalı odalar düz gri kalmasın)
+  const lit = [], sk = skyColors(alt), eve = opts.mood === 'evening';
+  S.traverse(o => {
+    if (!o.isLight) return;
+    lit.push({ l: o, i: o.intensity, c: o.color.clone(), g: o.groundColor ? o.groundColor.clone() : null });
+    if (o.isHemisphereLight) { o.color.copy(sk.hor).lerp(new THREE.Color(0xffffff), 0.5); o.groundColor.setHex(eve ? 0xffb877 : 0xb9a58c); o.intensity = eve ? 0.5 : 0.2 + 0.12 * sinA; }
+    else if (o.isDirectionalLight && o.castShadow) o.intensity = (0.75 + 0.75 * sinA) * (eve ? 0.75 : 1);
+    else if (o.isDirectionalLight) { o.color.setHex(eve ? 0xffc58a : 0xffe9cf); o.intensity = eve ? 0.5 : 0.22; }
+  });
+  const oldEnv = S.environment; S.environment = opts.mats !== false ? realEnv(sv) : oldEnv;
+  // temas gölgesi: duvar dibi şeritleri ve mobilya altı lekeleri (yalnızca döşeme üstünde)
+  const kids = S.children.filter(c => c.userData && (c.userData.furnId || (c.userData.wallId && !c.isMesh)));
+  if (opts.contact !== false && kids.length && kids.length < 1200) {
+    const geo = new THREE.PlaneGeometry(1, 1); geo.rotateX(-Math.PI / 2);
+    const mk = radial => { const t = contactTex(radial); texs.push(t); const m = new THREE.MeshBasicMaterial({ map: t, transparent: true, opacity: radial ? 0.4 : 0.36, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }); made.push(m); return m; };
+    const blob = mk(true), strip = mk(false), polys = new Map();
+    const onSlab = (fl, i, pt) => { if (!polys.has(i)) polys.set(i, [...slabPolys(fl), ...(fl.slabs || []).map(x => x.pts)]); return polys.get(i).some(pg => pointInPoly(pt, pg)); };
+    const add = (parent, m, x, y, z, sx, sz, ry) => { const d = new THREE.Mesh(geo, m); d.position.set(x, y, z); d.scale.set(sx, 1, sz); d.rotation.y = ry; d.userData.fpDecal = true; d.renderOrder = 1; parent.add(d); return d; };
+    for (const c of kids) {
+      const fd = findAnyFloor(c.userData.furnId || c.userData.wallId); if (!fd) continue;
+      if (fd.kind === 'furn') {
+        const o = fd.o; if (furnElev(o) > 0 || o.k === 'roof' || o.type === 'rug' || o.type === 'pool') continue;
+        decals.push(add(S, blob, c.position.x, c.position.y + 1.6, c.position.z, o.w + 26, o.d + 26, c.rotation.y));
+      } else if (fd.kind === 'wall' && !isLowWall(fd.o)) {
+        const w = fd.o, Ln = wLen(w); if (Ln < 1) continue;
+        const nx = -(w.b.y - w.a.y) / Ln, ny = (w.b.x - w.a.x) / Ln, mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2, off = w.t / 2 + 9;
+        const hold = new THREE.Group(); hold.position.copy(c.position); hold.rotation.y = c.rotation.y; hold.userData.fpDecal = true;
+        for (const sgn of [1, -1]) if (onSlab(fd.floor, fd.floorIdx, { x: mx + nx * off * sgn, y: my + ny * off * sgn })) add(hold, strip, 0, 1.6, off * sgn, Ln, 18, sgn > 0 ? 0 : Math.PI);
+        if (hold.children.length) { S.add(hold); decals.push(hold); }
+      }
+    }
+    made.push(geo);
+  }
+  return {
+    count: made.length, decals: decals.length,
+    restore() {
+      for (let i = swaps.length - 1; i >= 0; i--) swaps[i].o.material = swaps[i].mat;
+      for (const s of lit) { s.l.intensity = s.i; s.l.color.copy(s.c); if (s.g) s.l.groundColor.copy(s.g); }
+      S.environment = oldEnv;
+      for (const d of decals) S.remove(d);
+    },
+    dispose() { for (const m of made) m.dispose(); for (const t of texs) t.dispose(); },
+  };
+}
 function applyLive3D() {
   if (!T3 || !T3.scene) return;
   const S = T3.scene, old = T3.live; T3.live = null;
+  if (old && old.real) { old.real.restore(); old.real.dispose(); }
   if (old) { S.remove(old.sky); old.sky.geometry.dispose(); old.sky.material.dispose(); for (const m of old.mats) m.dispose(); S.fog = null; }
   if (!ui.live3d) return;
   const st = ui.studio, sv = sunVector(st.az, st.alt), sky = makeSky(sv, T3.cam, T3.fit);
@@ -9169,8 +9315,9 @@ function applyLive3D() {
     l.position.set(tg.x + sv.x * d0, tg.y + sv.y * d0, tg.z + sv.z * d0);
     l.color.setHex(st.alt < 20 ? 0xffc58a : 0xfff6e8);
   }
+  const real = realLook(S, sv, { mood: st.mood }); // fiziksel malzemeler + yansıma + güneşe bağlı ışık + temas gölgesi (#87)
   S.add(sky.mesh); S.fog = sky.fog; S.background = sky.horizon;
-  T3.live = { sky: sky.mesh, fog: sky.fog, mats: [ground, slab] };
+  T3.live = { sky: sky.mesh, fog: sky.fog, mats: [ground, slab], real };
   req3D();
 }
 function syncLiveUI() { const b = $('#b3dLive'); if (b) b.classList.toggle('on', !!ui.live3d); }
@@ -9201,41 +9348,78 @@ function mixHex(a, b, t) {
   const x = hex2rgb(a), y = hex2rgb(b), f = i => Math.round(x[i] + (y[i] - x[i]) * t);
   return '#' + [f(0), f(1), f(2)].map(v => v.toString(16).padStart(2, '0')).join('');
 }
-function floorTexture(kind, color, lt, C) {
-  const key = kind + '|' + color + '|' + (lt ? 'l' : 'd');
+function floorTexture(kind, color, lt, C, real) {
+  const key = kind + '|' + color + '|' + (lt ? 'l' : 'd') + (real ? 'r' : '');
   if (C.floorTex[key]) return C.floorTex[key];
   const accent = { wood: '#b08968', tile: '#94a3b8', marble: '#e7e5e4', concrete: '#a8a29e', stone: '#a8a29e', grass: '#4d7c0f', water: '#0e7490', gravel: '#a8a29e', deck: '#9a6b3f', asphalt: '#3f3f46' }[kind] || '#9ca3af';
   const px = 256, cv = document.createElement('canvas'); cv.width = cv.height = px;
   const g = cv.getContext('2d');
   // oda rengi korunur ama malzeme tonuna doğru harmanlanır (pastel renkler bembeyaz olmasın)
-  const base = lt ? mixHex(color, accent, 0.5) : mixHex(mixHex(color, accent, 0.55), '#0b0f14', 0.45);
+  // real (#87): gerçekçi görünümde malzemenin kendi tonu baskın (ahşap ahşap gibi, mermer mermer gibi); halı oda rengini korur
+  const realMix = { wood: 0.85, deck: 0.85, marble: 0.8, stone: 0.8, concrete: 0.8, tile: 0.6, carpet: 0.35 }[kind] || 0.7;
+  const base = lt ? mixHex(color, accent, real ? realMix : 0.5) : mixHex(mixHex(color, accent, 0.55), '#0b0f14', 0.45);
   const line = lt ? shade(base, -0.3) : shade(base, 0.16);
   g.fillStyle = base; g.fillRect(0, 0, px, px);
+  // kabartma haritası (#87): açık = yüzey, koyu = derz / çukur. Gerçekçi görünümde bump + pürüzlülük haritası olur.
+  const hc = document.createElement('canvas'); hc.width = hc.height = px;
+  const hg = hc.getContext('2d'); hg.fillStyle = '#c8c8c8'; hg.fillRect(0, 0, px, px);
+  let relief = false, sd0 = 97;
+  const rn = () => (sd0 = (sd0 * 16807) % 2147483647) / 2147483647; // sabit tohum: her kurulumda aynı doku
   if (kind === 'wood') {
-    g.strokeStyle = line; g.lineWidth = 2;
-    for (let i = 0; i <= 4; i++) { const y = i * px / 4; g.beginPath(); g.moveTo(0, y); g.lineTo(px, y); g.stroke(); }
-    for (let i = 0; i < 4; i++) {
-      const y = i * px / 4, x = (i % 2 ? px * 0.5 : px * 0.18);
-      g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + px / 4); g.stroke();
-      g.beginPath(); g.moveTo(x + px * 0.5, y); g.lineTo(x + px * 0.5, y + px / 4); g.stroke();
-    }
+    // parke: her tahtanın tonu farklı, lifli damar, pahlı derz; karo kenarında tahta aynı tonla devam eder
+    relief = true;
+    const ph = px / 8, plank = (x0, y, w) => {
+      const tone = (rn() - 0.5) * 0.24, fib = [];
+      for (let q = 0; q < 4; q++) fib.push([3 + rn() * (ph - 6), (rn() - 0.5) * 5, 0.16 + rn() * 0.2]);
+      for (const ox of [0, -px]) {
+        g.globalAlpha = 1; g.fillStyle = shade(base, tone); g.fillRect(x0 + ox, y, w, ph);
+        g.strokeStyle = shade(base, tone - 0.2); g.lineWidth = 0.7;
+        for (const [fy, wob, al] of fib) { g.globalAlpha = al; g.beginPath(); g.moveTo(x0 + ox, y + fy); g.bezierCurveTo(x0 + ox + w * 0.3, y + fy + wob, x0 + ox + w * 0.7, y + fy - wob, x0 + ox + w, y + fy + wob * 0.4); g.stroke(); }
+        g.globalAlpha = 1; g.strokeStyle = line; g.lineWidth = 1.4; g.strokeRect(x0 + ox + 0.5, y + 0.5, w - 1, ph - 1);
+        hg.strokeStyle = '#3c3c3c'; hg.lineWidth = 2.2; hg.strokeRect(x0 + ox, y, w, ph);
+        hg.strokeStyle = '#909090'; hg.lineWidth = 1; hg.strokeRect(x0 + ox + 2, y + 2, w - 4, ph - 4);
+      }
+    };
+    for (let i = 0; i < 8; i++) for (const x of (i % 2 ? [0, px * 0.5] : [px * 0.18, px * 0.68])) plank(x, i * ph, px * 0.5);
   } else if (kind === 'tile') {
-    g.strokeStyle = line; g.lineWidth = 3;
-    for (let i = 0; i <= 2; i++) { const p = i * px / 2; g.beginPath(); g.moveTo(p, 0); g.lineTo(p, px); g.moveTo(0, p); g.lineTo(px, p); g.stroke(); }
-  } else if (kind === 'carpet') {
-    g.fillStyle = line;
-    for (let y = 8; y < px; y += 16) for (let x = 8; x < px; x += 16) { g.beginPath(); g.arc(x + ((y / 16) % 2 ? 8 : 0), y, 2.4, 0, 6.2832); g.fill(); }
-  } else if (kind === 'marble') {
-    // damarlı mermer: deterministik (Math.random yok) ki her build aynı görünsün
-    g.strokeStyle = line; g.globalAlpha = 0.45;
-    for (let i = 0; i < 5; i++) {
-      g.lineWidth = 0.8 + (i % 3) * 0.6; g.beginPath();
-      let x = 0, y = (i * 53 + 20) % px; g.moveTo(x, y);
-      while (x < px) { x += 18; y += Math.sin(x * 0.045 + i * 1.7) * 9 + (i % 2 ? 3 : -2); g.lineTo(x, y); }
-      g.stroke();
+    // seramik: hafif ton farkı, parlak yüzey geçişi, pahlı kenar ve gömük mat derz
+    relief = true;
+    const n = 2, sz = px / n, gr = 5;
+    g.fillStyle = line; g.fillRect(0, 0, px, px);
+    hg.fillStyle = '#404040'; hg.fillRect(0, 0, px, px);
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const x = i * sz + gr / 2, y = j * sz + gr / 2, w = sz - gr;
+      g.fillStyle = shade(base, (rn() - 0.5) * 0.06); g.fillRect(x, y, w, w);
+      const gd = g.createLinearGradient(x, y, x + w, y + w); gd.addColorStop(0, 'rgba(255,255,255,0.10)'); gd.addColorStop(1, 'rgba(0,0,0,0.06)');
+      g.fillStyle = gd; g.fillRect(x, y, w, w);
+      hg.fillStyle = '#c8c8c8'; hg.fillRect(x, y, w, w);
+      hg.strokeStyle = '#8a8a8a'; hg.lineWidth = 2; hg.strokeRect(x + 1, y + 1, w - 2, w - 2);
     }
-    g.globalAlpha = 1; g.lineWidth = 1.5;
+  } else if (kind === 'carpet') {
+    // halı: sık ilmek dokusu (ton + kabartma)
+    relief = true;
+    for (let y = 2; y < px; y += 4) for (let x = 2; x < px; x += 4) {
+      const t = rn(), ox = (y / 4) % 2 ? 2 : 0;
+      g.fillStyle = shade(base, (t - 0.5) * 0.22); g.globalAlpha = 0.85; g.beginPath(); g.arc(x + ox, y, 1.9, 0, 6.2832); g.fill();
+      const v = Math.round(110 + t * 120); hg.fillStyle = `rgb(${v},${v},${v})`; hg.fillRect(x + ox - 2, y - 2, 4, 4);
+    }
+    g.globalAlpha = 1;
+  } else if (kind === 'marble') {
+    // damarlı mermer: üç katman (yumuşak geniş, orta, ince) — deterministik ki her build aynı görünsün
+    relief = true;
+    for (const [cnt, lw, al, amp] of [[3, 7, 0.10, 14], [5, 1.4, 0.42, 9], [7, 0.5, 0.5, 5]]) {
+      g.strokeStyle = line; g.globalAlpha = al;
+      for (let i = 0; i < cnt; i++) {
+        g.lineWidth = lw * (0.7 + (i % 3) * 0.3); g.beginPath();
+        let x = 0, y = (i * 53 + cnt * 17 + 20) % px; g.moveTo(x, y);
+        while (x < px) { x += 14; y += Math.sin(x * 0.045 + i * 1.7 + cnt) * amp * 0.6 + (i % 2 ? 2.5 : -2); g.lineTo(x, y); }
+        g.stroke();
+      }
+    }
+    g.globalAlpha = 1; g.lineWidth = 1.2;
     g.beginPath(); g.moveTo(0, px / 2); g.lineTo(px, px / 2); g.moveTo(px / 2, 0); g.lineTo(px / 2, px); g.stroke();
+    hg.strokeStyle = '#8c8c8c'; hg.lineWidth = 1.5;
+    hg.beginPath(); hg.moveTo(0, px / 2); hg.lineTo(px, px / 2); hg.moveTo(px / 2, 0); hg.lineTo(px / 2, px); hg.stroke();
   } else if (kind === 'concrete') {
     // ince taneli şap: sabit tohumlu küçük benekler
     let sd = 7;
@@ -9243,13 +9427,22 @@ function floorTexture(kind, color, lt, C) {
     for (let i = 0; i < 900; i++) { g.fillStyle = rnd01() > 0.5 ? line : shade(base, lt ? 0.12 : -0.12); g.globalAlpha = 0.25 + rnd01() * 0.3; g.fillRect(rnd01() * px, rnd01() * px, 1.5, 1.5); }
     g.globalAlpha = 1;
   } else if (kind === 'stone') {
-    // dış mekan taşı: şaşırtmalı farklı ölçülü karolar
-    g.strokeStyle = line; g.lineWidth = 4;
-    const rows = [[0, 0.62], [0.3, 0.8], [0.15, 0.55, 0.85], [0.45]];
+    // dış mekan taşı: şaşırtmalı farklı ölçülü karolar, taş taş ton farkı, derin derz
+    relief = true;
+    const rows = [[0, 0.62], [0.3, 0.8], [0.15, 0.55, 0.85], [0.45]], rh = px / 4;
     rows.forEach((xs, i) => {
-      const y = i * px / 4; g.beginPath(); g.moveTo(0, y); g.lineTo(px, y);
-      for (const x of xs) { g.moveTo(x * px, y); g.lineTo(x * px, y + px / 4); }
-      g.stroke();
+      const y = i * rh;
+      xs.forEach((x, k) => { // her taş: bir sonraki ek yerine (satır sonunda karo kenarını aşarak) kadar
+        const x0 = x * px, w = ((k + 1 < xs.length ? xs[k + 1] : xs[0] + 1) - x) * px, tone = (rn() - 0.5) * 0.2;
+        for (const ox of [0, -px]) { g.fillStyle = shade(base, tone); g.fillRect(x0 + ox, y, w, rh); }
+      });
+    });
+    let sdn = 31; const rnS = () => (sdn = (sdn * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 700; i++) { const v = rnS(); g.fillStyle = shade(base, (v - 0.5) * 0.5); g.globalAlpha = 0.22; g.fillRect(rnS() * px, rnS() * px, 2, 2); }
+    g.globalAlpha = 1; g.strokeStyle = line; g.lineWidth = 4; hg.strokeStyle = '#383838'; hg.lineWidth = 5;
+    rows.forEach((xs, i) => {
+      const y = i * rh;
+      for (const c of [g, hg]) { c.beginPath(); c.moveTo(0, y); c.lineTo(px, y); for (const x of xs) { c.moveTo(x * px, y); c.lineTo(x * px, y + rh); } c.stroke(); }
     });
   } else if (kind === 'grass' || kind === 'asphalt' || kind === 'gravel') {
     // dış mekan (#39): sabit tohumlu prosedürel doku — çim sapları, asfalt tanesi, çakıl taneleri
@@ -9294,15 +9487,25 @@ function floorTexture(kind, color, lt, C) {
       for (let k = 0; k < 2; k++) { g.beginPath(); g.moveTo(0, y + 8 + k * 12); g.bezierCurveTo(px * 0.3, y + 6 + k * 12, px * 0.6, y + 11 + k * 12, px, y + 8 + k * 12); g.stroke(); }
       g.globalAlpha = 1; g.fillStyle = shade(base, -0.55); g.fillRect(0, y, px, 2.5); g.fillRect(0, y + px / 8 - 2, px, 2);
       g.fillRect((i % 2 ? 0.62 : 0.2) * px, y, 2.5, px / 8);
+      relief = true; hg.fillStyle = '#262626'; hg.fillRect(0, y, px, 2.5); hg.fillRect(0, y + px / 8 - 2, px, 2); hg.fillRect((i % 2 ? 0.62 : 0.2) * px, y, 2.5, px / 8);
     }
   }
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.encoding = THREE.sRGBEncoding;
   t.anisotropy = 4;
-  const rep = { wood: 160, tile: 120, marble: 240, concrete: 200, stone: 200, grass: 120, water: 320, gravel: 90, deck: 120, asphalt: 160 }[kind] || 80; // cm cinsinden karo boyu
+  const rep = { wood: 180, tile: 120, marble: 240, concrete: 200, stone: 200, grass: 120, water: 320, gravel: 90, deck: 120, asphalt: 160 }[kind] || 80; // cm cinsinden karo boyu
   t.repeat.set(1 / rep, 1 / rep);
   C.floorTex[key] = t; C.texs.push(t);
+  // gerçekçi görünüm (#87) için: tür / renk / tema bilgisi ve kabartma + pürüzlülük haritaları (kullanılmadıkça GPU'ya yüklenmez)
+  t.fpKind = kind; t.fpColor = color; t.fpLt = !!lt; t.fpReal = !!real; t.fpBump = t; t.fpRough = null;
+  if (relief) {
+    const mk = c => { const x = new THREE.CanvasTexture(c); x.wrapS = x.wrapT = THREE.RepeatWrapping; x.anisotropy = 4; x.repeat.copy(t.repeat); C.texs.push(x); return x; };
+    const rc = document.createElement('canvas'); rc.width = rc.height = px;
+    const rg = rc.getContext('2d'); rg.fillStyle = '#fff'; rg.fillRect(0, 0, px, px);
+    rg.globalAlpha = 0.45; rg.globalCompositeOperation = 'difference'; rg.drawImage(hc, 0, 0); // 1 − 0,45·yükseklik: derz daha mat
+    t.fpBump = mk(hc); t.fpRough = mk(rc);
+  }
   return t;
 }
 // Özel doku (#40): kendi görseli, P.textures'taki w × h cm'de tekrarlanır; 2B ile aynı yön (flipY yok)
