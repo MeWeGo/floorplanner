@@ -8607,15 +8607,60 @@ function pbNudge(axis, d) {
   fsPush(); pbRedraw();
 }
 
-// seçili mobilyadan taslak: parçası yoksa tek parçalık başlangıç (kutu / silindir / şeklin kendi profili)
+// katalog öğesinin 3B modeli (furn3D) → stüdyo parçaları: THREE gerekmez, kutu / silindir / küre çağrıları kaydedilir.
+// { parts, w, d, h } döner; çözülemeyen bir şey (THREE ile özel geometri, 64'ten fazla parça) olursa null ve tek kutuya düşülür.
+function furnModelParts(o) {
+  if (o.k === 'poly' || o.k === 'stairs' || o.k === 'ramp' || o.k === 'roof' || (Array.isArray(o.parts) && o.parts.length)) return null;
+  const run = det => {
+    const rec = [], V = () => ({ x: 0, y: 0, z: 0, order: 'XYZ', set(a, b, c) { this.x = a; this.y = b; this.z = c; return this; }, copy(v) { return this.set(v.x, v.y, v.z); } });
+    const mk = (t, c, op) => { const m = { t, c, op, scale: V(), position: V(), rotation: V() }; rec.push(m); return m; };
+    const g = { add() { throw new Error('custom geometry'); } };
+    const C = {
+      det,
+      box: (_, w, h, d, c, x, y, z, ry = 0, op) => { const m = mk('box', c, op); m.scale.set(w, h, d); m.position.set(x, y, z); m.rotation.y = ry; return m; },
+      cyl: (_, r, hh, c, x, y, z, seg, op, rz) => { const m = mk('cyl', c, op); m.scale.set(r, hh, rz || r); m.position.set(x, y, z); return m; },
+      sph: (_, r, c, x, y, z, sx = 1, sy = 1, sz = 1) => { const m = mk('sphere', c); m.scale.set(r * sx, r * sy, r * sz); m.position.set(x, y, z); return m; },
+      mat: () => { throw new Error('custom material'); }, pmat: () => { throw new Error('custom material'); },
+    };
+    furn3D(g, o, C);
+    const deg = v => -v * 180 / Math.PI, hex = c => typeof c === 'number' ? '#' + c.toString(16).padStart(6, '0') : c;
+    return rec.map(m => {
+      const s = m.scale, P3 = m.position, R = m.rotation, half = Math.PI / 2, near = (a, b) => Math.abs(Math.abs(a) - b) < 1e-6;
+      const p = { type: m.t, x: P3.x, y: P3.z };
+      if (m.t === 'cyl' && near(R.x, half) && !R.z) { Object.assign(p, { axis: 'y', w: 2 * s.x, d: s.y, h: 2 * s.z }); }
+      else if (m.t === 'cyl' && near(R.z, half) && !R.x) { Object.assign(p, { axis: 'x', w: s.y, d: 2 * s.z, h: 2 * s.x }); }
+      else if (m.t === 'box') { Object.assign(p, { w: s.x, d: s.z, h: s.y, rot: deg(R.y), rx: deg(R.x), ry: deg(R.z) }); }
+      else if (m.t === 'cyl') { Object.assign(p, { w: 2 * s.x, d: 2 * s.z, h: s.y, rot: deg(R.y), rx: deg(R.x), ry: deg(R.z) }); }
+      else Object.assign(p, { w: 2 * s.x, d: 2 * s.z, h: 2 * s.y });
+      p.z = P3.y - p.h / 2;
+      const c = hex(m.c); if (partHex(c)) p.color = c;
+      if (m.op) p.mat = 'glass';
+      return cleanPart(p);
+    }).filter(p => p.w >= 0.1 && p.d >= 0.1 && p.h >= 0.1);
+  };
+  try {
+    let parts = run(true); if (parts.length > PARTS_MAX) parts = run(false);
+    if (!parts.length || parts.length > PARTS_MAX) return null;
+    // model kutudan taşabilir (yatak başlığı, buzdolabı kulpu, kolon tabanı): taslak kutusu öğe kutusu ∪ model olur (1 cm'ye kadar taşma yok sayılır);
+    // parçalar yeni kutunun ortasına kaydırılır, off = kaydırma (öğe yerelinde) → pbApply öğeyi aynı kadar taşır, plan yerinde kalır
+    const e = { x0: -o.w / 2, x1: o.w / 2, y0: -o.d / 2, y1: o.d / 2, z0: 0, z1: o.h };
+    for (const p of parts) { const b = partBounds(p); for (const k of ['x0', 'y0', 'z0']) if (b[k] < e[k] - 1) e[k] = b[k]; for (const k of ['x1', 'y1', 'z1']) if (b[k] > e[k] + 1) e[k] = b[k]; }
+    const off = { x: partR((e.x0 + e.x1) / 2), y: partR((e.y0 + e.y1) / 2), z: partR(e.z0) };
+    for (const p of parts) { p.x = partR(p.x - off.x); p.y = partR(p.y - off.y); p.z = partR(p.z - off.z); }
+    return { parts, w: partR(e.x1 - e.x0), d: partR(e.y1 - e.y0), h: partR(e.z1 - e.z0), off: off.x || off.y || off.z ? off : null };
+  } catch (e) { return null; }
+}
+// seçili mobilyadan taslak: parçası yoksa katalog 3B modeli, o da yoksa tek parçalık başlangıç (kutu / silindir / şeklin kendi profili)
 function pbStart(o) {
-  const has = Array.isArray(o.parts) && o.parts.length;
+  const has = Array.isArray(o.parts) && o.parts.length, model = has ? null : furnModelParts(o);
   let parts;
   if (has) parts = clonePlain(o.parts);
+  else if (model) parts = model.parts;
   else if (o.k === 'poly' && o.pts && o.pts.length >= 3) parts = [Object.assign(cleanPart({ type: 'extrude', pts: o.pts, h: o.h }), { name: L('gövde', 'body'), color: o.color })];
   else parts = [cleanPart({ name: L('gövde', 'body'), type: o.k === 'round' ? 'cyl' : 'box', w: o.w, d: o.d, h: o.h, color: partHex(o.color) ? o.color : undefined })];
-  const b = has && o.pbase ? o.pbase : { w: o.w, d: o.d, h: o.h };
+  const b = has && o.pbase ? o.pbase : model || { w: o.w, d: o.d, h: o.h };
   fsInit(o.id, o.label || o.name || '', { w: partR(b.w), d: partR(b.d), h: partR(b.h), color: partHex(o.color) ? o.color : '#b08968', parts });
+  if (model && model.off) ui.pb.off = model.off;
 }
 // yeni mobilya: boş kutu ya da hazır şablon (FURN_TEMPLATES)
 function fsNew(tpl) {
@@ -9068,6 +9113,12 @@ function pbApply(toLib) {
     o = f.o; const old = Array.isArray(o.parts) && o.parts.length && o.pbase ? o.pbase : { w: o.w, d: o.d, h: o.h };
     for (const k of ['w', 'd', 'h']) o[k] = partR(D[k] * (+o[k] > 0 && +old[k] > 0 ? o[k] / old[k] : 1)); // öğe büyütülmüşse aynı ölçek kalır
     if (name && name !== ui.pb.name0) { if (o.label) o.label = name; else o.name = name; }
+    const of = ui.pb.off; // katalog modeli kutusu ortalandıysa öğe de o kadar kayar: plandaki yeri değişmez
+    if (of) {
+      const r = (+o.rot || 0) * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+      o.x = partR(o.x + of.x * c - of.y * s); o.y = partR(o.y + of.x * s + of.y * c);
+      if (of.z) { const e = partR(furnElev(o) + of.z); if (e) o.elev = e; else delete o.elev; }
+    }
   } else {
     if (!D.parts.length) { toast(L('Önce birkaç parça ekleyin', 'Add a few parts first')); return; }
     const c = view2DCenter();
