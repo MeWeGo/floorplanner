@@ -119,7 +119,7 @@ The agent runs `node mcp/bridge.js` and the app tab connects automatically; afte
 | `create_furniture` | One custom item (name, w×d×h, x, y) built from parts; `template: "billiards"` starts from the reference table |
 | `add_component` | Add a part (box / cyl / sphere / extrude, item-local x, y, **z = bottom elevation**, w, d, h, rot, color, material) — or `parts: [...]` at once; rejected if it is invalid or sticks out of the item box |
 | `update_component` / `remove_component` | Change / remove a part by index or name (`all: true` for every part with that name) |
-| `set_material` | Colour and/or finish (`matte`, `gloss`, `metal`, `glass`) of one, several or all parts |
+| `set_material` | Colour and/or finish of one, several or all parts: `matte`, `gloss`, `metal`, `glass`, a textured `wood` / `fabric` / `leather` / `stone` / `marble` / `ceramic` / `chrome` / `plastic` / `rubber` / `foliage` (tinted by the colour) or `tex:<id>` for a project texture |
 | `set_transform` | Move / rotate / resize the item; `scaleParts: true` stretches the parts with it |
 | `validate_furniture` | Part list + errors (sizes, outside the box, above the item height) and warnings (floating parts, too many parts) |
 | `save_furniture` / `place_furniture` | Save the item to the project library (**⬡ My Library** in the app) / place a saved one again |

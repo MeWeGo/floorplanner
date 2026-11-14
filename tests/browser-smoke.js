@@ -1837,6 +1837,58 @@ check('realistic look: physically based materials, same render in dark and light
   return 'brightness ' + info.light.toFixed(0) + ' light / ' + info.dark.toFixed(0) + ' dark, ' + info.live.std + ' physical meshes, ' + info.live.dec + ' contact decals';
 });
 
+check('detailed models + sub-part surfaces: shared textures, user colour tints, stable GPU memory, live + render (#93)', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    addRectWalls(0, 0, 900, 600);
+    const f = F();
+    f.ops.push(mkOp(OPDEF.window2, f.walls[0], 450), mkOp(OPDEF.door, f.walls[2], 300));
+    const sofa = mkFurn(BYID.sofa3, 200, 120);
+    f.furn.push(sofa, mkFurn(BYID.bed2, 650, 180), mkFurn(BYID.sinkK, 200, 520), mkFurn(BYID.wc, 480, 520), mkFurn(BYID.plant, 60, 60), mkFurn(BYID.rug, 200, 260), mkFurn(BYID.car, 1300, 300, 90), mkFurn(BYID.pool, 1300, 900));
+    sel = []; commit(); refresh();
+    if (ui.live3d) setLive3D(false);
+    show3D(true);
+    if (!ui.view3d) return { err: '3D did not open' };
+    const tagged = () => { const out = []; T3.scene.traverse(o => { const m = o.isMesh && o.material; if (m && m.userData && m.userData.fk) out.push({ o, m, fk: m.userData.fk }); }); return out; };
+    const r = {}, t0 = tagged(), tex = new Map();
+    for (const { m } of t0) if (m.map && m.map.fpSurf) { const s = tex.get(m.map.fpSurf) || new Set(); s.add(m.map.uuid); tex.set(m.map.fpSurf, s); }
+    r.kinds = [...new Set(t0.map(x => x.fk))]; r.textured = [...tex.keys()]; r.perKind = Math.max(0, ...[...tex.values()].map(s => s.size));
+    // user colour tints the textured fabric (material colour), the texture stays shared
+    const sofaFabric = () => { let c = null; for (const x of tagged()) { if (c || x.fk !== 'fabric') continue; let p = x.o; while (p && !(p.userData && p.userData.furnId)) p = p.parent; if (p && p.userData.furnId === sofa.id) c = '#' + x.m.color.getHexString() + (x.m.map ? '+map' : ''); } return c; };
+    r.c0 = sofaFabric(); sofa.color = '#1d4ed8'; build3D(true); r.c1 = sofaFabric();
+    let win = 0; T3.scene.traverse(o => { if (o.userData && o.userData.opId && findAnyFloor(o.userData.opId).o.type === 'window') win = Math.max(win, o.children.length); });
+    r.win = win;
+    // rebuilds release what they made: GPU texture / geometry counts stay flat
+    build3D(true); const m0 = { ...T3.r.info.memory }; build3D(true); build3D(true); const m1 = { ...T3.r.info.memory };
+    r.mem = [m1.textures - m0.textures, m1.geometries - m0.geometries];
+    // live realistic view: each sub-part gets its own physical values (chrome mirror, rough woven fabric with relief)
+    const t1 = tagged();
+    document.getElementById('b3dLive').click();
+    const pick = k => t1.filter(x => x.fk === k).map(x => x.o.material).filter(m => m && m.isMeshStandardMaterial);
+    const chrome = pick('chrome'), fabric = pick('fabric'), ceramic = pick('ceramic');
+    r.chrome = chrome.length && chrome.every(m => m.metalness === 1 && m.roughness < 0.2);
+    r.fabric = fabric.length && fabric.every(m => m.roughness > 0.9) && fabric.some(m => m.bumpMap);
+    r.ceramic = ceramic.length && ceramic.every(m => m.roughness < 0.2 && m.metalness === 0);
+    document.getElementById('b3dLive').click();
+    r.cadBack = tagged().length > 0;
+    const lum = url => new Promise(res => { const im = new Image(); im.onload = () => { const c = document.createElement('canvas'); c.width = 48; c.height = 36; const g = c.getContext('2d'); g.drawImage(im, 0, 0, 48, 36); const d = g.getImageData(0, 0, 48, 36).data; let t = 0; for (let i = 0; i < d.length; i += 4) t += d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11; res(t / (d.length / 4)); }; im.onerror = () => res(-1); im.src = url; });
+    r.render = await lum(await render3DHQ({ style: 'realistic', backdrop: 'sky', sun: { az: 215, alt: 42 }, longSide: 360, supersample: 1, frames: 1, format: 'jpeg' }));
+    show3D(false);
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  for (const k of ['wood', 'fabric', 'stone', 'chrome', 'ceramic', 'glass', 'foliage', 'rubber', 'paint', 'water', 'rug']) if (!info.kinds.includes(k)) throw new Error('no sub-part tagged ' + k + ': ' + info.kinds.join(', '));
+  for (const k of ['wood', 'fabric', 'stone', 'foliage']) if (!info.textured.includes(k)) throw new Error('no procedural ' + k + ' texture in CAD view: ' + info.textured.join(', '));
+  if (info.perKind !== 1) throw new Error('a surface kind uses ' + info.perKind + ' textures instead of one shared texture');
+  if (!info.c0 || !info.c1 || info.c0 === info.c1 || !/\+map$/.test(info.c1)) throw new Error('sofa colour does not tint its textured fabric: ' + info.c0 + ' → ' + info.c1);
+  if (!(info.win >= 12)) throw new Error('window has no frame / sash / double glazing detail (' + info.win + ' parts)');
+  if (info.mem[0] !== 0 || info.mem[1] !== 0) throw new Error('rebuilding the furnished scene leaks GPU resources (textures, geometries): ' + info.mem);
+  if (!info.chrome || !info.fabric || !info.ceramic) throw new Error('live realistic view does not give sub-parts their own materials: ' + JSON.stringify({ chrome: info.chrome, fabric: info.fabric, ceramic: info.ceramic }));
+  if (!info.cadBack) throw new Error('turning the live view off lost the tagged CAD materials');
+  if (!(info.render > 40)) throw new Error('realistic render of the furnished scene is dark or empty: ' + info.render);
+  return info.kinds.length + ' surface kinds, ' + info.textured.length + ' shared textures, window ' + info.win + ' parts, render brightness ' + info.render.toFixed(0);
+});
+
 check('IFC fidelity: Revit fixtures become catalogue items, rooms are detected, concave outlines survive (#88)', async page => {
   const info = await page.evaluate(`(async () => {
     loadProject(newProject());

@@ -15,6 +15,13 @@ const lineSrc = name => {
   return src.slice(start, src.indexOf('\n', start));
 };
 
+// top-level one-line const (a local of the same name may appear earlier in app.js)
+const topLine = name => {
+  const m = src.match(new RegExp('^const ' + name + ' = .*$', 'm'));
+  assert.ok(m, name + ' is gone from app.js');
+  return m[0];
+};
+
 const engineOf = text => {
   const a = text.indexOf('/* PARTS-ENGINE:BEGIN'), b = text.indexOf('/* PARTS-ENGINE:END */');
   assert.ok(a >= 0 && b > a, 'PARTS-ENGINE block missing');
@@ -32,6 +39,11 @@ const api = new Function(`
   const rampRailSides = () => [];
 
   ${lineSrc('clamp')}
+  ${topLine('sf')}
+  ${topLine('surfOf')}
+  ${topLine('SURF_PART')}
+  ${topLine('FURN_SURF')}
+  ${fnSrc('mixHex')}
   ${engineOf(src)}
   ${fnSrc('hex2rgb')}
   ${fnSrc('shade')}

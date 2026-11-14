@@ -50,7 +50,7 @@ test('partIssues / validateParts: sizes, box, heights and floating parts', () =>
   assert.match(E.partIssues({ x: 48, w: 10, d: 10, h: 10 }, base).join(), /sticks out/);
   assert.match(E.partIssues({ z: 75, w: 10, d: 10, h: 10 }, base).join(), /above the item height/);
   assert.match(E.partIssues({ z: -5, w: 10, d: 10, h: 10 }, base).join(), /below the floor/);
-  assert.match(E.partIssues({ w: 1, d: 1, h: 1, color: 'green', mat: 'chrome' }, base).join(), /color.*mat/);
+  assert.match(E.partIssues({ w: 1, d: 1, h: 1, color: 'green', mat: 'velvet' }, base).join(), /color.*mat/);
   // prototype keys are not part types
   assert.match(E.partIssues({ type: 'constructor', w: 1, d: 1, h: 1 }, base).join(), /not one of/);
   assert.strictEqual(E.cleanPart({ type: 'toString' }).type, 'box');
