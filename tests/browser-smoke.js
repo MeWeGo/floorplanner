@@ -61,12 +61,19 @@ function serve() {
 
 /* ---------- CDP plumbing ---------- */
 async function connect(port, pageUrl) {
-  let wsUrl = null;
-  for (let i = 0; i < 120 && !wsUrl; i++) {
+  let wsUrl = null, opened = false;
+  // A cold runner sometimes starts Chromium without loading the URL from the command line (the tab stays
+  // on about:blank, or no tab at all) — CI once failed here with no check run. After ~5 s with the
+  // debugger up, open the page ourselves through CDP; give the whole start-up 60 s.
+  for (let i = 0; i < 240 && !wsUrl; i++) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
       const page = list.find(t => t.type === 'page' && t.url.startsWith('http'));
       if (page && page.webSocketDebuggerUrl) wsUrl = page.webSocketDebuggerUrl;
+      else if (!opened && i >= 20 && pageUrl) {
+        opened = true;
+        await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(pageUrl)}`, { method: 'PUT' }).catch(() => { });
+      }
     } catch (e) { }
     if (!wsUrl) await sleep(250);
   }
