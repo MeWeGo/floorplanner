@@ -62,17 +62,19 @@ const modelApi = new Function(`
   ${fnSrc('shade')}
   ${fnSrc('furn3D')}
   ${fnSrc('furnModelParts')}
+  ${fnSrc('deskPCLayout')}
+  ${fnSrc('deskPCPlan')}
 
   return {
     BYID, sf, surfOf,
-    furn3D, furnModelParts,
+    furn3D, furnModelParts, deskPCLayout, deskPCPlan,
     PART_MATS, partMatOk, cleanPart, partIssues, FURN_TEMPLATES,
   };
 `)();
 
 const {
   BYID, surfOf,
-  furn3D, furnModelParts,
+  furn3D, furnModelParts, deskPCLayout, deskPCPlan,
   PART_MATS, partMatOk, cleanPart, partIssues, FURN_TEMPLATES,
 } = modelApi;
 
@@ -122,7 +124,7 @@ function recordFurn3D(o, det) {
 test('(1) furn3D mesh counts for detailed catalogue items (det=1 and det=0)', () => {
   const ids = [
     'sofa3', 'armchair', 'chair', 'ochair', 'bed2', 'bunk', 'crib',
-    'deskL', 'desk', 'vanity', 'counter', 'island', 'sinkK', 'stove',
+    'deskL', 'desk', 'deskPC', 'vanity', 'counter', 'island', 'sinkK', 'stove',
     'fridge', 'dish', 'wm', 'wc', 'bidet', 'basin', 'basin2', 'tub',
     'shower', 'car', 'pool', 'fireplace', 'plant', 'tree', 'rug',
   ];
@@ -480,4 +482,121 @@ test('(9) source guards for build3D, fs3DBuild, fs3DDispose, realLook, and doorL
   const dl = fnSrc('doorLeaf3D');
   assert.match(dl, /sf\s*\(\s*['"]wood['"]/, 'doorLeaf3D must use sf("wood", ...) tagging');
   assert.match(dl, /\bhinges\b/, 'doorLeaf3D must include hinges');
+});
+
+// ---------- (10) deskPC & wc ----------
+
+test('(10) deskPC mesh count bounds (det=1 <= 40, det=0 <= 16) and stability across w/d/h', () => {
+  const countsWithSide = [];
+  for (const w of [140, 160, 200]) {
+    for (const d of [60, 80, 100]) {
+      for (const h of [70, 75, 85]) {
+        const o = itemFromCatalog('deskPC', { w, d, h });
+        const hi = recordFurn3D(o, 1);
+        const lo = recordFurn3D(o, 0);
+        assert.ok(hi.length <= 40, `deskPC ${w}x${d}x${h} det=1 produced ${hi.length} meshes (max 40)`);
+        assert.ok(lo.length <= 16, `deskPC ${w}x${d}x${h} det=0 produced ${lo.length} meshes (max 16)`);
+        countsWithSide.push([hi.length, lo.length]);
+      }
+    }
+  }
+  const [hi0, lo0] = countsWithSide[0];
+  for (const [hi, lo] of countsWithSide) {
+    assert.strictEqual(hi, hi0, 'deskPC det=1 mesh count must stay stable when w/d/h vary');
+    assert.strictEqual(lo, lo0, 'deskPC det=0 mesh count must stay stable when w/d/h vary');
+  }
+
+  // Without side monitor (w < 140) also respects bounds and stays stable across d/h
+  const countsNoSide = [];
+  for (const d of [60, 80]) {
+    for (const h of [70, 75]) {
+      const o = itemFromCatalog('deskPC', { w: 120, d, h });
+      const hi = recordFurn3D(o, 1);
+      const lo = recordFurn3D(o, 0);
+      assert.ok(hi.length <= 40, `deskPC 120x${d}x${h} det=1 produced ${hi.length} meshes (max 40)`);
+      assert.ok(lo.length <= 16, `deskPC 120x${d}x${h} det=0 produced ${lo.length} meshes (max 16)`);
+      countsNoSide.push([hi.length, lo.length]);
+    }
+  }
+  for (const [hi, lo] of countsNoSide) {
+    assert.strictEqual(hi, countsNoSide[0][0], 'deskPC (no side) det=1 mesh count must stay stable');
+    assert.strictEqual(lo, countsNoSide[0][1], 'deskPC (no side) det=0 mesh count must stay stable');
+  }
+});
+
+test('(11) deskPC uses wood, metal, plastic, fabric, ember, and glass surface kinds', () => {
+  const rec = recordFurn3D(itemFromCatalog('deskPC'), 1);
+  const got = new Set(rec.map(r => surfOf(r.color)).filter(Boolean).map(s => s.fk));
+  for (const fk of ['wood', 'metal', 'plastic', 'fabric', 'ember', 'glass']) {
+    assert.ok(got.has(fk), `deskPC missing fk="${fk}" (got: ${[...got].join(', ')})`);
+  }
+});
+
+test('(12) deskPCLayout keeps tower, monitors, keyboard, and mouse inside footprint and adds side monitor only for w >= 140', () => {
+  for (const w of [120, 160, 200]) {
+    for (const d of [60, 80]) {
+      const q = deskPCLayout({ w, d });
+      assert.strictEqual(q.side, w >= 140, `w=${w} side should be ${w >= 140}`);
+      const rects = [
+        ['tower', q.tx - q.tw / 2, q.tz - q.td / 2, q.tw, q.td],
+        ['mainMonitor', q.mx - q.mw / 2, q.mz - 1.5, q.mw, 3],
+        ...(q.side ? [['sideMonitor', q.sx - 13, q.mz - 1.5, 26, 3]] : []),
+        ['keyboard', q.kx - 16.5, q.kz - 5.75, 33, 11.5],
+        ['mouse', q.kx + 22.7, q.kz - 4.5, 6.5, 11],
+      ];
+      for (const [name, rx, ry, rw, rd] of rects) {
+        assert.ok(rx >= -w / 2 && rx + rw <= w / 2, `${name} x=[${rx}, ${rx + rw}] outside [-${w / 2}, ${w / 2}] for ${w}x${d}`);
+        assert.ok(ry >= -d / 2 && ry + rd <= d / 2, `${name} y=[${ry}, ${ry + rd}] outside [-${d / 2}, ${d / 2}] for ${w}x${d}`);
+      }
+    }
+  }
+  assert.strictEqual(deskPCLayout({ w: 139, d: 80 }).side, false);
+  assert.strictEqual(deskPCLayout({ w: 140, d: 80 }).side, true);
+});
+
+test('(13) deskPCPlan returns 5 rects with side monitor and 4 without', () => {
+  const withSide = deskPCPlan({ w: 160, d: 80 });
+  const atThreshold = deskPCPlan({ w: 140, d: 80 });
+  const withoutSide = deskPCPlan({ w: 120, d: 80 });
+  assert.strictEqual(withSide.length, 5);
+  assert.strictEqual(atThreshold.length, 5);
+  assert.strictEqual(withoutSide.length, 4);
+  for (const r of [...withSide, ...withoutSide]) {
+    assert.strictEqual(r.length, 4);
+    assert.ok(r[2] > 0 && r[3] > 0, `rect ${JSON.stringify(r)} must have positive dimensions`);
+  }
+});
+
+test('(14) wc (h=78) and legacy wc (h=40) reach ~76-78 cm top and bowl front reaches close to +d/2', () => {
+  const meshTopY = rec => Math.max(...rec.map(r => {
+    if (r.kind === 'box') return r.y + r.h / 2;
+    if (r.kind === 'cyl') return r.y + r.hh / 2;
+    return r.y + r.r * r.sy;
+  }));
+  const meshFrontZ = rec => Math.max(...rec.map(r => {
+    if (r.kind === 'box') return r.z + r.d / 2;
+    if (r.kind === 'cyl') return r.z + (r.rz || r.r);
+    return r.z + r.r * r.sz;
+  }));
+
+  for (const h of [78, 40]) {
+    for (const det of [0, 1]) {
+      const o = itemFromCatalog('wc', { h });
+      const rec = recordFurn3D(o, det);
+      const top = meshTopY(rec);
+      const front = meshFrontZ(rec);
+      // det=1 adds a 0.6 cm flush button on top of the 78 cm tank (78.6 cm)
+      assert.ok(top >= 76 && top <= 79, `wc h=${h} det=${det} max top=${top} (expected ~76-78.6)`);
+      assert.ok(Math.abs(front - o.d / 2) <= 2, `wc h=${h} det=${det} bowl front=${front} should be close to +d/2=${o.d / 2}`);
+    }
+  }
+});
+
+test('(15) deskPC catalogue row in app.js matches mcp/server.js CATALOG', () => {
+  const m = serverSrc.match(/^const CATALOG = \[[\s\S]*?\n\];/m);
+  assert.ok(m, 'CATALOG missing from mcp/server.js');
+  const serverCatalog = new Function(`${m[0]}\nreturn CATALOG;`)();
+  const sRow = serverCatalog.find(c => c.id === 'deskPC');
+  assert.ok(sRow, 'deskPC missing from mcp/server.js CATALOG');
+  assert.deepStrictEqual(sRow, BYID.deskPC);
 });
