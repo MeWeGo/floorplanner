@@ -1282,7 +1282,55 @@ body.touch-ui #touchBar .btn { display: flex; flex-direction: column; align-item
 body.touch-ui #touchBar .btn span { font-size: 17px; line-height: 1; }
 body.touch-ui #touchBar .btn small { font-size: 9.5px; margin-top: 2px; opacity: 0.8; white-space: nowrap; }
 body.touch-ui #touchBar .btn:disabled { opacity: 0.35; }
+body.touch-ui #touchBar .btn.on { background: var(--accent); color: #111; }
+/* dokunmatik uzunluk kutusu (📏): ekranın altında, eylem çubuğunun üstünde; sayı klavyesi açılınca görünür kalır */
+#lenBox {
+  position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 95;
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+#lenBox input { width: 96px; height: 36px; font-size: 17px; }
+#lenBox .btn { min-width: 40px; height: 36px; }
 body.fs-open #touchBar { display: none; }
+
+/* Kütüphane çekmecesi: kütüphane gizliyken (≤ 1000 px ya da ≤ 1280 px dokunmatik tablet) 📚 ile soldan açılır */
+#bLib, #bFootOpts, #drawerBg { display: none; }
+#drawerBg { position: fixed; inset: 0; z-index: 89; background: rgba(0, 0, 0, 0.35); }
+body.lib-open #drawerBg { display: block; }
+#bLib { position: absolute; top: 12px; left: 12px; z-index: 6; min-width: 38px; height: 38px; font-size: 17px; }
+@media (max-width: 1000px) {
+  #bLib { display: block; }
+  body.lib-open #lib { display: flex; position: fixed; top: 0; left: 0; bottom: 0; z-index: 90; width: min(86vw, 320px); box-shadow: 8px 0 28px rgba(0, 0, 0, 0.35); }
+}
+@media (max-width: 1280px) {
+  body.touch-ui #lib { display: none; }
+  body.touch-ui #bLib { display: block; }
+  body.touch-ui.lib-open #lib { display: flex; position: fixed; top: 0; left: 0; bottom: 0; z-index: 90; width: min(86vw, 320px); box-shadow: 8px 0 28px rgba(0, 0, 0, 0.35); }
+}
+/* dokunmatikte bildirim eylem çubuğunun üstünde durur; kısayol etiketleri (Ctrl+…) klavyesiz cihazda gereksiz */
+body.touch-ui #toast { bottom: 72px; }
+body.touch-ui .ctxmenu kbd { display: none; }
+/* Tuval: uzun basma sağ tık menüsünü açar; iOS büyüteci / metin seçimi araya girmesin */
+#cv { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+/* Telefon: üst çubuk tek satır (yana kaydırılır), alt çubuk ayarları ⚙ arkasında, kayan çubuklar taşmaz */
+@media (max-width: 700px) {
+  header { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 5px 8px; }
+  header::-webkit-scrollbar { display: none; }
+  header > * { flex: 0 0 auto; }
+  header .spacer { display: none; }
+  #logoTxt { display: none; }
+  #pname { width: 128px; }
+  footer { flex-wrap: nowrap; gap: 6px; padding: 4px 8px; }
+  #floors { overflow-x: auto; flex: 1 1 auto; min-width: 0; scrollbar-width: none; }
+  #bFootOpts { display: block; flex: 0 0 auto; min-width: 36px; }
+  #bFootOpts.on { border-color: var(--accent); }
+  footer .footer-controls, footer .telemetry, footer > .sep, footer > .spacer { display: none; }
+  body.foot-open footer { flex-wrap: wrap; }
+  body.foot-open footer .footer-controls { display: flex; flex-wrap: wrap; width: 100%; }
+  #shapeBar, .ctl3dCam { max-width: calc(100% - 16px); overflow-x: auto; scrollbar-width: none; }
+  #hud { max-width: calc(100% - 120px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
 .flbadge { margin: 0 0 8px; }
 
 @media (max-width: 700px) {
@@ -1290,6 +1338,7 @@ body.fs-open #touchBar { display: none; }
   /* dar ekran: özellik paneli bir çekmece olarak açılır (#82) */
   #bInspect { display: block; position: absolute; top: 12px; right: 12px; z-index: 6; min-width: 34px; height: 34px; }
   #bInspect.on { border-color: var(--accent); }
+  body.props-open #drawerBg { display: block; }
   body.props-open #props { display: block; position: fixed; top: 0; right: 0; bottom: 0; z-index: 90; width: min(86vw, 300px); box-shadow: -8px 0 28px rgba(0, 0, 0, 0.35); }
   body.props-open #bInspect { position: fixed; top: 8px; right: calc(min(86vw, 300px) + 8px); z-index: 91; }
 }
