@@ -27,8 +27,8 @@ const api = new Function(`
   const L = (tr, en) => en, esc = s => s;
   const setTool = t => calls.push('tool:' + t);
   const show3D = on => { calls.push('3d:' + on); ui.view3d = on; };
-  const [undo, redo, fit, saveBrowser, exportPrint, downloadJson, templatesModal, flipSel, scaleSelPrompt, deleteSel, paste, groupSel, ungroupSel, archModal, layerAct, openRenderStudio, helpModal, set3DCam, refresh] =
-    ['undo', 'redo', 'fit', 'save', 'print', 'json', 'new', 'flip', 'scale', 'del', 'paste', 'group', 'ungroup', 'arch', 'layer', 'studio', 'help', 'cam', 'refresh'].map(log);
+  const [undo, redo, fit, saveBrowser, exportPrint, downloadJson, downloadRevit, downloadIfc, templatesModal, flipSel, scaleSelPrompt, deleteSel, paste, groupSel, ungroupSel, archModal, layerAct, openRenderStudio, helpModal, set3DCam, refresh] =
+    ['undo', 'redo', 'fit', 'save', 'print', 'json', 'revit', 'ifc', 'new', 'flip', 'scale', 'del', 'paste', 'group', 'ungroup', 'arch', 'layer', 'studio', 'help', 'cam', 'refresh'].map(log);
   const $ = () => ({ click: () => calls.push('click') });
   let closed = 0; const closeCmdPalette = () => closed++;
   ${block('const TOOLS = [', '];')}

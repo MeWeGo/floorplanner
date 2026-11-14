@@ -1,0 +1,53 @@
+{
+  "_readme": "Which Revit families the Floor Planner add-in uses. Edit and save; no restart needed. Family names match case-insensitively, exactly first, then 'contains' (so 'Single-Flush' also finds 'M_Single-Flush'). A list is tried in order. Anything without a match is built as a DirectShape from the app's own 3D model. See revit/README.md.",
+  "wallType": "",
+  "curtainWallType": "",
+  "railingType": "",
+  "floorType": "",
+  "planViews": true,
+  "roomSeparationLines": true,
+  "doors": {
+    "_readme": "Swing side and hinge come from the plan. If your door family comes out mirrored, flip these.",
+    "swingToFacing": false,
+    "hingeToHand": false
+  },
+  "familyFolders": [],
+  "openings": {
+    "door": ["Single-Flush", "Single-Panel"],
+    "double": ["Double-Flush", "Double-Panel"],
+    "slide": ["Sliding", "Single-Flush"],
+    "window": ["Fixed", "Casement"]
+  },
+  "furniture": {
+    "sofa3": ["Sofa"],
+    "sofa2": ["Sofa"],
+    "armchair": ["Chair-Upholstered", "Armchair"],
+    "chair": ["Chair-Breuer", "Chair"],
+    "ochair": ["Chair-Task", "Chair-Executive"],
+    "table4": ["Table-Dining"],
+    "table6": ["Table-Dining"],
+    "tableR": ["Table-Dining Round", "Table-Round"],
+    "coffee": ["Table-Coffee"],
+    "desk": ["Desk"],
+    "deskL": ["Desk-Corner", "Desk"],
+    "meet": ["Table-Conference", "Table-Dining"],
+    "bed2": ["Bed-Standard", "Bed"],
+    "bed1": ["Bed-Standard", "Bed"],
+    "bedK": ["Bed-Standard", "Bed"],
+    "wardrobe": ["Wardrobe", "Cabinet-File"],
+    "dresser": ["Dresser"],
+    "night": ["Night Stand", "Nightstand"],
+    "bookcase": ["Shelving", "Bookcase"],
+    "shelf": ["Shelving"],
+    "wc": ["Toilet-Domestic", "Toilet"],
+    "basin": ["Sink Vanity", "Sink"],
+    "basin2": ["Sink Vanity", "Sink"],
+    "tub": ["Tub-Rectangular", "Bathtub"],
+    "shower": ["Shower Stall", "Shower"],
+    "fridge": ["Refrigerator"],
+    "stove": ["Range", "Cooker"],
+    "plant": ["Plant"],
+    "tree": ["RPC Tree", "Tree"],
+    "car": ["RPC Car", "Car"]
+  }
+}
