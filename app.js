@@ -63,7 +63,7 @@ const CAT_DEFS = [
   ['island', 2, 'Ada Tezgâh', 180, 90, 90, '▭', 'rect', '#e2e8f0', 'Kitchen Island'],
   ['wm', 2, 'Çamaşır Mak.', 60, 60, 85, '🧺', 'rect', '#cbd5e1', 'Washing Machine'],
   ['cabU', 2, 'Üst Dolap', 80, 35, 70, '🗄️', 'rect', '#e2e8f0', 'Wall Cabinet'],
-  ['wc', 3, 'Klozet', 40, 70, 40, '🚽', 'rect', '#f1f5f9', 'Toilet'],
+  ['wc', 3, 'Klozet', 38, 72, 78, '🚽', 'rect', '#f1f5f9', 'Toilet'],
   ['basin', 3, 'Lavabo', 60, 45, 85, '🚰', 'rect', '#f1f5f9', 'Washbasin'],
   ['basin2', 3, 'Çift Lavabo', 120, 50, 85, '🚰', 'rect', '#f1f5f9', 'Double Washbasin'],
   ['shower', 3, 'Duş Teknesi', 90, 90, 200, '🚿', 'rect', '#bae6fd', 'Shower'],
@@ -72,6 +72,7 @@ const CAT_DEFS = [
   ['wmirror', 3, 'Ayna', 60, 3, 90, '🪞', 'rect', '#cbd5e1', 'Mirror'],
   ['desk', 4, 'Çalışma Masası', 140, 70, 75, '🖥️', 'rect', '#d6b88f', 'Office Desk'],
   ['deskL', 4, 'L Masa', 180, 140, 75, '🖥️', 'rect', '#d6b88f', 'L-Shaped Desk'],
+  ['deskPC', 4, 'Bilgisayarlı Masa', 160, 80, 75, '💻', 'rect', '#5b4636', 'Computer Desk'],
   ['ochair', 4, 'Ofis Koltuğu', 60, 60, 100, '💺', 'round', '#94a3b8', 'Office Chair'],
   ['meet', 4, 'Toplantı Masası', 300, 110, 75, '🗣️', 'rect', '#d6b88f', 'Meeting Table'],
   ['shelf', 4, 'Raf Ünitesi', 120, 35, 180, '📚', 'rect', '#b08968', 'Shelving Unit'],
@@ -1600,6 +1601,20 @@ function roofSvg(f, col, fop, sk) {
   return fs.map(q => `<polygon points="${q.map(p => p[0] + ',' + p[1]).join(' ')}" fill="${col}" fill-opacity="${rop}" stroke="${sk}" stroke-width="1.4" ${dash} stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')
     || `<rect x="${-f.w / 2}" y="${-f.d / 2}" width="${f.w}" height="${f.d}" fill="${col}" fill-opacity="${rop}" stroke="${sk}" stroke-width="1.4" ${dash}/>`;
 }
+// bilgisayarlı masa (deskPC) yerleşimi, 2B ve 3B ortak: kasa sağ arkada, monitörler arkada (yan monitör ≥ 140 cm genişlikte), klavye önde (plan y, + = ön)
+function deskPCLayout(o) {
+  const w = o.w, d = o.d, tw = 22, td = Math.min(45, d * 0.6), tx = w / 2 - tw / 2 - 4, tz = -d / 2 + td / 2 + 4;
+  const x0 = -w / 2 + 4, x1 = tx - tw / 2 - 4, side = w >= 140, mw = Math.max(20, Math.min(62, (x1 - x0 - (side ? 30 : 0)) * 0.95)), cxL = (x0 + x1) / 2;
+  const mx = side ? cxL + 14 : cxL, sx = mx - mw / 2 - 15, mz = -d / 2 + 14, kz = Math.min(d / 2 - 16, mz + 30), kx = mx - 6;
+  return { tw, td, tx, tz, side, mw, mx, sx, mz, kx, kz };
+}
+// CAD planı: kasa, ana + yan monitör, klavye, mouse dikdörtgenleri [x, y, w, h]
+function deskPCPlan(o) {
+  const q = deskPCLayout(o), r = [[q.tx - q.tw / 2, q.tz - q.td / 2, q.tw, q.td], [q.mx - q.mw / 2, q.mz - 1.5, q.mw, 3]];
+  if (q.side) r.push([q.sx - 13, q.mz - 1.5, 26, 3]);
+  r.push([q.kx - 16.5, q.kz - 5.75, 33, 11.5], [q.kx + 22.7, q.kz - 4.5, 6.5, 11]);
+  return r;
+}
 // Çizgisel / CAD modu için mimari blok iç çizgileri (vitrifiye, tezgâh, kolon, bitki, araç, vb.)
 function furnCadSvg(f, hw, hd, sk) {
   const t = f.type, w = f.w, d = f.d, at = `fill="none" stroke="${sk}" stroke-width="1.1" pointer-events="none"`;
@@ -1615,6 +1630,7 @@ function furnCadSvg(f, hw, hd, sk) {
     return [[-bx, -by], [bx, -by], [-bx, by], [bx, by]].map(([cx, cy]) => `<circle cx="${cx}" cy="${cy}" r="${r}" ${at}/><circle cx="${cx}" cy="${cy}" r="${r * 0.5}" ${at}/>`).join('');
   }
   if (t === 'wardrobe' || t === 'dresser' || t === 'cabU') return `<line x1="${-hw}" y1="0" x2="${hw}" y2="0" stroke="${sk}" stroke-width="0.9" stroke-dasharray="4 3" pointer-events="none"/><line x1="${-hw}" y1="${-hd}" x2="${hw}" y2="${hd}" stroke="${sk}" stroke-opacity="0.45" stroke-width="0.9" pointer-events="none"/>`;
+  if (t === 'deskPC') return deskPCPlan(f).map(r => `<rect x="${r[0]}" y="${r[1]}" width="${r[2]}" height="${r[3]}" ${at}/>`).join('');
   if (t === 'chair' || t === 'ochair') return `<line x1="${-hw * 0.72}" y1="${-hd + 6}" x2="${hw * 0.72}" y2="${-hd + 6}" stroke="${sk}" stroke-width="1.3" pointer-events="none"/>`;
   if (t === 'colSq') return `<line x1="${-hw}" y1="${-hd}" x2="${hw}" y2="${hd}" ${at}/><line x1="${hw}" y1="${-hd}" x2="${-hw}" y2="${hd}" ${at}/>`;
   if (t === 'column') return `<line x1="${-hw * 0.7}" y1="${-hd * 0.7}" x2="${hw * 0.7}" y2="${hd * 0.7}" ${at}/><line x1="${hw * 0.7}" y1="${-hd * 0.7}" x2="${-hw * 0.7}" y2="${hd * 0.7}" ${at}/>`;
@@ -10743,6 +10759,62 @@ function furn3D(g, o, C) {
       if (ed) bb(w - wr - 8, h * 0.42, 1.8, tw, wr / 2, h * 0.3, -d / 2 + 3);
       break;
     }
+    case 'deskPC': {
+      // bilgisayarlı masa: çelik T ayaklar + kiriş, tabla, kablo tavası, masa matı; kollu ana monitör + dikey yan monitör (ekranlar ember = ışıklı; Basic malzeme sRGB çevrilmez → renkler doğrusal uzayda koyu yazılır),
+      // camlı oyun kasası (çerçeve, anakart, ekran kartı + RGB, ön fanlar), mekanik klavye + bilek desteği, mouse, ışık çubuğu + webcam
+      const L2 = deskPCLayout(o), top = 3, ph = h - top, fr = MT('#3a4250'), blk = PL('#151922'), cas = PL('#1a1f29'), scr = c => sf('ember', c), rgb = '#1a9187';
+      bb(w, top, d, W(col), 0, ph, 0, 0, ed);
+      const lx = w / 2 - Math.min(10, w * 0.06);
+      for (const sx of [-1, 1]) { bb(6, ph - 3, 8, fr, sx * lx, 3, 0); bb(8, 3, d * 0.85, MT('#424b59'), sx * lx, 0, 0); }
+      bb(2 * lx - 6, 5, 6, fr, 0, ph - 5, 0);
+      if (ed) bb(w * 0.6, 6, 12, MT('#1d222b'), -w * 0.08, ph - 12, -d / 2 + 10);
+      // masa matı: klavye + mouse altında
+      bb(Math.min(w * 0.6, 84), 0.4, Math.min(34, d * 0.42), FB('#181d26'), L2.kx + 8, h, L2.kz + 2);
+      // monitörler: kol direği + VESA çubuğu; ana monitör yatay, yan monitör dikey ve kullanıcıya dönük
+      const mH = L2.mw * 0.58, y0 = h + 12, yc = y0 + mH / 2, armX = L2.side ? L2.mx - L2.mw / 2 - 1 : L2.mx, pz = -d / 2 + 5;
+      cy(2.1, yc - h, fr, armX, h, pz, 12);
+      if (ed) {
+        bb(9, 4, 8, fr, armX, h, pz);
+        bb(4, 3, L2.mz - 3 - pz, fr, armX, yc - 1.5, (pz + L2.mz - 3) / 2);
+        bb((L2.side ? L2.mx - L2.sx : 4) + 4, 3, 2, fr, L2.side ? (L2.mx + L2.sx) / 2 : L2.mx, yc - 1.5, L2.mz - 2.5);
+      }
+      bb(L2.mw, mH, 3, blk, L2.mx, y0, L2.mz, 0, ed);
+      bb(L2.mw - 2.4, mH - 2.6, 0.3, scr('#030a14'), L2.mx, y0 + 1.3, L2.mz + 1.6);
+      if (ed) {
+        // ekranda kod satırları, üstte ışık çubuğu + webcam
+        [[rgb, 0.42, 0.78], ['#243a99', 0.55, 0.66], ['#de4221', 0.3, 0.54]].forEach(([c, f, v]) => bb(L2.mw * f, 0.8, 0.12, scr(c), L2.mx - L2.mw * (0.4 - f / 2), y0 + mH * v, L2.mz + 1.8));
+        bb(L2.mw * 0.68, 1.4, 2.4, MT('#2f3744'), L2.mx, y0 + mH, L2.mz + 0.4);
+        bb(8, 2.4, 3, blk, L2.mx, y0 + mH + 1.4, L2.mz + 0.3);
+      }
+      if (L2.side) {
+        const a = 0.35, sH = 46, sy = yc - sH / 2;
+        bb(26, sH, 3, blk, L2.sx, sy, L2.mz + 2, a, ed);
+        bb(23.6, sH - 2.6, 0.3, scr('#020812'), L2.sx + Math.sin(a) * 1.6, sy + 1.3, L2.mz + 2 + Math.cos(a) * 1.6, a);
+      }
+      // kasa: tabanda + tepede plakalar, sağ yan, arka, file ön (kumaş), sol temperli cam; içi camdan görünür
+      const { tw, td, tx, tz } = L2, TH = 48;
+      if (ed) {
+        for (const yy of [h, h + TH - 1.5]) bb(tw, 1.5, td, cas, tx, yy, tz);
+        bb(1.5, TH - 3, td - 3, cas, tx + tw / 2 - 0.75, h + 1.5, tz);
+        bb(tw - 1.5, TH - 3, 1.5, cas, tx, h + 1.5, tz - td / 2 + 0.75);
+        b(0.4, TH - 3, td - 3, sf('glass', '#4a6a82'), tx - tw / 2 + 0.3, h + TH / 2, tz, 0, 0.3);
+        bb(0.8, TH * 0.66, td * 0.62, PL('#1e2d3b'), tx + tw / 2 - 2.2, h + TH * 0.24, tz - 3);
+        bb(tw * 0.62, 5, td * 0.6, MT('#384254'), tx + 2, h + TH * 0.36, tz - 2);
+        bb(0.4, 1, td * 0.5, scr(rgb), tx - tw * 0.31 + 1.8, h + TH * 0.36 + 3, tz - 2);
+        bb(4, 12, 1.5, scr('#243a99'), tx + tw / 2 - 4, h + TH * 0.62, tz - 6);
+        for (let i = 0; i < 3; i++) cz(5.6, 0.8, scr(i % 2 ? rgb : '#162264'), tx, h + TH * (0.2 + i * 0.29), tz + td / 2 - 2.6);
+      } else bb(tw, TH, td - 1.5, cas, tx, h, tz - 0.75);
+      bb(tw, TH, 1.5, FB('#11151d'), tx, h, tz + td / 2 - 0.75);
+      // klavye + bilek desteği + mouse
+      bb(33, 2, 11.5, MT('#252c38'), L2.kx, h + 0.4, L2.kz);
+      if (ed) {
+        bb(30.5, 0.8, 9, PL('#525d70'), L2.kx, h + 2.4, L2.kz);
+        bb(5.5, 0.9, 3.8, scr(rgb), L2.kx - 10, h + 2.5, L2.kz - 1);
+        bb(33, 1.5, 6, FB('#1e232d'), L2.kx, h + 0.4, L2.kz + 9.5);
+      }
+      sph(g, 3.3, PL('#2b3340'), L2.kx + 26, h + 1.8, L2.kz + 1, 1, 0.5, 1.7);
+      break;
+    }
     case 'bed1': case 'bed2': case 'bedK': {
       // yatak: ahşap karyola + ayaklar, şilte, sarkan yorgan + dönük çarşaf bandı, iki sıra yastık, döşemeli başlık, ayak tahtası
       const legH = h * 0.14, fr = h * 0.26, frame = W(woodD), matY = legH + fr * 0.55, matH = h * 0.36, mTop = matY + matH;
@@ -10945,16 +11017,17 @@ function furn3D(g, o, C) {
     }
     case 'wc': case 'bidet': {
       // klozet / bide: porselen ayak + oval hazne; klozette kapaklı oturak, rezervuar + kapak + krom basma plakası; bidede batarya
-      const pc = PC(col), wc = o.type === 'wc', seatH = wc ? h * 0.55 : h, zc = wc ? d * 0.14 : d * 0.06, rz = wc ? d * 0.34 : d * 0.4;
+      // klozet h = rezervuar üstü (78); eski projelerde h ≈ 40 oturak yüksekliğiydi → toplam yükseklik oradan türetilir
+      const pc = PC(col), wc = o.type === 'wc', H = wc && h < 60 ? h * 1.95 : h, seatH = wc ? H * 0.53 : h, zc = wc ? d * 0.12 : d * 0.06, rz = wc ? d * 0.37 : d * 0.4;
       bb(w * 0.46, seatH * 0.7, d * 0.42, pc, 0, 0, zc - d * 0.05, 0, ed);
       cy(w * 0.46, seatH * 0.36, pc, 0, seatH * 0.62, zc, 22, rz);
       if (wc) {
         cy(w * 0.47, 2, PL('#ffffff'), 0, seatH * 0.98, zc, 22, rz * 1.02);
         cy(w * 0.45, 1.6, PL('#ffffff'), 0, seatH * 0.98 + 2, zc, 22, rz * 0.98);
         bb(w * 0.5, seatH * 0.5, d * 0.2, pc, 0, seatH * 0.45, -d / 2 + d * 0.27);
-        bb(w * 0.86, h - seatH * 0.9 - 2.5, d * 0.22, pc, 0, seatH * 0.9, -d / 2 + d * 0.12, 0, ed);
-        bb(w * 0.9, 2.5, d * 0.25, pc, 0, h - 2.5, -d / 2 + d * 0.125);
-        if (ed) bb(w * 0.3, 0.6, d * 0.1, chrome, 0, h, -d / 2 + d * 0.12);
+        bb(w * 0.86, H - seatH * 0.9 - 2.5, d * 0.22, pc, 0, seatH * 0.9, -d / 2 + d * 0.12, 0, ed);
+        bb(w * 0.9, 2.5, d * 0.25, pc, 0, H - 2.5, -d / 2 + d * 0.125);
+        if (ed) bb(w * 0.3, 0.6, d * 0.1, chrome, 0, H, -d / 2 + d * 0.12);
       } else {
         cy(w * 0.47, 2.5, pc, 0, seatH - 2.5, zc, 22, rz);
         if (ed) cy(w * 0.32, 0.4, PC(shade(col, -0.1)), 0, seatH - 0.2, zc + d * 0.04, 22, rz * 0.62);
