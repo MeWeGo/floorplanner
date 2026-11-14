@@ -502,6 +502,41 @@ check('3D: walls and windows are selectable, a window drags along its wall (issu
   return 'window select + highlight, wall-constrained drag committed, plain wall selected';
 });
 
+check('3D: furniture and doors are placed from the library without leaving 3D', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { skipped: true };
+    set3DCam('top'); await new Promise(r => setTimeout(r, 150));
+    const cnv = T3.r.domElement, rect = cnv.getBoundingClientRect();
+    const scr = (x, y, z) => { const c = new THREE.Vector3(x, y, z).project(T3.cam); return { x: rect.left + (c.x + 1) / 2 * rect.width, y: rect.top + (1 - c.y) / 2 * rect.height }; };
+    const ev = (t, p) => cnv.dispatchEvent(new PointerEvent(t, { clientX: p.x, clientY: p.y, bubbles: true, button: 0, pointerId: 1 }));
+    const out = {};
+    document.querySelector('#items .item[data-type="furn"]')?.click() || startPlace('furn', BYID.sofa3);
+    out.stay3d = ui.view3d && tool === 'place';
+    const n0 = F().furn.length, h0 = hi, p = scr(300, 0, 200);
+    ev('pointermove', p); out.ghost = !!(T3.ghost && T3.ghost.visible);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', bubbles: true })); out.rot = placing.rot === 90;
+    ev('pointerdown', p); ev('pointerup', p);
+    out.placed = F().furn.length === n0 + 1 && hi === h0 + 1; out.still = ui.view3d && tool === 'place';
+    const o = F().furn[F().furn.length - 1]; out.near = o && Math.hypot(o.x - 300, o.y - 200) < 60;
+    startPlace('op', OPDEF.door); const q = scr(300, 100, 0);
+    ev('pointermove', q); ev('pointerdown', q); ev('pointerup', q);
+    out.door = F().ops.length === 1;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    out.esc = ui.view3d && tool === 'select' && !T3.ghost.visible;
+    show3D(false); sel = []; refresh();
+    return out;
+  })()`);
+  if (info.skipped) return '3D unavailable';
+  if (!info.stay3d) throw new Error('picking a library item in 3D left the 3D view: ' + JSON.stringify(info));
+  if (!info.ghost || !info.rot) throw new Error('no 3D placement ghost, or R did not rotate it: ' + JSON.stringify(info));
+  if (!info.placed || !info.still || !info.near) throw new Error('a click in 3D did not place the item where clicked: ' + JSON.stringify(info));
+  if (!info.door) throw new Error('a door could not be placed on a wall in 3D: ' + JSON.stringify(info));
+  if (!info.esc) throw new Error('Esc did not end 3D placement while staying in 3D: ' + JSON.stringify(info));
+  return 'library pick stays in 3D, ghost follows, R rotates, click places, door on wall, Esc ends';
+});
+
 check('section tool, 2D section / elevation drawings and the 3D cutaway (issues #30, #31)', async page => {
   const info = await page.evaluate(`(async () => {
     const p = newProject(); p.floors.push(newFloor('1')); loadProject(p);

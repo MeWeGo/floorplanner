@@ -4499,7 +4499,7 @@ function buildTools() {
 function updateTools() {
   document.querySelectorAll('.tool').forEach(b => b.classList.toggle('on', b.dataset.tool === ui.btn));
   $('#hud').textContent = ui.view3d
-    ? L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Ctrl+Z: Geri al • Del: Sil • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Ctrl+Z: Undo • Del: Delete • Esc: 2D')
+    ? (tool === 'place' && placing ? L('3B yerleştirme: Tık: yerleştir • R: döndür • Shift: serbest • Sürükle: döndür / bak • Esc: bitir • ', '3D placing: Click: place • R: rotate • Shift: free • Drag: orbit / look • Esc: done • ') : '') + L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Ctrl+Z: Geri al • Del: Sil • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Ctrl+Z: Undo • Del: Delete • Esc: 2D')
     : ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '');
   $('#hud').style.display = '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
@@ -4519,12 +4519,15 @@ function setTool(t) {
   else if (t === 'furn') { ui.cat = ui.cat === 0 ? 1 : ui.cat; buildLib(); $('#search').focus(); tool = 'select'; ui.btn = 'select'; toast(L('Soldaki listeden bir mobilya seç', 'Select a furniture item from the left panel')); }
   else if (t === 'railing') tool = 'wall'; // korkuluk aracı = duvar aracı (aynı yakalama / uzunluk yazma), yeni parçalar korkuluk olur
   else tool = t;
-  if (ui.view3d) show3D(false);
+  // seç / mobilya / kapı / pencere 3B'de de çalışır (3B yerleştirme); diğer çizim araçları 2B'ye döner
+  if (ui.view3d && !['select', 'furn', 'door', 'window'].includes(t)) show3D(false);
+  ui.ghost = null; place3DSync();
   updateTools(); render();
 }
 function startPlace(type, def) {
   ui.draw = null; placing = { type, def, rot: 0, flip: def.flip || 0 }; tool = 'place'; ui.btn = type === 'op' ? (def.id.startsWith('w') ? 'window' : 'door') : null;
-  if (ui.view3d) show3D(false);
+  ui.ghost = null; place3DSync(); // 3B'de kalınır: hayalet imleçle gezer, tık = yerleştir
+  if (ui.view3d) toast(L('3B: zemine tıkla ve yerleştir • R: döndür • Esc: bitir', '3D: click to place • R: rotate • Esc: done'));
   updateTools(); render();
 }
 
@@ -4664,7 +4667,7 @@ function updateGhost() {
     const f = mkFurn(placing.def, 0, 0, placing.rot);
     const g = ui.snap && !ui.shift, sp = g ? snapToGrid(p) : p;
     f.x = sp.x; f.y = sp.y;
-    const c = g && nearCenter(p, 18 / view.z); // oda / grup merkezine kilitlen (#25), yoksa duvara yapış
+    const c = g && nearCenter(p, ui.view3d ? 25 : 18 / view.z); // oda / grup merkezine kilitlen (#25), yoksa duvara yapış (3B: sabit 25 cm)
     if (c) { f.x = c.x; f.y = c.y; ui.cur = { x: c.x, y: c.y, hit: 'center' }; }
     else if (!ui.shift) magnet(f);
     ui.ghost = f;
@@ -6654,7 +6657,12 @@ window.addEventListener('keydown', e => {
   // komut satırı (#43): ":" — 2B'de de 3B'de de; açık bir pencere (modal) varken değil
   if (e.key === ':' && !ctrl && !e.altKey && $('#modalbg').style.display !== 'flex') { e.preventDefault(); keys3D.clear(); openCmdPalette(); return; }
   if (ui.view3d) {
+    if (e.key === 'Escape' && tool === 'place') { setTool('select'); return; } // 3B yerleştirmeyi bitir, 3B'de kal
     if (e.key === 'Escape') { if (T3 && T3.walk) exitWalk(true); else show3D(false); return; }
+    if (tool === 'place' && placing && !ctrl && k === 'r') { // 3B yerleştirme: R = döndür (mobilya) / menteşe yönü (kapı)
+      if (placing.type === 'furn') placing.rot = ((placing.rot || 0) + 90) % 360; else placing.flip = placing.flip ? 0 : 1;
+      updateGhost(); place3DSync(); return;
+    }
     // Editing shortcuts must keep working while the user is looking at the 3D
     // model: undo/redo used to fall through to the early return below, so the
     // most-pressed key in the app silently did nothing in 3D. restore() already
@@ -9488,6 +9496,7 @@ function init3D() {
   r.domElement.addEventListener('pointerdown', e => {
     if (e.button !== 0 || !ui.view3d) return;
     if (T3 && T3.walk) { T3.walk.drag = { x: e.clientX, y: e.clientY }; return; } // yürüme (#46): sürükle = etrafa bak
+    if (place3DOn()) return; // 3B yerleştirme: sürükle = yörünge, tık (pointerup) = yerleştir
     const rc = ray3(e);
     const hits = rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh);
     if (!hits.length) return;
@@ -9643,9 +9652,12 @@ function init3D() {
     d3 = null;
   }, { passive: true });
   r.domElement.addEventListener('pointerdown', e => { if (e.button === 0) downPt = { x: e.clientX, y: e.clientY }; });
+  r.domElement.addEventListener('pointermove', e => { if (place3DOn() && !e.buttons) place3DMove(e); }); // hayalet imleci izler (sürüklerken değil)
+  r.domElement.addEventListener('pointerleave', () => { if (place3DOn()) { ui.ghost = null; place3DSync(); } });
   r.domElement.addEventListener('pointerup', e => {
     const dp = downPt; downPt = null; // eski bir basış konumu sonraki tıkı tetiklemesin
     if (!dp || e.button !== 0 || Math.hypot(e.clientX - dp.x, e.clientY - dp.y) > 5) return;
+    if (place3DOn()) { place3DMove(e); place3DClick(); return; } // 3B yerleştirme (yürüme modunda da)
     T3.cam.updateMatrixWorld(); scene.updateMatrixWorld();
     const rect = r.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
@@ -11368,6 +11380,7 @@ function build3D(keepCam = false) {
   req3D();
   sync3DFloors();
   const lt = isLight(), S = T3.scene;
+  if (T3.ghost) S.remove(T3.ghost); // 3B yerleştirme hayaleti kalıcıdır: sahne temizliğinde dispose edilmesin
   // önceki sahnenin GPU kaynaklarını serbest bırak (sık yeniden yapılanmalarda sızıntı olmasın)
   if (T3.mats) {
     const geos = new Set(); S.traverse(o => { if (o.geometry) geos.add(o.geometry); });
@@ -11705,7 +11718,7 @@ function build3D(keepCam = false) {
   T3.texs = texs;
   T3.ctl.update();
   if (T3.walk) applyWalkCam();
-  refreshSel3D(); applySecClip(); applyLive3D();
+  refreshSel3D(); applySecClip(); applyLive3D(); place3DSync();
 }
 
 /* ---------- 3B seçim vurgusu & canlı güncelleme ---------- */
@@ -11749,6 +11762,62 @@ function moveFurn3D(o) {
 function schedBuild3D() {
   if (!T3 || !ui.view3d) return;
   clearTimeout(b3t); b3t = setTimeout(() => { if (T3 && ui.view3d) build3D(true); }, 90);
+}
+
+/* ---------- 3B yerleştirme (kütüphaneden mobilya / kapı / pencere, 2B'ye dönmeden) ----------
+   2B yer tutucu mantığı aynen kullanılır: ui.raw → updateGhost() (ızgara, oda merkezi, duvara yapışma) → placeAt().
+   Mobilya: ışın etkin katın zemin düzlemine; kapı/pencere: imlecin altındaki ilk yüzey (duvar yüzü) → wallNear().
+   Hayalet tek birim kutu + kenar çizgisidir, ölçeklenip taşınır (fare hareketinde ayırma yok). */
+function place3DOn() { return !!(ui.view3d && T3 && tool === 'place' && placing); }
+function place3DFloor() {
+  const i = walkFloorIdx();
+  if (i !== fi) { fi = i; sel = []; renderFloors(); render(); } // yerleştirme görünen katta yapılır
+  return walkElev(i);
+}
+function place3DMove(e) {
+  if (!place3DOn()) return;
+  const r = T3.r, rect = r.domElement.getBoundingClientRect();
+  T3.cam.updateMatrixWorld(); T3.scene.updateMatrixWorld();
+  const rc = camRay(new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1));
+  const elev = place3DFloor(); let p = null;
+  if (placing.type === 'op') {
+    const h = rc.intersectObjects(T3.scene.children, true).find(x => x.object.isMesh && !x.object.userData.ghost);
+    if (h && h.point.y >= elev - 1 && h.point.y <= elev + floorH(F()) + 1) p = { x: h.point.x, y: h.point.z };
+  }
+  if (!p) { const v = new THREE.Vector3(); if (rc.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -elev), v)) p = { x: v.x, y: v.z }; }
+  ui.raw = p; ui.shift = e.shiftKey; T3.ghostElev = elev;
+  updateGhost(); place3DSync();
+}
+function place3DClick() {
+  if (!place3DOn() || !ui.raw) return;
+  const n = F()[placing.type === 'op' ? 'ops' : 'furn'].length;
+  placeAt(ui.raw);
+  if (F()[placing.type === 'op' ? 'ops' : 'furn'].length !== n) build3D(true); // eklendi → sahneyi tazele, araç açık kalır (art arda yerleştirme)
+}
+function place3DSync() {
+  if (!T3 || !T3.scene) return;
+  const o = place3DOn() ? ui.ghost : null;
+  T3.r.domElement.style.cursor = place3DOn() ? 'crosshair' : '';
+  if (!o) { if (T3.ghost) T3.ghost.visible = false; req3D(); return; }
+  if (!T3.ghost) {
+    const geo = new THREE.BoxGeometry(1, 1, 1), g = new THREE.Group();
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.35, depthWrite: false }));
+    const ln = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0xf59e0b }));
+    m.userData.ghost = ln.userData.ghost = true; m.raycast = ln.raycast = () => {}; // ışın hayaleti görmez
+    g.add(m, ln); g.userData = { ghost: true }; T3.ghost = g;
+  }
+  const g = T3.ghost, elev = T3.ghostElev || 0;
+  if (g.parent !== T3.scene) T3.scene.add(g);
+  if (placing.type === 'furn') {
+    g.scale.set(Math.max(1, o.w), Math.max(1, o.h || 1), Math.max(1, o.d));
+    g.position.set(o.x, elev + furnElev(o) + (o.h || 1) / 2, o.y); g.rotation.set(0, -(o.rot || 0) * Math.PI / 180, 0);
+  } else {
+    const w = F().walls.find(x => x.id === o.wall); if (!w) { g.visible = false; req3D(); return; }
+    const L = wLen(w), ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L;
+    g.scale.set(o.w, o.h, (w.t || 20) + 4);
+    g.position.set(w.a.x + ux * o.d, elev + (o.sill || 0) + o.h / 2, w.a.y + uy * o.d); g.rotation.set(0, -Math.atan2(uy, ux), 0);
+  }
+  g.visible = true; req3D();
 }
 
 /* ---------- Dil arayüzü & Başlatma ---------- */
