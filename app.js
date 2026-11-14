@@ -5449,7 +5449,10 @@ function renderProps() {
   const el = $('#props'), os = selObjs(), bi = $('#bInspect');
   syncTouchBar();
   if (bi) bi.classList.toggle('on', os.length > 0); // dar ekran: seçim varken düğme vurgulanır (#82)
-  if (!os.length) { el.innerHTML = projectPanel(); return; }
+  if (!os.length) { // kopyalanmış nesne varsa (başka sekmeden de) seçim olmadan yapıştırılabilsin: klavyesiz cihazlar
+    const pc = ui.clip && ui.clip.length ? `<div class="row clipRow"><button class="btn sm primary" data-act="paste" title="Ctrl+V">📥 ${L('Yapıştır', 'Paste')} <span class="muted">(${ui.clip.length} ${L('nesne', ui.clip.length > 1 ? 'objects' : 'object')})</span></button></div>` : '';
+    el.innerHTML = pc + projectPanel(); return;
+  }
   const kinds = [...new Set(os.map(x => x.kind))];
   const xf = os.some(x => XFORM_KINDS.has(x.kind)) ? `<div class="row"><button class="btn sm" data-act="flipH" title="Shift+H">${L('⇋ Yatay aynala', '⇋ Flip H')}</button><button class="btn sm" data-act="flipV" title="Shift+V">${L('⇵ Dikey aynala', '⇵ Flip V')}</button><button class="btn sm" data-act="mirror" title="I">${L('🪞 Eksene göre…', '🪞 Mirror…')}</button><button class="btn sm" data-act="scale">${L('⤢ Ölçekle…', '⤢ Scale…')}</button></div>` : '';
   const acts = (extra = '') => floorBadgeHtml() + selLayerHtml(os) + xf + `<div class="row">${extra}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;

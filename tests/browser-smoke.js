@@ -1968,6 +1968,7 @@ check('touch action bar: shown on touch / hidden with a mouse, copy an object in
     if (tabIdx === srcTab) return { err: 'no new tab opened' };
     const pasteBtn = document.querySelector('#touchBar [data-tb="paste"]');
     if (!pasteBtn || pasteBtn.disabled) return { err: 'paste disabled in the new tab' };
+    if (!document.querySelector('#props [data-act="paste"]')) return { err: 'no Paste button in the side panel of the new tab (nothing selected)' };
     pasteBtn.click();
     const got = F().furn.map(o => o.type);
     document.querySelector('#touchBar [data-tb="undo"]').click();
