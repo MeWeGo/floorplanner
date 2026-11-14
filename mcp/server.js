@@ -261,7 +261,9 @@ function parsePts(v, min, name) {
    - Local cm, centre of the item = (0, 0), y points down like the plan, z = BOTTOM elevation above the floor.
    - type: box | cyl | sphere | extrude. cyl stands upright (axis z) unless axis is 'x' or 'y' (lying);
      its w × d × h is always the bounding box. extrude = pts polygon (cm, relative to x, y) lifted h from z.
-   - rot = degrees clockwise on the plan, like furniture rot. mat: matte (default) | gloss | metal | glass.
+   - rot = degrees clockwise on the plan, like furniture rot. mat: matte (default) | gloss | metal | glass, or a textured
+     surface finish (#93): wood | fabric | leather | stone | marble | ceramic | chrome | plastic | rubber | foliage,
+     or a project texture tex:<id> (P.textures). The finish only changes how the part is drawn in 3D.
    - rx / ry = optional tilt in degrees about the part's own x / y axis (all-axis rotation). The part turns about its
      centre (x, y, z + h/2) as R = Rz(rot) · Ry(ry) · Rx(rx): first rx, then ry, then rot. Absent = 0 (upright).
    - gid = optional group id (1–16 letters / digits / _ / -). Parts with the same gid form a group in the furniture
@@ -270,7 +272,8 @@ function parsePts(v, min, name) {
 const PARTS_V = 1;
 const PART_TYPES = ['box', 'cyl', 'sphere', 'extrude'];
 const PART_ALIAS = Object.assign(Object.create(null), { box: 'box', cube: 'box', cyl: 'cyl', cylinder: 'cyl', sphere: 'sphere', sph: 'sphere', ball: 'sphere', extrude: 'extrude', prism: 'extrude' }); // no prototype keys ("constructor")
-const PART_MATS = ['matte', 'gloss', 'metal', 'glass'];
+const PART_MATS = ['matte', 'gloss', 'metal', 'glass', 'wood', 'fabric', 'leather', 'stone', 'marble', 'ceramic', 'chrome', 'plastic', 'rubber', 'foliage'];
+const partMatOk = v => PART_MATS.includes(v) || (typeof v === 'string' && /^tex:[\w-]{1,32}$/.test(v)); // tex:<id> = project texture
 const PARTS_MAX = 64, PARTS_SOFT = 40;
 // small helpers kept inside the block on purpose (instead of the app's rnd / clamp) so it can be pasted verbatim into mcp/server.js
 const partFin = v => v !== null && v !== undefined && v !== '' && typeof v !== 'boolean' && Number.isFinite(+v);
@@ -300,7 +303,7 @@ function cleanPart(p) {
   const r = n(p.rot, 0); if (r) q.rot = partR(((r % 360) + 360) % 360);
   for (const k of ['rx', 'ry']) { const t = partR(((n(p[k], 0) % 360) + 360) % 360); if (t && t !== 360) q[k] = t; }
   if (partHex(p.color)) q.color = p.color;
-  if (PART_MATS.includes(p.mat) && p.mat !== 'matte') q.mat = p.mat;
+  if (partMatOk(p.mat) && p.mat !== 'matte') q.mat = p.mat;
   if (type === 'cyl' && (p.axis === 'x' || p.axis === 'y')) q.axis = p.axis;
   return q;
 }
@@ -368,7 +371,7 @@ function partIssues(p, base) {
     if (!(partFin(p.h) && +p.h > 0)) e.push('h must be a number > 0');
   } else for (const k of ['w', 'd', 'h']) if (!(partFin(p[k]) && +p[k] > 0)) e.push(k + ' must be a number > 0');
   if (p.color !== undefined && p.color !== null && !partHex(p.color)) e.push('color must be #rgb or #rrggbb');
-  if (p.mat !== undefined && p.mat !== null && !PART_MATS.includes(p.mat)) e.push('mat must be one of ' + PART_MATS.join(', '));
+  if (p.mat !== undefined && p.mat !== null && !partMatOk(p.mat)) e.push('mat must be one of ' + PART_MATS.join(', ') + ' or tex:<id>');
   if (p.axis !== undefined && p.axis !== null && !['x', 'y', 'z'].includes(p.axis)) e.push('axis must be x, y or z');
   if (p.gid !== undefined && p.gid !== null && !(typeof p.gid === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(p.gid))) e.push('gid must be 1-16 letters, digits, _ or -');
   if (!e.length && base) {
@@ -842,6 +845,15 @@ const FURN_TEMPLATES = {
   },
   billiards: { tr: "Bilardo Masası", en: "Billiards Table", icon: "🎱", w: 280, d: 155, h: 85, color: "#5b3a24", parts: billiardParts }
 };
+// textured finishes for the templates (#93): parts without a mat get the template's main finish, parts in a listed colour the soft one
+const TPL_FINISH = {
+  table: ['wood'], desk: ['wood'], stool: ['wood'], bookcase: ['wood'], cabinet: ['wood'], coffee: ['wood'], wardrobe: ['wood'], nightstand: ['wood'],
+  chair: ['wood', 'fabric', ['#475569']], bed: ['wood', 'fabric', ['#dcd3c5', '#f1f5f9', '#94a3b8']], sofa: ['fabric'],
+};
+for (const k of Object.keys(TPL_FINISH)) {
+  const t = FURN_TEMPLATES[k], [main, soft, cols] = TPL_FINISH[k], gen = t && t.parts;
+  if (typeof gen === 'function') t.parts = (...a) => gen(...a).map(p => p.mat ? p : Object.assign(p, { mat: soft && cols.includes(p.color) ? soft : main }));
+}
 /* PARTS-ENGINE:END */
 /* IFC-IMPORT:BEGIN ---------- IFC içe aktarma (Revit / ArchiCAD / BIM dışa aktarımı) ----------
    Saf JS, bağımlılıksız; DOM'a ve global duruma dokunmaz. ifcToProject(text, opts) bir IFC-SPF
@@ -2844,7 +2856,7 @@ const FURN_SCHEMA = {
     name: 'optional label, e.g. "leg"', x: 'centre x', y: 'centre y', z: 'bottom elevation (0 = floor)',
     w: 'size along local x', d: 'size along local y', h: 'height', rot: 'degrees clockwise on the plan (yaw, about the upright z axis)', rx: 'optional tilt in degrees about the part x axis (forward / back)', ry: 'optional tilt in degrees about the part y axis (sideways); the part turns about its centre as Rz(rot)·Ry(ry)·Rx(rx), so z is the bottom only while it is upright',
     gid: 'optional group id (1–16 letters / digits / _ / -); parts with the same gid are grouped in the furniture studio (rendering ignores it)',
-    color: '#rgb / #rrggbb (default: the item colour)', mat: PART_MATS.join(' | ') + ' (default matte)',
+    color: '#rgb / #rrggbb (default: the item colour)', mat: PART_MATS.join(' | ') + ' | tex:<id> (default matte; textured finishes tint with the colour)',
     axis: 'cyl only: z (upright, default) | x | y (lying along that axis; w × d × h is still the bounding box)',
     pts: 'extrude only: 3+ {x, y} points relative to the part centre; extruded h up from z',
   },
@@ -2913,7 +2925,7 @@ const partProps = {
   ry: { type: 'number', description: 'Tilt in degrees about the part y axis (sideways). Applied after rx, before rot.' },
   gid: { type: 'string', description: 'Optional group id (1-16 letters / digits / _ / -); parts sharing it are grouped in the furniture studio.' },
   color: { type: 'string', description: '#hex. Default: the item colour.' },
-  material: { type: 'string', enum: PART_MATS, description: 'matte (default) | gloss | metal | glass.' },
+  material: { type: 'string', description: 'matte (default) | gloss | metal | glass, or a textured finish: wood | fabric | leather | stone | marble | ceramic | chrome | plastic | rubber | foliage, or tex:<id> for a project texture (see summarize / P.textures).' },
   axis: { type: 'string', enum: ['z', 'x', 'y'], description: 'cyl only: z upright (default), x / y lying along that axis.' },
   pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: 'extrude only: 3+ outline points relative to the part centre.' },
 };
@@ -3003,7 +3015,7 @@ tool('set_material',
   Object.assign({ furnitureId: furnIdArg }, pickArgs, {
     everything: { type: 'boolean', description: 'Apply to every part.' },
     color: { type: 'string', description: '#hex.' },
-    material: { type: 'string', enum: PART_MATS, description: 'matte | gloss | metal | glass.' },
+    material: { type: 'string', description: 'matte (default) | gloss | metal | glass, or a textured finish: wood | fabric | leather | stone | marble | ceramic | chrome | plastic | rubber | foliage, or tex:<id> for a project texture (see summarize / P.textures).' },
     floorIndex: floorArg,
   }),
   ['furnitureId'],
@@ -3011,7 +3023,7 @@ tool('set_material',
     const o = findFurnObj(floorOf(a), String(a.furnitureId), true);
     if (a.color === undefined && a.material === undefined) throw new Error('Pass color and/or material');
     if (a.color !== undefined && !partHex(a.color)) throw new Error('color must be #rgb or #rrggbb');
-    if (a.material !== undefined && !PART_MATS.includes(a.material)) throw new Error('material must be one of ' + PART_MATS.join(', '));
+    if (a.material !== undefined && !partMatOk(a.material)) throw new Error('material must be one of ' + PART_MATS.join(', ') + ' or tex:<id>');
     const idx = a.everything ? o.parts.map((p, i) => i) : pickParts(o, a);
     for (const i of idx) { const p = o.parts[i]; if (a.color !== undefined) p.color = a.color; if (a.material !== undefined) { if (a.material === 'matte') delete p.mat; else p.mat = a.material; } }
     return 'Set ' + [a.color, a.material].filter(Boolean).join(' / ') + ' on ' + idx.length + ' part(s).';
