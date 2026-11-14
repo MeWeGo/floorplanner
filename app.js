@@ -593,7 +593,7 @@ function restore(s) {
 }
 function undo() { if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
 function redo() { if (hi < hist.length - 1) { hi++; restore(hist[hi]); autosave(); updateUndo(); } }
-function updateUndo() { $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = hi >= hist.length - 1; }
+function updateUndo() { $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = hi >= hist.length - 1; syncTouchBar(); }
 /* ---------- Çizim katmanları (issue #32) ----------
    P.layers = [{ id, name, color, vis, lock, print }], P.activeLayer = id. '0' = Varsayılan katman, silinemez.
    Nesnede layer alanı yoksa '0' sayılır (eski projeler değişmeden açılır). commit() etkin katman '0' değilse
@@ -4838,6 +4838,13 @@ function openCtxMenu(e) {
       + `<button data-cmxf="mirror">🪞 ${L('Eksene göre aynala…', 'Mirror about axis…')} <kbd>I</kbd></button>`
       + `<button data-cmxf="scale">⤢ ${L('Ölçekle…', 'Scale…')}</button>`;
   }
+  if (sel.length || (ui.clip && ui.clip.length)) {
+    h += `<div class="cm-sep"></div>`
+      + (sel.length ? `<button data-cmed="copy">📋 ${L('Kopyala', 'Copy')} <kbd>Ctrl+C</kbd></button>` : '')
+      + (ui.clip && ui.clip.length ? `<button data-cmed="paste">📥 ${L('Yapıştır', 'Paste')} <kbd>Ctrl+V</kbd></button>` : '')
+      + (sel.length ? `<button data-cmed="dup">⧉ ${L('Çoğalt', 'Duplicate')} <kbd>Ctrl+D</kbd></button><button data-cmed="del">🗑 ${L('Sil', 'Delete')} <kbd>Del</kbd></button>` : '');
+  }
+  if (!h) return;
   m.innerHTML = h; document.body.appendChild(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.min(e.clientX, innerWidth - r.width - 6) + 'px';
@@ -4846,6 +4853,8 @@ function openCtxMenu(e) {
   m.addEventListener('click', ev => {
     const s = ev.target.closest('[data-cmsel]');
     if (s) { sel = [s.dataset.cmsel]; closeCtxMenu(); refresh(); return; }
+    const ed = ev.target.closest('[data-cmed]');
+    if (ed) { closeCtxMenu(); touchAct(ed.dataset.cmed); return; }
     const xf = ev.target.closest('[data-cmxf]');
     if (xf) { closeCtxMenu(); const v = xf.dataset.cmxf; if (v === 'mirror') setTool('mirror'); else if (v === 'scale') scaleSelPrompt(); else flipSel(v === 'flipH' ? 'h' : 'v'); return; }
     const l = ev.target.closest('[data-cmlayer]');
@@ -5438,11 +5447,12 @@ function bgFields(inProps = false) {
 }
 function renderProps() {
   const el = $('#props'), os = selObjs(), bi = $('#bInspect');
+  syncTouchBar();
   if (bi) bi.classList.toggle('on', os.length > 0); // dar ekran: seçim varken düğme vurgulanır (#82)
   if (!os.length) { el.innerHTML = projectPanel(); return; }
   const kinds = [...new Set(os.map(x => x.kind))];
   const xf = os.some(x => XFORM_KINDS.has(x.kind)) ? `<div class="row"><button class="btn sm" data-act="flipH" title="Shift+H">${L('⇋ Yatay aynala', '⇋ Flip H')}</button><button class="btn sm" data-act="flipV" title="Shift+V">${L('⇵ Dikey aynala', '⇵ Flip V')}</button><button class="btn sm" data-act="mirror" title="I">${L('🪞 Eksene göre…', '🪞 Mirror…')}</button><button class="btn sm" data-act="scale">${L('⤢ Ölçekle…', '⤢ Scale…')}</button></div>` : '';
-  const acts = (extra = '') => floorBadgeHtml() + selLayerHtml(os) + xf + `<div class="row">${extra}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+  const acts = (extra = '') => floorBadgeHtml() + selLayerHtml(os) + xf + `<div class="row">${extra}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
   if (kinds.length > 1) {
     const gs = os.filter(x => GROUPABLE[x.kind]);
     const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
@@ -5800,6 +5810,8 @@ $('#props').addEventListener('click', e => {
   if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
+  if (a === 'copy') { copySel(); return renderProps(); }
+  if (a === 'paste') return paste(false);
   if (a === 'flipH' || a === 'flipV') return flipSel(a === 'flipH' ? 'h' : 'v');
   if (a === 'archview') return archModal('elev:south');
   if (a === 'wallhfloor' || a === 'wallhall' || a === 'floorhreset') {
@@ -6521,7 +6533,7 @@ function variantBodyHtml() {
   <div class="row"><button class="btn sm" data-act="varSave" title="${L('Mevcut konumu/boyutu bu düzene kaydet', 'Save current position/size to this layout')}">💾 ${L('Kaydet', 'Save')}</button><button class="btn sm primary" data-act="varNew">➕ ${L('Yeni', 'New')}</button>${vars.length >= 2 ? `<button class="btn sm" data-act="varNext" title="${L('Sıradaki düzene geç', 'Cycle to next layout')}">↻</button>` : ''}<button class="btn sm" data-act="varDel" style="color:var(--danger)" title="${L('Bu düzeni sil', 'Delete this layout')}">🗑</button></div>
   <p class="muted" style="margin:4px 0 6px">${L('Aktif düzendeki konum ve boyut değişiklikleri otomatik kaydedilir. Tuvalde "👆 Tıkla" göstergesine tıklayarak düzenler arasında geçin.', 'Position & size changes in the active layout are auto-saved. Click the "👆 Click me" badge on canvas to cycle layouts.')}</p>`;
 }
-function copySel() { ui.clip = selObjs().map(({ kind, o }) => ({ kind, o: JSON.parse(JSON.stringify(o)) })); pasteN = 0; if (ui.clip.length) toast(ui.clip.length + L(' nesne kopyalandı', ' object(s) copied')); }
+function copySel() { ui.clip = selObjs().map(({ kind, o }) => ({ kind, o: JSON.parse(JSON.stringify(o)) })); pasteN = 0; if (ui.clip.length) toast(ui.clip.length + L(' nesne kopyalandı · başka bir sekmede de yapıştırılabilir', ' object(s) copied · can be pasted in another tab too')); syncTouchBar(); }
 function paste(fromSel, at = null) {
   if (fromSel) copySel();
   const items = ui.clip; if (!items || !items.length) return;
@@ -6546,6 +6558,45 @@ function paste(fromSel, at = null) {
   sel = ids; if (at != null) return; // yerinde kopya (aynalama): çağıran commit eder
   commit(); refresh();
   if (ui.view3d && T3) schedBuild3D();
+}
+
+/* ---------- Dokunmatik eylem çubuğu ----------
+   Telefon / tablette klavye yok: Ctrl+C / V / D / Z ve Del yerine tuvalin altında küçük bir düğme çubuğu.
+   Yalnızca dokunmatik (pointer: coarse) ya da dar ekranda görünür (style.css). ui.clip sekmeler arasında
+   ortak olduğundan, bir sekmede kopyalanan nesne (ör. yapay zekânın çizdiği) başka sekmeye yapıştırılabilir. */
+function touchAct(a) {
+  if (a === 'undo') return undo();
+  if (a === 'redo') return redo();
+  if (a === 'copy') { copySel(); return renderProps(); }
+  if (a === 'paste') return paste(false);
+  if (a === 'dup') return paste(true);
+  if (a === 'del') return deleteSel();
+  if (a === 'all') { sel = allPickableIds(); return refresh(); }
+  if (a === 'none') { sel = []; refresh(); if (ui.view3d && T3) refreshSel3D(); }
+}
+function allPickableIds() { const f = F(), ids = []; for (const a in KINDS) (f[a] || []).forEach(o => { if (pickable(o.id)) ids.push(o.id); }); return ids; } // = Ctrl+A
+/* Dokunmatik arayüz: ekran genişliği iyi bir gösterge değil (tabletler geniş, dar masaüstü penceresi klavyeli).
+   Başlangıç cihazın bildirdiği birincil girdiden (hover yok / kaba işaretçi), sonra son kullanılan girdiden gelir:
+   parmak ya da kalem dokununca çubuk açılır, fare kullanılınca (klavye + iz paneli bağlı tablet, dokunmatik dizüstü) kapanır. */
+let touchUI = null;
+function setTouchUI(on) { if (touchUI === on || !document.body) return; touchUI = on; document.body.classList.toggle('touch-ui', on); }
+try { setTouchUI(matchMedia('(hover: none)').matches || matchMedia('(pointer: coarse)').matches); } catch (e) { setTouchUI(false); }
+window.addEventListener('pointerdown', e => setTouchUI(e.pointerType === 'touch' || e.pointerType === 'pen'), true);
+function syncTouchBar() {
+  const st = document.getElementById('stage'); if (!st) return;
+  let b = document.getElementById('touchBar');
+  if (!b) {
+    b = document.createElement('div'); b.id = 'touchBar';
+    b.addEventListener('pointerdown', e => e.stopPropagation());
+    b.addEventListener('click', e => { const t = e.target.closest('[data-tb]'); if (t && !t.disabled) touchAct(t.dataset.tb); });
+    st.appendChild(b);
+  }
+  const has = sel.length > 0, clip = !!(ui.clip && ui.clip.length);
+  const bt = (a, icon, tr, en, on = true) => `<button class="btn" type="button" data-tb="${a}" title="${L(tr, en)}" ${on ? '' : 'disabled'}><span>${icon}</span><small>${L(tr, en)}</small></button>`;
+  b.innerHTML = bt('undo', '↶', 'Geri al', 'Undo', hi > 0) + bt('redo', '↷', 'Yinele', 'Redo', hi < hist.length - 1)
+    + (has ? bt('copy', '📋', 'Kopyala', 'Copy') : bt('all', '⬚', 'Tümü', 'Select all'))
+    + bt('paste', '📥', 'Yapıştır', 'Paste', clip)
+    + (has ? bt('dup', '⧉', 'Çoğalt', 'Duplicate') + bt('del', '🗑', 'Sil', 'Delete') + bt('none', '✕', 'Bırak', 'Deselect') : '');
 }
 
 /* ---------- Klavye ---------- */
@@ -6695,7 +6746,7 @@ window.addEventListener('keydown', e => {
     else if (k === 'v') paste(false);
     else if (k === 'd') { e.preventDefault(); paste(true); }
     else if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }
-    else if (k === 'a') { e.preventDefault(); const f = F(); sel = []; for (const a in KINDS) f[a].forEach(o => { if (pickable(o.id)) sel.push(o.id); }); refresh(); }
+    else if (k === 'a') { e.preventDefault(); sel = allPickableIds(); refresh(); }
     else if (k === 's') { e.preventDefault(); saveBrowser(); }
     return;
   }

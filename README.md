@@ -241,6 +241,8 @@ python -m http.server 8080      # then open http://localhost:8080
 | `0` · `+` · `−` | Fit view · Zoom in · Zoom out (2D zooms in to 1 mm = 4 px; a short note tells you when the limit is reached) |
 | Double-click | Rename room / edit text |
 
+**Phones and tablets (no keyboard):** as soon as you touch the screen with a finger or pen, a small bar appears at the bottom of the canvas (it hides again when you use a mouse) with **↶ Undo**, **↷ Redo**, **📋 Copy**, **📥 Paste**, **⧉ Duplicate**, **🗑 Delete**, **⬚ Select all** and **✕ Deselect**. The copy is shared between project tabs, so you can copy something (for example a piece the AI drew in another tab), switch tabs and paste it there. **Copy / Paste** are also in the selection panel and the right-click menu.
+
 ---
 
 ## 🗂️ Project Structure

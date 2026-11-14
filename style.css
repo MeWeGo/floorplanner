@@ -1268,6 +1268,21 @@ kbd {
 #v3dFloorList label { display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
 
 #bInspect { display: none; }
+/* Dokunmatik eylem çubuğu: klavyesiz cihazlarda Geri al / Kopyala / Yapıştır / Çoğalt / Sil.
+   Ekran genişliğine değil, gerçek dokunmatik kullanıma bağlı: body.touch-ui (app.js, setTouchUI) */
+#touchBar { display: none; }
+body.touch-ui #touchBar {
+  /* sola yaslı: dar ekranda sahne görünür alandan geniş olabilir, ortalanınca sağ uç taşar */
+  display: flex; position: absolute; left: 8px; bottom: 10px; z-index: 7;
+  gap: 2px; padding: 3px; max-width: min(calc(100% - 70px), calc(100vw - 96px)); overflow-x: auto;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+body.touch-ui #touchBar .btn { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 46px; height: 44px; padding: 2px 6px; flex: 0 0 auto; border: 0; }
+body.touch-ui #touchBar .btn span { font-size: 17px; line-height: 1; }
+body.touch-ui #touchBar .btn small { font-size: 9.5px; margin-top: 2px; opacity: 0.8; white-space: nowrap; }
+body.touch-ui #touchBar .btn:disabled { opacity: 0.35; }
+body.fs-open #touchBar { display: none; }
 .flbadge { margin: 0 0 8px; }
 
 @media (max-width: 700px) {

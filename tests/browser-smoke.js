@@ -1949,6 +1949,39 @@ check('IFC fidelity: Revit fixtures become catalogue items, rooms are detected, 
   return info.stats.matched + ' catalogue items, 1 detected room, finishes ' + info.fin + ', 3D ' + info.meshes + ' meshes';
 });
 
+check('touch action bar: shown on touch / hidden with a mouse, copy an object in one tab, paste it in a new tab without a keyboard', async page => {
+  const r = await page.evaluate(`(() => {
+    if (typeof show3D === 'function' && ui.view3d) show3D(false);
+    loadProject(newProject()); const f = F();
+    const w = mkWall({ x: 0, y: 0 }, { x: 400, y: 0 }); f.walls.push(w);
+    const it = mkFurn(BYID.sofa3 || CATALOG[0], 200, 200); f.furn.push(it); commit();
+    sel = [it.id]; refresh();
+    const bar = document.getElementById('touchBar'); if (!bar) return { err: 'no #touchBar' };
+    const btn = a => bar.querySelector('[data-tb="' + a + '"]');
+    if (!btn('copy') || !btn('del') || !btn('undo')) return { err: 'bar buttons missing: ' + bar.innerHTML.slice(0, 200) };
+    const shown = () => getComputedStyle(bar).display !== 'none';
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true })); const onTouch = shown();
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'mouse', bubbles: true })); const onMouse = shown();
+    if (!onTouch || onMouse) return { err: 'bar should follow the input: touch ' + onTouch + ', mouse ' + onMouse };
+    btn('copy').click();
+    const srcTab = tabIdx; newTabSlot(); loadProject(newProject());
+    if (tabIdx === srcTab) return { err: 'no new tab opened' };
+    const pasteBtn = document.querySelector('#touchBar [data-tb="paste"]');
+    if (!pasteBtn || pasteBtn.disabled) return { err: 'paste disabled in the new tab' };
+    pasteBtn.click();
+    const got = F().furn.map(o => o.type);
+    document.querySelector('#touchBar [data-tb="undo"]').click();
+    const afterUndo = F().furn.length;
+    tabs.splice(tabIdx, 1); activateTab(srcTab); renderTabs();
+    return { got, type: it.type, afterUndo };
+  })()`);
+  if (r.err) throw new Error(r.err);
+  if (r.got.length !== 1 || r.got[0] !== r.type) throw new Error('paste in the new tab gave ' + JSON.stringify(r.got));
+  if (r.afterUndo !== 0) throw new Error('undo button did not remove the pasted item');
+  return `pasted ${r.type} across tabs, undo ok`;
+});
+
+
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();
   if (!browserPath) {
