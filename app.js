@@ -3839,9 +3839,11 @@ function layerStrings(f, live) {
 const GRESIZE = { wall: 1, dim: 1, room: 1, slab: 1, void: 1, furn: 1, text: 1, sketch: 1, draft: 1, bg: 1 };
 function handleSvg() {
   const C = pal(), z = view.z, hs = 6 / z, os = selObjs(); let s = '';
-  const hnd = (x, y, id, cur = 'pointer', shape = 'rect') => shape === 'rect'
+  // dokunmatikte tutamağın etrafında parmak boyunda (≈ 44 px) görünmez bir tutma alanı
+  const tch = !ui.exporting && document.body.classList.contains('touch-ui');
+  const hnd = (x, y, id, cur = 'pointer', shape = 'rect') => (tch ? `<circle data-h="${id}" cx="${x}" cy="${y}" r="${22 / z}" fill="transparent"/>` : '') + (shape === 'rect'
     ? `<rect data-h="${id}" x="${x - hs}" y="${y - hs}" width="${hs * 2}" height="${hs * 2}" fill="#fff" stroke="#f59e0b" stroke-width="${1.6 / z}" style="cursor:${cur}"/>`
-    : `<circle data-h="${id}" cx="${x}" cy="${y}" r="${hs * 1.15}" fill="#f59e0b" stroke="#fff" stroke-width="${1.6 / z}" style="cursor:${cur}"/>`;
+    : `<circle data-h="${id}" cx="${x}" cy="${y}" r="${hs * 1.15}" fill="#f59e0b" stroke="#fff" stroke-width="${1.6 / z}" style="cursor:${cur}"/>`);
   for (const { kind, o } of os) {
     if (kind === 'wall') s += `<line x1="${o.a.x}" y1="${o.a.y}" x2="${o.b.x}" y2="${o.b.y}" stroke="#f59e0b" stroke-opacity=".45" stroke-width="${o.t + 6 / z}" stroke-linecap="square" pointer-events="none"/>`
       + `<text transform="translate(${(o.a.x + o.b.x) / 2} ${(o.a.y + o.b.y) / 2})" font-size="${14 / z}" text-anchor="middle" dy="${-o.t / 2 - 6 / z}" fill="${C.lt ? '#b45309' : '#fbbf24'}" font-weight="700" stroke="${C.halo}" stroke-width="${3 / z}" paint-order="stroke" pointer-events="none">${fmtLen(wLen(o))}</text>`;
@@ -4508,6 +4510,7 @@ function updateTools() {
   bar.style.display = showShape ? 'flex' : 'none';
   bar.dataset.on = showShape ? '1' : '0';
   if (showShape) tool === 'draft' ? buildDraftBar() : buildShapeBar();
+  syncTouchBar();
 }
 function setTool(t) {
   ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null; ui.mAxis = null; ui.secStart = null; ui.dr = null; ui.attRef = null;
@@ -4516,7 +4519,7 @@ function setTool(t) {
   if (t === 'mirror' && !selObjs().some(x => XFORM_KINDS.has(x.kind))) toast(L('Aynalamak için önce nesneleri seç', 'Select the objects to mirror first'));
   if (t === 'door') { placing = { type: 'op', def: OPDEF.door, rot: 0 }; tool = 'place'; }
   else if (t === 'window') { placing = { type: 'op', def: OPDEF.window, rot: 0 }; tool = 'place'; }
-  else if (t === 'furn') { ui.cat = ui.cat === 0 ? 1 : ui.cat; buildLib(); $('#search').focus(); tool = 'select'; ui.btn = 'select'; toast(L('Soldaki listeden bir mobilya seç', 'Select a furniture item from the left panel')); }
+  else if (t === 'furn') { ui.cat = ui.cat === 0 ? 1 : ui.cat; buildLib(); tool = 'select'; ui.btn = 'select'; if (libHidden()) toggleDrawer('lib', true); else $('#search').focus(); toast(L('Kütüphaneden bir mobilya seç', 'Pick a furniture item from the library')); }
   else if (t === 'railing') tool = 'wall'; // korkuluk aracı = duvar aracı (aynı yakalama / uzunluk yazma), yeni parçalar korkuluk olur
   else tool = t;
   // seç / mobilya / kapı / pencere 3B'de de çalışır (3B yerleştirme); diğer çizim araçları 2B'ye döner
@@ -4526,6 +4529,7 @@ function setTool(t) {
 }
 function startPlace(type, def) {
   ui.draw = null; placing = { type, def, rot: 0, flip: def.flip || 0 }; tool = 'place'; ui.btn = type === 'op' ? (def.id.startsWith('w') ? 'window' : 'door') : null;
+  if (document.body.classList.contains('lib-open')) { toggleDrawer('lib', false); if (!ui.view3d) toast(L('Plana dokun ve yerleştir', 'Tap the plan to place it')); } // çekmece kapanır: plana dokunarak yerleştirilir
   ui.ghost = null; place3DSync(); // 3B'de kalınır: hayalet imleçle gezer, tık = yerleştir
   if (ui.view3d) toast(L('3B: zemine tıkla ve yerleştir • R: döndür • Esc: bitir', '3D: click to place • R: rotate • Esc: done'));
   updateTools(); render();
@@ -4702,7 +4706,7 @@ function setCursor(e) {
   }
   $('#coords').textContent = `x: ${(raw.x / 100).toFixed(2)} m   y: ${(raw.y / 100).toFixed(2)} m`;
 }
-cv.addEventListener('contextmenu', e => { e.preventDefault(); if (tool === 'select') { openCtxMenu(e); return; } if (tool === 'place' || tool === 'wall' || POLY_TOOLS.has(tool) || tool === 'pen' || tool === 'draft') { setTool('select'); } });
+cv.addEventListener('contextmenu', e => { e.preventDefault(); if (lpress || performance.now() - lpressAt < 1500) return; /* dokunmatik uzun basma kendi yolundan açar */ if (tool === 'select') { openCtxMenu(e); return; } if (tool === 'place' || tool === 'wall' || POLY_TOOLS.has(tool) || tool === 'pen' || tool === 'draft') { setTool('select'); } });
 cv.addEventListener('wheel', e => {
   e.preventDefault(); const r = cv.getBoundingClientRect();
   zoomAt(Math.exp(-e.deltaY * 0.0016), e.clientX - r.left, e.clientY - r.top);
@@ -4959,7 +4963,7 @@ cv.addEventListener('pointerdown', e => {
       if (t) {
         const id = t.dataset.id;
         const badgeType = t.dataset.varBadge || null, badgeGrp = t.dataset.grp || null;
-        if (e.shiftKey) { sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]; }
+        if (e.shiftKey || ui.multiSel) { sel = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]; } // ui.multiSel: dokunmatik çoklu seçim (Shift yerine)
         else if (e.altKey || (!badgeType && grpEditing(find(id)?.o))) { sel = [id]; } // Alt veya grup düzenleme: tek üye
         else if (!sel.includes(id) || badgeType) {
           const fd = find(id);
@@ -4974,7 +4978,7 @@ cv.addEventListener('pointerdown', e => {
           ui.drag.clickedId = id;
           if (badgeType) ui.drag.badgeClick = { type: badgeType, id, grp: badgeGrp };
         }
-      } else { if (!e.shiftKey) sel = []; ui.drag = { type: 'box', start: raw, cur: raw, moved: false }; renderProps(); }
+      } else { if (!e.shiftKey && !ui.multiSel) sel = []; ui.drag = { type: 'box', start: raw, cur: raw, moved: false }; renderProps(); }
       render(); return;
     }
     case 'wall': {
@@ -5539,7 +5543,7 @@ function renderProps() {
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button>`);
     if (!NO_TILT_K.has(o.k)) { // tüm eksenlerde döndürme: öne / arkaya (X) ve yana (Y) yatırma; 3B'de en alt nokta zemine oturur
       h += fld(L('Öne / arkaya yatır X (°)', 'Tilt forward / back X (°)'), 'furn', 'rx', +o.rx || 0, { min: 0, max: 360, step: 15 }) + fld(L('Yana yatır Y (°)', 'Tilt sideways Y (°)'), 'furn', 'ry', +o.ry || 0, { min: 0, max: 360, step: 15 });
-      h += acts(`<button class="btn sm" data-act="tiltx" title="${L('X ekseninde 90° yatır (ör. dolabı sırtüstü yatır)', 'Tilt 90° about X (e.g. lay a cabinet on its back)')}">⤾ X 90°</button><button class="btn sm" data-act="tilty" title="${L('Y ekseninde 90° yatır (yan yatır)', 'Tilt 90° about Y (lay it on its side)')}">⤿ Y 90°</button>${furnTilted(o) ? `<button class="btn sm" data-act="upright">↺ ${L('Dik', 'Upright')}</button>` : ''}`);
+      h += `<div class="row"><button class="btn sm" data-act="tiltx" title="${L('X ekseninde 90° yatır (ör. dolabı sırtüstü yatır)', 'Tilt 90° about X (e.g. lay a cabinet on its back)')}">⤾ X 90°</button><button class="btn sm" data-act="tilty" title="${L('Y ekseninde 90° yatır (yan yatır)', 'Tilt 90° about Y (lay it on its side)')}">⤿ Y 90°</button>${furnTilted(o) ? `<button class="btn sm" data-act="upright">↺ ${L('Dik', 'Upright')}</button>` : ''}</div>`; // yalnız yatırma düğmeleri: acts() ikinci kez çoğalt / sil satırı basıyordu
     }
     if (o.k === 'ramp' && n === 1) {
       // rampa ayarları (#58): tür, korkuluk; canlı eğim (% ve 1:X) + yönetmelik rozeti
@@ -6034,16 +6038,18 @@ $('#items').addEventListener('click', e => {
 /* ---------- Katlar ---------- */
 function renderFloors() {
   $('#floors').innerHTML = P.floors.map((f, i) => `<button class="ftab ${i === fi ? 'on' : ''}" data-fl="${i}" title="${L('Çift tıkla: yeniden adlandır', 'Double-click to rename')}">${esc(f.name)}</button>`).join('')
-    + `<button class="btn sm" data-fa="add" title="${L('Kat ekle', 'Add floor')}">${L('＋ Kat', '＋ Floor')}</button><button class="btn sm" data-fa="dup" title="${L('Katı kopyala', 'Duplicate floor')}">⧉</button><button class="btn sm" data-fa="del" title="${L('Katı sil', 'Delete floor')}">🗑</button>`;
+    + `<button class="btn sm" data-fa="ren" title="${L('Katı yeniden adlandır', 'Rename floor')}">✎</button><button class="btn sm" data-fa="add" title="${L('Kat ekle', 'Add floor')}">${L('＋ Kat', '＋ Floor')}</button><button class="btn sm" data-fa="dup" title="${L('Katı kopyala', 'Duplicate floor')}">⧉</button><button class="btn sm" data-fa="del" title="${L('Katı sil', 'Delete floor')}">🗑</button>`;
 }
 $('#floors').addEventListener('click', e => {
   const t = e.target.closest('[data-fl]'); if (t) { fi = +t.dataset.fl; sel = []; refresh(); return; }
   const a = e.target.closest('[data-fa]'); if (!a) return;
+  if (a.dataset.fa === 'ren') return renameFloor(fi); // dokunmatikte çift dokunma yerine
   if (a.dataset.fa === 'add') { P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length)); fi = P.floors.length - 1; sel = []; commit(); fit(); refresh(); }
   if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); const gm = {}; for (const k in KINDS) c[k].forEach(o => { if (o.grp) o.grp = gm[o.grp] || (gm[o.grp] = uid()); }); c.groups = Object.values(gm).map(id => ({ id, vars: [], idx: 0 })); c.rooms.forEach(r => { delete r.vars; delete r.vIdx; }); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
   if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
 });
-$('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) { const f = P.floors[+t.dataset.fl], n = prompt(L('Kat adı:', 'Floor name:'), f.name); if (n) { f.name = n; commit(); refresh(); } } });
+function renameFloor(i) { const f = P.floors[i]; if (!f) return; const n = (prompt(L('Kat adı:', 'Floor name:'), f.name) || '').trim(); if (n && n !== f.name) { f.name = n; commit(); refresh(); } }
+$('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) renameFloor(+t.dataset.fl); });
 function refresh() { if (ui.lenTyped && !(sel.length === 1 && find(sel[0])?.kind === 'wall')) ui.lenTyped = ''; render(); renderProps(); renderFloors(); updateTools(); syncLayerUI(); }
 
 /* ---------- Kopyala / yapıştır ---------- */
@@ -6575,7 +6581,13 @@ function touchAct(a) {
   if (a === 'dup') return paste(true);
   if (a === 'del') return deleteSel();
   if (a === 'all') { sel = allPickableIds(); return refresh(); }
-  if (a === 'none') { sel = []; refresh(); if (ui.view3d && T3) refreshSel3D(); }
+  if (a === 'none') { sel = []; refresh(); if (ui.view3d && T3) refreshSel3D(); return; }
+  if (a === 'multi') { ui.multiSel = !ui.multiSel; toast(ui.multiSel ? L('Çoklu seçim açık: dokunduğun her nesne eklenir / çıkarılır', 'Multi-select on: each tap adds or removes an object') : L('Çoklu seçim kapalı', 'Multi-select off')); return syncTouchBar(); }
+  if (a === 'len') return openLenBox();
+  if (a === 'prot') return placeRotate();
+  if (a === 'pside') return placeSide();
+  if (a === 'finish') return finishPoly();
+  if (a === 'esc') { if (ui.view3d && tool === 'place') { setTool('select'); return; } return escTool(); }
 }
 function allPickableIds() { const f = F(), ids = []; for (const a in KINDS) (f[a] || []).forEach(o => { if (pickable(o.id)) ids.push(o.id); }); return ids; } // = Ctrl+A
 /* Dokunmatik arayüz: ekran genişliği iyi bir gösterge değil (tabletler geniş, dar masaüstü penceresi klavyeli).
@@ -6585,8 +6597,75 @@ let touchUI = null;
 function setTouchUI(on) { if (touchUI === on || !document.body) return; touchUI = on; document.body.classList.toggle('touch-ui', on); }
 try { setTouchUI(matchMedia('(hover: none)').matches || matchMedia('(pointer: coarse)').matches); } catch (e) { setTouchUI(false); }
 window.addEventListener('pointerdown', e => setTouchUI(e.pointerType === 'touch' || e.pointerType === 'pen'), true);
+/* Dokunmatik uzunluk kutusu: parmakla imleç gezdirilemediği için yazılan uzunluk önceden yön alamaz.
+   Bunun yerine kabaca çizilen son duvarın (ya da seçili tek duvarın) uzunluğu kesinleştirilir: yön korunur,
+   bitişik uçlar applyWallLength() ile gelir ve zincir yeni uçtan devam eder. Sayı klavyesi açılır (inputmode). */
+function chainWall() { // duvar aracında zincirin son parçası: serbest ucu çizimin devam ettiği nokta
+  if (tool !== 'wall' || !ui.draw) return null;
+  const ws = F().walls; for (let i = ws.length - 1; i >= 0; i--) if (dist(ws[i].b, ui.draw.start) < 0.5) return ws[i];
+  return null;
+}
+function oneWall() { const fd = sel.length === 1 ? find(sel[0]) : null; return fd && fd.kind === 'wall' ? fd.o : null; }
+function closeLenBox() { const b = document.getElementById('lenBox'); if (b) b.remove(); }
+function openLenBox() {
+  closeLenBox();
+  const cw = chainWall(), w = cw || oneWall();
+  if (!w) { toast(L('Önce bir duvar çiz ya da seç', 'Draw or select a wall first')); return; }
+  const box = document.createElement('div'); box.id = 'lenBox';
+  box.innerHTML = `<span>${L('Uzunluk', 'Length')}</span><input type="number" inputmode="decimal" min="1" step="1" value="${Math.round(wLen(w) * 10) / 10}"><span class="muted">cm</span><button class="btn primary" type="button" data-lb="ok">✓</button><button class="btn" type="button" data-lb="x">✕</button>`;
+  document.body.appendChild(box);
+  const inp = box.querySelector('input');
+  const apply = () => {
+    const v = parseFloat(String(inp.value).replace(',', '.')); closeLenBox();
+    if (!applyWallLength(w, v)) return;
+    if (cw && ui.draw) ui.draw = { start: { x: w.b.x, y: w.b.y } }; // zincir yeni uçtan sürer
+    commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+  };
+  box.addEventListener('pointerdown', e => e.stopPropagation());
+  box.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') apply(); else if (e.key === 'Escape') closeLenBox(); });
+  box.addEventListener('click', e => { const t = e.target.closest('[data-lb]'); if (t) t.dataset.lb === 'ok' ? apply() : closeLenBox(); });
+  inp.focus(); inp.select();
+}
+window.addEventListener('pointerdown', e => { const b = document.getElementById('lenBox'); if (b && !b.contains(e.target)) closeLenBox(); });
+function libHidden() { const l = document.getElementById('lib'); return !!l && !document.body.classList.contains('lib-open') && getComputedStyle(l).display === 'none'; }
+/* Dar ekran / dokunmatik tablet çekmeceleri: kütüphane (soldan) ve özellikler (sağdan). Aynı anda biri açık;
+   arkadaki karartmaya dokunmak kapatır. */
+function toggleDrawer(name, on) {
+  const b = document.body, c = name + '-open'; on = on == null ? !b.classList.contains(c) : on;
+  b.classList.remove('lib-open', 'props-open'); if (on) b.classList.add(c);
+  let bg = document.getElementById('drawerBg');
+  if (!bg) { bg = document.createElement('div'); bg.id = 'drawerBg'; bg.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); toggleDrawer(name, false); }); document.body.appendChild(bg); }
+}
+/* Uzun basma (dokunmatik, seçim aracı): sağ tık menüsü — buradaki nesneler, katman sırası, aynala, kopyala / yapıştır. */
+let lpress = null, lpressAt = 0;
+function lpressClear() { if (lpress) { clearTimeout(lpress.t); lpress = null; } }
+cv.addEventListener('pointerdown', e => {
+  lpressClear();
+  if (e.pointerType !== 'touch' || ui.view3d || tool !== 'select' || touchPts.size > 1) return;
+  const x = e.clientX, y = e.clientY;
+  lpress = { x, y, t: setTimeout(() => {
+    lpress = null; if (touchPts.size !== 1) return;
+    cancelTouchSingle(); render(); lpressAt = performance.now();
+    openCtxMenu({ clientX: x, clientY: y });
+    try { if (navigator.vibrate) navigator.vibrate(12); } catch (_) {}
+  }, 550) };
+});
+cv.addEventListener('pointermove', e => { if (lpress && Math.hypot(e.clientX - lpress.x, e.clientY - lpress.y) > 10) lpressClear(); });
+['pointerup', 'pointercancel'].forEach(t => cv.addEventListener(t, lpressClear));
 function syncTouchBar() {
   const st = document.getElementById('stage'); if (!st) return;
+  const fc = document.querySelector('footer .footer-controls');
+  if (fc && !document.getElementById('bFootOpts')) { // telefonda alt çubuk ayarları ⚙ arkasında (style.css)
+    const fb = document.createElement('button'); fb.id = 'bFootOpts'; fb.className = 'btn'; fb.type = 'button'; fb.textContent = '⚙';
+    fb.onclick = () => { document.body.classList.toggle('foot-open'); fb.classList.toggle('on', document.body.classList.contains('foot-open')); };
+    fc.parentNode.insertBefore(fb, fc);
+  }
+  const fo = document.getElementById('bFootOpts'); if (fo) fo.title = L('Izgara, yakalama ve görünüm ayarları', 'Grid, snap and view settings');
+  if (!document.getElementById('bLib')) { // kütüphane gizliyken (dar ekran / dokunmatik tablet) çekmeceyi açan düğme
+    const lb = document.createElement('button'); lb.id = 'bLib'; lb.className = 'btn'; lb.type = 'button'; lb.textContent = '📚';
+    lb.onclick = () => toggleDrawer('lib'); st.appendChild(lb);
+  }
+  document.getElementById('bLib').title = L('Kütüphane: kapı, pencere, mobilya', 'Library: doors, windows, furniture');
   let b = document.getElementById('touchBar');
   if (!b) {
     b = document.createElement('div'); b.id = 'touchBar';
@@ -6595,12 +6674,35 @@ function syncTouchBar() {
     st.appendChild(b);
   }
   const has = sel.length > 0, clip = !!(ui.clip && ui.clip.length);
+  const bt0 = (a, icon, tr, en, on = true) => `<button class="btn" type="button" data-tb="${a}" title="${L(tr, en)}" ${on ? '' : 'disabled'}><span>${icon}</span><small>${L(tr, en)}</small></button>`;
+  const undoBtns = bt0('undo', '↶', 'Geri al', 'Undo', hi > 0) + bt0('redo', '↷', 'Yinele', 'Redo', hi < hist.length - 1);
+  if (tool === 'place' && placing) { // yerleştirirken: R / S / Esc yerine
+    const op = placing.type === 'op';
+    b.innerHTML = undoBtns + bt0('prot', op ? '⇋' : '⟳', op ? 'Menteşe' : 'Döndür', op ? 'Hinge' : 'Rotate') + (op ? bt0('pside', '⇅', 'Açılış', 'Swing') : '') + bt0('esc', '✓', 'Bitti', 'Done');
+    return;
+  }
+  if (tool !== 'select' && tool !== 'pan') { // çizim araçları: Enter / Esc yerine
+    b.innerHTML = undoBtns + (tool === 'wall' ? bt0('len', '📏', 'Uzunluk', 'Length', !!chainWall()) : '') + (POLY_TOOLS.has(tool) ? bt0('finish', '⏎', 'Kapat', 'Finish') : '') + bt0('esc', '✓', 'Bitti', 'Done');
+    return;
+  }
   const bt = (a, icon, tr, en, on = true) => `<button class="btn" type="button" data-tb="${a}" title="${L(tr, en)}" ${on ? '' : 'disabled'}><span>${icon}</span><small>${L(tr, en)}</small></button>`;
   b.innerHTML = bt('undo', '↶', 'Geri al', 'Undo', hi > 0) + bt('redo', '↷', 'Yinele', 'Redo', hi < hist.length - 1)
     + (has ? bt('copy', '📋', 'Kopyala', 'Copy') : bt('all', '⬚', 'Tümü', 'Select all'))
     + bt('paste', '📥', 'Yapıştır', 'Paste', clip)
-    + (has ? bt('dup', '⧉', 'Çoğalt', 'Duplicate') + bt('del', '🗑', 'Sil', 'Delete') + bt('none', '✕', 'Bırak', 'Deselect') : '');
+    + (oneWall() ? bt('len', '📏', 'Uzunluk', 'Length') : '')
+    + (has ? bt('dup', '⧉', 'Çoğalt', 'Duplicate') + bt('del', '🗑', 'Sil', 'Delete') : '')
+    + bt('multi', ui.multiSel ? '☑' : '☐', 'Çoklu', 'Multi').replace('class="btn"', ui.multiSel ? 'class="btn on"' : 'class="btn"')
+    + (has ? bt('none', '✕', 'Bırak', 'Deselect') : '');
 }
+
+/* Esc (2B) ve yerleştirirken R / S: klavye ve dokunmatik eylem çubuğu aynı yolu kullanır */
+function escTool() {
+  if (tool === 'attach') { ui.attRef = null; setTool('select'); return; } // yüzeye bağla (#96): Esc bitirir
+  if (ui.draw || ui.polyPts || ui.dimStart || ui.calib || ui.pen || ui.mAxis || ui.secStart || ui.dr) { ui.dr = null; ui.draw = null; ui.polyPts = null; ui.dimStart = null; ui.calib = null; ui.pen = null; ui.mAxis = null; ui.secStart = null; ui.typed = ''; render(); }
+  else if (tool !== 'select') setTool('select'); else if (ui.grpEdit) { stopGrpEdit(); refresh(); } else { sel = []; refresh(); }
+}
+function placeRotate() { if (!placing) return; if (placing.type === 'furn') placing.rot = ((placing.rot || 0) + 90) % 360; else placing.flip = placing.flip ? 0 : 1; updateGhost(); drawPreview(); place3DSync(); }
+function placeSide() { if (!placing || placing.type !== 'op') return; placing.side = -(placing.side || 1); updateGhost(); drawPreview(); place3DSync(); }
 
 /* ---------- Klavye ---------- */
 const keys3D = new Set();
@@ -6784,16 +6886,11 @@ window.addEventListener('keydown', e => {
     if (e.key === 'Enter') { if (ui.typed && ui.cur) draftClick(ui.cur); else finishDraft(); return; }
   }
   if (POLY_TOOLS.has(tool) && e.key === 'Enter') { finishPoly(); return; }
-  if (e.key === 'Escape') {
-    if (tool === 'attach') { ui.attRef = null; setTool('select'); return; } // yüzeye bağla (#96): Esc bitirir
-    if (ui.draw || ui.polyPts || ui.dimStart || ui.calib || ui.pen || ui.mAxis || ui.secStart || ui.dr) { ui.dr = null; ui.draw = null; ui.polyPts = null; ui.dimStart = null; ui.calib = null; ui.pen = null; ui.mAxis = null; ui.secStart = null; ui.typed = ''; render(); }
-    else if (tool !== 'select') setTool('select'); else if (ui.grpEdit) { stopGrpEdit(); refresh(); } else { sel = []; refresh(); }
-    return;
-  }
+  if (e.key === 'Escape') { escTool(); return; }
   if (e.key === 'Delete' || e.key === 'Backspace') { deleteSel(); return; }
   if (tool === 'place' && placing) {
-    if (k === 'r') { if (placing.type === 'furn') placing.rot = ((placing.rot || 0) + 90) % 360; else placing.flip = placing.flip ? 0 : 1; updateGhost(); drawPreview(); return; }
-    if (k === 's' && placing.type === 'op') { placing.side = -(placing.side || 1); updateGhost(); drawPreview(); return; }
+    if (k === 'r') { placeRotate(); return; }
+    if (k === 's' && placing.type === 'op') { placeSide(); return; }
   }
   if (e.key === '[' || e.key === ']') {
     const d = e.key === ']' ? 15 : -15, os = selObjs(); let ch = false;
@@ -6819,7 +6916,7 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => { if (e.key === ' ') ui.space = false; keys3D.delete(e.key.toLowerCase()); });
 function zoomBtn(f) { const s = svgSize(); zoomAt(f, s.w / 2, s.h / 2); }
-if ($('#bInspect')) $('#bInspect').onclick = () => document.body.classList.toggle('props-open'); // dar ekranda özellik çekmecesi (#82)
+if ($('#bInspect')) $('#bInspect').onclick = () => toggleDrawer('props'); // dar ekranda özellik çekmecesi (#82)
 $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8); $('#zFit').onclick = fit;
 
 /* ---------- Modal ---------- */

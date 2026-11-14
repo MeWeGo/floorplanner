@@ -1949,6 +1949,79 @@ check('IFC fidelity: Revit fixtures become catalogue items, rooms are detected, 
   return info.stats.matched + ' catalogue items, 1 detected room, finishes ' + info.fin + ', 3D ' + info.meshes + ' meshes';
 });
 
+check('mobile: context touch bar (placing / drawing), library drawer, long-press menu, finger-size handles', async page => {
+  const r = await page.evaluate(`(async () => {
+    if (ui.view3d) show3D(false);
+    loadProject(newProject()); const f = F();
+    const it = mkFurn(BYID.sofa3 || CATALOG[0], 200, 200); f.furn.push(it); commit(); sel = []; refresh(); fit();
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true }));
+    const bar = () => [...document.querySelectorAll('#touchBar [data-tb]')].map(b => b.dataset.tb).join(',');
+    setTool('poly'); const drawBar = bar(); touchAct('esc'); const afterEsc = tool;
+    startPlace('furn', BYID.sofa3 || CATALOG[0]); const placeBar = bar();
+    touchAct('prot'); const rot = placing && placing.rot; touchAct('esc'); const afterDone = tool;
+    toggleDrawer('lib', true); const libOpen = document.body.classList.contains('lib-open') && getComputedStyle(document.getElementById('lib')).display !== 'none';
+    document.getElementById('drawerBg').dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true }));
+    const libClosed = !document.body.classList.contains('lib-open');
+    sel = [it.id]; render(); const hit = !!document.querySelector('#gSel circle[data-h][fill="transparent"]');
+    sel = []; render();
+    const cvr = document.getElementById('cv').getBoundingClientRect(), p = w2s({ x: it.x, y: it.y });
+    const at = { clientX: cvr.left + p.x, clientY: cvr.top + p.y, pointerType: 'touch', pointerId: 77, bubbles: true, isPrimary: true };
+    document.getElementById('cv').dispatchEvent(new PointerEvent('pointerdown', at));
+    await new Promise(r => setTimeout(r, 750));
+    const menu = !!document.getElementById('ctxMenu');
+    document.getElementById('cv').dispatchEvent(new PointerEvent('pointerup', at));
+    closeCtxMenu(); document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'mouse', bubbles: true }));
+    return { drawBar, afterEsc, placeBar, rot, afterDone, libOpen, libClosed, hit, menu, moved: it.x !== 200 || it.y !== 200 };
+  })()`);
+  if (!/finish/.test(r.drawBar) || !/esc/.test(r.drawBar)) throw new Error('drawing bar lacks Finish / Done: ' + r.drawBar);
+  if (r.afterEsc !== 'select') throw new Error('Done did not leave the drawing tool: ' + r.afterEsc);
+  if (!/prot/.test(r.placeBar)) throw new Error('placing bar lacks Rotate: ' + r.placeBar);
+  if (r.rot !== 90) throw new Error('Rotate while placing gave ' + r.rot);
+  if (r.afterDone !== 'select') throw new Error('Done did not end placing: ' + r.afterDone);
+  if (!r.libOpen || !r.libClosed) throw new Error('library drawer open / backdrop close failed: ' + JSON.stringify(r));
+  if (!r.hit) throw new Error('no finger-size hit circle on handles in touch mode');
+  if (!r.menu) throw new Error('long press did not open the object menu');
+  if (r.moved) throw new Error('long press moved the item');
+  return 'drawing + placing bars, drawer, long press, touch handles';
+});
+
+
+check('mobile: exact wall length from the touch bar, multi-select without Shift, rename a floor without double-tap', async page => {
+  const r = await page.evaluate(`(() => {
+    if (ui.view3d) show3D(false);
+    loadProject(newProject()); const f = F(); commit(); refresh();
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true }));
+    // a chain: first segment drawn roughly (as two taps would), the chain continues from its end
+    setTool('wall'); const w1 = mkWall({ x: 0, y: 0 }, { x: 287, y: 0 }); f.walls.push(w1); ui.draw = { start: { x: 287, y: 0 } }; commit();
+    const lenBtn = document.querySelector('#touchBar [data-tb="len"]'); if (!lenBtn || lenBtn.disabled) return { err: 'no enabled Length button while drawing' };
+    lenBtn.click(); const box = document.getElementById('lenBox'); if (!box) return { err: 'length box did not open' };
+    box.querySelector('input').value = '350'; box.querySelector('[data-lb="ok"]').click();
+    const len = Math.round(wLen(w1)), start = ui.draw && ui.draw.start.x, boxGone = !document.getElementById('lenBox');
+    touchAct('esc'); touchAct('esc');
+    // multi-select: two taps with the toggle on select both
+    const a = mkFurn(CATALOG[0], 100, 300), b = mkFurn(CATALOG[0], 400, 300); f.furn.push(a, b); commit(); sel = []; refresh();
+    touchAct('multi'); const multiOn = !!document.querySelector('#touchBar [data-tb="multi"].on');
+    const cvr = document.getElementById('cv').getBoundingClientRect();
+    const tap = o => { const p = w2s({ x: o.x, y: o.y }), at = { clientX: cvr.left + p.x, clientY: cvr.top + p.y, pointerType: 'touch', pointerId: 5, bubbles: true, isPrimary: true };
+      document.getElementById('cv').dispatchEvent(new PointerEvent('pointerdown', at)); window.dispatchEvent(new PointerEvent('pointerup', at)); document.getElementById('cv').dispatchEvent(new PointerEvent('pointerup', at)); };
+    tap(a); tap(b); const both = sel.includes(a.id) && sel.includes(b.id);
+    touchAct('multi'); sel = []; refresh(); tap(a); tap(b); const single = sel.length === 1 && sel[0] === b.id;
+    // floor rename button
+    const op = window.prompt; window.prompt = () => 'Zemin X'; document.querySelector('#floors [data-fa="ren"]').click(); window.prompt = op;
+    const fname = F().name;
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'mouse', bubbles: true }));
+    return { len, start, boxGone, multiOn, both, single, fname };
+  })()`);
+  if (r.err) throw new Error(r.err);
+  if (r.len !== 350 || r.start !== 350) throw new Error('length box: wall ' + r.len + ', chain start ' + r.start);
+  if (!r.boxGone) throw new Error('length box stayed open');
+  if (!r.multiOn || !r.both) throw new Error('multi-select toggle did not add the second tap: ' + JSON.stringify(r));
+  if (!r.single) throw new Error('turning multi-select off did not go back to single taps');
+  if (r.fname !== 'Zemin X') throw new Error('floor rename button gave ' + r.fname);
+  return 'wall 287 → 350 cm, chain continues, two taps select two, floor renamed';
+});
+
+
 check('touch action bar: shown on touch / hidden with a mouse, copy an object in one tab, paste it in a new tab without a keyboard', async page => {
   const r = await page.evaluate(`(() => {
     if (typeof show3D === 'function' && ui.view3d) show3D(false);
