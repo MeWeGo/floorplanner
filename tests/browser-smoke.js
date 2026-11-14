@@ -2080,6 +2080,31 @@ check('Revit export: levels, walls, doors with swing, floors, rooms and furnitur
   return `${r.stats.walls} walls, ${r.stats.items} solid items, ${Math.round(r.got.size / 1024)} KB`;
 });
 
+check('IFC export: every template round-trips through the app IFC importer (walls, door swing, rooms, catalogue items); the button downloads it', async page => {
+  const r = await page.evaluate(`(() => {
+    if (ui.view3d) show3D(false);
+    const out = [];
+    for (let t = 1; t < TEMPLATES.length; t++) {
+      loadProject(newProject()); buildTemplate(t); commit();
+      const f = F(), txt = ifcFromExchange(revitExport(P)), g = ifcToProject(txt, { uid, L, catalog: BYID, colors: ROOMCOL }).project.floors[0];
+      const wl = a => a.map(w => Math.round(wLen(w)) + 'x' + w.t).sort().join(' ');
+      const sw = a => a.filter(o => o.type !== 'window').map(o => o.type + o.side + o.flip).sort().join(' ');
+      const nm = a => a.map(o => o.name).sort().join('|');
+      const kept = g.furn.filter(o => BYID[o.type]).length;
+      out.push({ t, walls: wl(f.walls) === wl(g.walls), ops: f.ops.length === g.ops.length && sw(f.ops) === sw(g.ops), rooms: nm(f.rooms) === nm(g.rooms), furn: [f.furn.length, g.furn.length, kept] });
+    }
+    let got = null; const keep = download; download = (name, blob) => { got = { name, size: blob.size }; };
+    try { document.getElementById('bIfc').click(); } finally { download = keep; }
+    return { out, got };
+  })()`);
+  for (const o of r.out) {
+    if (!o.walls || !o.ops || !o.rooms) throw new Error('template ' + o.t + ' did not round-trip: ' + JSON.stringify(o));
+    if (o.furn[0] !== o.furn[1] || o.furn[2] < o.furn[0] * 0.7) throw new Error('template ' + o.t + ' furniture: ' + JSON.stringify(o.furn));
+  }
+  if (!r.got || !/.ifc$/.test(r.got.name) || r.got.size < 1000) throw new Error('#bIfc did not download: ' + JSON.stringify(r.got));
+  return r.out.map(o => `template ${o.t}: ${o.furn[2]}/${o.furn[0]} catalogue items back`).join(', ');
+});
+
 
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();
