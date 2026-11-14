@@ -558,6 +558,7 @@ function commit() {
   hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 150) hist.shift();
   hi = hist.length - 1;
   autosave(); updateUndo();
+  if (fp3DOn()) schedBuild3D(); // 3B'de çizim aracıyla eklenen / değişen nesne sahnede görünsün
 }
 function autosave() {
   clearTimeout(saveTimer);
@@ -1088,7 +1089,7 @@ function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('s
 const cv = $('#cv');
 function svgSize() { const r = cv.getBoundingClientRect(); return { w: r.width, h: r.height, l: r.left, t: r.top }; }
 function w2s(p) { return { x: p.x * view.z + view.x, y: p.y * view.z + view.y }; }
-function wpos(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left - view.x) / view.z, y: (e.clientY - r.top - view.y) / view.z }; }
+function wpos(e) { if (e.fpPt) return { x: e.fpPt.x, y: e.fpPt.y }; /* 3B'den iletilen olay: plan noktası ışından gelir */ const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left - view.x) / view.z, y: (e.clientY - r.top - view.y) / view.z }; }
 function applyView() {
   $('#world').setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.z})`);
   const pct = view.z * 100;
@@ -1528,6 +1529,11 @@ function surfFaces(o) {
     [[-1, -1, -1], [-1, 1, -1], [-1, 1, 1], [-1, -1, 1]], [[1, -1, -1], [1, 1, -1], [1, 1, 1], [1, -1, 1]]].map(q => q.map(p => V(...p)));
 }
 // (x, y) noktasının üstünden geçen düşey doğrunun yüzleri kestiği kotlar (düşey yüzler atlanır)
+// referans yüzeyler i katının döşemesine göre: başka kattaki çatı / eğik öğe, kat kotu farkı kadar kaydırılır
+function surfFacesOn(ref, i) {
+  const fs = surfFaces(ref.o), dz = ref.floorIdx == null ? 0 : floorElev(ref.floorIdx) - floorElev(i);
+  return dz ? fs.map(q => q.map(p => [p[0], p[1], p[2] + dz])) : fs;
+}
 function surfHits(faces, x, y) {
   const out = [];
   for (const q of faces) {
@@ -4501,17 +4507,20 @@ function buildTools() {
 function updateTools() {
   document.querySelectorAll('.tool').forEach(b => b.classList.toggle('on', b.dataset.tool === ui.btn));
   $('#hud').textContent = ui.view3d
-    ? (tool === 'place' && placing ? L('3B yerleştirme: Tık: yerleştir • R: döndür • Shift: serbest • Sürükle: döndür / bak • Esc: bitir • ', '3D placing: Click: place • R: rotate • Shift: free • Drag: orbit / look • Esc: done • ') : '') + L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Ctrl+Z: Geri al • Del: Sil • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Ctrl+Z: Undo • Del: Delete • Esc: 2D')
+    ? (tool === 'place' && placing ? L('3B yerleştirme: Tık: yerleştir • R: döndür • Shift: serbest • Sürükle: döndür / bak • Esc: bitir • ', '3D placing: Click: place • R: rotate • Shift: free • Drag: orbit / look • Esc: done • ')
+      : fp3DOn() ? ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '') + L(' • Sağ sürükle: kaydır • Esc: aracı bitir • ', ' • Right-drag: pan • Esc: end tool • ') : '') + L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Ctrl+Z: Geri al • Del: Sil • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Ctrl+Z: Undo • Del: Delete • Esc: 2D')
     : ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '');
   $('#hud').style.display = '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
   document.querySelectorAll('#items .item').forEach(el => el.classList.toggle('on', !!placing && el.dataset.id === (el.dataset.type === 'pre' ? placing.def.preset : !placing.def.preset && placing.def.id)));
-  const bar = $('#shapeBar'), showShape = (tool === 'shape' || tool === 'draft') && !ui.view3d, was = bar.dataset.on === '1';
+  const bar = $('#shapeBar'), showShape = (tool === 'shape' || tool === 'draft'), was = bar.dataset.on === '1';
   bar.style.display = showShape ? 'flex' : 'none';
   bar.dataset.on = showShape ? '1' : '0';
   if (showShape) tool === 'draft' ? buildDraftBar() : buildShapeBar();
   syncTouchBar();
 }
+const FP3D_2D_ONLY = new Set(['calib', 'plotwin']); // 3B'de anlamı olmayan araçlar (altlık görseli / kağıt penceresi)
+let fp3DPick = null; // 3B'den iletilen olay sırasında ışının kestiği nesne kimlikleri (idsAt / pickDataId bunları döndürür)
 function setTool(t) {
   ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null; ui.mAxis = null; ui.secStart = null; ui.dr = null; ui.attRef = null;
   ui.btn = t; placing = null;
@@ -4522,10 +4531,11 @@ function setTool(t) {
   else if (t === 'furn') { ui.cat = ui.cat === 0 ? 1 : ui.cat; buildLib(); tool = 'select'; ui.btn = 'select'; if (libHidden()) toggleDrawer('lib', true); else $('#search').focus(); toast(L('Kütüphaneden bir mobilya seç', 'Pick a furniture item from the library')); }
   else if (t === 'railing') tool = 'wall'; // korkuluk aracı = duvar aracı (aynı yakalama / uzunluk yazma), yeni parçalar korkuluk olur
   else tool = t;
-  // seç / mobilya / kapı / pencere 3B'de de çalışır (3B yerleştirme); diğer çizim araçları 2B'ye döner
-  if (ui.view3d && !['select', 'furn', 'door', 'window'].includes(t)) show3D(false);
+  // sol çubuktaki araçlar 3B'de de çalışır: tıklar zemin / yüzey ışınıyla plan noktasına çevrilip 2B araç koduna iletilir (fp3D*);
+  // yalnızca 2B altlığa bağlı olanlar (ölçek kalibrasyonu, çıktı penceresi seçimi) 2B'ye döner
+  if (ui.view3d && FP3D_2D_ONLY.has(t)) show3D(false);
   ui.ghost = null; place3DSync();
-  updateTools(); render();
+  updateTools(); render(); fp3DPreview();
 }
 function startPlace(type, def) {
   ui.draw = null; placing = { type, def, rot: 0, flip: def.flip || 0 }; tool = 'place'; ui.btn = type === 'op' ? (def.id.startsWith('w') ? 'window' : 'door') : null;
@@ -4555,6 +4565,7 @@ function snapGlyph(q, C, z, label, op = 1) {
   return op < 1 ? `<g opacity="${op}">${s}</g>` : s;
 }
 function drawPreview() {
+  if (ui.view3d && T3) { fp3DPreview(); return; } // 3B: önizleme sahnede çizilir (2B katmanı gizli)
   const C = pal(), ac = C.accent, g = $('#gPv'), z = view.z, cur = ui.cur; let s = '';
   const lbl = (x, y, t) => `<text x="${x}" y="${y}" font-size="${13 / z}" font-weight="700" fill="${C.text}" stroke="${C.halo}" stroke-width="${3.5 / z}" paint-order="stroke" text-anchor="middle" pointer-events="none">${t}</text>`;
   if (tool === 'trim' && ui.raw) {
@@ -4689,7 +4700,7 @@ function updateGhost() {
 
 /* ---------- İşaretçi etkileşimi ---------- */
 function setCursor(e) {
-  const raw = wpos(e); ui.raw = raw; ui.shift = e.shiftKey; ui.lastE = { clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey };
+  const raw = wpos(e); ui.raw = raw; ui.shift = e.shiftKey; ui.lastE = { clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey, fpPt: e.fpPt };
   let from = null;
   if (tool === 'wall' && ui.draw) from = ui.draw.start;
   else if (tool === 'dim' && ui.dimStart) from = ui.dimStart;
@@ -4711,7 +4722,7 @@ cv.addEventListener('wheel', e => {
   e.preventDefault(); const r = cv.getBoundingClientRect();
   zoomAt(Math.exp(-e.deltaY * 0.0016), e.clientX - r.left, e.clientY - r.top);
 }, { passive: false });
-cv.addEventListener('dblclick', e => {
+function cvDbl(e) {
   if (tool === 'wall') { ui.draw = null; ui.typed = ''; render(); }
   else if (POLY_TOOLS.has(tool)) finishPoly();
   else if (tool === 'select') {
@@ -4720,11 +4731,13 @@ cv.addEventListener('dblclick', e => {
     else if (o && (o.kind === 'slab' || o.kind === 'void')) { const n = prompt(L('Ad:', 'Name:'), o.o.name || ''); if (n != null) { o.o.name = n; commit(); refresh(); } }
     else if (o && o.kind === 'text') { const n = prompt(L('Metin:', 'Text:'), o.o.text); if (n) { o.o.text = n; commit(); refresh(); } }
   }
-});
+}
+cv.addEventListener('dblclick', cvDbl);
 function pickDataId(e) {
   // 1) "👆 Tıkla / Click me" rozeti her zaman en üst önceliklidir
   // 2) Mobilya/duvar/kapı gibi nesneler oda etiketinin altında kalmasın
   // 3) Altında nesne yoksa oda etiketi / oda çokgeni seçilir
+  if (fp3DPick) return fp3DPick[0] ? { dataset: { id: fp3DPick[0] }, hasAttribute: () => false, closest: () => null } : null; // 3B ışını
   let first = null, roomHit = null, lowHit = null;
   for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
     const b = el.closest ? el.closest('[data-var-badge]') : null;
@@ -4753,6 +4766,7 @@ function pickDataId(e) {
 const LAYER_ARR = { furn: 'furn', room: 'rooms', slab: 'slabs', void: 'voids', text: 'texts', sketch: 'sketches', draft: 'drafts', dim: 'dims' };
 // İmlecin altındaki tüm nesneler, en üstteki önce (rozetler hariç)
 function idsAt(clientX, clientY) {
+  if (fp3DPick) return fp3DPick.slice(); // 3B'den iletilen olay: ışının kestiği nesneler (en yakın önce)
   const out = [];
   for (const el of document.elementsFromPoint(clientX, clientY)) {
     const t = el.closest ? el.closest('[data-id]') : null;
@@ -4921,8 +4935,8 @@ function endTouch(e) {
   if (touchPts.size === 0) touchSnap = null;
   return false;
 }
-cv.addEventListener('pointerdown', e => {
-  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+function cvDown(e) {
+  if (!e.fp) try { cv.setPointerCapture(e.pointerId); } catch (_) {} // 3B'den iletilen olay: yakalama yok
   if (e.pointerType === 'touch') {
     touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touchPts.size >= 2) {
@@ -5044,11 +5058,11 @@ cv.addEventListener('pointerdown', e => {
         if (!surfFaces(hit.o).length) { toast(L('Bu öğe referans yüzey olamaz (merdiven / rampa)', 'This item cannot be a reference surface (stairs / ramp)')); return; }
         ui.attRef = hit.o.id; sel = [hit.o.id]; refresh(); toast(step2); return;
       }
-      const ref = ui.attRef && find(ui.attRef);
+      const ref = ui.attRef && findAnyFloor(ui.attRef); // referans başka katta olabilir (çatı katı → alt kattaki duvarlar)
       if (hit && hit.kind === 'wall') {
         if (!ref) { toast(step1); return; }
         if (!isSolidWall(hit.o)) { toast(L('Yalnızca dolu duvarlar bağlanabilir', 'Only solid walls can be attached')); return; }
-        if (!attachWallTop(hit.o, surfFaces(ref.o), f)) { toast(L('Duvar bu yüzeyin altında değil', 'This wall is not under that surface')); return; }
+        if (!attachWallTop(hit.o, surfFacesOn(ref, fi), f)) { toast(L('Duvar bu yüzeyin altında değil', 'This wall is not under that surface')); return; }
         commit(); render(); renderProps(); if (ui.view3d && T3) schedBuild3D();
         toast(wallTopOn(hit.o) ? L(`Duvar yüzeye bağlandı: üst ${Math.round(wallTopMin(hit.o, 0, wLen(hit.o)))}–${Math.round(hit.o.h)} cm`, `Wall attached: top ${Math.round(wallTopMin(hit.o, 0, wLen(hit.o)))}–${Math.round(hit.o.h)} cm`) : L(`Duvar yüzeye bağlandı: ${hit.o.h} cm (düz)`, `Wall attached: ${hit.o.h} cm (flat)`));
         return;
@@ -5091,7 +5105,8 @@ cv.addEventListener('pointerdown', e => {
       render(); return;
     }
   }
-});
+}
+cv.addEventListener('pointerdown', cvDown);
 function closesLoop(p) {
   // başlangıç noktasına dönüldü mü: zincirdeki ilk noktadan başka duvar ucu varsa
   const f = F(); let n = 0; for (const w of f.walls) { if (dist(w.a, p) < 1) n++; if (dist(w.b, p) < 1) n++; } return n >= 3;
@@ -5171,7 +5186,7 @@ function placeAt(raw) {
   }
   commit(); refresh();
 }
-cv.addEventListener('pointermove', e => {
+function cvMove(e) {
   if (e.pointerType === 'touch' && touchPts.has(e.pointerId)) {
     touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touchPts.size >= 2) {
@@ -5201,8 +5216,9 @@ cv.addEventListener('pointermove', e => {
     if (d.type === 'handle') { doHandle(ui.raw, e); return; }
   }
   updateGhost(); drawPreview();
-});
-cv.addEventListener('pointerup', e => {
+}
+cv.addEventListener('pointermove', cvMove);
+function cvUp(e) {
   if (endTouch(e)) return;
   if ((tool === 'pen' || tool === 'shape') && ui.pen) { tool === 'shape' ? finishShapeFree() : finishPen(); return; }
   const d = ui.drag; if (!d) return; ui.drag = null; setCursor(e);
@@ -5274,7 +5290,8 @@ cv.addEventListener('pointerup', e => {
     if (d.moved) commit();
     refresh();
   }
-});
+}
+cv.addEventListener('pointerup', cvUp);
 cv.addEventListener('lostpointercapture', e => { if (touchPts.has(e.pointerId)) endTouch(e); }); // kaçırılan pointerup: eski parmak noktası kalmasın
 cv.addEventListener('pointercancel', e => {
   if (endTouch(e)) return;
@@ -6716,7 +6733,7 @@ window.addEventListener('blur', () => keys3D.clear());
 const foldText = s => String(s || '').replace(/[İIı]/g, 'i').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 function cmdList() {
   const act = (id, icon, tr, en, key, run, in3d = false, alias = '') => ({ id, icon, tr, en, key, run, in3d, alias });
-  const tools = TOOLS.filter(Boolean).map(([id, icon, tr, key, en]) => act('tool:' + id, icon, tr, en, key, () => setTool(id), false, (HINTS_EN[id] || '').split(':')[0]));
+  const tools = TOOLS.filter(Boolean).map(([id, icon, tr, key, en]) => act('tool:' + id, icon, tr, en, key, () => setTool(id), !FP3D_2D_ONLY.has(id), (HINTS_EN[id] || '').split(':')[0]));
   return tools.concat([
     act('undo', '↶', 'Geri al', 'Undo', 'Ctrl+Z', undo, true),
     act('redo', '↷', 'Yinele', 'Redo', 'Ctrl+Y', redo, true),
@@ -6812,7 +6829,10 @@ window.addEventListener('keydown', e => {
   if (ui.modal === 'parts') { fsKey(e); return; } // mobilya stüdyosu açıkken tuşlar stüdyonun: Delete / Ctrl+Z arkadaki plana gitmez
   // komut satırı (#43): ":" — 2B'de de 3B'de de; açık bir pencere (modal) varken değil
   if (e.key === ':' && !ctrl && !e.altKey && $('#modalbg').style.display !== 'flex') { e.preventDefault(); keys3D.clear(); openCmdPalette(); return; }
+  // 3B'de çizim aracı (fp3D): Esc aracı / yarım çizimi bitirir ve 3B'de kalınır; Enter ve yazılan ölçü 2B tuş yolundan geçer
   if (ui.view3d) {
+    if (e.key === 'Escape' && fp3DOn()) { escTool(); fp3DPreview(); return; } // 3B çizim aracı: Esc aracı / yarım çizimi bitirir, 3B'de kalınır
+    if (!ctrl && fp3DOn() && fp3DTypedKey(e, k)) { /* Enter ve yazılan ölçü aşağıdaki 2B tuş yoluna düşer */ } else {
     if (e.key === 'Escape' && tool === 'place') { setTool('select'); return; } // 3B yerleştirmeyi bitir, 3B'de kal
     if (e.key === 'Escape') { if (T3 && T3.walk) exitWalk(true); else show3D(false); return; }
     if (tool === 'place' && placing && !ctrl && k === 'r') { // 3B yerleştirme: R = döndür (mobilya) / menteşe yönü (kapı)
@@ -6841,7 +6861,7 @@ window.addEventListener('keydown', e => {
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSel(); return; }
     if (['w', 'a', 's', 'd', 'q', 'e', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) { keys3D.add(k); e.preventDefault(); }
     return;
-  }
+  } }
   if (e.key === ' ') { ui.space = true; e.preventDefault(); return; }
   if (ctrl) {
     if (e.code === 'BracketRight' || e.code === 'BracketLeft') { e.preventDefault(); if (sel.length) reorderSel(e.code === 'BracketRight' ? (e.shiftKey ? 'front' : 'up') : (e.shiftKey ? 'back' : 'down')); return; }
@@ -9620,6 +9640,7 @@ function show3D(on) {
     // 2B'ye dönerken bırakılan kamera: bir sonraki girişte aynen geri gelir
     T3.lastCam = { pos: T3.cam.position.clone(), target: T3.ctl.target.clone() };
     T3.run = false;
+    fp3DPreview(); render(); // 3B araç önizlemesi gizlenir; 2B tuval 3B'de değişen planı ve ölçeği yeniden çizer
   }
 }
 function init3D() {
@@ -9647,6 +9668,7 @@ function init3D() {
   r.domElement.addEventListener('pointerdown', e => {
     if (e.button !== 0 || !ui.view3d) return;
     if (T3 && T3.walk) { T3.walk.drag = { x: e.clientX, y: e.clientY }; return; } // yürüme (#46): sürükle = etrafa bak
+    if (fp3DOn()) { e.stopImmediatePropagation(); e.preventDefault(); fp3DDown(e); return; } // sol çubuk aracı: tık / sürükle araca gider, yörünge başlamaz
     if (place3DOn()) return; // 3B yerleştirme: sürükle = yörünge, tık (pointerup) = yerleştir
     const rc = ray3(e);
     const hits = rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh);
@@ -9804,6 +9826,10 @@ function init3D() {
   }, { passive: true });
   r.domElement.addEventListener('pointerdown', e => { if (e.button === 0) downPt = { x: e.clientX, y: e.clientY }; });
   r.domElement.addEventListener('pointermove', e => { if (place3DOn() && !e.buttons) place3DMove(e); }); // hayalet imleci izler (sürüklerken değil)
+  r.domElement.addEventListener('pointermove', e => { if (!fp3DDrag && !e.buttons && fp3DOn()) fp3DMoveSoon(e); }); // araç önizlemesi imleci izler
+  window.addEventListener('pointermove', e => { if (fp3DDrag) fp3DMoveSoon(e); });
+  window.addEventListener('pointerup', e => { if (fp3DDrag) fp3DUp(e); });
+  r.domElement.addEventListener('dblclick', e => { if (fp3DOn()) fp3DCall(cvDbl, e); });
   r.domElement.addEventListener('pointerleave', () => { if (place3DOn()) { ui.ghost = null; place3DSync(); } });
   r.domElement.addEventListener('pointerup', e => {
     const dp = downPt; downPt = null; // eski bir basış konumu sonraki tıkı tetiklemesin
@@ -11531,6 +11557,7 @@ function build3D(keepCam = false) {
   req3D();
   sync3DFloors();
   const lt = isLight(), S = T3.scene;
+  if (T3.fpPrev) S.remove(T3.fpPrev); // 3B araç önizlemesi de kalıcıdır
   if (T3.ghost) S.remove(T3.ghost); // 3B yerleştirme hayaleti kalıcıdır: sahne temizliğinde dispose edilmesin
   // önceki sahnenin GPU kaynaklarını serbest bırak (sık yeniden yapılanmalarda sızıntı olmasın)
   if (T3.mats) {
@@ -11869,7 +11896,7 @@ function build3D(keepCam = false) {
   T3.texs = texs;
   T3.ctl.update();
   if (T3.walk) applyWalkCam();
-  refreshSel3D(); applySecClip(); applyLive3D(); place3DSync();
+  refreshSel3D(); applySecClip(); applyLive3D(); place3DSync(); fp3DPreview();
 }
 
 /* ---------- 3B seçim vurgusu & canlı güncelleme ---------- */
@@ -11969,6 +11996,113 @@ function place3DSync() {
     g.position.set(w.a.x + ux * o.d, elev + (o.sill || 0) + o.h / 2, w.a.y + uy * o.d); g.rotation.set(0, -Math.atan2(uy, ux), 0);
   }
   g.visible = true; req3D();
+}
+
+/* ---------- 3B'de sol çubuk araçları (duvar, oda, döşeme, ölçü, metin, kalem, silgi, kırp, ayna, kesit, yüzeye bağla…) ----------
+   2B'ye dönmeden çalışırlar: işaretçi olayı ışınla plan noktasına çevrilir (imlecin altındaki ilk yüzey, yoksa katın zemin
+   düzlemi) ve 2B işleyicilerine (cvDown / cvMove / cvUp / cvDbl) sahte bir olayla iletilir. Yakalama, açı kilidi, yazılan
+   ölçü ve commit() böylece 2B ile birebir aynıdır; commit() sahneyi yeniden kurar. idsAt / pickDataId bu sırada ışının
+   kestiği nesneleri döndürür (fp3DPick). Yakalama yarıçapları piksel / view.z olduğundan view.z geçici olarak imleçteki
+   3B ölçeğe ayarlanır. Bir çizim sürmüyorsa etkin kat imlecin altındaki katı izler (üst kattaki çatı → alt kattaki duvar).
+   Önizleme: tek kalıcı LineSegments (sabit tampon, hareket başına geometri ayrılmaz), katın 2 cm üstünde, derinlik testi kapalı. */
+function fp3DOn() { return !!(ui.view3d && T3 && !T3.walk && tool !== 'select' && tool !== 'place' && tool !== 'pan' && !FP3D_2D_ONLY.has(tool)); }
+const FP3D_ID_KEYS = ['opId', 'furnId', 'wallId', 'slabId', 'roomId'];
+function fp3DIdOf(obj) {
+  for (let o = obj; o; o = o.parent) { const u = o.userData; if (u) for (const k of FP3D_ID_KEYS) if (u[k]) return u[k]; }
+  return null;
+}
+// görünen katlardan, y kotunun bulunduğu kat (tabanı y'nin altında kalan en yüksek kat)
+function fp3DFloorAtY(y) {
+  let best = -1;
+  P.floors.forEach((f, i) => { if (v3dShown(f) && v3dElev(i) <= y + 2 && (best < 0 || v3dElev(i) >= v3dElev(best))) best = i; });
+  return best < 0 ? walkFloorIdx() : best;
+}
+function fp3DBusy() { return !!(ui.draw || ui.polyPts || ui.dimStart || ui.secStart || ui.mAxis || ui.pen || (ui.dr && ui.dr.pts.length) || ui.drag); }
+// 3B işaretçi olayı → 2B işleyicilerine verilecek olay; ışın hiçbir yere değmiyorsa null (keep: son plan noktası kullanılır)
+function fp3DEvent(e, keep) {
+  const rect = T3.r.domElement.getBoundingClientRect();
+  T3.cam.updateMatrixWorld(); T3.scene.updateMatrixWorld();
+  const rc = camRay(new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1));
+  const hits = rc.intersectObjects(T3.scene.children, true).filter(h => h.object.isMesh && h.object.visible && !h.object.userData.ghost && !h.object.userData.fpDecal && !(h.object.material && h.object.material.isShaderMaterial));
+  const floorOf = h => { const id = fp3DIdOf(h.object), fd = id && findAnyFloor(id); return fd && fd.floorIdx != null ? fd.floorIdx : fp3DFloorAtY(h.point.y); };
+  if (!fp3DBusy()) { // yarım çizim yokken etkin kat imlecin altındaki katı izler
+    let h0 = hits[0];
+    if (tool === 'attach' && ui.attRef) h0 = hits.find(h => { const id = fp3DIdOf(h.object); return id && findAnyFloor(id)?.kind === 'wall'; }) || h0; // 2. adım: çatının altındaki duvar
+    let i = h0 ? floorOf(h0) : walkFloorIdx();
+    if (!P.floors[i] || !v3dShown(P.floors[i])) i = walkFloorIdx();
+    if (i !== fi) followSelFloor({ floorIdx: i });
+  }
+  const elev = v3dElev(fi), h0 = hits[0];
+  let p = null, pt = null;
+  if (h0 && h0.point.y >= elev - 1 && floorOf(h0) === fi) pt = h0.point;
+  else { const v = new THREE.Vector3(); if (rc.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -elev), v)) pt = v; }
+  if (pt) p = { x: pt.x, y: pt.z };
+  else if (keep && ui.raw) p = { x: ui.raw.x, y: ui.raw.y };
+  else return null;
+  const ids = [];
+  for (const h of hits) { const id = fp3DIdOf(h.object); if (id && !ids.includes(id) && find(id) && pickable(id)) ids.push(id); }
+  const dd = pt ? T3.cam.position.distanceTo(pt) : T3.cam.position.distanceTo(T3.ctl.target);
+  const z = clamp((rect.height || 1) / 2 / Math.max(1e-3, viewHalfH(T3.cam, dd)), MIN_ZOOM, MAX_ZOOM);
+  return { fp: true, fpPt: p, fpIds: ids, fpZ: z, clientX: e.clientX, clientY: e.clientY, button: e.button || 0, buttons: e.buttons, detail: e.detail,
+    shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, pointerId: e.pointerId, pointerType: 'mouse', target: cv,
+    preventDefault() {}, stopPropagation() {} };
+}
+// 2B işleyicisini 3B olayıyla çalıştır
+function fp3DCall(fn, e, keep) {
+  if (!fp3DOn()) return false;
+  const ev = fp3DEvent(e, keep); if (!ev) return false;
+  const z0 = view.z, sel0 = sel.join(','); view.z = ev.fpZ; fp3DPick = ev.fpIds; T3.fpZ = ev.fpZ;
+  try { fn(ev); } finally { view.z = z0; fp3DPick = null; }
+  if (sel.join(',') !== sel0 && ui.view3d && T3) refreshSel3D();
+  fp3DPreview(); return true;
+}
+let fp3DDrag = false, fp3DMv = null;
+function fp3DDown(e) { fp3DMv = null; fp3DDrag = true; fp3DCall(cvDown, e); }
+// hareketler kare başına bir kez işlenir (her fare olayında sahne ışınlanmaz)
+function fp3DMoveSoon(e) {
+  const first = !fp3DMv; fp3DMv = e;
+  if (first) requestAnimationFrame(() => { const ev = fp3DMv; fp3DMv = null; if (ev && fp3DOn()) fp3DCall(cvMove, ev); });
+}
+function fp3DUp(e) {
+  fp3DDrag = false;
+  if (fp3DMv) { const ev = fp3DMv; fp3DMv = null; fp3DCall(cvMove, ev); }
+  if (!fp3DCall(cvUp, e, true)) ui.drag = null;
+}
+// 3B'de çizim sürerken 2B tuş yoluna gidecek tuşlar: Enter (bitir / uygula), yazılan ölçü (rakam, Backspace, dikdörtgende x)
+function fp3DTypedKey(e, k) {
+  const drawing = (tool === 'wall' && ui.draw) || (tool === 'draft' && ui.dr && ui.dr.pts.length);
+  if (e.key === 'Enter') return !!(drawing || (POLY_TOOLS.has(tool) && ui.polyPts));
+  if (!drawing) return false;
+  if (/^[0-9.,]$/.test(e.key) || e.key === 'Backspace' || (tool === 'draft' && (k === 'x' || k === '*'))) { keys3D.clear(); return true; }
+  return false;
+}
+const FP3D_MAXV = 4096;
+function fp3DPreview() {
+  if (!T3 || !T3.scene) return;
+  const on = fp3DOn();
+  if (!place3DOn()) T3.r.domElement.style.cursor = on ? 'crosshair' : '';
+  let ln = T3.fpPrev;
+  if (!on) { if (ln && ln.visible) { ln.visible = false; req3D(); } return; }
+  if (!ln) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(FP3D_MAXV * 3), 3));
+    ln = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xf59e0b, depthTest: false, transparent: true }));
+    ln.renderOrder = 999; ln.frustumCulled = false; ln.raycast = () => {}; ln.userData.fpPrev = true; T3.fpPrev = ln;
+  }
+  if (ln.parent !== T3.scene) T3.scene.add(ln);
+  const a = ln.geometry.attributes.position, arr = a.array, y = v3dElev(fi) + 2; let n = 0;
+  const put = q => { arr[n * 3] = q.x; arr[n * 3 + 1] = y; arr[n * 3 + 2] = q.y; n++; };
+  const seg = (p, q) => { if (p && q && n + 2 <= FP3D_MAXV) { put(p); put(q); } };
+  const path = pts => { for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i]); };
+  const c = ui.cur || ui.raw, d = ui.drag;
+  if (d && d.start && ['rect', 'prect', 'box', 'shape'].includes(d.type)) { const q = d.cur || c; if (q) { const b = { x: q.x, y: d.start.y }, e2 = { x: d.start.x, y: q.y }; seg(d.start, b); seg(b, q); seg(q, e2); seg(e2, d.start); } }
+  if (tool === 'wall' && ui.draw && ui.draw.start) seg(ui.draw.start, c);
+  if (ui.polyPts && ui.polyPts.length) { path(ui.polyPts); seg(ui.polyPts[ui.polyPts.length - 1], c); }
+  for (const s0 of [ui.dimStart, ui.secStart, ui.mAxis]) if (s0) seg(s0, c);
+  if (ui.dr && ui.dr.pts.length) { path(ui.dr.pts); seg(ui.dr.pts[ui.dr.pts.length - 1], c); }
+  if (ui.pen && ui.pen.pts) path(ui.pen.pts);
+  if (c) { const r = 9 / (T3.fpZ || view.z); seg({ x: c.x - r, y: c.y }, { x: c.x + r, y: c.y }); seg({ x: c.x, y: c.y - r }, { x: c.x, y: c.y + r }); }
+  a.needsUpdate = true; ln.geometry.setDrawRange(0, n); ln.visible = n > 0; req3D();
 }
 
 /* ---------- Dil arayüzü & Başlatma ---------- */
