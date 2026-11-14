@@ -537,6 +537,64 @@ check('3D: furniture and doors are placed from the library without leaving 3D', 
   return 'library pick stays in 3D, ghost follows, R rotates, click places, door on wall, Esc ends';
 });
 
+check('3D: left-toolbar drawing tools work without leaving 3D; attach to surface across floors', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+    if (!ui.view3d) return { skipped: true };
+    set3DCam('top'); await new Promise(r => setTimeout(r, 150));
+    const cnv = T3.r.domElement, wait = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 20)));
+    const scr = (x, y, z) => { const rect = cnv.getBoundingClientRect(), c = new THREE.Vector3(x, y, z).project(T3.cam); return { x: rect.left + (c.x + 1) / 2 * rect.width, y: rect.top + (1 - c.y) / 2 * rect.height }; };
+    const ev = (t, p) => (t === 'pointerdown' ? cnv : window).dispatchEvent(new PointerEvent(t, { clientX: p.x, clientY: p.y, bubbles: true, button: 0, buttons: t === 'pointerup' ? 0 : 1, pointerId: 1 }));
+    const click = async p => { ev('pointerdown', p); ev('pointerup', p); await wait(); };
+    const out = {};
+    document.querySelector('.tool[data-tool="wall"]').click();
+    out.stay = ui.view3d && tool === 'wall';
+    const n0 = F().walls.length;
+    cnv.dispatchEvent(new PointerEvent('pointermove', { clientX: scr(150, 0, 200).x, clientY: scr(150, 0, 200).y, bubbles: true, pointerId: 1 })); await wait();
+    out.preview = !!(T3.fpPrev && T3.fpPrev.visible);
+    await click(scr(150, 0, 200)); await click(scr(450, 0, 200));
+    const w = F().walls[n0]; out.wall = F().walls.length === n0 + 1 && w && Math.abs(w.a.x - 150) < 15 && Math.abs(w.b.x - 450) < 15 && Math.abs(w.a.y - 200) < 15;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    out.esc = ui.view3d && tool === 'select';
+    await new Promise(r => setTimeout(r, 150)); // sahne yeniden kuruldu
+    out.built = T3.scene.children.some(c => c.userData && c.userData.wallId === (w && w.id));
+    // sürükleyen araç (dikdörtgen oda) ve silgi
+    setTool('rect'); const nw = F().walls.length;
+    ev('pointerdown', scr(800, 0, 50)); await wait(); ev('pointermove', scr(1000, 0, 250)); await wait(); ev('pointerup', scr(1000, 0, 250)); await wait();
+    out.rect = F().walls.length === nw + 4 && ui.view3d;
+    await new Promise(r => setTimeout(r, 150));
+    setTool('eraser'); const ne = F().walls.length;
+    await click(scr(300, 150, 200));
+    out.erased = F().walls.length === ne - 1 && !F().walls.some(x => x.id === (w && w.id));
+    setTool('select');
+    // yüzeye bağla: eğik kutu üst katta, duvarlar zemin katta
+    const p = newProject(); p.floors.push(newFloor('1')); loadProject(p);
+    fi = 0; addRectWalls(0, 0, 600, 400);
+    fi = 1; const lid = { id: uid(), type: 'box', name: 'lid', icon: '', k: 'rect', w: 800, d: 600, h: 10, color: '#888888', x: 300, y: 200, rot: 0, rx: 12 };
+    F().furn.push(lid); fi = 0; commit(); sel = []; refresh(); build3D(); set3DCam('top'); await new Promise(r => setTimeout(r, 150));
+    document.querySelector('.tool[data-tool="attach"]').click();
+    out.attStay = ui.view3d && tool === 'attach';
+    const e0 = floorElev(1); await click(scr(300, e0 + 60, 200));
+    out.ref = ui.attRef === lid.id;
+    const wall = P.floors[0].walls.find(x => Math.abs(x.a.y - x.b.y) < 1 && x.a.y < 50), h0 = wall.h;
+    await click(scr((wall.a.x + wall.b.x) / 2, 200, wall.a.y));
+    out.attached = fi === 0 && (wall.h !== h0 || !!wall.top); out.h = wall.h; out.top = wall.top;
+    out.attStill = ui.view3d;
+    show3D(false); sel = []; refresh();
+    return out;
+  })()`);
+  if (info.skipped) return '3D unavailable';
+  if (!info.stay) throw new Error('picking the wall tool in 3D left the 3D view: ' + JSON.stringify(info));
+  if (!info.preview) throw new Error('no 3D preview for the wall tool: ' + JSON.stringify(info));
+  if (!info.wall || !info.built) throw new Error('two clicks in 3D did not draw a wall where clicked: ' + JSON.stringify(info));
+  if (!info.esc) throw new Error('Esc did not end the tool while staying in 3D: ' + JSON.stringify(info));
+  if (!info.rect || !info.erased) throw new Error('rectangle drag or eraser did not work in 3D: ' + JSON.stringify(info));
+  if (!info.attStay || !info.ref || !info.attached || !info.attStill) throw new Error('attach to surface did not work in 3D across floors: ' + JSON.stringify(info));
+  return 'wall tool stays in 3D, preview, two clicks draw a wall, Esc ends the tool, rectangle drag, eraser; attach takes an upper-floor surface for a ground-floor wall';
+});
+
 check('section tool, 2D section / elevation drawings and the 3D cutaway (issues #30, #31)', async page => {
   const info = await page.evaluate(`(async () => {
     const p = newProject(); p.floors.push(newFloor('1')); loadProject(p);
@@ -1164,13 +1222,14 @@ check('command line: ":" finds tools in TR / EN, runs them, respects inputs and 
     const pn = document.getElementById('pname'); pn.focus(); pn.dispatchEvent(new KeyboardEvent('keydown', { key: ':', bubbles: true })); out.input = !!document.getElementById('cmdPal'); pn.blur();
     show3D(true); await new Promise(r => setTimeout(r, 800));
     key(':'); type('yinele'); key('Enter'); out.redo3d = ui.view3d;
-    key(':'); type('duvar'); key('Enter'); out.wall2d = !ui.view3d && tool === 'wall';
-    setTool('select'); return out;
+    key(':'); type('duvar'); key('Enter'); out.wall3d = ui.view3d && tool === 'wall'; // sol çubuk araçları 3B'de kalır
+    key(':'); type('calibrate'); key('Enter'); out.calib2d = !ui.view3d && tool === 'calib';  // altlığa bağlı araç 2B'ye döner
+    setTool('select'); if (ui.view3d) show3D(false); return out;
   })()`);
   if (!info.open || info.rows < 30) throw new Error('":" did not open the command list: ' + JSON.stringify(info));
   if (info.top !== 'L' || info.tool !== 'section' || !info.closed) throw new Error('searching "KESİT" did not run the Section tool: ' + JSON.stringify(info));
   if (info.input) throw new Error('":" typed in a text field opened the command line');
-  if (!info.redo3d || !info.wall2d) throw new Error('3D rules broken (redo should stay in 3D, wall should go to 2D): ' + JSON.stringify(info));
+  if (!info.redo3d || !info.wall3d || !info.calib2d) throw new Error('3D rules broken (redo and the wall tool should stay in 3D, calibrate should go to 2D): ' + JSON.stringify(info));
   return `${info.rows} commands, KESİT → Section (L), inputs ignored, 3D rules kept`;
 });
 

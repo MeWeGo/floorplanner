@@ -33,6 +33,7 @@ const api = new Function(`
   let closed = 0; const closeCmdPalette = () => closed++;
   ${block('const TOOLS = [', '];')}
   ${block('const HINTS_EN = {', '\n};')}
+  ${lineSrc('FP3D_2D_ONLY')}
   ${lineSrc('foldText')}
   ${fnSrc('cmdList')}
   ${fnSrc('cmdFilter')}
@@ -85,14 +86,19 @@ test('in 3D: view / history / save run in place, editing and drawing commands re
   const cmds = api.cmdList(), by = id => cmds.find(c => c.id === id);
   for (const id of ['undo', 'redo', 'fit', 'save', '3d', '2d', 'print'])
     assert.strictEqual(by(id).in3d, true, id + ' should run in 3D');
-  for (const id of ['tool:wall', 'tool:door', 'flipH', 'scale', 'selall'])
+  for (const id of ['tool:wall', 'tool:door', 'tool:attach', 'tool:eraser']) // sol çubuk araçları 3B'de de çalışır
+    assert.strictEqual(by(id).in3d, true, id + ' should run in 3D');
+  for (const id of ['tool:calib', 'flipH', 'scale', 'selall'])
     assert.strictEqual(by(id).in3d, false, id + ' should switch to 2D');
   api.ui.view3d = true; api.calls.length = 0;
   api.runCmd(by('undo'));
   assert.deepStrictEqual(api.calls, ['undo'], 'undo must not leave 3D');
   api.calls.length = 0;
   api.runCmd(by('tool:wall'));
-  assert.deepStrictEqual(api.calls, ['3d:false', 'tool:wall']);
+  assert.deepStrictEqual(api.calls, ['tool:wall'], 'a drawing tool picked in 3D stays in 3D');
+  api.calls.length = 0;
+  api.runCmd(by('tool:calib'));
+  assert.deepStrictEqual(api.calls, ['3d:false', 'tool:calib']);
   api.ui.view3d = true; api.calls.length = 0;
   api.runCmd(by('fit'));
   assert.deepStrictEqual(api.calls, ['cam'], 'fit in 3D uses the 3D camera');
