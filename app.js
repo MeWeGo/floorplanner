@@ -6731,6 +6731,7 @@ function cmdList() {
     act('png', '🖼', 'PNG dışa aktar', 'Export PNG', '', () => $('#bPng').click(), true, 'image görsel render'),
     act('svg', '⬇', 'SVG dışa aktar', 'Export SVG', '', () => $('#bSvg').click(), false),
     act('json', '⬇', 'JSON indir', 'Download JSON', '', () => downloadJson(P), true, 'export backup yedek'),
+    act('revit', '⬇', 'Revit için dışa aktar', 'Export for Revit', '', downloadRevit, true, 'revit bim pyrevit autodesk export dışa aktar family aile'),
     act('open', '📂', 'Dosya aç (JSON / IFC)', 'Open file (JSON / IFC)', '', () => $('#fileOpen').click(), true, 'import ifc revit archicad bim içe aktar'),
     act('new', '＋', 'Yeni proje', 'New project', '', templatesModal, true, 'template şablon'),
     act('texture', '🎨', 'Doku oluştur / yükle', 'Create / upload texture', '', () => openTexDialog(), true, 'texture pattern tile parquet brick image ai doku desen karo parke tuğla görsel'),
@@ -7666,6 +7667,155 @@ async function saveBrowser() {
 function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
 const fname = ext => (P.name || 'plan').replace(/[^\w\-çğıöşüÇĞİÖŞÜ ]+/g, '_') + '.' + ext;
 function downloadJson(proj = P) { download(fname('json'), new Blob([JSON.stringify(bundleTextures(proj), null, 2)], { type: 'application/json' })); }
+/* ---------- Revit dışa aktarma (floorplanner → Revit) ----------
+   revitExport() bir değişim dosyası (.fp-revit.json) üretir; revit/ klasöründeki pyRevit eklentisi onu okuyup
+   yerel Revit öğeleri kurar: seviyeler, duvarlar, kapı / pencere, döşemeler, odalar. Mobilya family-map.json'daki
+   aileyle eşleşir; eşleşmeyen her öğe kendi 3B modelinin yüzleriyle DirectShape olur.
+   Dosyada her şey Revit'in iç biriminde (fit), y yukarı (plan y'si ters), açılar derece ve saat yönünün tersine.
+   Mesh yardımcıları saf (REVIT-MESH bloğu, tests/revit-export.test.js): yüzler sağ elli çerçevede dışa bakan
+   (dışarıdan bakınca saat yönünün tersine) döngülerdir; plan çerçevesi (y aşağı) sol ellidir, bu yüzden her şey önce
+   y = −y ile sağ elli yerel çerçeveye çevrilir ve yalnızca dönme + pozitif ölçek uygulanır (yönelim korunur). */
+/* REVIT-MESH:BEGIN */
+const REVIT_FT = 30.48;
+const rvR = v => Math.round(v * 1e5) / 1e5;
+const rvFt = v => rvR(v / REVIT_FT);
+// dış çokgen (sağ elli, +z'den bakınca CCW) z0 → z1 prizma: alt (ters), üst, yanlar
+function rvPrism(pts, z0, z1) {
+  let p = pts.map(q => [q[0], q[1]]);
+  let a = 0; for (let i = 0; i < p.length; i++) { const u = p[i], v = p[(i + 1) % p.length]; a += u[0] * v[1] - v[0] * u[1]; }
+  if (a < 0) p = p.reverse();
+  const f = [p.slice().reverse().map(q => [q[0], q[1], z0]), p.map(q => [q[0], q[1], z1])];
+  for (let i = 0; i < p.length; i++) { const u = p[i], v = p[(i + 1) % p.length]; f.push([[u[0], u[1], z0], [v[0], v[1], z0], [v[0], v[1], z1], [u[0], u[1], z1]]); }
+  return f;
+}
+const rvEllipse = (rx, ry, n = 16) => Array.from({ length: n }, (_, i) => [rx * Math.cos(i * 2 * Math.PI / n), ry * Math.sin(i * 2 * Math.PI / n)]);
+// elipsoit (enlem / boylam dörtgenleri, kutuplarda üçgen)
+function rvSphere(rx, ry, rz, nLat = 6, nLon = 12) {
+  const P3 = (t, f) => [rx * Math.cos(t) * Math.cos(f), ry * Math.cos(t) * Math.sin(f), rz * Math.sin(t)], out = [];
+  for (let i = 0; i < nLat; i++) for (let j = 0; j < nLon; j++) {
+    const t0 = -Math.PI / 2 + i * Math.PI / nLat, t1 = t0 + Math.PI / nLat, f0 = j * 2 * Math.PI / nLon, f1 = f0 + 2 * Math.PI / nLon;
+    const q = [P3(t0, f0), P3(t0, f1), P3(t1, f1), P3(t1, f0)];
+    out.push(i === 0 ? [q[0], q[2], q[3]] : i === nLat - 1 ? [q[0], q[1], q[2]] : q);
+  }
+  return out;
+}
+// eksen permütasyonu (döngüsel = uygun dönme): (u, v, t) → yerel (x, y, z)
+const rvCyc = (faces, m) => faces.map(f => f.map(([u, v, t]) => m === 'x' ? [t, u, v] : m === 'y' ? [v, t, u] : [u, v, t]));
+const rvMat = (M, v) => [M[0][0] * v[0] + M[0][1] * v[1] + M[0][2] * v[2], M[1][0] * v[0] + M[1][1] * v[1] + M[1][2] * v[2], M[2][0] * v[0] + M[2][1] * v[1] + M[2][2] * v[2]];
+const rvFlipM = M => M.map((r, i) => r.map((v, j) => ((i === 1) !== (j === 1) ? -v : v))); // S · M · S, S = diag(1, −1, 1)
+// temiz bir parçanın yüzleri: öğe yereli, sağ elli (x, −y, z), z tabandan
+function rvPartFaces(q) {
+  const hw = q.w / 2, hd = q.d / 2, hh = q.h / 2;
+  let f;
+  if (q.type === 'sphere') f = rvSphere(hw, hd, hh);
+  else if (q.type === 'cyl' && q.axis === 'x') f = rvCyc(rvPrism(rvEllipse(hd, hh), -hw, hw), 'x');
+  else if (q.type === 'cyl' && q.axis === 'y') f = rvCyc(rvPrism(rvEllipse(hh, hw), -hd, hd), 'y');
+  else if (q.type === 'cyl') f = rvPrism(rvEllipse(hw, hd), -hh, hh);
+  else if (q.type === 'extrude' && Array.isArray(q.pts) && q.pts.length >= 3) f = rvPrism(q.pts.map(p => [p.x, -p.y]), -hh, hh);
+  else f = rvPrism([[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]], -hh, hh);
+  const M = rvFlipM(partRotM(q.rx, q.ry, q.rot)), c = [q.x || 0, -(q.y || 0), (q.z || 0) + hh];
+  return f.map(fc => fc.map(v => { const r = rvMat(M, v); return [r[0] + c[0], r[1] + c[1], r[2] + c[2]]; }));
+}
+// öğe yerelinden (sağ elli) Revit dünyasına: eğim (furnTiltGroup gibi orta yükseklik etrafında, en alt köşe zemine), dönüş, konum; cm → ft
+function rvPlace(faces, o, z0) {
+  let T = null, lift = 0;
+  if (furnTilted(o)) {
+    const M = partRotM(o.rx, o.ry, 0); T = rvFlipM(M);
+    lift = Math.abs(M[2][0]) * o.w / 2 + Math.abs(M[2][1]) * o.d / 2 + Math.abs(M[2][2]) * o.h / 2;
+  }
+  const a = -(o.rot || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a), X = o.x || 0, Y = -(o.y || 0);
+  return faces.map(f => f.map(v => {
+    if (T) { const r = rvMat(T, [v[0], v[1], v[2] - o.h / 2]); v = [r[0], r[1], r[2] + lift]; }
+    return [rvFt(X + v[0] * c - v[1] * s), rvFt(Y + v[0] * s + v[1] * c), rvFt(z0 + v[2])];
+  }));
+}
+/* REVIT-MESH:END */
+// öğenin gövdesi: [{ faces, m }] (m = malzeme { c, glass }); parçalar > katalog 3B modeli > şekil profili > kutu / silindir
+function rvItemSolids(o) {
+  const col = c => (partHex(c) ? c : partHex(o.color) ? o.color : '#b08968');
+  if (o.k === 'roof') return [{ faces: roofFaces(o).map(f => f.map(p => [p[0], -p[1], p[2]])), m: { c: col() } }];
+  if (o.k === 'stairs') {
+    const st = stairSteps(o);
+    return st.steps.map(s => ({ faces: rvPrism(stepCorners(s).map(p => [p.x, -p.y]), 0, s.z), m: { c: col() } }));
+  }
+  if (o.k === 'ramp') return [{ faces: rvCyc(rvPrism([[-o.d / 2, 0], [o.d / 2, 0], [o.d / 2, Math.max(1, o.h)]], -o.w / 2, o.w / 2), 'x'), m: { c: col() } }];
+  let parts = null, sc = { sx: 1, sy: 1, sz: 1 }, off = null;
+  if (Array.isArray(o.parts) && o.parts.length) { parts = o.parts; sc = partsScale(o); }
+  else { const md = furnModelParts(o); if (md) { parts = md.parts; off = md.off; } }
+  if (!parts && o.k === 'poly' && o.pts && o.pts.length >= 3) parts = [cleanPart({ type: 'extrude', pts: o.pts, h: o.h })];
+  if (!parts) parts = [cleanPart({ type: o.k === 'round' ? 'cyl' : 'box', w: o.w, d: o.d, h: o.h })];
+  return parts.map(q => ({
+    faces: rvPartFaces(q).map(f => f.map(v => [(v[0] + (off ? off.x : 0)) * sc.sx, (v[1] - (off ? off.y : 0)) * sc.sy, (v[2] + (off ? off.z : 0)) * sc.sz])),
+    m: { c: col(q.color), glass: q.mat === 'glass' || undefined },
+  }));
+}
+const RV_CAT = { wc: 'plumbing', bidet: 'plumbing', basin: 'plumbing', basin2: 'plumbing', shower: 'plumbing', tub: 'plumbing', sinkK: 'plumbing',
+  plant: 'planting', tree: 'planting', column: 'column', colSq: 'column', fridge: 'appliance', stove: 'appliance', dish: 'appliance', wm: 'appliance',
+  counter: 'casework', counter2: 'casework', island: 'casework', cabU: 'casework', car: 'entourage' };
+const rvCat = o => (o.k === 'stairs' ? 'stairs' : o.k === 'ramp' ? 'ramp' : o.k === 'roof' ? 'roof' : RV_CAT[o.type] || 'furniture');
+// çokgenin içinde, kenarlardan en uzak örnek nokta (oda etiketi / Revit oda noktası)
+function rvInsidePt(pts) {
+  const c = polyCentroid(pts);
+  const dEdge = p => Math.min(...pts.map((a, i) => segProj(p, a, pts[(i + 1) % pts.length]).d));
+  let best = pointInPoly(c, pts) ? c : null, bd = best ? dEdge(best) : -1;
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  for (let i = 1; i < 12; i++) for (let j = 1; j < 12; j++) {
+    const p = { x: x0 + (x1 - x0) * i / 12, y: y0 + (y1 - y0) * j / 12 };
+    if (!pointInPoly(p, pts)) continue;
+    const d = dEdge(p); if (d > bd * 1.5) { best = p; bd = d; }
+  }
+  return best || c;
+}
+function revitExport(proj = P) {
+  const pt = p => [rvFt(p.x), rvFt(-p.y)], vec = (x, y) => [rvR(x), rvR(-y)];
+  const out = { format: 'floorplanner-revit', v: 1, units: 'ft', name: proj.name || 'plan', made: new Date().toISOString(),
+    levels: [], walls: [], openings: [], floors: [], rooms: [], items: [], stats: {} };
+  const keep = fi, keepP = P; P = proj;
+  try {
+    proj.floors.forEach((f0, i) => {
+      fi = i; const f = visFloor(f0), E = floorElev(i), lv = 'L' + i;
+      out.levels.push({ id: lv, name: f0.name || L('Kat', 'Floor') + ' ' + (i + 1), elev: rvFt(E), height: rvFt(floorH(f0)) });
+      const wById = {};
+      for (const w of f.walls) {
+        if (wLen(w) < 1) continue;
+        wById[w.id] = w;
+        const kind = w.wt || 'solid';
+        out.walls.push(Object.assign({ id: w.id, level: lv, a: pt(w.a), b: pt(w.b), t: rvFt(w.t), h: rvFt(w.h), base: rvFt(wallElev(w)), kind },
+          w.color ? { color: w.color } : {}, kind === 'curtain' ? { bays: curtainBays(w) } : {}, kind === 'railing' ? { rs: railStyle(w) } : {},
+          Array.isArray(w.top) && w.top.length ? { sloped: true } : {}));
+      }
+      for (const op of f.ops) {
+        const w = wById[op.wall]; if (!w) continue;
+        const Lw = wLen(w), ux = (w.b.x - w.a.x) / Lw, uy = (w.b.y - w.a.y) / Lw, c = { x: w.a.x + ux * op.d, y: w.a.y + uy * op.d };
+        const door = op.type !== 'window', sd = op.side || 1, hs = op.flip ? 1 : -1; // menteşe: flip 0 → a ucu yönü (opSvg: yaprak −hw'de)
+        out.openings.push(Object.assign({ id: op.id, wall: op.wall, level: lv, kind: op.type, at: pt(c), w: rvFt(op.w), h: rvFt(op.h), sill: rvFt(op.sill || 0) },
+          door && op.type !== 'arch' ? { hinge: vec(ux * hs, uy * hs), swing: vec(-uy * sd, ux * sd), mat: doorMat(op) } : {}));
+      }
+      for (const poly of slabPolys(f)) out.floors.push({ id: 'slab-' + i + '-' + out.floors.length, level: lv, kind: 'slab', loops: [poly, ...voidHoles(f.voids, poly)].map(l => l.map(pt)), top: 0, t: rvFt(20), finish: f0.slabFloor || 'none' });
+      for (const s of f.slabs || []) if (s.pts && s.pts.length > 2) out.floors.push({ id: s.id, level: lv, kind: 'free', name: s.name || '', loops: [s.pts, ...voidHoles(f.voids, s.pts)].map(l => l.map(pt)), top: rvFt(+s.off || 0), t: rvFt(+s.t || 20), finish: s.floor || 'none' });
+      for (const r of f.rooms) if (r.pts && r.pts.length > 2) out.rooms.push({ id: r.id, level: lv, name: r.name || '', pt: pt(rvInsidePt(r.pts)), loop: r.pts.map(pt), area: rvR(polyArea(r.pts) / 1e4), finish: r.floor || 'none' });
+      const slabs = f.slabs || [], fOff = o => { for (let k = slabs.length - 1; k >= 0; k--) if (slabs[k].pts && pointInPoly(o, slabs[k].pts)) return +slabs[k].off || 0; return 0; };
+      for (const o of f.furn) {
+        const el = fOff(o) + furnElev(o), mats = [], faces = [];
+        rvItemSolids(o).forEach((s, si) => {
+          const key = s.m.c + (s.m.glass ? 'g' : ''); let mi = mats.findIndex(m => m.c + (m.glass ? 'g' : '') === key); if (mi < 0) { mi = mats.length; mats.push(s.m); }
+          faces.push(...rvPlace(s.faces, o, E + el).map(p => ({ p, m: mi, s: si })));
+        });
+        out.items.push(Object.assign({ id: o.id, level: lv, type: o.type || '', cat: rvCat(o), name: o.label || o.name || (BYID[o.type] ? L(BYID[o.type].name, BYID[o.type].en) : o.type || ''),
+          en: BYID[o.type] ? BYID[o.type].en : '', at: pt(o), rot: rvR(-(o.rot || 0)), elev: rvFt(el), w: rvFt(o.w), d: rvFt(o.d), h: rvFt(o.h), color: o.color || '', mats, faces },
+          o.k === 'stairs' ? { risers: stairSteps(o).n, stairType: o.stairType || 'straight' } : {}, furnTilted(o) ? { tilted: true } : {}));
+      }
+    });
+  } finally { P = keepP; fi = keep; }
+  for (const k of ['levels', 'walls', 'openings', 'floors', 'rooms', 'items']) out.stats[k] = out[k].length;
+  return out;
+}
+function downloadRevit() {
+  const x = revitExport(P);
+  download(fname('fp-revit.json'), new Blob([JSON.stringify(x)], { type: 'application/json' }));
+  toast(L(`Revit dosyası hazır: ${x.stats.walls} duvar, ${x.stats.openings} kapı / pencere, ${x.stats.items} eşya. Revit'te Floor Planner ▸ Import Plan ile aç (revit/README.md).`,
+    `Revit file ready: ${x.stats.walls} walls, ${x.stats.openings} doors / windows, ${x.stats.items} items. Open it in Revit with Floor Planner ▸ Import Plan (revit/README.md).`));
+}
 async function projectsModal() {
   let list = [];
   try { list = await dbGetAll('projects'); list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); } catch (e) { }
@@ -12005,6 +12155,7 @@ function applyLangUI() {
   $('#bSave').textContent = L('💾 Kaydet', '💾 Save');
   $('#bSave').title = L('Tarayıcıya kaydet (Ctrl+S)', 'Save to browser (Ctrl+S)');
   $('#bJson').title = L('JSON dosyası olarak indir', 'Download as JSON file');
+  $('#bRevit').title = L('Revit için dışa aktar: duvar, kapı / pencere, döşeme, oda, mobilya (revit/ eklentisi)', 'Export for Revit: walls, doors / windows, floors, rooms, furniture (revit/ add-in)');
   $('#bOpen').textContent = L('📂 Aç', '📂 Open');
   $('#bOpen').title = L('Dosya aç: JSON ya da IFC (Revit, ArchiCAD…) — dosyayı tuvale sürükleyip de bırakabilirsiniz', 'Open file: JSON or IFC (Revit, ArchiCAD…) — you can also drag the file onto the canvas');
   $('#bUndo').title = L('Geri al (Ctrl+Z)', 'Undo (Ctrl+Z)');
@@ -12085,6 +12236,7 @@ function setLang(nl) {
 
 $('#bNew').onclick = templatesModal; $('#bProjects').onclick = projectsModal; $('#bSave').onclick = saveBrowser;
 $('#bJson').onclick = () => downloadJson(P);
+$('#bRevit').onclick = downloadRevit;
 $('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpModal; $('#bAi').onclick = () => aiModal();
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
 $('#bPng').onclick = e => (ui.view3d ? export3DRender(e && e.shiftKey) : exportPng()); $('#bPrint').onclick = exportPrint;

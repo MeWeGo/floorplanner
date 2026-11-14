@@ -8,3 +8,7 @@ package-lock.json
 
 # plan snapshots written by mcp/bridge.js (local user data, never committed)
 .fp-history/
+
+# Python bytecode from the pyRevit add-in tests
+__pycache__/
+*.pyc

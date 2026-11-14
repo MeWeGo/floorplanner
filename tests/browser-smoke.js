@@ -2055,6 +2055,31 @@ check('touch action bar: shown on touch / hidden with a mouse, copy an object in
   return `pasted ${r.type} across tabs, undo ok`;
 });
 
+check('Revit export: levels, walls, doors with swing, floors, rooms and furniture solids in feet with y up; the button downloads it', async page => {
+  const r = await page.evaluate(`(() => {
+    if (ui.view3d) show3D(false);
+    loadProject(newProject()); const f = F();
+    const ws = addRectWalls(0, 0, 500, 400); const door = mkOp(OPENINGS.find(o => opType(o.id) === 'door'), ws[0], 150); f.ops.push(door);
+    f.rooms.push(mkRoom([{ x: 0, y: 0 }, { x: 500, y: 0 }, { x: 500, y: 400 }, { x: 0, y: 400 }], 'Salon'));
+    for (const [id, ex] of [['sofa3', {}], ['billiard', { rot: 30 }], ['stairs', { stairType: 'u' }], ['ramp', {}], ['chair', { rx: 90 }], ['tree', {}]]) f.furn.push(Object.assign(mkFurn(BYID[id], 250, 200), ex));
+    P.floors.push(newFloor('Upper')); commit();
+    const x = revitExport(P);
+    const vol = fs => { let v = 0; for (const fc of fs) { const q = fc.p; for (let i = 1; i + 1 < q.length; i++) { const a = q[0], b = q[i], c = q[i + 1]; v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]); } } return v / 6; };
+    const w0 = P.floors[0].walls[0], xw = x.walls.find(w => w.id === w0.id), op = x.openings.find(o => o.id === door.id);
+    let got = null; const keep = download; download = (name, blob) => { got = { name, size: blob.size }; };
+    try { document.getElementById('bRevit').click(); } finally { download = keep; }
+    return { stats: x.stats, levels: x.levels.map(l => l.elev), yFlip: Math.abs(xw.a[1] + w0.a.y / 30.48) < 1e-4, op, bad: x.items.filter(i => !i.faces.length || vol(i.faces) <= 0).map(i => i.type), cats: x.items.map(i => i.cat), got };
+  })()`);
+  if (r.stats.levels < 2 || !(r.levels[1] > r.levels[0])) throw new Error('levels: ' + JSON.stringify(r.levels));
+  if (r.stats.walls !== 4 || r.stats.rooms !== 1 || r.stats.items !== 6 || r.stats.floors < 1) throw new Error('stats: ' + JSON.stringify(r.stats));
+  if (!r.yFlip) throw new Error('plan y is not flipped / converted to feet');
+  if (!r.op || !r.op.hinge || !r.op.swing || Math.abs(Math.hypot(...r.op.swing) - 1) > 1e-6) throw new Error('door without unit swing / hinge vectors: ' + JSON.stringify(r.op));
+  if (r.bad.length) throw new Error('items with no geometry or inward faces: ' + r.bad.join(', '));
+  for (const c of ['stairs', 'ramp', 'planting', 'furniture']) if (!r.cats.includes(c)) throw new Error('missing category ' + c);
+  if (!r.got || !/.fp-revit.json$/.test(r.got.name) || r.got.size < 1000) throw new Error('#bRevit did not download: ' + JSON.stringify(r.got));
+  return `${r.stats.walls} walls, ${r.stats.items} solid items, ${Math.round(r.got.size / 1024)} KB`;
+});
+
 
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();
