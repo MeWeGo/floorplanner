@@ -4384,7 +4384,7 @@ function slabPolys(f) {
   const M = 40, res = Math.max(2, Math.min(6, Math.max(W, H) / 300));
   const cw = Math.ceil((W + 2 * M) / res), ch = Math.ceil((H + 2 * M) / res), N = cw * ch;
   const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
-  const ctx = cv.getContext('2d');
+  const ctx = cv.getContext('2d', { willReadFrequently: true }); // CPU okuması: GPU geri okuma beklemesi yok (#106)
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch);
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.strokeStyle = '#fff';
@@ -10542,7 +10542,7 @@ function loop3D() {
   }
   if (T3.ctl.update() || due) draw3D(now);
 }
-function draw3D(now) { T3.dirty = false; T3.drawT = now; if (T3.live) liveSkyFollow(); T3.r.render(T3.scene, T3.cam); }
+function draw3D(now) { T3.dirty = false; T3.drawT = now; if (T3.live) liveSkyFollow(); T3.r.render(T3.scene, T3.cam); flush3DLater(); }
 /* ---------- Canlı gerçekçi 3B görünüm (#81) ----------
    Render stüdyosunun "gerçekçi" görünümü canlı pencerede: CAD kenar çizgileri gizlenir, gökyüzü + ufuk sisi,
    açık zemin / döşeme ve stüdyodaki güneş (ui.studio.az / alt) uygulanır. Tek geçiş: çizim döngüsü ve boşta
@@ -10701,8 +10701,9 @@ function realLook(S, sv, opts = {}) {
 function applyLive3D() {
   if (!T3 || !T3.scene) return;
   const S = T3.scene, old = T3.live; T3.live = null;
-  if (old && old.real) { old.real.restore(); old.real.dispose(); }
-  if (old) { S.remove(old.sky); old.sky.geometry.dispose(); old.sky.material.dispose(); for (const m of old.mats) m.dispose(); S.fog = null; }
+  // bırakılan gerçekçi malzemeler bir kare sonra dispose edilir (#106): yeniden kurulan sahne aynı shader'ları devralır
+  if (old && old.real) { old.real.restore(); const r = old.real; dispose3DLater([{ dispose: () => r.dispose() }]); }
+  if (old) { S.remove(old.sky); old.sky.geometry.dispose(); dispose3DLater([old.sky.material, ...old.mats]); S.fog = null; }
   if (!ui.live3d) return;
   const st = ui.studio, sv = sunVector(st.az, st.alt), sky = makeSky(sv, T3.cam, T3.fit);
   const ground = grassGroundMat(), slab = new THREE.MeshLambertMaterial({ color: 0xded8cc, side: THREE.DoubleSide });
@@ -10911,8 +10912,9 @@ function floorTexture(kind, color, lt, C, real) {
 }
 // Özel doku (#40): kendi görseli, P.textures'taki w × h cm'de tekrarlanır; 2B ile aynı yön (flipY yok)
 function customTexture(id, C) {
-  const key = 'tex|' + id; if (C.floorTex[key]) return C.floorTex[key];
-  const m = texMeta(id), t = new THREE.Texture(TEX.get(id).img);
+  const key = 'tex|' + id, m = texMeta(id), c = C.floorTex[key];
+  if (c && c.image === TEX.get(id).img) { c.repeat.set(1 / m.w, 1 / m.h); return c; } // önbellekte (#106): tekrar boyu düzenlenmiş olabilir
+  const t = new THREE.Texture(TEX.get(id).img);
   t.wrapS = t.wrapT = THREE.RepeatWrapping; t.encoding = THREE.sRGBEncoding; t.anisotropy = 4; t.flipY = false; t.needsUpdate = true;
   t.repeat.set(1 / m.w, 1 / m.h);
   C.floorTex[key] = t; C.texs.push(t); return t;
@@ -11050,9 +11052,9 @@ function surfCanvas(kind) {
 }
 // paylaşılan doku: tür başına bir CanvasTexture (renk malzemede) ya da proje dokusu (tex:<id>); C.texs'e kaydedilir, build3D bırakır
 function surfTexture(kind, C) {
-  if (C.stex[kind]) return C.stex[kind];
+  const id = texIdOf(kind), c0 = C.stex[kind];
+  if (c0 && (!id || (TEX.get(id) && c0.image === TEX.get(id).img))) return c0; // önbellekte (#106)
   let t;
-  const id = texIdOf(kind);
   if (id) { const e = TEX.get(id); if (!e || !e.ready) return null; t = new THREE.Texture(e.img); t.flipY = false; t.needsUpdate = true; }
   else t = new THREE.CanvasTexture(surfCanvas(kind));
   t.wrapS = t.wrapT = THREE.RepeatWrapping; t.encoding = THREE.sRGBEncoding; t.anisotropy = 4; t.fpSurf = kind;
@@ -11889,24 +11891,56 @@ function lowWall3D(g, w, L, H, ops, box, det, lt) {
     }
   }
 }
+/* ---------- 3B GPU önbelleği (#106) ----------
+   Malzemeler (matCache: renk + saydamlık, yüzey türü), zemin / yüzey dokuları, cm ölçekli UV geometrileri, birim kutu /
+   silindir / küre ve kenar çizgisi malzemesi T3.cache'te tema + detay seviyesi anahtarıyla build'ler arasında yaşar.
+   Her build sonunda sahnede kullanılmayan girdiler bırakılır (bellek düz kalır); tema / detay değişince önbellek bütünüyle
+   emekli edilir. Bırakılan malzemeler / dokular bir sonraki kare çizildikten sonra dispose edilir (dispose3DLater):
+   o karede yeni malzemeler aynı shader programlarını devralır, böylece düzenleme sonrası yeniden derleme olmaz. */
+function cache3D(lt, det) {
+  const key = (lt ? 'l' : 'd') + det;
+  let K = T3.cache;
+  if (K && K.key === key) return K;
+  if (K) dispose3DLater([...Object.values(K.matCache), K.lineMat, ...K.texs, ...Object.values(K.unit), ...Object.values(K.geo)]);
+  const box = new THREE.BoxGeometry(1, 1, 1);
+  K = T3.cache = { key, matCache: {}, floorTex: {}, stex: {}, geo: {}, texs: [],
+    unit: { box, edges: new THREE.EdgesGeometry(box), cyl: new THREE.CylinderGeometry(1, 1, 1, 24), sph: new THREE.SphereGeometry(1, 16, 12) },
+    lineMat: new THREE.LineBasicMaterial({ color: lt ? 0x334155 : 0x64748b, transparent: true, opacity: .35 }) };
+  return K;
+}
+function cache3DGeos(K) { return new Set(K ? [...Object.values(K.unit), ...Object.values(K.geo)] : []); }
+function prune3DCache(K, S) {
+  const mats = new Set(), geos = new Set(), tx = new Set(), drop = [];
+  S.traverse(o => { if (o.material) for (const m of [].concat(o.material)) mats.add(m); if (o.geometry) geos.add(o.geometry); });
+  for (const m of mats) for (const p of ['map', 'bumpMap', 'roughnessMap', 'alphaMap']) { const t = m[p]; if (t) { tx.add(t); if (t.fpBump) tx.add(t.fpBump); if (t.fpRough) tx.add(t.fpRough); } }
+  for (const k in K.matCache) if (!mats.has(K.matCache[k])) { drop.push(K.matCache[k]); delete K.matCache[k]; }
+  for (const k in K.geo) if (!geos.has(K.geo[k])) { drop.push(K.geo[k]); delete K.geo[k]; }
+  for (const k in K.floorTex) if (!tx.has(K.floorTex[k])) delete K.floorTex[k];
+  for (const k in K.stex) if (!tx.has(K.stex[k])) delete K.stex[k];
+  for (let i = K.texs.length - 1; i >= 0; i--) if (!tx.has(K.texs[i])) { drop.push(K.texs[i]); K.texs.splice(i, 1); }
+  dispose3DLater(drop);
+}
+// GPU kaynağını bir sonraki 3B karesinden sonra bırak (draw3D → flush3DLater); 3B yoksa hemen
+function dispose3DLater(list) {
+  if (!list || !list.length) return;
+  if (!T3) { for (const x of list) if (x && x.dispose) x.dispose(); return; }
+  (T3.later || (T3.later = [])).push(...list); req3D();
+}
+function flush3DLater() {
+  const l = T3 && T3.later; if (!l || !l.length) return;
+  T3.later = []; for (const x of l) if (x && x.dispose) x.dispose();
+}
+// kalıcı ışıklar (#106): build her seferinde renk / şiddet / konumu baştan yazar (canlı görünüm onları değiştirir)
+function lights3D() {
+  if (!T3.lights) T3.lights = { hemi: new THREE.HemisphereLight(0xffffff, 0x667788, 0.4), dl: new THREE.DirectionalLight(0xfff6e8, 0.5), fill: new THREE.DirectionalLight(0xdbeafe, 0.2) };
+  return T3.lights;
+}
 function build3D(keepCam = false) {
   req3D();
   sync3DFloors();
   const lt = isLight(), S = T3.scene;
   if (T3.fpPrev) S.remove(T3.fpPrev); // 3B araç önizlemesi de kalıcıdır
   if (T3.ghost) S.remove(T3.ghost); // 3B yerleştirme hayaleti kalıcıdır: sahne temizliğinde dispose edilmesin
-  // önceki sahnenin GPU kaynaklarını serbest bırak (sık yeniden yapılanmalarda sızıntı olmasın)
-  if (T3.mats) {
-    const geos = new Set(); S.traverse(o => { if (o.geometry) geos.add(o.geometry); });
-    for (const gg of geos) gg.dispose();
-    for (const m of T3.mats) m.dispose();
-    if (T3.texs) for (const t of T3.texs) t.dispose();
-    // ışıkların gölge haritaları da GPU belleğinde: yeniden kurmadan önce bırakılmalı
-    S.traverse(o => { if (o.isLight && o.shadow && o.shadow.map) { o.shadow.map.dispose(); o.shadow.map = null; } });
-  }
-  while (S.children.length) S.remove(S.children[0]);
-  S.background = new THREE.Color(lt ? 0xe8e3d9 : 0x0b0f14);
-
   // sahne sınırları (ışık gölge kamerası ve kamera sığdırma için) — çizimden ÖNCE hesaplanır
   let all = null;
   P.floors.forEach(f => {
@@ -11921,29 +11955,43 @@ function build3D(keepCam = false) {
   P.floors.forEach(f => { if (!v3dShown(f)) return; nObj += f.walls.length * 5 + f.ops.length * 6 + f.furn.length * 8 + f.rooms.length; });
   const det = nObj < 3000 ? 1 : 0;
 
-  S.add(new THREE.HemisphereLight(0xffffff, lt ? 0x667788 : 0x1e293b, lt ? 0.32 : 0.5));
-  const dl = new THREE.DirectionalLight(0xfff6e8, lt ? 0.5 : 0.45);
+  // #106: malzemeler, dokular ve birim geometriler build'ler arasında korunur (tema / detay değişince yenilenir);
+  // böylece bir düzenleme shader derletmez ve dokuları yeniden yüklemez. Eski sahnenin geri kalanı bırakılır:
+  // geometriler hemen, malzemeler bir sonraki kare çizildikten sonra (shader programları yeni malzemelere geçsin).
+  const K = cache3D(lt, det), keepGeo = cache3DGeos(K);
+  {
+    const geos = new Set(); S.traverse(o => { if (o.geometry && !keepGeo.has(o.geometry)) geos.add(o.geometry); });
+    for (const gg of geos) gg.dispose();
+    if (T3.mats) dispose3DLater(T3.mats);
+    T3.mats = null;
+  }
+  while (S.children.length) S.remove(S.children[0]);
+  S.background = new THREE.Color(lt ? 0xe8e3d9 : 0x0b0f14);
+
+  // ışıklar kalıcıdır (#106): gölge haritası yalnızca çözünürlük değişince yeniden ayrılır
+  const { hemi, dl, fill } = lights3D();
+  hemi.color.setHex(0xffffff); hemi.groundColor.setHex(lt ? 0x667788 : 0x1e293b); hemi.intensity = lt ? 0.32 : 0.5; S.add(hemi);
+  dl.color.setHex(0xfff6e8); dl.intensity = lt ? 0.5 : 0.45;
   dl.position.set(cx + sz * 0.75, sz * 1.7, cz + sz * 0.85);
   dl.target.position.set(cx, 0, cz); S.add(dl.target);
   dl.castShadow = true;
   const shadowRes = nObj < 700 ? 2048 : 1024;
-  dl.shadow.mapSize.set(shadowRes, shadowRes);
+  if (dl.shadow.mapSize.x !== shadowRes || dl.shadow.mapSize.y !== shadowRes) { dl.shadow.mapSize.set(shadowRes, shadowRes); if (dl.shadow.map) { dl.shadow.map.dispose(); dl.shadow.map = null; } }
   const ext = sz * 0.95 + 200, sc3 = dl.shadow.camera;
   sc3.left = -ext; sc3.right = ext; sc3.top = ext; sc3.bottom = -ext; sc3.near = 10; sc3.far = sz * 5 + 4000;
   sc3.updateProjectionMatrix();
   dl.shadow.bias = -0.0004; dl.shadow.normalBias = 1.2;
   S.add(dl);
-  const fill = new THREE.DirectionalLight(0xdbeafe, lt ? 0.14 : 0.24);
+  fill.color.setHex(0xdbeafe); fill.intensity = lt ? 0.14 : 0.24;
   fill.position.set(cx - sz * 0.9, sz * 0.55, cz - sz * 0.7); S.add(fill);
 
-  const matCache = {}, extraMats = [], texs = [], floorTex = {};
+  const matCache = K.matCache, extraMats = [], texs = K.texs, floorTex = K.floorTex;
   // alt parça yüzeyleri (#93): sf(tür, renk) etiketli renkler türün malzemesini / paylaşılan dokusunu / cm ölçekli UV'sini alır
-  const sctx = { cache: matCache, texs, stex: {}, geo: {}, det };
+  const sctx = { cache: matCache, texs, stex: K.stex, geo: K.geo, det };
   const mat = (c, o) => { if (surfOf(c)) return surfMat(c.fk, c.c, o, sctx); const k = c + '|' + (o || ''); return matCache[k] || (matCache[k] = new THREE.MeshLambertMaterial({ color: c, ...(o ? { transparent: true, opacity: o } : {}), side: THREE.DoubleSide })); };
-  const lineMat = new THREE.LineBasicMaterial({ color: lt ? 0x334155 : 0x64748b, transparent: true, opacity: .35 });
-  // paylaşılan birim geometriler: her parça için yeni tampon ayırmak yerine ölçeklenir
-  const unitBox = new THREE.BoxGeometry(1, 1, 1), unitEdges = new THREE.EdgesGeometry(unitBox);
-  const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 24), unitSph = new THREE.SphereGeometry(1, 16, 12);
+  const lineMat = K.lineMat;
+  // paylaşılan birim geometriler: her parça için yeni tampon ayırmak yerine ölçeklenir (T3.cache'te kalıcı)
+  const unitBox = K.unit.box, unitEdges = K.unit.edges, unitCyl = K.unit.cyl, unitSph = K.unit.sph;
   const box = (parent, w, h, d, color, x, y, z, ry = 0, op, edges = true, cast) => {
     const m = new THREE.Mesh(surfGeo('box', w, h, d, color, sctx) || unitBox, mat(color, op)), see = op || m.material.transparent;
     m.scale.set(w, h, d); m.position.set(x, y, z); m.rotation.y = ry; parent.add(m);
@@ -12228,8 +12276,9 @@ function build3D(keepCam = false) {
   T3.ground = ground;                                 // the render swaps its material for a studio backdrop
   T3.fit = { cx, cz, sz, elev, x0: all.x0, x1: all.x1, z0: all.y0, z1: all.y1 };
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); fitOrtho(); }
-  T3.mats = Object.values(matCache).concat(extraMats, [lineMat]); // sonraki build3D çağrısında dispose edilmek üzere
+  T3.mats = extraMats; // önbellekte olmayan malzemeler: sonraki build3D'de (bir kare sonra) dispose edilir
   T3.texs = texs;
+  prune3DCache(T3.cache, S); // bu sahnede kullanılmayan önbellek girdileri bırakılır (canlı görünüm malzemeleri değiştirmeden ÖNCE)
   T3.ctl.update();
   if (T3.walk) applyWalkCam();
   refreshSel3D(); applySecClip(); applyLive3D(); place3DSync(); fp3DPreview();
@@ -12661,6 +12710,33 @@ new ResizeObserver(() => { if (P && !ui.view3d) render(); if (T3 && ui.view3d) r
 window.addEventListener('beforeunload', () => { if (P) { dbPut('state', P, 'auto').catch(() => {}); dbPut('state', tabsState(), 'tabs').catch(() => {}); } });
 if (localStorage.getItem('fp_theme') === 'light') document.documentElement.dataset.theme = 'light';
 
+/* ---------- 3B ön ısıtma (#106) ----------
+   İlk 3B girişinin bedeli (WebGL bağlamı, sahne, shader derleme) proje açıldıktan sonra boşta geçen zamana dağıtılır:
+   her adım ayrı bir requestIdleCallback'te çalışır, böylece 2B tuval arada yanıt vermeye devam eder.
+   WebGL / Three.js yoksa ya da kullanıcı o arada 3B'ye geçtiyse hiçbir şey yapılmaz. ?prewarm=off kapatır. */
+const PREWARM_OFF = /[?&]prewarm=off\b/.test(location.search);
+function idle3D(fn, ms) {
+  if (window.requestIdleCallback) requestIdleCallback(fn, { timeout: ms || 4000 }); else setTimeout(fn, 400);
+}
+function prewarm3D() {
+  if (PREWARM_OFF || T3 || !window.THREE || !THREE.OrbitControls) return;
+  idle3D(() => {
+    if (T3 || ui.view3d) return;
+    try { init3D(); } catch (_) { return; }  // WebGL yoksa WebGLRenderer hata verir: sessizce vazgeç
+    idle3D(() => {
+      if (!T3 || ui.view3d || T3.warm) return;
+      try {
+        build3D(false);                                // önbelleği (malzeme, doku, birim geometri) doldurur
+        idle3D(() => {
+          if (!T3 || ui.view3d) return;
+          try { T3.r.compile(T3.scene, T3.cam); T3.warm = true; } catch (_) {} // shader programları önceden derlenir
+          flush3DLater();
+        });
+      } catch (_) {}
+    });
+  });
+}
+
 applyLangUI();
 (async () => {
   await migrateLegacyStorage();
@@ -12672,4 +12748,5 @@ applyLangUI();
   try { restoreTabs(await dbGet('state', 'tabs')); } catch (e) { }
   setTimeout(fit, 50);
   aiBridgeBoot();          // connect to a running local bridge, if any
+  prewarm3D();             // 3B'yi boşta hazırla: ilk 3B düğmesi bekletmesin (#106)
 })();
