@@ -1068,6 +1068,49 @@ check('furniture studio: copy look onto clicked parts, recolour a selection, add
   return 'copy look by click, Esc, undo, finish for a selection, texture dialog over the studio, placed with the texture';
 });
 
+check('catalogue furniture is drawn in 2D from its 3D model, the same as after a studio round trip, and cached', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); closeModal();
+    const shapes = s => (s.match(/<(rect|ellipse|polygon|circle|path)\\b/g) || []).length;
+    const out = {};
+    for (const id of ['sofa3', 'stove', 'wc', 'tub', 'car']) {
+      const o = mkFurn(BYID[id], 300, 300); F().furn.push(o);
+      const fresh = furnBody(o);
+      // the studio round trip: open, apply without changes
+      sel = [o.id]; pbStart(o); pbApply(false);
+      const after = F().furn.find(x => x.id === o.id);
+      out[id] = { fresh: shapes(fresh), studio: after.parts ? shapes(furnBody(after)) : -1, icon: furnSvg(mkFurn(BYID[id], 0, 0), false).includes(BYID[id].icon) };
+    }
+    // cache: drawing 200 identical sofas builds the model once
+    const real = furnModelParts; let calls = 0;
+    furnModelParts = o => { calls++; return real(o); };
+    try {
+      FURN_PLAN_CACHE.clear();
+      for (let i = 0; i < 200; i++) F().furn.push(mkFurn(BYID.sofa3, 100 + (i % 20) * 250, 800 + Math.floor(i / 20) * 120));
+      const t = performance.now(); render(); render(); out.ms = performance.now() - t;
+      out.calls = calls;
+      // a resize is a new key: one more model, nothing else rebuilt
+      F().furn[F().furn.length - 1].w += 10; render(); out.callsAfterResize = calls;
+    } finally { furnModelParts = real; }
+    // CAD outline view, stairs and a tilted item keep their own drawing
+    const sofa = mkFurn(BYID.sofa3, 0, 0);
+    ui.outline = true; out.outline = !furnBody(sofa).includes('<g opacity'); ui.outline = false;
+    out.stairs = !furnBody(mkFurn(BYID.stairs, 0, 0)).includes('<g opacity');
+    return out;
+  })()`);
+  for (const id of ['sofa3', 'stove', 'wc', 'tub', 'car']) {
+    const r = info[id];
+    if (!(r.fresh > 3)) throw new Error(id + ' is still drawn as a simple symbol in 2D: ' + JSON.stringify(r));
+    if (r.fresh !== r.studio) throw new Error(id + ': the plan drawing changes after opening it in the studio and applying (' + r.fresh + ' → ' + r.studio + ' shapes)');
+    if (r.icon) throw new Error(id + ': the emoji is drawn over the detailed top view');
+  }
+  if (info.calls > 2) throw new Error('the 3D model is rebuilt per item / per render: ' + info.calls + ' builds for 200 identical sofas × 2 renders');
+  if (info.callsAfterResize - info.calls > 1) throw new Error('resizing one item rebuilt more than its own model');
+  if (!info.outline) throw new Error('the CAD outline view lost its own furniture blocks');
+  if (!info.stairs) throw new Error('stairs lost their walking-line drawing');
+  return 'sofa ' + info.sofa3.fresh + ' shapes = studio, ' + info.calls + ' model build for 200 sofas, 2 renders in ' + info.ms.toFixed(0) + ' ms';
+});
+
 check('render studio: every style renders and restores the scene (issue #34)', async page => {
   const info = await page.evaluate(`(async () => {
     loadProject(newProject()); addRectWalls(0, 0, 600, 400); F().ops.push(mkOp(OPDEF.window, F().walls[0], 300)); commit(); sel = []; refresh();
@@ -1854,9 +1897,12 @@ check('live realistic 3D view: sky on, CAD edges hidden, walk mode works, CAD vi
 check('furniture labels and icons toggle separately, without touching the plan (#84)', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
-    const f = F(), o = mkFurn(BYID.wc, 200, 200); o.label = 'Tuvalet-A'; f.furn.push(o); commit(); refresh();
+    // an item that still uses its plain symbol + emoji (detailed catalogue models draw no emoji)
+    const def = CATALOG.find(d => { const t = mkFurn(d, 0, 0); return d.icon && !['stairs', 'ramp', 'roof'].includes(d.k) && !t.parts && !furnPlanSvg(t); });
+    if (!def) return { err: 'no catalogue item keeps an emoji symbol' };
+    const f = F(), o = mkFurn(def, 200, 200); o.label = 'Tuvalet-A'; f.furn.push(o); commit(); refresh();
     const g = () => document.getElementById('gFurn').innerHTML, has = () => ({ icon: g().includes(o.icon), label: g().includes('Tuvalet-A') });
-    const r = { both: has(), hi0: hi, json0: JSON.stringify(P) };
+    const r = { both: has(), hi0: hi, json0: JSON.stringify(P), def: def.id, icon: o.icon };
     const cb = k => document.querySelector('#props input[data-k="layer"][data-p="' + k + '"]');
     if (!cb('furnLabel') || !cb('furnIcon')) return { err: 'label / icon toggles are missing from Project > Layers' };
     cb('furnLabel').click(); r.noLabel = has(); r.expNoLabel = exportSvg().svg.includes('Tuvalet-A');
@@ -1869,7 +1915,7 @@ check('furniture labels and icons toggle separately, without touching the plan (
   })()`);
   if (info.err) throw new Error(info.err);
   const ok = (v, i, l) => v && v.icon === i && v.label === l;
-  if (!ok(info.both, true, true)) throw new Error('icon and label should both show by default');
+  if (!ok(info.both, true, true)) throw new Error('icon and label should both show by default: ' + JSON.stringify(info));
   if (!ok(info.noLabel, true, false) || info.expNoLabel) throw new Error('label toggle did not hide only the label (canvas / export)');
   if (!ok(info.none, false, false) || !info.body) throw new Error('with both off the furniture body must stay, icon and label go');
   if (!ok(info.iconOff, false, true)) throw new Error('icon toggle is not independent of the label toggle');
