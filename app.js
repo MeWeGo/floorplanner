@@ -1653,6 +1653,7 @@ function furnCadSvg(f, hw, hd, sk) {
 }
 function furnBody(f) {
   if (Array.isArray(f.parts) && f.parts.length) return partsSvg(f); // çok parçalı mobilya (parts şeması v1)
+  const md = furnPlanSvg(f); if (md) return md; // katalog eşyası: 3B modelin üstten görünüşü (stüdyoya açılınca görülenle aynı)
   const C = pal(), hw = f.w / 2, hd = f.d / 2, col = f.color, sk = C.furnStroke, fop = `fill-opacity="${C.outline ? 0 : C.furnOp}"`;
   let s = '';
   if (f.k === 'round') s += `<ellipse rx="${hw}" ry="${hd}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>` + (C.outline ? furnCadSvg(f, hw, hd, sk) : '');
@@ -3576,6 +3577,30 @@ function partsSvg(f) {
   for (const { p } of list) out += partShapeSvg(p, C.outline ? 'none' : (p.color || f.color || '#cbd5e1'), ns);
   return out + '</g>';
 }
+/* Parçasız katalog eşyasının 2B üstten görünüşü = 3B modelinin parçaları (furnModelParts), stüdyoda "Uygula"dan
+   sonra görülenle aynı. Tür + ölçü + renk + palete göre önbellekte tutulur (render başına model kurulmaz; boyut
+   sürüklerken yalnızca o eşya yeniden hesaplanır). Merdiven / rampa / çatı / şekil, CAD çizgi görünümü ve
+   tek kutudan oluşan modeller ('' döner) eski sembolü kullanır. */
+const FURN_PLAN_CACHE = new Map(), FURN_PLAN_MAX = 600;
+function furnPlanSvg(f) {
+  const C = pal();
+  if (C.outline || !f.type || !BYID[f.type] || f.k === 'poly' || f.k === 'stairs' || f.k === 'ramp' || f.k === 'roof') return '';
+  const key = [f.type, f.k, f.w, f.d, f.h, f.color, C.furnStroke, C.furnOp].join('|');
+  let svg = FURN_PLAN_CACHE.get(key);
+  if (svg === undefined) {
+    svg = '';
+    const md = furnModelParts(f);
+    if (md && md.parts.length > 1) {
+      const o = md.off || { x: 0, y: 0 };
+      // furnModelParts parçaları kendi kutusunun ortasına kaydırır; planda eşyanın yerinde kalsın diye geri taşınır
+      const parts = md.parts.map(p => Object.assign({}, p, { x: p.x + o.x, y: p.y + o.y }));
+      svg = partsSvg({ w: f.w, d: f.d, color: f.color, parts });
+    }
+    if (FURN_PLAN_CACHE.size >= FURN_PLAN_MAX) FURN_PLAN_CACHE.clear();
+    FURN_PLAN_CACHE.set(key, svg);
+  }
+  return svg;
+}
 // bir parçanın üstten şekli (öğe yerel cm); plan çizimi ve parça düzenleyici önizlemesi ortak kullanır
 function partShapeSvg(p, col, attrs) {
   if (partTilted(p)) return `<polygon points="${partHull(partCloud(p).map(q => [q[0], q[1]])).map(q => partR(q[0]) + ',' + partR(q[1])).join(' ')}" fill="${col}" ${attrs}/>`; // eğik parça: üstten izdüşümün dış zarfı
@@ -3638,7 +3663,7 @@ function furnSvg(f, live) {
   const body = furnTilted(f) ? furnTiltSvg(f) : furnBody(f);
   let s = `<g transform="translate(${f.x} ${f.y}) rotate(${f.rot})" ${live ? `data-id="${f.id}" style="cursor:move"` : ''}>${fe ? `<g stroke-dasharray="6 4">${body}</g>` : body}`;
   if (fe) s += `<text transform="translate(0 ${f.d / 2 + 9}) rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="11" fill="${C.sub}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${fe > 0 ? '▲ +' : '▼ −'}${Math.abs(Math.round(fe))}</text>`;
-  if (layersVis.furnIcon && !C.outline && f.icon && f.k !== 'roof' && !(Array.isArray(f.parts) && f.parts.length)) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
+  if (layersVis.furnIcon && !C.outline && f.icon && f.k !== 'roof' && !(Array.isArray(f.parts) && f.parts.length) && !(!furnTilted(f) && furnPlanSvg(f))) s += `<text transform="rotate(${-f.rot})" text-anchor="middle" dominant-baseline="central" font-size="${fs}" pointer-events="none">${f.icon}</text>`;
   if (layersVis.furnLabel && f.label) s += `<text transform="rotate(${-f.rot})" y="${Math.min(f.d, f.w) * 0.42 + 6}" text-anchor="middle" font-size="${clamp(Math.min(f.w, f.d) * 0.18, 10, 18)}" fill="${C.text}" stroke="${C.halo}" stroke-width="3" paint-order="stroke" pointer-events="none" font-family="Segoe UI,sans-serif">${esc(f.label)}</text>`;
   return s + '</g>';
 }
