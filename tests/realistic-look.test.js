@@ -204,7 +204,8 @@ test('(B4) render3DHQ applies realLook for realistic and maquette styles and cle
 
 test('(B5) applyLive3D applies realLook, stores it on T3.live, and restores/disposes previous', () => {
   const body = fnSrcOf(src, 'applyLive3D');
-  assert.match(body, /old\s*&&\s*old\.real[\s\S]*old\.real\.restore\(\s*\)[\s\S]*old\.real\.dispose\(\s*\)/);
+  // the previous look is restored at once; its materials are disposed one frame later (#106) so shaders carry over
+  assert.match(body, /old\s*&&\s*old\.real[\s\S]*old\.real\.restore\(\s*\)[\s\S]*dispose3DLater\(\s*\[\s*\{\s*dispose:\s*\(\)\s*=>\s*r\.dispose\(\)/);
   assert.match(body, /real\s*=\s*realLook\s*\(/);
   assert.match(body, /T3\.live\s*=\s*\{[^}]*\breal\b/);
 });

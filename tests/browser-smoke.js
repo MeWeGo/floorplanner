@@ -1964,6 +1964,56 @@ check('IFC / Revit buttons explain both formats first; "don\'t show again" downl
   return 'explainer, highlighted card, card download, skip, command reopen';
 });
 
+check('3D edits keep shaders, textures, lights and the shadow map; GPU memory stays flat; build is fast (#106)', async page => {
+  const info = await page.evaluate(`(async () => {
+    const theme0 = document.documentElement.dataset.theme;
+    const p = newProject(); for (let i = 1; i < 4; i++) p.floors.push(newFloor(String(i))); loadProject(p);
+    for (let i = 0; i < 4; i++) {
+      fi = i; addRectWalls(0, 0, 900, 600); const f = F();
+      f.ops.push(mkOp(OPDEF.window2, f.walls[0], 450), mkOp(OPDEF.door, f.walls[2], 300));
+      const a = autoRoomAt({ x: 450, y: 300 }, true); if (a) a.floor = 'wood';
+      f.furn.push(mkFurn(BYID.sofa3, 200, 120), mkFurn(BYID.bed2, 650, 180), mkFurn(BYID.sinkK, 200, 520), mkFurn(BYID.plant, 60, 60));
+    }
+    fi = 0; sel = []; commit(); refresh();
+    if (ui.live3d) setLive3D(false);
+    show3D(true);
+    if (!ui.view3d) return { err: '3D did not open' };
+    const draw = () => draw3D(performance.now());
+    const mem = () => ({ ...T3.r.info.memory, programs: (T3.r.info.programs || []).length });
+    const edit = () => { const w = P.floors[0].walls[1]; w.h = w.h === 270 ? 260 : 270; commit(); clearTimeout(b3t); const t = performance.now(); build3D(true); const b = performance.now() - t; draw(); return { build: b, total: performance.now() - t }; };
+    draw(); edit(); draw();
+    const r = {}, m0 = mem(), lights = T3.lights, map = T3.lights.dl.shadow.map, mat0 = T3.cache.matCache;
+    const times = []; for (let i = 0; i < 4; i++) times.push(edit());
+    r.build = Math.min(...times.map(t => t.build)); r.total = Math.min(...times.map(t => t.total));
+    const m1 = mem();
+    r.edit = [m1.geometries - m0.geometries, m1.textures - m0.textures, m1.programs - m0.programs];
+    r.sameLights = T3.lights === lights && T3.lights.dl.shadow.map === map && T3.cache.matCache === mat0;
+    r.pending = (T3.later || []).length;
+    // 2D <-> 3D on an unchanged plan: no new shader programs, no new textures
+    show3D(false); show3D(true); draw(); const m2 = mem();
+    r.reenter = [m2.textures - m1.textures, m2.programs - m1.programs];
+    // theme, live realistic view and the render studio, then back: counts return to where they were
+    document.documentElement.dataset.theme = theme0 === 'light' ? 'dark' : 'light'; build3D(true); draw();
+    document.documentElement.dataset.theme = theme0 || ''; if (!theme0) delete document.documentElement.dataset.theme; build3D(true); draw();
+    document.getElementById('b3dLive').click(); draw(); edit(); draw();
+    document.getElementById('b3dLive').click(); draw();
+    await render3DHQ({ style: 'realistic', backdrop: 'sky', longSide: 320, supersample: 1, frames: 1, format: 'jpeg' }); draw();
+    edit(); draw(); edit(); draw(); const m3 = mem();
+    r.after = [m3.geometries - m1.geometries, m3.textures - m1.textures];
+    show3D(false);
+    return r;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  if (!info.sameLights) throw new Error('a rebuild recreated the lights, the shadow map or the material cache');
+  if (info.edit[2] > 0) throw new Error('an edit in 3D compiled new shader programs: +' + info.edit[2]);
+  if (info.edit[0] > 0 || info.edit[1] > 0) throw new Error('repeated edits in 3D grow GPU memory (geometries, textures): ' + info.edit);
+  if (info.pending) throw new Error('released materials were not disposed after the next frame: ' + info.pending);
+  if (info.reenter[0] > 0 || info.reenter[1] > 0) throw new Error('re-entering 3D on an unchanged plan rebuilt textures / shaders: ' + info.reenter);
+  if (info.after[0] > 0 || info.after[1] > 0) throw new Error('theme / live view / render studio leave GPU resources behind (geometries, textures): ' + info.after);
+  if (info.build > 400) throw new Error('build3D after one wall edit takes ' + info.build.toFixed(0) + ' ms on a 4-floor plan');
+  return 'edit: build ' + info.build.toFixed(0) + ' ms, to frame ' + info.total.toFixed(0) + ' ms; no new shaders or textures';
+});
+
 check('detailed models + sub-part surfaces: shared textures, user colour tints, stable GPU memory, live + render (#93)', async page => {
   const info = await page.evaluate(`(async () => {
     loadProject(newProject());
