@@ -94,6 +94,7 @@ const env = new Function(`
   ${fnSrc('opSvg')}
   ${fnSrc('roofSvg')}
   ${fnSrc('furnCadSvg')}
+  const furnPlanSvg = () => ''; // catalogue model top view is never used in outline mode (browser-smoke.js)
   ${fnSrc('furnBody')}
   ${fnSrc('partShapeSvg')}
   ${fnSrc('partsSvg')}
