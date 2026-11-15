@@ -121,6 +121,9 @@ test('IFC or Revit explainer: skip switch, both cards, bilingual', () => {
   assert.match(blk, /data-bimdl/);
   assert.match(blk, /kind === k \? ' on' : ''/, 'the clicked format is highlighted');
   assert.match(blk, /github\.com\/MeWeGo\/floorplanner\/tree\/main\/revit/, 'Revit card links to the add-in');
+  assert.match(blk, /Why not a \.rvt file\?/, 'Revit card explains why there is no .rvt file');
+  assert.match(blk, /Floor Planner ▸ Import Plan/, 'Revit card gives the add-in steps');
+  assert.match(blk, /File ▸ Open ▸ IFC/, 'Revit card offers the no-add-in IFC route');
   // every visible string goes through L(tr, en)
   assert.ok((blk.match(/\bL\(/g) || []).length >= 14, 'explainer text is not bilingual');
   assert.match(read('style.css'), /\.bimgrid\s*\{/);

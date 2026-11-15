@@ -8034,9 +8034,9 @@ function exportBim(kind, force) {
 }
 function exportBimModal(kind) {
   const li = a => a.map(x => `<li>${x}</li>`).join('');
-  const card = (k, title, sub, why, note, btn) => `<div class="bimcard${kind === k ? ' on' : ''}">
+  const card = (k, title, sub, why, note, btn, extra = '') => `<div class="bimcard${kind === k ? ' on' : ''}">
     <h3>${title}</h3><p class="muted bimsub">${sub}</p>
-    <ul>${li(why)}</ul>
+    <ul>${li(why)}</ul>${extra}
     <p class="muted bimnote">${note}</p>
     <button class="btn${kind === k ? ' primary' : ''}" data-bimdl="${k}">${btn}</button>
   </div>`;
@@ -8055,7 +8055,17 @@ function exportBimModal(kind) {
       L('Gerçek duvar tipleri, kapı / pencere aileleri, döşemeler, odalar ve seviyeler; eşleşen mobilya aile olarak yerleşir.', 'Real wall types, door / window families, floors, rooms and levels; matching furniture is placed as families.'),
       L('Eşleşmeyen eşyalar Revit içinde 3B şekil (DirectShape) olarak gelir.', 'Unmatched items come in as 3D shapes (DirectShape).')
     ], L('Revit\'te pyRevit ve bu projenin <a href="https://github.com/MeWeGo/floorplanner/tree/main/revit" target="_blank" rel="noopener">revit/ eklentisi</a> gerekir; başka program bu dosyayı okumaz.', 'Needs pyRevit and this project\'s <a href="https://github.com/MeWeGo/floorplanner/tree/main/revit" target="_blank" rel="noopener">revit/ add-in</a> in Revit; no other program reads this file.'),
-    L('⬇ Revit dosyası indir', '⬇ Download Revit file'))}
+    L('⬇ Revit dosyası indir', '⬇ Download Revit file'),
+    `<div class="bimwhy"><b>${L('Neden .rvt dosyası değil?', 'Why not a .rvt file?')}</b> ${L(
+      'Revit\'in kendi biçimi kapalıdır: onu yalnızca Revit yazabilir, bu yüzden hiçbir web uygulaması Revit\'te gerçek duvar olarak açılan bir dosya kaydedemez. Bu dosyayı Revit içinde çalışan ücretsiz eklenti okur ve öğeleri orada kurar.',
+      'Revit\'s own format is closed: only Revit itself can write it, so no web app can save a file that opens as real Revit walls. This file is read by the free add-in running inside Revit, which builds the elements there.')}
+      <ol>${li([
+        L('Revit\'e <a href="https://github.com/pyrevitlabs/pyRevit" target="_blank" rel="noopener">pyRevit</a> kurun.', 'Install <a href="https://github.com/pyrevitlabs/pyRevit" target="_blank" rel="noopener">pyRevit</a> for Revit.'),
+        L('Bu projenin <a href="https://github.com/MeWeGo/floorplanner/tree/main/revit" target="_blank" rel="noopener">revit/</a> klasörünü pyRevit uzantısı olarak ekleyin.', 'Add this project\'s <a href="https://github.com/MeWeGo/floorplanner/tree/main/revit" target="_blank" rel="noopener">revit/</a> folder as a pyRevit extension.'),
+        L('Revit\'te <b>Floor Planner ▸ Import Plan</b> ile bu dosyayı açın.', 'In Revit, open this file with <b>Floor Planner ▸ Import Plan</b>.')
+      ])}</ol>
+      ${L('<b>Eklenti yok mu?</b> IFC indirip Revit\'te <b>Dosya ▸ Aç ▸ IFC</b> ile açın: öğeler doğru kategorilerle gelir, taşınıp silinebilir ama Revit\'te çizilmiş duvarlar gibi düzenlenemez.',
+        '<b>No add-in?</b> Download IFC and open it in Revit with <b>File ▸ Open ▸ IFC</b>: elements arrive with the right categories and can be moved or deleted, but not edited like walls drawn in Revit.')}</div>`)}
   </div>
   <p class="bimtip">${L('Emin değilseniz <b>IFC</b> seçin: en çok programın açabildiği biçim budur.', 'Not sure? Choose <b>IFC</b>: it is the format the most programs can open.')}</p>
   <label class="muted bimskip"><input type="checkbox" id="bimSkip"${bimSkip() ? ' checked' : ''}> ${L('Bir daha gösterme, düğmeler doğrudan indirsin (komut satırında “IFC mi Revit mi” ile yine açılır)', 'Don\'t show this again, let the buttons download directly (reopen it from the command line: “IFC or Revit”)')}</label>`, 'bim');
@@ -12516,7 +12526,7 @@ function applyLangUI() {
   $('#bSave').title = L('Tarayıcıya kaydet (Ctrl+S)', 'Save to browser (Ctrl+S)');
   $('#bJson').title = L('JSON dosyası olarak indir', 'Download as JSON file');
   $('#bIfc').title = L('IFC4 olarak dışa aktar (Revit, ArchiCAD, BIM görüntüleyiciler): duvar, kapı / pencere, döşeme, oda, mobilya', 'Export as IFC4 (Revit, ArchiCAD, BIM viewers): walls, doors / windows, slabs, rooms, furniture');
-  $('#bRevit').title = L('Revit için dışa aktar: duvar, kapı / pencere, döşeme, oda, mobilya (revit/ eklentisi)', 'Export for Revit: walls, doors / windows, floors, rooms, furniture (revit/ add-in)');
+  $('#bRevit').title = L('Revit için dışa aktar: duvar, kapı / pencere, döşeme, oda, mobilya — Revit\'te pyRevit + revit/ eklentisiyle açılır (eklentisiz: IFC)', 'Export for Revit: walls, doors / windows, floors, rooms, furniture — opened in Revit with pyRevit + the revit/ add-in (no add-in: use IFC)');
   $('#bOpen').textContent = L('📂 Aç', '📂 Open');
   $('#bOpen').title = L('Dosya aç: JSON ya da IFC (Revit, ArchiCAD…) — dosyayı tuvale sürükleyip de bırakabilirsiniz', 'Open file: JSON or IFC (Revit, ArchiCAD…) — you can also drag the file onto the canvas');
   $('#bUndo').title = L('Geri al (Ctrl+Z)', 'Undo (Ctrl+Z)');
