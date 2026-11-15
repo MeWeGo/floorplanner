@@ -3,7 +3,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, wallTopSrc, fnSrcOf } = require('./helpers/repo');
+const { read, wallTopSrc, fnSrcOf, markerBlock } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcpSrc = read('mcp/server.js');
@@ -18,6 +18,7 @@ function load(floor = { walls: [], ops: [] }) {
     const wallElev = w => +w.elev || 0;
     const furnElev = o => +o.elev || 0;
     ${fnSrcOf(src, 'pointInPoly')}
+    ${markerBlock(src, 'ROOF-PARAM')}
     ${fnSrcOf(src, 'roofFaces')}
     ${fnSrcOf(src, 'partRotM')}
     ${fnSrcOf(src, 'fitOpsToWall')}

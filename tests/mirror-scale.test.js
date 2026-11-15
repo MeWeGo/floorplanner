@@ -21,6 +21,7 @@ function env(initialFloor = { walls: [], ops: [] }) {
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const wLen = w => dist(w.a, w.b);
     const F = () => f;
+    const isParamRoof = () => false; // parametric roofs: parametric-roof.test.js
     ${fnSrc('reflectPoint')}
     ${normDegSrc}
     ${fnSrc('mirrorObjs')}

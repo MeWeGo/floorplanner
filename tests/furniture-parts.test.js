@@ -82,7 +82,7 @@ test('partsScale follows a resize; the billiards table is a sound reference', ()
 });
 
 test('app wiring: defaults on load, 2D / 3D renderers, catalogue, presets, mirror', () => {
-  assert.match(appJs, /for \(const o of f\.furn\) cleanParts\(o\);/, 'normalizeProject must clean parts');
+  assert.match(appJs, /for \(const o of f\.furn\) \{? ?cleanParts\(o\);/, 'normalizeProject must clean parts');
   assert.match(appJs, /function furnBody\(f\) \{\n\s*if \(Array\.isArray\(f\.parts\) && f\.parts\.length\) return partsSvg\(f\);/);
   assert.match(appJs, /function furn3D\(g, o, C\) \{\n\s*if \(Array\.isArray\(o\.parts\) && o\.parts\.length\) return parts3D\(g, o, C\);/);
   assert.match(appJs, /\['billiard', 0, 'Bilardo Masası', 280, 155, 85,/);
