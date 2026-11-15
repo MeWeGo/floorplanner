@@ -99,10 +99,34 @@ test('items are placed in feet with the plan rotation and tilt', () => {
 
 test('app wiring: button, command, export file name', () => {
   assert.match(read('index.html'), /id="bRevit"/);
-  assert.match(src, /\$\('#bRevit'\)\.onclick = downloadRevit/);
-  assert.match(src, /act\('revit',[^\n]*downloadRevit/);
+  // the buttons and commands go through the IFC-or-Revit explainer (exportBim), which downloads directly once skipped
+  assert.match(src, /\$\('#bRevit'\)\.onclick = \(\) => exportBim\('revit'\)/);
+  assert.match(src, /\$\('#bIfc'\)\.onclick = \(\) => exportBim\('ifc'\)/);
+  assert.match(src, /act\('revit',[^\n]*exportBim\('revit'\)/);
+  assert.match(src, /act\('ifc',[^\n]*exportBim\('ifc'\)/);
+  assert.match(src, /act\('bimhelp',[^\n]*exportBim\('ifc', true\)/);
   assert.match(src, /fname\('fp-revit\.json'\)/);
   assert.match(src, /format: 'floorplanner-revit', v: 1, units: 'ft'/);
+});
+
+test('IFC or Revit explainer: skip switch, both cards, bilingual', () => {
+  const start = src.indexOf('function bimSkip('), end = src.indexOf('async function projectsModal(');
+  assert.ok(start > 0 && end > start, 'explainer block not found');
+  const blk = src.slice(start, end);
+  // skipped => the clicked format downloads at once; force (command line) always shows the dialog
+  assert.match(blk, /if \(!force && bimSkip\(\)\) \{ if \(kind === 'revit'\) downloadRevit\(\); else downloadIfc\(\); return; \}/);
+  assert.match(blk, /localStorage\.setItem\('fp_bim_skip'/);
+  assert.match(blk, /card\('ifc'/);
+  assert.match(blk, /card\('revit'/);
+  assert.match(blk, /data-bimdl/);
+  assert.match(blk, /kind === k \? ' on' : ''/, 'the clicked format is highlighted');
+  assert.match(blk, /github\.com\/MeWeGo\/floorplanner\/tree\/main\/revit/, 'Revit card links to the add-in');
+  assert.match(blk, /Why not a \.rvt file\?/, 'Revit card explains why there is no .rvt file');
+  assert.match(blk, /Floor Planner ▸ Import Plan/, 'Revit card gives the add-in steps');
+  assert.match(blk, /File ▸ Open ▸ IFC/, 'Revit card offers the no-add-in IFC route');
+  // every visible string goes through L(tr, en)
+  assert.ok((blk.match(/\bL\(/g) || []).length >= 14, 'explainer text is not bilingual');
+  assert.match(read('style.css'), /\.bimgrid\s*\{/);
 });
 
 test('add-in files exist, family map is valid JSON, Python stays IronPython 2.7 compatible', () => {

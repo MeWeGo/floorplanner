@@ -1547,3 +1547,21 @@ body.fs-open #toast { position: fixed; z-index: 140; }
   .fs-views { grid-template-columns: 1fr; grid-template-rows: repeat(4, 260px); }
   .fs-side { border-left: 0; border-top: 1px solid var(--line); }
 }
+
+/* IFC mi Revit mi? dışa aktarma bilgisi */
+.bimgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.bimcard { background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 12px 14px; display: flex; flex-direction: column; }
+.bimcard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.bimcard h3 { margin: 0; font-size: 14px; }
+.bimcard .bimsub { margin: 2px 0 8px; font-size: 12px; }
+.bimcard ul { margin: 0 0 8px; padding-left: 18px; font-size: 12.5px; line-height: 1.5; }
+.bimcard li { margin-bottom: 4px; }
+.bimcard .bimnote { margin: 0 0 10px; font-size: 12px; flex: 1; }
+.bimcard .bimnote a { color: var(--accent); }
+.bimcard .btn { align-self: flex-start; }
+.bimcard .bimwhy { margin: 0 0 8px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 3px; font-size: 12px; line-height: 1.5; }
+.bimcard .bimwhy ol { margin: 6px 0; padding-left: 18px; }
+.bimcard .bimwhy a { color: var(--accent); }
+.bimtip { margin: 12px 0 8px; font-size: 13px; }
+.bimskip { display: flex; gap: 6px; align-items: center; font-size: 12px; cursor: pointer; }
+@media (max-width: 700px) { .bimgrid { grid-template-columns: 1fr; } }
