@@ -8026,10 +8026,12 @@ function downloadIfc() {
 /* ---------- IFC mi Revit mi? (dışa aktarma bilgisi) ----------
    ⬇ IFC ve ⬇ Revit önce iki biçimi yan yana anlatan kısa bir pencere açar (tıklanan vurgulu, her kartın kendi indirme
    düğmesi). "Bir daha gösterme" localStorage['fp_bim_skip']'e yazılır; o zaman düğmeler doğrudan indirir.
-   Pencere komut satırından (bimhelp) her zaman açılabilir. */
+   Pencere komut satırından (bimhelp) her zaman açılabilir. Revit indirmesi, kullanıcı içe aktarma adımlarını okuduğunu
+   onaylayana kadar kapalıdır (localStorage['fp_bim_rvok']); onaysız "Bir daha gösterme" Revit için pencereyi yine açar. */
 function bimSkip() { try { return localStorage.getItem('fp_bim_skip') === '1'; } catch (_) { return false; } }
+function bimRvOk() { try { return localStorage.getItem('fp_bim_rvok') === '1'; } catch (_) { return false; } }
 function exportBim(kind, force) {
-  if (!force && bimSkip()) { if (kind === 'revit') downloadRevit(); else downloadIfc(); return; }
+  if (!force && bimSkip() && (kind !== 'revit' || bimRvOk())) { if (kind === 'revit') downloadRevit(); else downloadIfc(); return; }
   exportBimModal(kind);
 }
 function exportBimModal(kind) {
@@ -8038,7 +8040,8 @@ function exportBimModal(kind) {
     <h3>${title}</h3><p class="muted bimsub">${sub}</p>
     <ul>${li(why)}</ul>${extra}
     <p class="muted bimnote">${note}</p>
-    <button class="btn${kind === k ? ' primary' : ''}" data-bimdl="${k}">${btn}</button>
+    ${k === 'revit' ? `<label class="bimok"><input type="checkbox" id="bimRvOk"${bimRvOk() ? ' checked' : ''}> ${L('Revit\'e nasıl aktarılacağını okudum ve bunu yapabilirim', 'I have read how to import it into Revit and I can do that')}</label>` : ''}
+    <button class="btn${kind === k ? ' primary' : ''}" data-bimdl="${k}"${k === 'revit' && !bimRvOk() ? ' disabled' : ''}>${btn}</button>
   </div>`;
   openModal(`<h2>${L('⬇ BIM dışa aktarma: IFC mi, Revit mi?', '⬇ BIM export: IFC or Revit?')} <button class="btn sm" data-close>✕</button></h2>
   <p class="muted" style="margin:0 0 12px">${L('İkisi de duvarları, kapı / pencereleri, döşemeleri, odaları, katları ve mobilyayı aktarır. Fark, dosyayı kimin ve hangi programla açacağıdır.',
@@ -8070,6 +8073,10 @@ function exportBimModal(kind) {
   <p class="bimtip">${L('Emin değilseniz <b>IFC</b> seçin: en çok programın açabildiği biçim budur.', 'Not sure? Choose <b>IFC</b>: it is the format the most programs can open.')}</p>
   <label class="muted bimskip"><input type="checkbox" id="bimSkip"${bimSkip() ? ' checked' : ''}> ${L('Bir daha gösterme, düğmeler doğrudan indirsin (komut satırında “IFC mi Revit mi” ile yine açılır)', 'Don\'t show this again, let the buttons download directly (reopen it from the command line: “IFC or Revit”)')}</label>`, 'bim');
   $('#bimSkip').onchange = e => { try { localStorage.setItem('fp_bim_skip', e.target.checked ? '1' : '0'); } catch (_) {} };
+  $('#bimRvOk').onchange = e => {
+    try { localStorage.setItem('fp_bim_rvok', e.target.checked ? '1' : '0'); } catch (_) {}
+    document.querySelector('[data-bimdl="revit"]').disabled = !e.target.checked;
+  };
   for (const b of document.querySelectorAll('[data-bimdl]')) b.onclick = () => { closeModal(); if (b.dataset.bimdl === 'revit') downloadRevit(); else downloadIfc(); };
 }
 async function projectsModal() {

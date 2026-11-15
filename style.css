@@ -1559,6 +1559,8 @@ body.fs-open #toast { position: fixed; z-index: 140; }
 .bimcard .bimnote { margin: 0 0 10px; font-size: 12px; flex: 1; }
 .bimcard .bimnote a { color: var(--accent); }
 .bimcard .btn { align-self: flex-start; }
+.bimcard .bimok { display: flex; gap: 6px; align-items: flex-start; margin: 0 0 8px; font-size: 12px; line-height: 1.4; cursor: pointer; }
+.bimcard .bimok input { margin-top: 2px; }
 .bimcard .bimwhy { margin: 0 0 8px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 3px; font-size: 12px; line-height: 1.5; }
 .bimcard .bimwhy ol { margin: 6px 0; padding-left: 18px; }
 .bimcard .bimwhy a { color: var(--accent); }
