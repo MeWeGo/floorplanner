@@ -81,6 +81,7 @@ const CATALOG = [
   { id: 'printer', cat: 4, name: 'Yazıcı', en: 'Printer', w: 50, d: 45, h: 40, icon: '🖨️', k: 'rect', color: '#cbd5e1' },
   { id: 'stairs', cat: 5, name: 'Merdiven', en: 'Stairs', w: 100, d: 300, h: 270, icon: '🪜', k: 'stairs', color: '#e2e8f0' },
   { id: 'ramp', cat: 5, name: 'Rampa', en: 'Ramp', w: 120, d: 500, h: 35, icon: '♿', k: 'ramp', color: '#cbd5e1' },
+  { id: 'roof', cat: 5, name: 'Çatı', en: 'Roof', w: 1000, d: 800, h: 251, icon: '🏠', k: 'roof', color: '#b45309' },
   { id: 'column', cat: 5, name: 'Kolon', en: 'Round Column', w: 40, d: 40, h: 270, icon: '', k: 'round', color: '#64748b' },
   { id: 'colSq', cat: 5, name: 'Kare Kolon', en: 'Square Column', w: 40, d: 40, h: 270, icon: '', k: 'rect', color: '#64748b' },
   { id: 'car', cat: 5, name: 'Araba', en: 'Car', w: 180, d: 450, h: 150, icon: '🚗', k: 'rect', color: '#fca5a5' },
@@ -2097,7 +2098,7 @@ function normalizeProject(obj) {
     for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
     for (const sl of f.slabs) { if (!(sl.t > 0)) sl.t = 20; sl.floor = sl.floor || 'concrete'; sl.off = +sl.off || 0; }
     for (const v of f.voids) if (!VOID_TYPES.includes(v.type)) v.type = 'stair';
-    for (const o of f.furn) cleanParts(o); // multi-part furniture; items without "parts" are untouched
+    for (const o of f.furn) { cleanParts(o); cleanRoof(o); } // multi-part furniture; items without "parts" are untouched; parametric roofs clamped (#115)
   });
   return obj;
 }
@@ -2171,6 +2172,96 @@ function mkOp(f, a) {
   f.ops.push(o);
   return o;
 }
+/* ROOF-PARAM:BEGIN — parametrik çatı (#115). Saf JS: app.js ve mcp/server.js'te birebir aynı (tests/parametric-roof.test.js denetler).
+   Öğe: { k: 'roof', roofType: flat|gable|hip|shed, pitch°, ridge (mahya kaçıklığı, derinliğin oranı −0.45..0.45),
+   ridgeDir: 'w' (mahya genişlik boyunca) | 'd', hip (kırma ucu, yarı genişliğin oranı; yoksa eşit eğim), over (saçak cm), th (kalınlık cm),
+   rmat (kaplama) }. w × d = duvar hattındaki ayak izi; saçak bunun dışına taşar ve eğimle aşağı iner. z = 0 öğenin tabanı (elev = duvar üstü)
+   = çatının alt yüzü duvar hattında. Yüzler yerel cm (merkez 0,0), dışa bakar; IFC çatılarının faces / fbase alanlarına dokunulmaz. */
+const ROOF_TYPES = { flat: ['Düz', 'Flat'], gable: ['Beşik', 'Gable'], hip: ['Kırma', 'Hip'], shed: ['Tek eğimli', 'Shed'] };
+const ROOF_MATS = { tile: ['Kiremit', 'Clay tile'], shingle: ['Şıngıl', 'Shingle'], metal: ['Kenet metal', 'Standing-seam metal'], slate: ['Arduvaz', 'Slate'], concrete: ['Beton / teras', 'Concrete / terrace'], none: ['Düz renk', 'Plain colour'] };
+const ROOF_PITCH_MAX = 75, ROOF_OVER_MAX = 300;
+const isParamRoof = o => !!o && o.k === 'roof' && Object.prototype.hasOwnProperty.call(ROOF_TYPES, o.roofType);
+// tek okuyucu: eksik / geçersiz alanlar varsayılana düşer
+function roofP(o) {
+  o = o || {};
+  const num = (v, d, a, b) => { if (v == null || v === '') return d; v = +v; return isFinite(v) ? Math.max(a, Math.min(b, v)) : d; };
+  const type = ROOF_TYPES[o.roofType] ? o.roofType : 'gable', flat = type === 'flat';
+  return {
+    type, flat,
+    pitch: flat ? 0 : num(o.pitch, 30, 1, ROOF_PITCH_MAX),
+    ridge: type === 'gable' || type === 'hip' ? num(o.ridge, 0, -0.45, 0.45) : 0,
+    dir: o.ridgeDir === 'd' ? 'd' : 'w',
+    hip: num(o.hip, null, 0.05, 1),
+    over: num(o.over, flat ? 0 : 50, 0, ROOF_OVER_MAX),
+    th: num(o.th, 20, 2, 80),
+    mat: ROOF_MATS[o.rmat] ? o.rmat : flat ? 'concrete' : 'tile',
+  };
+}
+// alanları temizle (normalizeProject): yalnızca parametrik çatılar; geçersiz değerler silinir ya da sınıra çekilir
+function cleanRoof(o) {
+  if (!o || o.k !== 'roof' || o.roofType == null) return o;
+  if (!ROOF_TYPES[o.roofType]) { delete o.roofType; return o; }
+  const q = roofP(o);
+  for (const k of ['pitch', 'over', 'th']) if (o[k] != null) o[k] = q[k];
+  if (o.ridge != null) o.ridge = num0(o.ridge, -0.45, 0.45);
+  if (o.hip != null) { if (q.hip == null) delete o.hip; else o.hip = q.hip; }
+  if (o.ridgeDir != null && o.ridgeDir !== 'd') delete o.ridgeDir;
+  if (o.rmat != null && !ROOF_MATS[o.rmat]) delete o.rmat;
+  o.h = roofHeight(o);
+  return o;
+}
+function num0(v, a, b) { v = +v; return v === v && isFinite(v) ? Math.max(a, Math.min(b, v)) : 0; }
+// mahya düzlemleri: alt yüz z = a·x + b·y + c (yerel çerçeve: mahya x' boyunca, W × D)
+function roofPlanes(q, W, D) {
+  const hw = W / 2, hd = D / 2, t = Math.tan(q.pitch * Math.PI / 180);
+  if (q.flat) return [[0, 0, 0]];
+  if (q.type === 'shed') return [[0, -t, hd * t]];                                  // arka (−y) yüksek, ön saçak (+y) alçak
+  const yr = q.ridge * D, H = hd * t, sN = H / Math.max(1, yr + hd), sS = H / Math.max(1, hd - yr);
+  const out = [[0, sN, sN * hd], [0, -sS, sS * hd]];                                // kuzey (y < mahya) ve güney yüzleri
+  if (q.type === 'hip') { const run = q.hip == null ? Math.min(hw, hd) : q.hip * hw, sE = H / Math.max(1, run); out.push([sE, 0, sE * hw], [-sE, 0, sE * hw]); }
+  return out;
+}
+// mahya yüksekliği (duvar hattından) ve toplam yükseklik (o.h): mahya + kalınlık
+function roofRise(o) { const q = roofP(o), sw = q.dir === 'd', D = sw ? +o.w || 0 : +o.d || 0; return q.flat ? 0 : Math.tan(q.pitch * Math.PI / 180) * (q.type === 'shed' ? D : D / 2); }
+function roofHeight(o) { return Math.round((roofRise(o) + roofP(o).th) * 10) / 10; }
+// dışbükey çokgeni a·x + b·y + c ≤ 0 yarı düzlemiyle kırp (Sutherland–Hodgman)
+function roofClip(poly, a, b, c) {
+  const out = [], f = p => a * p[0] + b * p[1] + c;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length], fp = f(p), fq = f(q);
+    if (fp <= 1e-9) out.push(p);
+    if ((fp < -1e-9 && fq > 1e-9) || (fp > 1e-9 && fq < -1e-9)) { const s = fp / (fp - fq); out.push([p[0] + (q[0] - p[0]) * s, p[1] + (q[1] - p[1]) * s]); }
+  }
+  return out;
+}
+// yüzler: her düzlemin en alçak olduğu bölge (min-düzlem yükseklik alanı) üst (+th) ve alt yüz olarak; dış kenarlarda yan yüzler
+function roofParamFaces(o) {
+  const q = roofP(o), sw = q.dir === 'd', W = Math.max(1, sw ? +o.d || 0 : +o.w || 0), D = Math.max(1, sw ? +o.w || 0 : +o.d || 0);
+  const X = W / 2 + q.over, Y = D / 2 + q.over, R = [[-X, -Y], [X, -Y], [X, Y], [-X, Y]], pl = roofPlanes(q, W, D), faces = [];
+  const z = (P, x, y) => P[0] * x + P[1] * y + P[2];
+  const edge = (p, k) => (k === 'x' && (Math.abs(p[0] + X) < 1e-6 || Math.abs(p[0] - X) < 1e-6)) || (k === 'y' && (Math.abs(p[1] + Y) < 1e-6 || Math.abs(p[1] - Y) < 1e-6));
+  pl.forEach((P, i) => {
+    let poly = R;
+    pl.forEach((Q, j) => { if (j !== i && poly.length) poly = roofClip(poly, P[0] - Q[0], P[1] - Q[1], P[2] - Q[2] - (j < i ? 1e-7 : 0)); });
+    let A = 0; for (let k = 0; k < poly.length; k++) { const a = poly[k], b = poly[(k + 1) % poly.length]; A += a[0] * b[1] - b[0] * a[1]; }
+    if (poly.length < 3 || Math.abs(A) < 2) return;
+    faces.push(poly.map(p => [p[0], p[1], z(P, p[0], p[1]) + q.th]));
+    faces.push(poly.map(p => [p[0], p[1], z(P, p[0], p[1])]).reverse());
+    for (let k = 0; k < poly.length; k++) {                                      // dış sınırdaki kenar: alın / saçak yüzü
+      const a = poly[k], b = poly[(k + 1) % poly.length];
+      const sx = Math.abs(a[0] - b[0]) < 1e-6 && edge(a, 'x'), sy = Math.abs(a[1] - b[1]) < 1e-6 && edge(a, 'y');
+      if (!sx && !sy) continue;
+      const za = z(P, a[0], a[1]), zb = z(P, b[0], b[1]);
+      faces.push([[a[0], a[1], za], [b[0], b[1], zb], [b[0], b[1], zb + q.th], [a[0], a[1], za + q.th]]);
+    }
+  });
+  const rot = sw ? faces.map(f => f.map(p => [-p[1], p[0], p[2]])) : faces;     // mahya d boyunca: 90° döndür (sarım korunur)
+  // dışa bakış: sağ elli (x, −y, z) çerçevede işaretli hacim pozitif olsun (Revit / IFC dışa aktarımı bunu bekler)
+  let V = 0;
+  for (const f of rot) for (let k = 1; k + 1 < f.length; k++) { const a = f[0], b = f[k], c = f[k + 1], ay = -a[1], by = -b[1], cy = -c[1]; V += a[0] * (by * c[2] - b[2] * cy) - ay * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * cy - by * c[0]); }
+  return V < 0 ? rot.map(f => f.slice().reverse()) : rot;
+}
+/* ROOF-PARAM:END */
 function mkFurn(f, a) {
   const def = BYID[a.catalogId];
   if (!def) throw new Error('Unknown catalogId "' + a.catalogId + '". Use list_catalog to see valid ids.');
@@ -2187,6 +2278,15 @@ function mkFurn(f, a) {
     if (e !== 0 || a.elev != null) o.elev = e;
   }
   if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } // multi-part catalogue item
+  if (def.k === 'roof') { // parametric roof (#115): same defaults as the app; elev = top of the walls (floor wall height)
+    if (a.roofType != null && !ROOF_TYPES[a.roofType]) throw new Error('roofType must be one of ' + Object.keys(ROOF_TYPES).join(', '));
+    if (a.rmat != null && !ROOF_MATS[a.rmat]) throw new Error('rmat must be one of ' + Object.keys(ROOF_MATS).join(', '));
+    o.roofType = a.roofType || 'gable'; const flat = o.roofType === 'flat';
+    if (!flat) o.pitch = a.pitch != null ? num(a.pitch, 30, 'pitch') : 30;
+    if (a.ridge != null) o.ridge = num(a.ridge, 0, 'ridge'); if (a.ridgeDir === 'd') o.ridgeDir = 'd'; if (a.hip != null) o.hip = num(a.hip, 0, 'hip');
+    o.over = a.over != null ? num(a.over, 50, 'over') : flat ? 0 : 50; o.th = a.th != null ? num(a.th, 20, 'th') : 20; o.rmat = a.rmat || (flat ? 'concrete' : 'tile');
+    if (a.elev == null) o.elev = +f.wallH > 0 ? +f.wallH : P.wallH; o.icon = ''; cleanRoof(o);
+  }
   f.furn.push(o);
   return o;
 }
@@ -2252,7 +2352,7 @@ function summarize() {
     for (const v of f.voids || [])
       out.push('  void ' + v.id + ': ' + v.type + (v.name ? ' "' + v.name + '"' : '') + ' ' + fmtArea(polyArea(v.pts)));
     for (const t of f.furn)
-      out.push('  furn ' + t.id + ': ' + t.name + ' ' + t.w + '×' + t.d + ' cm at (' + t.x + ',' + t.y + ') rot=' + t.rot + '°' + (t.elev > 0 ? ', ' + t.elev + ' cm above floor' : '') + (Array.isArray(t.parts) ? ', ' + t.parts.length + ' parts' : ''));
+      out.push('  furn ' + t.id + ': ' + t.name + ' ' + t.w + '×' + t.d + ' cm at (' + t.x + ',' + t.y + ') rot=' + t.rot + '°' + (t.elev > 0 ? ', ' + t.elev + ' cm above floor' : '') + (Array.isArray(t.parts) ? ', ' + t.parts.length + ' parts' : '') + (isParamRoof(t) ? ', ' + t.roofType + ' roof' + (t.roofType !== 'flat' ? ' ' + roofP(t).pitch + '°' : '') + ' ' + roofP(t).mat + ', overhang ' + roofP(t).over + ' cm, height ' + t.h + ' cm' : ''));
     for (const t of f.texts)
       out.push('  text ' + t.id + ': "' + t.text + '" at (' + t.x + ',' + t.y + ')');
   });
@@ -2593,7 +2693,15 @@ tool('add_furniture',
     d: { type: 'number', description: 'Override depth (cm).' },
     h: { type: 'number', description: 'Override height (cm, 3D).' },
     color: { type: 'string', description: 'Override color (#hex).' },
-    elev: { type: 'number', description: 'Height above the floor in cm (-500..500; negative = below the floor), for wall-mounted items (TV, cabinet, mirror, shelf). Wall items (tvw, art, shelfW, ac, cabU, wmirror) default to a typical height; everything else defaults to 0.' },
+    elev: { type: 'number', description: 'Height above the floor in cm (-500..500; negative = below the floor), for wall-mounted items (TV, cabinet, mirror, shelf). Wall items (tvw, art, shelfW, ac, cabU, wmirror) default to a typical height; everything else defaults to 0. A roof defaults to the floor wall height (top of the walls).' },
+    roofType: { type: 'string', enum: Object.keys(ROOF_TYPES), description: 'catalogId "roof" only: flat | gable | hip | shed. Default gable. w × d = footprint at the wall line (the eaves overhang it); h is derived.' },
+    pitch: { type: 'number', description: 'Roof only: slope in degrees (1–75, default 30; ignored for flat).' },
+    ridge: { type: 'number', description: 'Gable / hip only: ridge offset as a fraction of the depth across the ridge (-0.45..0.45, default 0 = centred).' },
+    ridgeDir: { type: 'string', enum: ['w', 'd'], description: 'Roof only: the ridge runs along the width (w, default) or the depth (d). For a shed roof the slope rises across it toward local -Y (w) or toward +X (d).' },
+    hip: { type: 'number', description: 'Hip only: hip end run as a fraction of half the ridge-direction length (0.05–1; 1 = pyramid). Omit for equal pitch on all faces.' },
+    over: { type: 'number', description: 'Roof only: eaves overhang in cm (0–300, default 50; flat 0).' },
+    th: { type: 'number', description: 'Roof only: thickness in cm (2–80, default 20).' },
+    rmat: { type: 'string', enum: Object.keys(ROOF_MATS), description: 'Roof only: covering tile | shingle | metal | slate | concrete | none (default tile; flat concrete).' },
     floorIndex: floorArg,
   },
   ['catalogId', 'x', 'y'],
@@ -2798,7 +2906,7 @@ tool('add_text',
   });
 
 tool('update_object',
-  'Change properties of an existing object (wall t/h/wt or endpoints; a wall may take top: [[t, h], ...] = sloped top profile, t 0 to 1 along a→b, h cm above the wall base, null = flat; opening d/w/side..., furniture x/y/rot..., room name/pts/floor...). Ramps (type "ramp"): w = width, d = horizontal length, h = rise, rampType accessible|vehicle|landscape, railing none|left|right|both. Rooms/slabs may use floor "glass" with glass clear|frosted. The "id" property cannot be changed.',
+  'Change properties of an existing object (wall t/h/wt or endpoints; a wall may take top: [[t, h], ...] = sloped top profile, t 0 to 1 along a→b, h cm above the wall base, null = flat; opening d/w/side..., furniture x/y/rot..., room name/pts/floor...). Parametric roofs (type "roof" with roofType): roofType flat|gable|hip|shed, pitch, ridge, ridgeDir, hip, over, th, rmat (see add_furniture); h is derived. Ramps (type "ramp"): w = width, d = horizontal length, h = rise, rampType accessible|vehicle|landscape, railing none|left|right|both. Rooms/slabs may use floor "glass" with glass clear|frosted. The "id" property cannot be changed.',
   {
     id: { type: 'string', description: 'Object id (see summarize).' },
     props: { type: 'object', description: 'Properties to set, e.g. {"t":30} or {"name":"Mutfak"}.' },
@@ -2822,6 +2930,7 @@ tool('update_object',
     if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
     if (found.kind === 'draft') { parsePts(found.o.pts, found.o.shape === 'arc' ? 3 : 2, 'pts'); if (!DRAFT_SHAPES.includes(found.o.shape)) found.o.shape = 'pline'; }
     if (found.kind === 'furn' && 'parts' in props) cleanParts(found.o);
+    if (found.kind === 'furn') cleanRoof(found.o); // parametric roof: clamp fields, height from the parameters (#115)
     return 'Updated ' + found.kind + ' ' + found.o.id + ':\n' + JSON.stringify(found.o, null, 2);
   });
 

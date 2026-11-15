@@ -401,7 +401,7 @@ test('13: roof items are wired into 2D, 3D, mirror, Swap W/D, presets and sectio
   assert.match(appJs, /if \(p\.t === 'rpoly'\)/);
   // roofFaces scales with w / d / h against fbase (resize and group scale need nothing else)
   const src = appJs.slice(appJs.indexOf('function roofFaces'), appJs.indexOf('\n}', appJs.indexOf('function roofFaces')) + 2);
-  const roofFaces = new Function(src + '\nreturn roofFaces;')();
+  const roofFaces = new Function(markerBlock(appJs, 'ROOF-PARAM') + src + '\nreturn roofFaces;')();
   const out = roofFaces({ w: 200, d: 100, h: 60, fbase: { w: 100, d: 100, h: 30 }, faces: [[[50, 50, 30], [-50, 50, 0], [0, -50, 0]], [[1, 1, 1]]] });
   assert.deepStrictEqual(out, [[[100, 50, 60], [-100, 50, 0], [0, -50, 0]]], 'scaled, and degenerate faces dropped');
 });
