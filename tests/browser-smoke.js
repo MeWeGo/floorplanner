@@ -1068,6 +1068,64 @@ check('furniture studio: copy look onto clicked parts, recolour a selection, add
   return 'copy look by click, Esc, undo, finish for a selection, texture dialog over the studio, placed with the texture';
 });
 
+check('overlap picker asks which object; locked objects are not dragged, nudged, resized or deleted', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); closeModal();
+    const f = F(), out = {};
+    const sofa = mkFurn(BYID.sofa3, 300, 300), rug = mkFurn(BYID.rug, 300, 300);
+    f.furn.push(rug, sofa);
+    const room = mkRoom([{ x: 600, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 400 }, { x: 600, y: 400 }], 'Oda'); f.rooms.push(room);
+    const chair = mkFurn(BYID.chair, 800, 200); f.furn.push(chair);
+    addRectWalls(0, 600, 500, 900); const w = f.walls[0]; const door = mkOp(OPDEF.door, w, 250); f.ops.push(door);
+    commit(); view.z = 0.5; view.x = 50; view.y = 50; setTool('select'); sel = []; render();
+    const r = cv.getBoundingClientRect(), at = p => { const s = w2s(p); return { x: r.left + s.x, y: r.top + s.y }; };
+    const ptr = (type, p, extra = {}) => { const el = document.elementFromPoint(p.x, p.y) || cv; el.dispatchEvent(new PointerEvent(type, { clientX: p.x, clientY: p.y, bubbles: true, pointerId: 3, button: 0, ...extra })); };
+    const click = (p, extra) => { ptr('pointerdown', p, extra); ptr('pointerup', p, extra); };
+    const drag = (p, q) => { ptr('pointerdown', p); for (let k = 1; k <= 4; k++) ptr('pointermove', { x: p.x + (q.x - p.x) * k / 4, y: p.y + (q.y - p.y) * k / 4 }); ptr('pointerup', q); };
+    const menu = () => document.querySelector('#ctxMenu.pickmenu');
+    const key = (k, o) => window.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true }, o || {})));
+    // 1) sofa on a rug: a plain click asks which one
+    const P0 = at({ x: 300, y: 300 });
+    click(P0);
+    out.rows = menu() ? [...menu().querySelectorAll('[data-pk]')].map(b => b.dataset.pk) : null;
+    out.top = sel.slice();
+    menu().querySelectorAll('[data-pk]')[1].dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+    out.preview = sel.slice();
+    key('Escape'); out.escBack = !menu() && sel.join() === sofa.id;
+    click(P0); menu().querySelectorAll('[data-pk]')[1].click(); out.picked = !menu() && sel.join() === rug.id;
+    // 2) furniture in a room, 3) a door: no question
+    click(at({ x: 800, y: 200 })); out.roomAsk = !!menu(); out.chairSel = sel.join() === chair.id; key('Escape');
+    const dp = opPos(door); click(at({ x: dp.x, y: dp.y })); out.doorAsk = !!menu(); out.doorOpen = door.open; key('Escape');
+    // 4) lock the sofa from the panel
+    sel = [sofa.id]; refresh();
+    document.querySelector('#props [data-act="lock"]').click();
+    out.locked = sofa.lock === true && /Unlock|Kilidi/.test(document.querySelector('#props [data-act="lock"]').textContent);
+    out.noHandles = !document.querySelector('#gSel [data-h]') && document.getElementById('gSel').innerHTML.includes('🔒');
+    const x0 = sofa.x, h0 = hist.length;
+    sel = [sofa.id]; drag(P0, at({ x: 500, y: 300 }));
+    out.dragKept = sofa.x === x0;
+    sel = [sofa.id]; key('ArrowRight'); out.nudgeKept = sofa.x === x0;
+    sel = [sofa.id]; key(']'); out.rotKept = (sofa.rot || 0) === 0;
+    sel = [sofa.id]; key('Delete'); out.delKept = f.furn.includes(sofa);
+    sel = [sofa.id, rug.id]; deleteSel(); out.mixedDel = f.furn.includes(sofa) && !f.furn.includes(rug);
+    // a locked chair stays put when its room is dragged
+    chair.lock = true; const cx0 = chair.x; sel = [room.id]; refresh(); drag(at({ x: 650, y: 350 }), at({ x: 750, y: 350 }));
+    out.roomMoved = room.pts[0].x !== 600; out.chairKept = chair.x === cx0;
+    // copies are not locked; unlocking makes it draggable again
+    sel = [sofa.id]; paste(true); const copy = f.furn[f.furn.length - 1]; out.copyFree = copy.id !== sofa.id && !copy.lock;
+    sel = [sofa.id]; refresh(); document.querySelector('#props [data-act="lock"]').click(); out.unlocked = !('lock' in sofa);
+    sel = [sofa.id]; key('ArrowRight'); out.nudgeAfter = sofa.x === x0 + 1;
+    return out;
+  })()`);
+  if (!info.rows || info.rows.length !== 2) throw new Error('a click on a sofa over a rug did not ask which one: ' + JSON.stringify(info));
+  const bad = ['escBack', 'picked', 'chairSel', 'locked', 'noHandles', 'dragKept', 'nudgeKept', 'rotKept', 'delKept', 'mixedDel', 'roomMoved', 'chairKept', 'copyFree', 'unlocked', 'nudgeAfter'].filter(k => !info[k]);
+  if (info.roomAsk) bad.push('furniture in a room asked');
+  if (info.doorAsk || info.doorOpen !== 90) bad.push('a door click asked / did not open the door');
+  if (JSON.stringify(info.preview) === JSON.stringify(info.top)) bad.push('hovering a row did not preview it');
+  if (bad.length) throw new Error('overlap picker / lock: ' + bad.join(', ') + ' ' + JSON.stringify(info));
+  return 'picker (preview, Esc, pick), room / door do not ask, lock blocks drag / nudge / rotate / delete, room drag leaves locked items, copies unlocked';
+});
+
 check('render studio: every style renders and restores the scene (issue #34)', async page => {
   const info = await page.evaluate(`(async () => {
     loadProject(newProject()); addRectWalls(0, 0, 600, 400); F().ops.push(mkOp(OPDEF.window, F().walls[0], 300)); commit(); sel = []; refresh();
