@@ -704,7 +704,7 @@ function cacheTex(id, data) {
   if (e && e.url && e.url.startsWith('blob:')) URL.revokeObjectURL(e.url);
   e = { data, url: data, img: new Image(), ready: false };
   try { e.url = URL.createObjectURL(dataUrlBlob(data)); } catch (er) { }
-  e.img.onload = () => { e.ready = true; if (P) render(); if (ui.view3d && T3) schedBuild3D(); };
+  e.img.onload = () => { e.ready = true; if (P) render(); if (ui.view3d && T3) schedBuild3D(); if (ui.modal === 'parts') pbLive(); };
   e.img.src = data;
   TEX.set(id, e); return e;
 }
@@ -753,8 +753,9 @@ function addTexture(name, w, h, data) {
   const id = uid(); cacheTex(id, data);
   dbPut('textures', { id, data }).catch(() => toast(L('Doku tarayıcıya kaydedilemedi', 'The texture could not be stored in the browser')));
   P.textures = P.textures || []; P.textures.push({ id, name: String(name).slice(0, 60), w, h });
-  // seçili oda / döşeme varsa doku doğrudan ona uygulanır
-  for (const { o } of selObjs().filter(x => x.kind === 'room' || x.kind === 'slab')) o.floor = 'tex:' + id;
+  // mobilya stüdyosundan açıldıysa seçili parçalara, yoksa seçili oda / döşemeye uygulanır
+  if (ui.txStudio && ui.pb) { if (pbSetLook(ui.txStudio, { mat: 'tex:' + id })) fsPush(); }
+  else for (const { o } of txTargets()) o.floor = 'tex:' + id;
   commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
   toast(L(`“${name}” dokusu eklendi`, `Texture “${name}” added`));
   return id;
@@ -6829,6 +6830,7 @@ window.addEventListener('keydown', e => {
   if (typing) { if (e.key === 'Escape') e.target.blur(); return; }
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
   if (e.key === 'Escape' && document.getElementById('ctxMenu')) { closeCtxMenu(); return; }
+  if (ui.modal === 'tex' && ui.txStudio) { if (e.key === 'Escape') closeModal(); return; } // stüdyonun üstündeki doku penceresi: tuşlar plana düşmez, Esc stüdyoya döner
   if (ui.modal === 'parts') { fsKey(e); return; } // mobilya stüdyosu açıkken tuşlar stüdyonun: Delete / Ctrl+Z arkadaki plana gitmez
   // komut satırı (#43): ":" — 2B'de de 3B'de de; açık bir pencere (modal) varken değil
   if (e.key === ':' && !ctrl && !e.altKey && $('#modalbg').style.display !== 'flex') { e.preventDefault(); keys3D.clear(); openCmdPalette(); return; }
@@ -6944,7 +6946,10 @@ $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8)
 
 /* ---------- Modal ---------- */
 function openModal(html, kind = null) { ui.modal = kind; $('#modal').innerHTML = html; $('#modalbg').style.display = 'flex'; }
-function closeModal() { if (ui.modal === 'parts') fsClose(); ui.modal = null; $('#modalbg').style.display = 'none'; }
+function closeModal() {
+  if (ui.modal === 'tex' && ui.txStudio) { ui.txStudio = null; ui.modal = 'parts'; $('#modalbg').style.display = 'none'; pbRedraw(); return; }
+  if (ui.modal === 'parts') fsClose(); ui.modal = null; $('#modalbg').style.display = 'none';
+}
 $('#modalbg').addEventListener('mousedown', e => { if (e.target.id === 'modalbg') closeModal(); });
 $('#modal').addEventListener('click', e => { if (e.target.closest('[data-close]')) closeModal(); });
 /* ---------- AI (MCP) help: copy-ready prompt for the user's agent ---------- */
@@ -8976,19 +8981,21 @@ function txState() {
   if (!ui.tx) ui.tx = { mode: 'gen', spec: texGenClean({ pattern: 'tile' }), up: null, ai: '', aiMsg: '' };
   return ui.tx;
 }
-function openTexDialog(mode) { const t = txState(); if (mode) t.mode = mode; openModal(texDialogHtml(), 'tex'); }
-const txTargets = () => selObjs().filter(x => x.kind === 'room' || x.kind === 'slab');
+function openTexDialog(mode) { const t = txState(); if (mode) t.mode = mode; if (ui.txStudio && t.mode === 'ai') t.mode = 'gen'; openModal(texDialogHtml(), 'tex'); }
+const txTargets = () => ui.txStudio ? [] : selObjs().filter(x => x.kind === 'room' || x.kind === 'slab');
 const txDefName = s => L(...TEXGEN_PATTERNS[s.pattern]) + ' ' + (s.pattern === 'hex' ? s.w : s.w + '×' + s.h);
 // önizleme kutusu ≈ 2+ tekrar gösterir; w / h cm → px
 const txBg = (url, w, h) => { const k = 300 / Math.max(240, 2.2 * w); return `url('${url}') 0 0 / ${(w * k).toFixed(2)}px ${(h * k).toFixed(2)}px repeat`; };
 const TX_C2 = { tile: ['Derz rengi', 'Grout colour'], brick: ['Harç rengi', 'Mortar colour'], plank: ['Derz rengi', 'Seam colour'], basket: ['Derz rengi', 'Seam colour'], hex: ['Derz rengi', 'Grout colour'], checker: ['İkinci renk', 'Second colour'], terrazzo: ['Taneler', 'Chips'], stripe: ['İkinci renk', 'Second colour'] };
 function texDialogHtml() {
   const t = txState(), n = txTargets().length;
-  const tabs = [['gen', L('🎨 Desen oluştur', '🎨 Create pattern')], ['up', L('🖼 Görsel yükle', '🖼 Upload image')], ['ai', L('🤖 AI ile', '🤖 With AI')]];
+  const tabs = [['gen', L('🎨 Desen oluştur', '🎨 Create pattern')], ['up', L('🖼 Görsel yükle', '🖼 Upload image')], ['ai', L('🤖 AI ile', '🤖 With AI')]].filter(x => !ui.txStudio || x[0] !== 'ai');
   const num = (attr, k, v, lbl, o = {}) => `<label style="display:flex;flex-direction:column;gap:2px;font-size:12px">${lbl}<input type="number" ${attr}="${k}" value="${v}" min="${o.min ?? 1}" max="${o.max ?? 500}" step="${o.step ?? 1}" style="width:90px"></label>`;
   let h = `<h2>${L('Doku ekle', 'Add texture')} <button class="btn sm" data-close>✕</button></h2>
     <div class="row" style="gap:6px;margin:0 0 10px;flex-wrap:wrap">${tabs.map(([k, v]) => `<button class="btn sm${k === t.mode ? ' primary' : ''}" data-tx-mode="${k}">${v}</button>`).join('')}</div>`;
-  const target = n ? `<p class="muted" style="margin:8px 0 0">${L(`Seçili ${n} oda / döşemeye uygulanır.`, `Will be applied to the ${n} selected room(s) / slab(s).`)}</p>` : '';
+  const nP = ui.txStudio ? ui.txStudio.length : 0;
+  const target = nP ? `<p class="muted" style="margin:8px 0 0">${L(`Stüdyoda seçili ${nP} parçaya uygulanır.`, `Will be applied to the ${nP} selected part(s) in the studio.`)}</p>`
+    : n ? `<p class="muted" style="margin:8px 0 0">${L(`Seçili ${n} oda / döşemeye uygulanır.`, `Will be applied to the ${n} selected room(s) / slab(s).`)}</p>` : '';
   if (t.mode === 'gen') {
     const s = t.spec, g = texGen(s), joint = !['checker', 'terrazzo', 'stripe'].includes(s.pattern);
     const wl = s.pattern === 'terrazzo' ? L('Tekrar genişliği (cm)', 'Repeat width (cm)') : s.pattern === 'hex' ? L('Karo genişliği (cm)', 'Tile width (cm)') : s.pattern === 'stripe' ? L('Tekrar genişliği (cm)', 'Repeat width (cm)') : L('Birim genişliği (cm)', 'Unit width (cm)');
@@ -9149,6 +9156,39 @@ const PB_TYPES = { box: ['Kutu', 'Box'], cyl: ['Silindir', 'Cylinder'], sphere: 
 const PB_MATS = { matte: ['Mat', 'Matte'], gloss: ['Parlak', 'Gloss'], metal: ['Metal', 'Metal'], glass: ['Cam', 'Glass'], wood: ['Ahşap', 'Wood'], fabric: ['Kumaş', 'Fabric'], leather: ['Deri', 'Leather'], stone: ['Taş / granit', 'Stone / granite'], marble: ['Mermer', 'Marble'], ceramic: ['Porselen / seramik', 'Porcelain / ceramic'], chrome: ['Krom', 'Chrome'], plastic: ['Plastik', 'Plastic'], rubber: ['Kauçuk', 'Rubber'], foliage: ['Yaprak', 'Foliage'] }, pbMatOpts = () => Object.assign({}, PB_MATS, ...((P && P.textures) || []).map(t => ({ ['tex:' + t.id]: ['🖼 ' + esc(t.name), '🖼 ' + esc(t.name)] })));
 const PB_AXES = { z: ['Dik', 'Upright'], x: ['Yatık (X)', 'Lying (X)'], y: ['Yatık (Y)', 'Lying (Y)'] };
 const hex6 = c => { const s = String(c || '').replace('#', ''); return /^[0-9a-f]{6}$/i.test(s) ? '#' + s : /^[0-9a-f]{3}$/i.test(s) ? '#' + s.split('').map(x => x + x).join('') : '#b08968'; };
+/* Görünüm = renk + yüzey (doku dahil). Kopyala (🖌): seçili parçanın görünümü alınır, tıklanan her parçaya
+   uygulanır (Esc / ✓ Bitti ile biter). Çoklu seçimde renk / yüzey alanları hepsine birden yazar. */
+const pbLookOf = p => ({ color: hex6((p && p.color) || ui.pb.d.color), mat: (p && p.mat) || null });
+/** look: { color?, mat? } — tanımsız alan değişmez; mat null / 'matte' = varsayılan mat yüzey. Kaç parça değişti döner. */
+function pbSetLook(ids, look) {
+  let n = 0;
+  for (const i of ids) {
+    const p = ui.pb.d.parts[i]; if (!p) continue;
+    if (look.color != null) p.color = look.color;
+    if (look.mat !== undefined) { if (look.mat && look.mat !== 'matte' && partMatOk(look.mat)) p.mat = look.mat; else delete p.mat; }
+    n++;
+  }
+  return n;
+}
+function pbPaint(on) {
+  const p = ui.pb.d.parts[ui.pb.sel];
+  ui.pb.paint = on && p ? pbLookOf(p) : null;
+  document.getElementById('fstudio')?.classList.toggle('fs-paint', !!ui.pb.paint);
+  pbRedraw();
+}
+function pbTexAdd() {
+  const ids = pbSelIds().filter(i => ui.pb.d.parts[i]); if (!ids.length) return;
+  if (ui.pb.paint) pbPaint(false);
+  ui.txStudio = ids; openTexDialog();
+}
+const pbPaintBar = () => {
+  const k = ui.pb.paint; if (!k) return '';
+  const fin = k.mat ? (pbMatOpts()[k.mat] ? L(...pbMatOpts()[k.mat]) : k.mat) : L(...PB_MATS.matte);
+  return `<div class="fs-paintbar"><span class="fs-sw" style="background:${k.color}"></span><span>🖌 ${L('Bu görünümü vermek için parçalara tıklayın', 'Click parts to give them this look')} · ${fin}</span>`
+    + `<button type="button" class="btn sm" data-pbact="paintoff">✓ ${L('Bitti', 'Done')} (Esc)</button></div>`;
+};
+const pbLookBtns = () => `<div class="row"><button type="button" class="btn sm${ui.pb.paint ? ' primary' : ''}" data-pbact="paint" title="${L('Bu parçanın rengini ve yüzeyini tıkladığınız parçalara kopyalar', 'Copies this part\'s colour and finish onto the parts you click')}">🖌 ${L('Görünümü kopyala', 'Copy look')}</button>`
+  + `<button type="button" class="btn sm" data-pbact="texadd" title="${L('Yeni bir doku oluşturur ya da yükler ve seçili parçalara uygular', 'Creates or uploads a texture and applies it to the selected parts')}">🖼 ${L('Doku ekle…', 'Add texture…')}</button></div>`;
 const pbItem = () => { const D = ui.pb.d; return { w: D.w, d: D.d, h: D.h, k: 'rect', color: D.color, parts: D.parts, pbase: { w: D.w, d: D.d, h: D.h } }; };
 // yapı taşları: varsayılan ölçüler o anki kutudan türetilir; [anahtar, ikon, TR, EN, D => parça]
 const FS_BLOCKS = [
@@ -9191,6 +9231,13 @@ function pbSelBounds(ids) {
 // tıkla / Ctrl (veya Shift) + tıkla = çoklu seçim, Alt + tıkla = gruptaki tek parçayı seç
 function pbPickPart(i, e, shiftMulti = true) {
   const D = ui.pb.d, p = D.parts[i]; if (!p) return false;
+  if (ui.pb.paint && !(e && (e.ctrlKey || e.metaKey || e.shiftKey))) {
+    const ids = (e && e.altKey) || !p.gid ? [i] : D.parts.map((q, j) => (q.gid === p.gid ? j : -1)).filter(j => j >= 0);
+    const was = JSON.stringify(ids.map(j => pbLookOf(D.parts[j])));
+    pbSetLook(ids, ui.pb.paint);
+    if (JSON.stringify(ids.map(j => pbLookOf(D.parts[j]))) !== was) { fsPush(); pbLive(); }
+    return false; // boyama tıklaması seçimi değiştirmez, sürükleme başlatmaz
+  }
   const before = ui.pb.sel + '|' + (ui.pb.gsel || '') + '|' + (ui.pb.multi || []).join(',');
   if (e && (e.ctrlKey || e.metaKey || (shiftMulti && e.shiftKey))) {
     const m = new Set(ui.pb.multi || []);
@@ -9364,21 +9411,26 @@ function pbFields() {
   if (ids.length > 1) {
     const g = ui.pb.gsel;
     const names = ids.slice(0, 8).map(i => D.parts[i].name || L(...PB_TYPES[D.parts[i].type])).join(', ');
-    return `<div class="pb-group"><h4>👥 ${g ? esc(pbGroupLabel(g)) : L('Seçim', 'Selection')} · ${ids.length} ${L('parça', 'parts')}</h4>`
+    const lk = pbLookOf(p || D.parts[ids[0]]), same = ids.every(i => (D.parts[i].mat || null) === lk.mat);
+    return pbPaintBar() + `<div class="pb-group"><h4>👥 ${g ? esc(pbGroupLabel(g)) : L('Seçim', 'Selection')} · ${ids.length} ${L('parça', 'parts')}</h4>`
       + `<p class="muted">${esc(names)}${ids.length > 8 ? '…' : ''}</p>`
       + `<p class="muted fs-tip">${L('Grup birlikte taşınır ve döner. Tek parçayı düzenlemek için Alt + tıkla.', 'The group moves and rotates together. Alt + click a part to edit it alone.')}</p>`
       + `<div class="row">${g ? `<button type="button" class="btn sm" data-pbact="ungroup">🔓 ${L('Grubu çöz', 'Ungroup')}</button>` : `<button type="button" class="btn sm primary" data-pbact="group">👥 ${L('Grupla', 'Group')}</button>`}</div>`
+      + `<label class="f"><span>${L('Renk (hepsi)', 'Colour (all)')}</span><input type="color" data-pfall="color" value="${lk.color}"></label>`
+      + `<label class="f"><span>${L('Yüzey (hepsi)', 'Finish (all)')}</span><select data-pfall="mat">${same ? '' : `<option value="" selected>— ${L('karışık', 'mixed')} —</option>`}${Object.entries(pbMatOpts()).map(([kk, x]) => `<option value="${kk}"${same && kk === (lk.mat || 'matte') ? ' selected' : ''}>${L(...x)}</option>`).join('')}</select></label>`
+      + pbLookBtns()
       + `<div class="row"><button type="button" class="btn sm" data-pbact="dup">⧉ ${L('Çoğalt', 'Duplicate')}</button><button type="button" class="btn sm" data-pbact="mirror">⇋ ${L('Aynala kopyala', 'Mirror copy')}</button><button type="button" class="btn sm" data-pbact="del">🗑 ${L('Sil', 'Delete')}</button></div></div>`;
   }
-  if (!p) return `<p class="muted">${L('Bir parça seçin ya da soldan ekleyin.', 'Select a part, or add one from the left.')}</p>`;
+  if (!p) return pbPaintBar() + `<p class="muted">${L('Bir parça seçin ya da soldan ekleyin.', 'Select a part, or add one from the left.')}</p>`;
   const num = (lbl, k, v, o = {}) => `<label class="f"><span>${lbl}</span><input type="number" data-pf="${k}" value="${partR(v || 0)}" step="${o.step || 1}"${o.min !== undefined ? ` min="${o.min}"` : ''}></label>`;
   const pick = (lbl, k, v, map) => `<label class="f"><span>${lbl}</span><select data-pf="${k}">${Object.entries(map).map(([kk, x]) => `<option value="${kk}"${kk === v ? ' selected' : ''}>${L(...x)}</option>`).join('')}</select></label>`;
   const types = p.type === 'extrude' ? PB_TYPES : { box: PB_TYPES.box, cyl: PB_TYPES.cyl, sphere: PB_TYPES.sphere };
-  return `<label class="f"><span>${L('Ad', 'Name')}</span><input type="text" data-pf="name" maxlength="40" value="${esc(p.name || '')}" placeholder="${L('ör. ayak', 'e.g. leg')}"></label>`
+  return pbPaintBar() + `<label class="f"><span>${L('Ad', 'Name')}</span><input type="text" data-pf="name" maxlength="40" value="${esc(p.name || '')}" placeholder="${L('ör. ayak', 'e.g. leg')}"></label>`
     + pick(L('Şekil', 'Shape'), 'type', p.type, types)
     + (p.type === 'cyl' ? pick(L('Duruş', 'Direction'), 'axis', p.axis || 'z', PB_AXES) : '')
     + `<label class="f"><span>${L('Renk', 'Colour')}</span><input type="color" data-pf="color" value="${hex6(p.color || D.color)}"></label>`
     + pick(L('Yüzey', 'Finish'), 'mat', p.mat || 'matte', pbMatOpts())
+    + pbLookBtns()
     + `<h4>${L('Konum (cm)', 'Position (cm)')}</h4>` + num(L('Sağa / sola (X)', 'Left / right (X)'), 'x', p.x) + num(L('İleri / geri (Y)', 'Back / front (Y)'), 'y', p.y)
     + num(L('Yerden yükseklik', 'Height above floor'), 'z', p.z, { min: 0 })
     + `<div class="row"><button type="button" class="btn sm" data-pbact="ontop" title="${L('Altındaki en yüksek parçanın üstüne koyar', 'Puts it on the highest part under it')}">⬆ ${L('Üstüne oturt', 'Sit on top')}</button><button type="button" class="btn sm" data-pbact="floor">⤓ ${L('Yere indir', 'Put on floor')}</button></div>`
@@ -9770,6 +9822,9 @@ function pbApply(toLib) {
 }
 function fsAct(act) {
   const D = ui.pb.d, ids = pbSelIds(), p = D.parts[ui.pb.sel], group = ids.length > 1;
+  if (act === 'paint') { pbPaint(!ui.pb.paint); return; }
+  if (act === 'paintoff') { pbPaint(false); return; }
+  if (act === 'texadd') { pbTexAdd(); return; }
   if (act === 'fit') {
     let w = 1, d = 1, h = 1;
     for (const q of D.parts) { const b = partBounds(q); w = Math.max(w, 2 * Math.abs(b.x0), 2 * Math.abs(b.x1)); d = Math.max(d, 2 * Math.abs(b.y0), 2 * Math.abs(b.y1)); h = Math.max(h, b.z1); }
@@ -9829,6 +9884,7 @@ function fsWire(root) {
     const t = e.target, D = ui.pb.d;
     if (t.id === 'fsName') { ui.pb.name = t.value; return; }
     if (t.dataset.pbox) { const v = +t.value; if (t.value !== '' && v > 0) { D[t.dataset.pbox] = partR(v); pbLive(); } return; }
+    if (t.dataset.pfall === 'color') { pbSetLook(pbSelIds(), { color: t.value }); pbLive(); return; }
     const k = t.dataset.pf, p = D.parts[ui.pb.sel]; if (!k || !p || t.tagName === 'SELECT') return;
     if (k === 'name') { if (t.value.trim()) p.name = t.value.slice(0, 40); else delete p.name; }
     else if (k === 'color') p.color = t.value;
@@ -9851,6 +9907,11 @@ function fsWire(root) {
       ui.pb.sel = ui.pb.d.parts.length ? 0 : -1; fsPush(); pbRedraw(); return;
     }
     const D = ui.pb.d, p = D.parts[ui.pb.sel];
+    if (t.dataset.pfall) {
+      if (t.dataset.pfall === 'mat' && t.value) pbSetLook(pbSelIds(), { mat: t.value });
+      else if (t.dataset.pfall === 'color') pbSetLook(pbSelIds(), { color: t.value });
+      fsPush(); pbRedraw(); return;
+    }
     if (t.tagName === 'SELECT' && t.dataset.pf && p) {
       const k = t.dataset.pf, v = t.value;
       if (k === 'type') { p.type = v; if (v !== 'cyl') delete p.axis; if (v !== 'extrude') delete p.pts; }
@@ -9885,7 +9946,7 @@ function fsWire(root) {
 // stüdyo açıkken klavye (yazı alanı dışında): Esc, Delete, Ctrl+Z / Y, Ctrl+G / Shift+G, Ctrl+D, oklar, PageUp / PageDown
 function fsKey(e) {
   const ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
-  if (e.key === 'Escape') { fsCancel(); return; }
+  if (e.key === 'Escape') { if (ui.pb.paint) pbPaint(false); else fsCancel(); return; }
   if (ctrl && k === 'z') { e.preventDefault(); fsUndo(e.shiftKey ? 1 : -1); return; }
   if (ctrl && k === 'y') { e.preventDefault(); fsUndo(1); return; }
   if (ctrl && k === 'g') { e.preventDefault(); if (e.shiftKey) pbUngroup(); else pbGroup(); return; }

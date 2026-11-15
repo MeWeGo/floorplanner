@@ -21,6 +21,8 @@ const lineSrc = name => {
 const engineOf = text => markerBlock(text, 'PARTS-ENGINE');
 
 const blocksSrc = src.slice(src.indexOf('const FS_BLOCKS = ['), src.indexOf('function pbStart('));
+// copy look / add texture helpers (between the look comment and pbItem)
+const lookSrc = src.slice(src.indexOf('/* Görünüm = renk + yüzey'), src.indexOf('const pbItem = '));
 const viewsSrc = src.slice(src.indexOf('const FS_VIEWS = ['), src.indexOf('function fsProj('))
   + '\n'
   + src.slice(src.indexOf('const fsHorizKey ='), src.indexOf('function fsViewBox('));
@@ -75,6 +77,10 @@ const api = new Function(`
   ${lineSrc('PB_MATS')}
   ${lineSrc('PB_AXES')}
   ${lineSrc('hex6')}
+  let texOpened = 0;
+  const openTexDialog = () => { texOpened++; };
+  const document = { getElementById: () => null };
+  ${lookSrc}
   ${blocksSrc}
   ${fnSrc('partShapeSvg')}
   ${viewsSrc}
@@ -112,7 +118,7 @@ const api = new Function(`
     fsUV, fsProj, fsHorizKey, fsViewBox, fsViewSvg, fsHandles, fsGroupHandles, fsMagnet, fsMoveAxis,
     fsAddBlock, fsSitOnTop, pbApply, fsAct, fsKey,
     pbGroup, pbUngroup, pbSelSet, pbSelIds, pbSelBounds, pbPickPart, pbPruneGroups, pbNudge, pbGroupIds, pbGroupLabel,
-    fsStartDrag, winL,
+    fsStartDrag, winL, pbLookOf, pbSetLook, pbPaint, pbTexAdd, texOpened: () => texOpened,
     toast: () => toastMsg,
     setFind: f => { findTarget = f; },
     getCommitted: () => committed,
@@ -823,4 +829,51 @@ test('(15) grouping wiring: studio list / panel / keys / drag and the MCP schema
 
   // The shared engine block must stay byte-identical (also guarded in furniture-parts.test.js)
   assert.strictEqual(engineOf(src), engineOf(mcp));
+});
+
+test('(16) copy look: the painter copies colour + finish onto clicked parts (whole group, Alt = one), Esc ends it; Finish (all) and Add texture target the selection', () => {
+  api.fsNew();
+  const P3 = [mkPart(-30, 0), mkPart(0, 0), mkPart(30, 0)];
+  P3[0].color = '#ff0000'; P3[0].mat = 'wood'; P3[1].gid = 'gA'; P3[2].gid = 'gA';
+  api.ui.pb.d.parts = P3; api.ui.pb.sel = 0; api.ui.pb.multi = []; api.ui.pb.gsel = null;
+  api.ui.pb.hist = [JSON.stringify(api.ui.pb.d)]; api.ui.pb.hi = 0;
+  const look = i => [api.ui.pb.d.parts[i].color, api.ui.pb.d.parts[i].mat || null];
+
+  api.fsAct('paint');
+  assert.deepStrictEqual(api.ui.pb.paint, { color: '#ff0000', mat: 'wood' });
+  assert.match(api.pbFields(), /fs-paintbar/, 'the panel shows what is being painted');
+  // Alt + click paints one member of a group, does not select it and does not start a drag
+  assert.strictEqual(api.pbPickPart(1, { altKey: true }), false);
+  assert.deepStrictEqual(look(1), ['#ff0000', 'wood']);
+  assert.notDeepStrictEqual(look(2), ['#ff0000', 'wood'], 'Alt paints only the clicked part');
+  assert.strictEqual(api.ui.pb.sel, 0, 'painting keeps the source part selected');
+  assert.strictEqual(api.ui.pb.hist.length, 2, 'one undo step per painted click');
+  // a plain click paints the whole group; repainting the same look adds no undo step
+  api.pbPickPart(2, {});
+  assert.deepStrictEqual(look(2), ['#ff0000', 'wood']);
+  api.pbPickPart(2, {});
+  assert.strictEqual(api.ui.pb.hist.length, 3, 'an unchanged repaint is not an undo step');
+  // Ctrl + click still multi-selects while painting
+  api.pbPickPart(1, { ctrlKey: true });
+  assert.deepStrictEqual(api.ui.pb.multi, [1]);
+  // Esc ends painting first, the studio stays open
+  api.fsKey({ key: 'Escape', preventDefault() {} });
+  assert.strictEqual(api.ui.pb.paint, null);
+  // a matte / unknown finish clears mat; undefined fields are left alone
+  assert.strictEqual(api.pbSetLook([1, 2], { mat: 'matte' }), 2);
+  assert.deepStrictEqual([look(1)[1], look(2)[1]], [null, null]);
+  api.pbSetLook([1], { mat: 'tex:abc' }); assert.strictEqual(look(1)[1], 'tex:abc');
+  api.pbSetLook([1], { mat: 'nonsense' }); assert.strictEqual(look(1)[1], null, 'an invalid finish never reaches the data');
+  api.pbSetLook([1], { color: '#00ff00' }); assert.deepStrictEqual(look(1), ['#00ff00', null]);
+  // multi-selection panel offers Finish (all) / Colour (all) and the look buttons
+  api.ui.pb.multi = [1, 2]; api.ui.pb.gsel = null;
+  const f = api.pbFields();
+  assert.match(f, /data-pfall="color"/); assert.match(f, /data-pfall="mat"/);
+  assert.match(f, /data-pbact="paint"/); assert.match(f, /data-pbact="texadd"/);
+  // Add texture remembers which parts get it
+  const n0 = api.texOpened();
+  api.fsAct('texadd');
+  assert.deepStrictEqual(api.ui.txStudio, [1, 2]);
+  assert.strictEqual(api.texOpened(), n0 + 1);
+  api.ui.txStudio = null;
 });

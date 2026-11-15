@@ -1006,6 +1006,68 @@ check('furniture studio: drop, drag, resize, keys, undo, templates, place in pla
   return 'drop, drag, resize, fit, keys, undo/redo, mirror, group, place + library, template, Esc' + (info.has3d ? ', 3D ' + info.meshes + ' meshes' : ' (no WebGL)');
 });
 
+check('furniture studio: copy look onto clicked parts, recolour a selection, add a texture without leaving the studio', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    const out = {}, D = () => ui.pb.d, look = i => [D().parts[i].color, D().parts[i].mat || null];
+    const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const key = (k, o) => window.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true }, o || {})));
+    const fire = (el, type, v) => { el.value = v; el.dispatchEvent(new Event(type, { bubbles: true })); };
+    const tex0 = (P.textures || []).length;
+    try {
+    fsNew('chair'); await frame();
+    out.open = ui.modal === 'parts' && D().parts.length >= 3;
+    // give part 0 a red wood look through its panel
+    pbPickPart(0, { altKey: true });
+    fire(document.querySelector('#pbFields [data-pf="color"]'), 'input', '#ff0000');
+    fire(document.querySelector('#pbFields [data-pf="color"]'), 'change', '#ff0000');
+    fire(document.querySelector('#pbFields [data-pf="mat"]'), 'change', 'wood');
+    out.src = look(0);
+    // 🖌 Copy look, then a real pointer click on part 1 in the top view (Alt = only that part, even in a group)
+    document.querySelector('#pbFields [data-pbact="paint"]').click();
+    out.painting = !!ui.pb.paint && document.getElementById('fstudio').classList.contains('fs-paint') && !!document.querySelector('#pbFields .fs-paintbar');
+    const h0 = ui.pb.hist.length, before1 = look(1);
+    const g = document.querySelector('#fsv-top [data-pi="1"]'), r = g.getBoundingClientRect();
+    const ev = t => g.dispatchEvent(new PointerEvent(t, { clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, bubbles: true, button: 0, pointerId: 9, altKey: true }));
+    ev('pointerdown'); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 9 }));
+    out.painted = look(1); out.selKept = ui.pb.sel === 0; out.undoStep = ui.pb.hist.length === h0 + 1;
+    key('Escape'); out.escStops = !ui.pb.paint && ui.modal === 'parts' && !!document.getElementById('fstudio');
+    fsUndo(-1); out.undone = JSON.stringify(look(1)) === JSON.stringify(before1);
+    // multi-selection: one finish for all selected parts
+    ui.pb.multi = []; pbPickPart(1, { ctrlKey: true }); pbPickPart(2, { ctrlKey: true });
+    out.multi = pbSelIds().join(',');
+    fire(document.querySelector('#pbFields [data-pfall="mat"]'), 'change', 'metal');
+    out.metal = [look(1)[1], look(2)[1], look(0)[1]];
+    // 🖼 Add texture… opens the texture dialog over the studio; Esc goes back to the studio
+    document.querySelector('#pbFields [data-pbact="texadd"]').click();
+    out.texModal = ui.modal === 'tex' && !document.querySelector('[data-tx-mode="ai"]') && /2 selected part/.test(document.getElementById('modal').textContent);
+    key('Delete'); out.planSafe = D().parts.length >= 3 && P.floors[0].furn.length === 0;
+    key('Escape'); out.escBack = ui.modal === 'parts' && !!document.getElementById('fstudio') && !ui.txStudio;
+    // ...and creating a pattern puts it on the selected parts, then returns to the studio
+    ui.pb.multi = []; pbPickPart(1, { ctrlKey: true }); pbPickPart(2, { ctrlKey: true });
+    document.querySelector('#pbFields [data-pbact="texadd"]').click();
+    document.querySelector('[data-tx-go]').click();
+    for (let i = 0; i < 100 && ui.modal !== 'parts'; i++) await new Promise(r => setTimeout(r, 30));
+    const t = (P.textures || [])[tex0];
+    out.tex = !!t && ui.modal === 'parts' && !!document.getElementById('fstudio') && look(1)[1] === 'tex:' + t.id && look(2)[1] === 'tex:' + t.id && look(0)[1] === 'wood';
+    out.texOption = !!document.querySelector('#pbFields [data-pfall="mat"] option[value="tex:' + (t && t.id) + '"]');
+    // the textured parts survive Place in plan
+    pbApply(false); await frame();
+    const it = P.floors[0].furn[P.floors[0].furn.length - 1];
+    out.placed = !!it && ui.modal !== 'parts' && it.parts.filter(p => t && p.mat === 'tex:' + t.id).length === 2;
+    } catch (e) { out.err = String(e && e.stack || e); }
+    finally { ui.txStudio = null; if (ui.modal === 'tex' || ui.modal === 'parts') closeModal(); if (ui.modal === 'parts') closeModal(); }
+    return out;
+  })()`);
+  if (info.err) throw new Error(info.err);
+  const bad = Object.entries({ open: info.open, painting: info.painting, selKept: info.selKept, undoStep: info.undoStep, escStops: info.escStops, undone: info.undone, texModal: info.texModal, planSafe: info.planSafe, escBack: info.escBack, tex: info.tex, texOption: info.texOption, placed: info.placed }).filter(([, v]) => !v).map(([k]) => k);
+  if (JSON.stringify(info.src) !== '["#ff0000","wood"]') throw new Error('the part panel did not set colour / finish: ' + JSON.stringify(info.src));
+  if (JSON.stringify(info.painted) !== '["#ff0000","wood"]') throw new Error('clicking a part with 🖌 Copy look did not copy colour + finish: ' + JSON.stringify(info.painted));
+  if (info.multi !== '1,2' || JSON.stringify(info.metal) !== '["metal","metal","wood"]') throw new Error('Finish (all) did not apply to exactly the selected parts: ' + JSON.stringify(info));
+  if (bad.length) throw new Error('studio look / texture flow failed: ' + bad.join(', ') + ' ' + JSON.stringify(info));
+  return 'copy look by click, Esc, undo, finish for a selection, texture dialog over the studio, placed with the texture';
+});
+
 check('render studio: every style renders and restores the scene (issue #34)', async page => {
   const info = await page.evaluate(`(async () => {
     loadProject(newProject()); addRectWalls(0, 0, 600, 400); F().ops.push(mkOp(OPDEF.window, F().walls[0], 300)); commit(); sel = []; refresh();
