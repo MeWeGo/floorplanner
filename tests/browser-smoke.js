@@ -95,10 +95,13 @@ async function connect(port, pageUrl) {
       problems.push('console.error: ' + msg.params.args.map(a => a.value || a.description || a.type).join(' '));
     }
     if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
-      const t = String(msg.params.entry.text || '');
+      const e = msg.params.entry;
+      // "Failed to load resource" keeps the URL in entry.url, not in the text — match and report both,
+      // or the browser's own /favicon.ico request (a 404 here, timing-dependent) fails the boot check.
+      const t = String(e.text || '') + (e.url ? ' [' + e.url + ']' : '');
       // CDN/WebGL noise is environmental, not a regression in our code. The
       // AI bridge probe also expects no server on 8787 during the smoke run.
-      if (!/three\.js|cdnjs|jsdelivr|WebGL|GPU|GroupMarkerNotSet|favicon|ERR_CONNECTION_REFUSED/i.test(t)) problems.push('log: ' + t);
+      if (!/three\.js|cdnjs|jsdelivr|fonts\.g(oogleapis|static)|WebGL|GPU|GroupMarkerNotSet|favicon|ERR_CONNECTION_REFUSED/i.test(t)) problems.push('log: ' + t);
     }
   };
   const send = (method, params) => new Promise(res => {
