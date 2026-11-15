@@ -1936,7 +1936,8 @@ check('realistic look: physically based materials, same render in dark and light
 
 check('IFC / Revit buttons explain both formats first; "don\'t show again" downloads directly', async page => {
   const info = await page.evaluate(`(() => {
-    let skip0 = null; try { skip0 = localStorage.getItem('fp_bim_skip'); localStorage.removeItem('fp_bim_skip'); } catch (_) {}
+    let skip0 = null, ok0 = null;
+    try { skip0 = localStorage.getItem('fp_bim_skip'); ok0 = localStorage.getItem('fp_bim_rvok'); localStorage.removeItem('fp_bim_skip'); localStorage.removeItem('fp_bim_rvok'); } catch (_) {}
     const dl0 = download, got = []; download = (name) => got.push(name);
     const r = {};
     try {
@@ -1944,27 +1945,42 @@ check('IFC / Revit buttons explain both formats first; "don\'t show again" downl
       document.getElementById('bIfc').click();
       r.modal = ui.modal; r.on = (document.querySelector('.bimcard.on [data-bimdl]') || {}).dataset?.bimdl;
       r.cards = document.querySelectorAll('.bimcard').length; r.dlBefore = got.length;
-      document.querySelector('[data-bimdl="revit"]').click();
+      const rv = document.querySelector('[data-bimdl="revit"]');
+      r.rvLocked = rv.disabled; rv.click(); r.lockedClick = { modal: ui.modal, files: got.length };
+      const ok = document.getElementById('bimRvOk'); ok.checked = true; ok.dispatchEvent(new Event('change'));
+      r.rvUnlocked = !rv.disabled; rv.click();
       r.afterDl = { modal: ui.modal, files: got.slice() };
       document.getElementById('bRevit').click();
       r.on2 = (document.querySelector('.bimcard.on [data-bimdl]') || {}).dataset?.bimdl;
       const cb = document.getElementById('bimSkip'); cb.checked = true; cb.dispatchEvent(new Event('change')); closeModal();
       got.length = 0; document.getElementById('bIfc').click();
       r.skipped = { modal: ui.modal, files: got.slice() };
+      // "don't show again" never skips the Revit confirmation
+      localStorage.removeItem('fp_bim_rvok'); got.length = 0; document.getElementById('bRevit').click();
+      r.rvNoOk = { modal: ui.modal, files: got.length }; closeModal();
+      localStorage.setItem('fp_bim_rvok', '1'); got.length = 0; document.getElementById('bRevit').click();
+      r.rvOkSkip = { modal: ui.modal, files: got.slice() };
       runCmd(cmdList().find(c => c.id === 'bimhelp')); r.forced = ui.modal; closeModal();
     } finally {
       download = dl0;
-      try { if (skip0 == null) localStorage.removeItem('fp_bim_skip'); else localStorage.setItem('fp_bim_skip', skip0); } catch (_) {}
+      try {
+        if (skip0 == null) localStorage.removeItem('fp_bim_skip'); else localStorage.setItem('fp_bim_skip', skip0);
+        if (ok0 == null) localStorage.removeItem('fp_bim_rvok'); else localStorage.setItem('fp_bim_rvok', ok0);
+      } catch (_) {}
     }
     return r;
   })()`);
   if (info.modal !== 'bim' || info.cards !== 2) throw new Error('⬇ IFC did not open the explainer with two cards: ' + JSON.stringify(info));
   if (info.on !== 'ifc' || info.on2 !== 'revit') throw new Error('the clicked format is not highlighted: ' + info.on + ' / ' + info.on2);
   if (info.dlBefore) throw new Error('opening the explainer already downloaded a file');
+  if (!info.rvLocked || info.lockedClick.modal !== 'bim' || info.lockedClick.files) throw new Error('the Revit download is not locked until the import steps are confirmed: ' + JSON.stringify(info));
+  if (!info.rvUnlocked) throw new Error('ticking "I have read how to import it into Revit" did not enable the download');
   if (info.afterDl.modal || !/fp-revit\.json$/.test(info.afterDl.files[0] || '')) throw new Error('the Revit card did not download and close: ' + JSON.stringify(info.afterDl));
   if (info.skipped.modal || !/\.ifc$/.test(info.skipped.files[0] || '')) throw new Error('"don\'t show again" did not make ⬇ IFC download directly: ' + JSON.stringify(info.skipped));
+  if (info.rvNoOk.modal !== 'bim' || info.rvNoOk.files) throw new Error('"don\'t show again" skipped the Revit confirmation: ' + JSON.stringify(info.rvNoOk));
+  if (info.rvOkSkip.modal || !/fp-revit\.json$/.test(info.rvOkSkip.files[0] || '')) throw new Error('a confirmed Revit export with "don\'t show again" did not download directly: ' + JSON.stringify(info.rvOkSkip));
   if (info.forced !== 'bim') throw new Error('the "IFC or Revit?" command did not reopen the explainer');
-  return 'explainer, highlighted card, card download, skip, command reopen';
+  return 'explainer, highlighted card, Revit confirmation lock, card download, skip, command reopen';
 });
 
 check('3D edits keep shaders, textures, lights and the shadow map; GPU memory stays flat; build is fast (#106)', async page => {
@@ -2212,7 +2228,11 @@ check('Revit export: levels, walls, doors with swing, floors, rooms and furnitur
     const vol = fs => { let v = 0; for (const fc of fs) { const q = fc.p; for (let i = 1; i + 1 < q.length; i++) { const a = q[0], b = q[i], c = q[i + 1]; v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]); } } return v / 6; };
     const w0 = P.floors[0].walls[0], xw = x.walls.find(w => w.id === w0.id), op = x.openings.find(o => o.id === door.id);
     let got = null; const keep = download; download = (name, blob) => { got = { name, size: blob.size }; };
-    try { document.getElementById('bRevit').click(); const c = document.querySelector('[data-bimdl="revit"]'); if (c) c.click(); } finally { download = keep; }
+    try {
+      document.getElementById('bRevit').click();
+      const ok = document.getElementById('bimRvOk'); if (ok && !ok.checked) { ok.checked = true; ok.dispatchEvent(new Event('change')); }
+      const c = document.querySelector('[data-bimdl="revit"]'); if (c) c.click();
+    } finally { download = keep; }
     return { stats: x.stats, levels: x.levels.map(l => l.elev), yFlip: Math.abs(xw.a[1] + w0.a.y / 30.48) < 1e-4, op, bad: x.items.filter(i => !i.faces.length || vol(i.faces) <= 0).map(i => i.type), cats: x.items.map(i => i.cat), got };
   })()`);
   if (r.stats.levels < 2 || !(r.levels[1] > r.levels[0])) throw new Error('levels: ' + JSON.stringify(r.levels));
