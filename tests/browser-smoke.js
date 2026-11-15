@@ -1931,6 +1931,39 @@ check('realistic look: physically based materials, same render in dark and light
   return 'brightness ' + info.light.toFixed(0) + ' light / ' + info.dark.toFixed(0) + ' dark, ' + info.live.std + ' physical meshes, ' + info.live.dec + ' contact decals';
 });
 
+check('IFC / Revit buttons explain both formats first; "don\'t show again" downloads directly', async page => {
+  const info = await page.evaluate(`(() => {
+    let skip0 = null; try { skip0 = localStorage.getItem('fp_bim_skip'); localStorage.removeItem('fp_bim_skip'); } catch (_) {}
+    const dl0 = download, got = []; download = (name) => got.push(name);
+    const r = {};
+    try {
+      loadProject(newProject()); addRectWalls(0, 0, 500, 400); commit(); closeModal();
+      document.getElementById('bIfc').click();
+      r.modal = ui.modal; r.on = (document.querySelector('.bimcard.on [data-bimdl]') || {}).dataset?.bimdl;
+      r.cards = document.querySelectorAll('.bimcard').length; r.dlBefore = got.length;
+      document.querySelector('[data-bimdl="revit"]').click();
+      r.afterDl = { modal: ui.modal, files: got.slice() };
+      document.getElementById('bRevit').click();
+      r.on2 = (document.querySelector('.bimcard.on [data-bimdl]') || {}).dataset?.bimdl;
+      const cb = document.getElementById('bimSkip'); cb.checked = true; cb.dispatchEvent(new Event('change')); closeModal();
+      got.length = 0; document.getElementById('bIfc').click();
+      r.skipped = { modal: ui.modal, files: got.slice() };
+      runCmd(cmdList().find(c => c.id === 'bimhelp')); r.forced = ui.modal; closeModal();
+    } finally {
+      download = dl0;
+      try { if (skip0 == null) localStorage.removeItem('fp_bim_skip'); else localStorage.setItem('fp_bim_skip', skip0); } catch (_) {}
+    }
+    return r;
+  })()`);
+  if (info.modal !== 'bim' || info.cards !== 2) throw new Error('⬇ IFC did not open the explainer with two cards: ' + JSON.stringify(info));
+  if (info.on !== 'ifc' || info.on2 !== 'revit') throw new Error('the clicked format is not highlighted: ' + info.on + ' / ' + info.on2);
+  if (info.dlBefore) throw new Error('opening the explainer already downloaded a file');
+  if (info.afterDl.modal || !/fp-revit\.json$/.test(info.afterDl.files[0] || '')) throw new Error('the Revit card did not download and close: ' + JSON.stringify(info.afterDl));
+  if (info.skipped.modal || !/\.ifc$/.test(info.skipped.files[0] || '')) throw new Error('"don\'t show again" did not make ⬇ IFC download directly: ' + JSON.stringify(info.skipped));
+  if (info.forced !== 'bim') throw new Error('the "IFC or Revit?" command did not reopen the explainer');
+  return 'explainer, highlighted card, card download, skip, command reopen';
+});
+
 check('detailed models + sub-part surfaces: shared textures, user colour tints, stable GPU memory, live + render (#93)', async page => {
   const info = await page.evaluate(`(async () => {
     loadProject(newProject());
@@ -2126,7 +2159,7 @@ check('Revit export: levels, walls, doors with swing, floors, rooms and furnitur
     const vol = fs => { let v = 0; for (const fc of fs) { const q = fc.p; for (let i = 1; i + 1 < q.length; i++) { const a = q[0], b = q[i], c = q[i + 1]; v += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]); } } return v / 6; };
     const w0 = P.floors[0].walls[0], xw = x.walls.find(w => w.id === w0.id), op = x.openings.find(o => o.id === door.id);
     let got = null; const keep = download; download = (name, blob) => { got = { name, size: blob.size }; };
-    try { document.getElementById('bRevit').click(); } finally { download = keep; }
+    try { document.getElementById('bRevit').click(); const c = document.querySelector('[data-bimdl="revit"]'); if (c) c.click(); } finally { download = keep; }
     return { stats: x.stats, levels: x.levels.map(l => l.elev), yFlip: Math.abs(xw.a[1] + w0.a.y / 30.48) < 1e-4, op, bad: x.items.filter(i => !i.faces.length || vol(i.faces) <= 0).map(i => i.type), cats: x.items.map(i => i.cat), got };
   })()`);
   if (r.stats.levels < 2 || !(r.levels[1] > r.levels[0])) throw new Error('levels: ' + JSON.stringify(r.levels));
@@ -2153,7 +2186,7 @@ check('IFC export: every template round-trips through the app IFC importer (wall
       out.push({ t, walls: wl(f.walls) === wl(g.walls), ops: f.ops.length === g.ops.length && sw(f.ops) === sw(g.ops), rooms: nm(f.rooms) === nm(g.rooms), furn: [f.furn.length, g.furn.length, kept] });
     }
     let got = null; const keep = download; download = (name, blob) => { got = { name, size: blob.size }; };
-    try { document.getElementById('bIfc').click(); } finally { download = keep; }
+    try { document.getElementById('bIfc').click(); const c = document.querySelector('[data-bimdl="ifc"]'); if (c) c.click(); } finally { download = keep; }
     return { out, got };
   })()`);
   for (const o of r.out) {
