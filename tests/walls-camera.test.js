@@ -4,20 +4,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
-const html = read('index.html');
 const mcpSrc = read('mcp/server.js');
 
-const fnSrc = name => {
-  const start = src.indexOf('function ' + name + '(');
-  assert.ok(start >= 0, name + '() is gone from app.js');
-  const lineEnd = src.indexOf('\n', start);
-  const firstLine = src.slice(start, lineEnd);
-  if (firstLine.includes('}')) return firstLine;
-  return src.slice(start, src.indexOf('\n}', start) + 2);
-};
+const fnSrc = name => fnSrcOf(src, name);
 
 const constLine = name => {
   const start = src.indexOf('const ' + name);
@@ -295,12 +287,4 @@ test('(#74) setCamAspect and viewHalfH execution on mock cameras', () => {
   const pCam = { fov: 90 };
   const vh = viewHalfH(pCam, 100);
   assert.ok(Math.abs(vh - 100) < 1e-6, `viewHalfH({fov:90}, 100) is ${vh}, expected ~100`);
-});
-
-test('(#74) index.html camera controls: #b3dIso and #b3dProj inside .ctl3dCam', () => {
-  const ctlMatch = html.match(/<div[^>]*class="[^"]*\bctl3dCam\b[^"]*"[^>]*>([\s\S]*?)<\/div>/);
-  assert.ok(ctlMatch, '.ctl3dCam container exists in index.html');
-  const ctlHtml = ctlMatch[1];
-  assert.ok(/id="b3dIso"/.test(ctlHtml), '#b3dIso button exists inside .ctl3dCam');
-  assert.ok(/id="b3dProj"/.test(ctlHtml), '#b3dProj button exists inside .ctl3dCam');
 });

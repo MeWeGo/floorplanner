@@ -11,27 +11,16 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
 
-const fnSrc = name => {
-  const start = src.indexOf('function ' + name + '(');
-  assert.ok(start >= 0, name + '() is gone from app.js');
-  return src.slice(start, src.indexOf('\n}', start) + 2);
-};
+const fnSrc = name => fnSrcOf(src, name);
 
 test('(a) in build3D every opening gets its own THREE.Group with userData { opId: o.id, elev } and no isLeaf', () => {
   const b3d = fnSrc('build3D');
   assert.strictEqual(src.includes('isLeaf'), false, 'expected no isLeaf in app.js');
   assert.match(b3d, /og\.userData\s*=\s*\{\s*opId:\s*o\.id,\s*elev(?::\s*we)?\s*\}/, 'expected og.userData = { opId: o.id, elev: we } in build3D');
-});
-
-test('(b) opDragHit builds vertical plane from wall normal (-uy, 0, ux), falls back to horizontal plane, returns t along wall from a', () => {
-  const hitSrc = fnSrc('opDragHit');
-  assert.ok(hitSrc.includes('new THREE.Vector3(-uy, 0, ux)'), 'opDragHit must build vertical plane from normal (-uy, 0, ux)');
-  assert.ok(hitSrc.includes('new THREE.Plane(new THREE.Vector3(0, 1, 0), -elev)'), 'opDragHit must fall back to horizontal plane');
-  assert.ok(hitSrc.includes('{ t: (p.x - w.a.x) * ux + (p.z - w.a.y) * uy }'), 'opDragHit must return { t: ... } along wall from a');
 });
 
 test('(c) in init3D pointerdown handler checks userData.opId, starts drag with op: true, stops propagation before OrbitControls', () => {

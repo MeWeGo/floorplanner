@@ -3,7 +3,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const js = read('app.js');
 const html = read('index.html');
@@ -15,13 +15,7 @@ const sliceConst = name => {
   return js.slice(start, end).replace(/\r$/, '');
 };
 
-const sliceFn = name => {
-  const start = js.indexOf('function ' + name + '(');
-  assert.ok(start > 0, name + '() is gone');
-  const end = js.indexOf('\n}', start);
-  assert.ok(end > start, name + '() closing brace not found');
-  return js.slice(start, end + 2);
-};
+const sliceFn = name => fnSrcOf(js, name);
 
 // Cut out and run for real
 const { PAPERS, PLOT_TITLE_MM, paperMm, calcPlotTransform, plotBarCm } = new Function(`

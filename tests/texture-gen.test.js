@@ -2,18 +2,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { spawn } = require('node:child_process');
-const path = require('node:path');
-const { ROOT, read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock, mcpClient } = require('./helpers/repo');
 
 const appJs = read('app.js').replace(/\r\n/g, '\n');
 const serverJs = read('mcp/server.js').replace(/\r\n/g, '\n');
 
-const texgenOf = src => {
-  const a = src.indexOf('/* TEXGEN:BEGIN'), b = src.indexOf('/* TEXGEN:END */');
-  assert.ok(a >= 0 && b > a, 'TEXGEN block missing');
-  return src.slice(a, b);
-};
+const texgenOf = src => markerBlock(src, 'TEXGEN');
 
 // eslint-disable-next-line no-new-func
 const T = new Function(texgenOf(appJs) + '\nreturn { texGenClean, texGen, texGenUrl, texgenRng, texgenMix, texgenShade, TEXGEN_PATTERNS, TEXGEN_DEF };')();
@@ -93,27 +87,7 @@ test('(c) app.js source wiring: texadd, cmdList texture, dataUrlBlob non-base64,
 });
 
 /* ---------- MCP round-trip ---------- */
-function client() {
-  const proc = spawn(process.execPath, [path.join(ROOT, 'mcp', 'server.js')], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
-  const pending = new Map(); let nextId = 1, buf = '';
-  proc.stdout.setEncoding('utf8');
-  proc.stdout.on('data', chunk => {
-    buf += chunk; let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-      if (!line) continue;
-      let msg; try { msg = JSON.parse(line); } catch (e) { continue; }
-      if (msg.id != null && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-    }
-  });
-  const call = (method, params) => new Promise((resolve, reject) => {
-    const id = nextId++, t = setTimeout(() => reject(new Error('timeout on ' + method)), 10000);
-    pending.set(id, msg => { clearTimeout(t); resolve(msg); });
-    proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-  });
-  const tool = async (name, args) => { const r = await call('tools/call', { name, arguments: args || {} }); return { err: r.result.isError, text: r.result.content[0].text }; };
-  return { call, tool, stop: () => proc.kill() };
-}
+const client = mcpClient;
 
 test('(d) MCP round-trip: create_texture, add_texture, list_textures', async t => {
   const c = client(); t.after(() => c.stop());

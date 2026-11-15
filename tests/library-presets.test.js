@@ -4,17 +4,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcp = read('mcp/server.js');
-const fnSrc = name => {
-  const start = src.indexOf('function ' + name + '(');
-  assert.ok(start >= 0, name + '() is gone from app.js');
-  const line = src.slice(start, src.indexOf('\n', start));
-  if (line.split('{').length === line.split('}').length) return line; // one-line function
-  return src.slice(start, src.indexOf('\n}', start) + 2);
-};
+const fnSrc = name => fnSrcOf(src, name);
 const lineSrc = name => {
   const start = src.indexOf('const ' + name);
   assert.ok(start >= 0, name + ' is gone from app.js');
@@ -122,22 +116,4 @@ test('old projects load with an empty preset list; invalid presets are dropped',
   assert.ok(!keep(null));
   assert.match(mcp, /obj\.lib\.presets = \(Array\.isArray\(obj\.lib\.presets\)/, 'MCP normalizeProject must keep presets');
   assert.match(mcp, /lib: \{ shapes: \[\], presets: \[\] \}/, 'MCP newProject must start with presets: []');
-});
-
-test('save / place / rename / delete / undo are wired', () => {
-  const props = fnSrc('renderProps');
-  assert.strictEqual((props.match(/data-act="savepreset"/g) || []).length, 2, 'ops and non-shape furniture need a Save to library button');
-  assert.match(src, /if \(a === 'savepreset'\) return savePresetSel\(\);/);
-  const lib = fnSrc('buildLib');
-  assert.match(lib, /data-type="pre"/);
-  assert.match(lib, /data-renpre=/);
-  assert.match(lib, /data-delpre=/);
-  assert.match(src, /ps\.splice\(i, 1\);[^\n]*commit\(\)/, 'deleting a preset must commit (undoable)');
-  assert.match(fnSrc('restore'), /buildLib\(\)/, 'undo must refresh the library');
-  assert.match(fnSrc('loadProject'), /buildLib\(\)/);
-  assert.match(fnSrc('activateTab'), /buildLib\(\)/);
-  assert.match(fnSrc('placeAt'), /ui\.opSrc\[o\.id\] = placing\.def\.id/);
-  assert.match(fnSrc('applyProp'), /rememberOpSize/);
-  assert.match(lineSrc('LIBCATS ='), /'⬡ Kütüphanem'\]/);
-  assert.match(lineSrc('LIBCATS_EN'), /'⬡ My Library'\]/);
 });

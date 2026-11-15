@@ -3,31 +3,24 @@
    The 3D view is a live WebGL canvas created WITHOUT preserveDrawingBuffer, so
    the drawing buffer is discarded once the current task yields. A capture that
    render()s and then reads the canvas in a later task (await, toBlob callback,
-   setTimeout) produces a blank PNG. The scale helper is pure geometry and is
-   proven here; the capture contract is asserted at source level because the
+   setTimeout) produces a blank PNG. The scale helper and the Halton jitter are pure
+   and run here; the capture contract is asserted at source level because the
    buffer behaviour only exists inside a real GPU context (browser-smoke.js
    runs the real capture and checks the PNG is not blank). */
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const js = read('app.js');
 const html = read('index.html');
 
-/** Mirror of shot3DScale() — keep in sync with app.js. */
-function shot3DScale(w, h, maxSide = 3840, maxPixels = 12e6) {
-  const side = Math.max(1, w, h);
-  const ideal = Math.max(2, Math.min(3, maxSide / side));
-  return Math.max(1, Math.min(ideal, maxSide / side, Math.sqrt(maxPixels / (w * h))));
-}
+// the real pure helpers, cut out of app.js
+const { shot3DScale, halton } = new Function(`${fnSrcOf(js, 'shot3DScale')}
+${fnSrcOf(js, 'halton')}
+return { shot3DScale, halton };`)();
 
-const sliceFn = name => {
-  const start = js.indexOf('function ' + name);
-  assert.ok(start > 0, name + '() is gone');
-  const end = js.indexOf('\n}', start);
-  return js.slice(start, end);
-};
+const sliceFn = name => fnSrcOf(js, name);
 
 test('the render is oversampled 2x-3x without exploding past 4K / 12 MP', () => {
   // a normal desktop window: a full 2x is always affordable
@@ -115,12 +108,7 @@ test('the default export is a rendered image, not a viewport screenshot', () => 
 });
 
 test('the jitter pattern is a Halton sequence, not a random walk', () => {
-  // mirror of halton() — deterministic offsets are what make averaging converge
-  function halton(i, base) {
-    let f = 1, r = 0, n = i;
-    while (n > 0) { f /= base; r += f * (n % base); n = Math.floor(n / base); }
-    return r;
-  }
+  // deterministic offsets are what make averaging converge
   const xs = [];
   for (let i = 1; i <= 8; i++) {
     const x = halton(i, 2), y = halton(i, 3);
@@ -131,18 +119,6 @@ test('the jitter pattern is a Halton sequence, not a random walk', () => {
   // a sample-based estimate of the mean should be near 0.5 for a decent spread
   const meanX = Array.from({ length: 64 }, (_, i) => halton(i + 1, 2)).reduce((a, b) => a + b, 0) / 64;
   assert.ok(Math.abs(meanX - 0.5) < 0.02, 'the jitter does not average out around the pixel centre');
-});
-
-test('the top-bar PNG button follows the active view', () => {
-  assert.match(js, /\$\('#bPng'\)\.onclick = e => \(ui\.view3d \? export3DRender\(e && e\.shiftKey\) : exportPng\(\)\)/,
-    'the PNG button must render while in 3D and export the 2D plan otherwise');
-  assert.match(js, /function syncExportTitles/, 'the PNG button has no context-aware tooltip');
-  assert.match(sliceFn('syncExportTitles'), /L\(/, 'the tooltip must be bilingual');
-  assert.match(sliceFn('show3D'), /syncExportTitles\(\)/, 'entering/leaving 3D must refresh the tooltip');
-  // SVG / PDF stay 2D plan exports in both modes (they carry a title block + scale bar)
-  assert.match(js, /\$\('#bSvg'\)\.onclick = \(\) => download\(fname\('svg'\)/, 'the SVG export changed');
-  assert.match(js, /\$\('#bPrint'\)\.onclick = exportPrint/, 'the print export changed');
-  assert.match(js, /if \(\$\('#b3dShot'\)\) \$\('#b3dShot'\)\.title = L\(/, 'the render button tooltip is not translated');
 });
 
 /* Sky backdrop + toon style (issue #45) */

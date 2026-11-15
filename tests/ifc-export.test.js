@@ -5,15 +5,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js').replace(/\r\n/g, '\n');
 
-function sliceFunc(name) {
-  const start = src.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, `function ${name} not found in app.js`);
-  return src.slice(start, src.indexOf('\n}', start) + 2);
-}
+const sliceFunc = name => fnSrcOf(src, name);
 
 function block(begin, end) {
   const a = src.indexOf(begin), b = src.indexOf(end);

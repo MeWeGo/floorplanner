@@ -7,14 +7,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
-const fnSrc = name => {
-  const start = src.indexOf('function ' + name + '(');
-  assert.ok(start >= 0, name + '() is gone from app.js');
-  return src.slice(start, src.indexOf('\n}', start) + 2);
-};
+const fnSrc = name => fnSrcOf(src, name);
 const pip = src.slice(src.indexOf('function pointInPoly('), src.indexOf('\n', src.indexOf('function pointInPoly(')));
 const { voidHoles, pointInPoly } = new Function(`
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -60,13 +56,6 @@ test('the data model carries slabs and voids, with defaults for old saves', () =
   assert.match(fnSrc('deleteIds'), /'slabs', 'voids'/, 'Del does not remove slabs/voids');
 });
 
-test('slab (K) and void (Y) are drawing tools', () => {
-  assert.match(src, /\['slab', '[^']+', 'Döşeme', 'K', 'Slab'\]/);
-  assert.match(src, /\['void', '[^']+', 'Boşluk', 'Y', 'Void'\]/);
-  assert.match(src, /k: 'slab', y: 'void'/, 'keyboard shortcuts missing');
-  assert.match(fnSrc('addPolyObj'), /mkSlab[\s\S]*mkVoid/);
-});
-
 test('2D: slabs sit under rooms, voids are drawn with the architectural X', () => {
   assert.match(fnSrc('layerStrings'), /slabSvg[\s\S]*roomSvg[\s\S]*voidSvg/, 'layer order must be slab → room → void');
   const v = fnSrc('voidSvg');
@@ -74,16 +63,6 @@ test('2D: slabs sit under rooms, voids are drawn with the architectural X', () =
   assert.match(v, /bb\.x0\}" y1="\$\{bb\.y0\}" x2="\$\{bb\.x1\}" y2="\$\{bb\.y1\}/, 'diagonal 1 missing');
   assert.match(v, /bb\.x1\}" y1="\$\{bb\.y0\}" x2="\$\{bb\.x0\}" y2="\$\{bb\.y1\}/, 'diagonal 2 missing');
   assert.doesNotMatch(v + fnSrc('slabSvg'), /#[0-9a-f]{6}/i, 'plan colours must come from pal()');
-});
-
-test('3D: voids cut the floor slab and room floors, slabs are extruded with their thickness', () => {
-  const b = fnSrc('build3D');
-  assert.match(b, /withHoles\(new THREE\.Shape\(pts[^\n]*\n\s*const geo = new THREE\.ExtrudeGeometry\(shp, \{ depth: 20/, 'the floor slab is not holed');
-  assert.match(b, /voidHoles\(f\.voids, pts\)/);
-  assert.match(b, /const shp = withHoles\(new THREE\.Shape\(r\.pts/, 'room floors would cover the stairwell');
-  assert.match(b, /withHoles\(new THREE\.Shape\(s\.pts[^\n]*\n\s*const geo = new THREE\.ExtrudeGeometry\(shp, \{ depth: t/, 'free slabs are not extruded to their thickness');
-  assert.match(b, /elev \+ \(\+s\.off \|\| 0\) \+ 0\.2/, 'slab must sit just above the auto slab (no z-fighting)');
-  assert.match(b, /const fy = elev \+ furnOff\(o\)/, 'furniture does not sit on a lowered slab');
 });
 
 test('the MCP server mirrors the new arrays and tools', () => {

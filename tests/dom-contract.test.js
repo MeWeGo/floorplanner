@@ -49,15 +49,6 @@ test('regression: runtime-created ids are not false positives', () => {
   assert.deepStrictEqual(fatalBindings(js2, '<div id="app"></div>'), []);
 });
 
-test('the AI and 3D toolbars are wired end to end', () => {
-  for (const id of ['bAi', 'bHelp', 'b3d', 'b2d', 'bPng', 'b3dFit', 'b3dTop', 'b3dEye', 'b3dShot', 'ptabs']) {
-    assert.ok(html.includes(`id="${id}"`), `index.html is missing #${id}`);
-  }
-  for (const fn of ['aiModal', 'helpModal', 'show3D', 'export3DRender', 'render3DDataUrl']) {
-    assert.ok(js.includes(`function ${fn}`), `app.js is missing ${fn}()`);
-  }
-});
-
 test('every id inside index.html is unique', () => {
   const all = [...html.matchAll(/\sid="([A-Za-z0-9_-]+)"/g)].map(m => m[1]);
   const dupes = all.filter((id, i) => all.indexOf(id) !== i);

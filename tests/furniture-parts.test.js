@@ -3,17 +3,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { spawn } = require('node:child_process');
-const path = require('node:path');
-const { ROOT, read } = require('./helpers/repo');
+const { read, markerBlock, mcpClient } = require('./helpers/repo');
 
 const appJs = read('app.js').replace(/\r\n/g, '\n');
 const serverJs = read('mcp/server.js').replace(/\r\n/g, '\n');
-const engineOf = src => {
-  const a = src.indexOf('/* PARTS-ENGINE:BEGIN'), b = src.indexOf('/* PARTS-ENGINE:END */');
-  assert.ok(a >= 0 && b > a, 'PARTS-ENGINE block missing');
-  return src.slice(a, b);
-};
+const engineOf = src => markerBlock(src, 'PARTS-ENGINE');
 // eslint-disable-next-line no-new-func
 const E = new Function(engineOf(appJs) + '\nreturn { PARTS_V, PARTS_MAX, cleanPart, cleanParts, partIssues, partBounds, partsScale, validateParts, billiardParts };')();
 
@@ -103,27 +97,7 @@ test('app wiring: defaults on load, 2D / 3D renderers, catalogue, presets, mirro
 });
 
 /* ---------- MCP round-trip ---------- */
-function client() {
-  const proc = spawn(process.execPath, [path.join(ROOT, 'mcp', 'server.js')], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
-  const pending = new Map(); let nextId = 1, buf = '';
-  proc.stdout.setEncoding('utf8');
-  proc.stdout.on('data', chunk => {
-    buf += chunk; let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-      if (!line) continue;
-      let msg; try { msg = JSON.parse(line); } catch (e) { continue; }
-      if (msg.id != null && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-    }
-  });
-  const call = (method, params) => new Promise((resolve, reject) => {
-    const id = nextId++, t = setTimeout(() => reject(new Error('timeout on ' + method)), 10000);
-    pending.set(id, msg => { clearTimeout(t); resolve(msg); });
-    proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-  });
-  const tool = async (name, args) => { const r = await call('tools/call', { name, arguments: args || {} }); return { err: r.result.isError, text: r.result.content[0].text }; };
-  return { call, tool, stop: () => proc.kill() };
-}
+const client = mcpClient;
 
 test('MCP: a billiards table is built as ONE furniture item from components', async t => {
   const c = client(); t.after(() => c.stop());

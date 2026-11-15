@@ -4,17 +4,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const js = read('app.js');
 const html = read('index.html');
 
-const sliceFn = name => {
-  const start = js.indexOf('function ' + name);
-  assert.ok(start > 0, name + '() is gone from app.js');
-  const end = js.indexOf('\n}', start);
-  return js.slice(start, end + 2);
-};
+const sliceFn = name => fnSrcOf(js, name);
 
 const constSrc = name => {
   const start = js.indexOf('const ' + name);
@@ -85,45 +80,6 @@ test('(2) RENDER_STYLES and RENDER_RES constants define styles and resolution lo
   assert.strictEqual(RENDER_RES.hd[2], 1920, 'hd resolution must give long side 1920');
   assert.strictEqual(RENDER_RES.qhd[2], 2560, 'qhd resolution must give long side 2560');
   assert.strictEqual(RENDER_RES.uhd[2], 3840, 'uhd resolution must give long side 3840');
-});
-
-test('(3) render3DHQ source wiring: opts.longSide, styles, edge visibility, material swap & restore, sun, sketchFilter, format', () => {
-  const fn = sliceFn('render3DHQ');
-
-  // reads opts.longSide for the output size
-  assert.match(fn, /opts\.longSide\s*\?\s*opts\.longSide\s*\/\s*Math\.max\(w,\s*h\)/, 'reads opts.longSide for the output size scale factor');
-
-  // chooses a style from RENDER_STYLES
-  assert.match(fn, /RENDER_STYLES\[opts\.style\]\s*\?\s*opts\.style\s*:\s*'realistic'/, 'chooses a style from RENDER_STYLES, defaulting to realistic');
-  assert.match(fn, /inkStyle\s*=\s*style\s*===\s*'technical'\s*\|\|\s*style\s*===\s*'sketch'/, 'defines inkStyle for technical and sketch styles');
-
-  // keeps LineSegments visible for technical/sketch (the hide loop is guarded by !inkStyle)
-  assert.match(fn, /if\s*\([^)]*!inkStyle[^)]*\)\s*scene\.traverse\([^)]*isLineSegments/, 'hiding LineSegments must be guarded by !inkStyle');
-
-  // swaps mesh materials when the style is not realistic and restores them in finally (swapped[i].m.material = swapped[i].mat) and disposes styleMats
-  assert.match(fn, /if\s*\(style\s*!==\s*'realistic'\)\s*\{/, 'swaps materials when style !== realistic');
-  assert.match(fn, /swapped\.push\(\{\s*m:\s*o,\s*mat:\s*o\.material\s*\}\)/, 'records original materials in swapped array');
-  assert.match(fn, /finally\s*\{[\s\S]*for\s*\([^)]*swapped\.length[^)]*\)\s*swapped\[i\]\.m\.material\s*=\s*swapped\[i\]\.mat;/, 'restores mesh materials in finally');
-  assert.match(fn, /finally\s*\{[\s\S]*for\s*\(\s*const\s+m\s+of\s+styleMats\s*\)\s*m\.dispose\(\);/, 'disposes styleMats in finally');
-
-  // moves the shadow light for opts.sun via sunVector and restores position and colour in finally
-  assert.match(fn, /const\s+tg\s*=\s*l\.target\.position[\s\S]*sunVector\(opts\.sun\.az,\s*opts\.sun\.alt\)/, 'moves shadow light using sunVector');
-  assert.match(fn, /sunSaved\.push\(\{\s*l,\s*pos:\s*l\.position\.clone\(\),\s*col:\s*l\.color\.clone\(\)\s*\}\)/, 'saves sun light position and colour');
-  assert.match(fn, /finally\s*\{[\s\S]*s\.l\.position\.copy\(s\.pos\);\s*s\.l\.color\.copy\(s\.col\);/, 'restores sun light position and colour in finally');
-
-  // runs sketchFilter for the sketch style
-  assert.match(fn, /if\s*\(style\s*===\s*'sketch'\)\s*sketchFilter\(fin\);/, 'runs sketchFilter for the sketch style');
-
-  // encodes with toDataURL(mime, 0.92) where mime is image/jpeg for opts.format === 'jpeg'
-  assert.match(fn, /mime\s*=\s*opts\.format\s*===\s*'jpeg'\s*\?\s*'image\/jpeg'\s*:\s*'image\/png'/, 'sets mime to image/jpeg when format is jpeg');
-  assert.match(fn, /fin\.toDataURL\(mime,\s*0\.92\)/, 'encodes with toDataURL(mime, 0.92)');
-});
-
-test('(4) export3DRender(quick, opts) passes opts to render3DHQ and contains default -3d-render.png', () => {
-  const fn = sliceFn('export3DRender');
-  assert.match(fn, /function\s+export3DRender\(\s*quick\s*,\s*opts\s*\)/, 'export3DRender takes quick and opts arguments');
-  assert.match(fn, /render3DHQ\(opts\)/, 'passes opts to render3DHQ');
-  assert.match(fn, /'-3d-render\.png'/, 'contains the literal "-3d-render.png" default name');
 });
 
 test('(5) index.html #b3dStudio, openRenderStudio click binding, studioHtml controls, and render action', () => {

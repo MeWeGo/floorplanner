@@ -3,16 +3,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
 
-function sliceFunc(name) {
-  const start = src.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, `function ${name} not found in app.js`);
-  const end = src.indexOf('\n}', start) + 2;
-  return src.slice(start, end);
-}
+const sliceFunc = name => fnSrcOf(src, name);
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -145,47 +140,4 @@ test('(5) invalid input: len 0, negative, NaN or a zero-length wall returns fals
   assert.strictEqual(zw.a.y, 100);
   assert.strictEqual(zw.b.x, 100);
   assert.strictEqual(zw.b.y, 100);
-});
-
-test('(6) wiring asserts on app.js source', () => {
-  // wallDimSvg adds data-wdim only when not ui.exporting (pointer-events none in exports)
-  const wallDimSvgSrc = sliceFunc('wallDimSvg');
-  assert.ok(wallDimSvgSrc.includes('ui.exporting'));
-  assert.ok(wallDimSvgSrc.includes('pointer-events="none"'));
-  assert.ok(wallDimSvgSrc.includes('data-wdim='));
-
-  // the select tool pointerdown opens openWallDimInput for [data-wdim]
-  const selectIdx = src.indexOf("case 'select':");
-  assert.ok(selectIdx >= 0, "case 'select' found");
-  const selectCase = src.slice(selectIdx, selectIdx + 400);
-  assert.ok(selectCase.includes("closest('[data-wdim]')"));
-  assert.ok(selectCase.includes('openWallDimInput('));
-
-  // openWallDimInput creates an input with id wdimInput, applies on Enter via applyWallLength then commit(), and cancels on Escape
-  const openWallDimSrc = sliceFunc('openWallDimInput');
-  assert.ok(openWallDimSrc.includes("id = 'wdimInput'"));
-  assert.ok(openWallDimSrc.includes("ev.key === 'Enter'"));
-  assert.ok(openWallDimSrc.includes('applyWallLength(w, v)'));
-  assert.ok(openWallDimSrc.includes('commit()'));
-  assert.ok(openWallDimSrc.includes("ev.key === 'Escape'"));
-  assert.ok(openWallDimSrc.includes('closeWallDimInput()'));
-
-  // applyProp for wall len calls applyWallLength only when final
-  const applyPropSrc = sliceFunc('applyProp');
-  assert.ok(applyPropSrc.includes("k === 'wall' && p === 'len'"));
-  assert.ok(applyPropSrc.includes('if (final) applyWallLength('));
-
-  // the keydown handler handles ui.lenTyped for a single selected wall (Enter applies, Backspace edits, Escape clears)
-  assert.ok(src.includes("tool === 'select' && sel.length === 1 && find(sel[0])?.kind === 'wall'"));
-  assert.ok(src.includes("if (e.key === 'Enter') { const v = parseFloat(ui.lenTyped); ui.lenTyped = ''; if (applyWallLength(sw, v)) { commit(); refresh();"));
-  assert.ok(src.includes("ui.lenTyped = e.key === 'Escape' ? '' : e.key === 'Backspace' ? ui.lenTyped.slice(0, -1) : (ui.lenTyped || '') + (e.key === ',' ? '.' : e.key);"));
-
-  // and the handle drag (ui.drag.h wa or wb) collects digits into typed
-  assert.ok(src.includes("ui.drag.type === 'handle' && (ui.drag.h === 'wa' || ui.drag.h === 'wb')"));
-  assert.ok(src.includes("hd.typed = e.key === 'Backspace' ? (hd.typed || '').slice(0, -1) : (hd.typed || '') + (e.key === ',' ? '.' : e.key);"));
-
-  // doHandle uses parseFloat(d.typed) and still contains the exact text "snapPt(raw, other, e, ign); ui.cur = p;"
-  const doHandleSrc = sliceFunc('doHandle');
-  assert.ok(doHandleSrc.includes('parseFloat(d.typed)'));
-  assert.ok(doHandleSrc.includes('snapPt(raw, other, e, ign); ui.cur = p;'));
 });

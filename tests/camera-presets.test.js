@@ -1,57 +1,36 @@
 /* 3D camera presets must actually look AT the plan.
    The "eye" preset shipped pointing outside the building: the plan spans
    cz ± d/2, but the camera sat at cz + 0.95·sz, so it stared at an exterior
-   wall from outside. This is a pure-geometry check — no browser needed. */
+   wall from outside. These run the real set3DCam() / eyeRoom() cut out of
+   app.js against a stub camera — no browser needed. */
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
-/** Mirror of eyeRoom(): bounding box of the biggest room, or null. */
-function eyeRoom(rooms) {
-  if (!rooms || !rooms.length) return null;
-  let best = null, bestArea = 0;
-  for (const r of rooms) {
-    if (!r.pts || r.pts.length < 3) continue;
-    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-    for (const p of r.pts) {
-      if (p.x < x0) x0 = p.x;
-      if (p.x > x1) x1 = p.x;
-      if (p.y < z0) z0 = p.y;
-      if (p.y > z1) z1 = p.y;
-    }
-    const a = (x1 - x0) * (z1 - z0);
-    if (a > bestArea) { bestArea = a; best = { x0, x1, z0, z1, area: a }; }
-  }
-  return best && best.area > 10000 ? best : null;
+const src = read('app.js');
+const vec = () => ({ x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }, clone() { return { ...this }; } });
+
+/** Runs the real set3DCam(kind) with T3.fit = fit and the given rooms on floor 0; returns { pos, target, log }. */
+function runPreset(kind, fit, rooms = []) {
+  const log = [];
+  const T3 = { fit, ortho: false, cam: { position: vec() }, ctl: { target: vec(), update: () => log.push('update') } };
+  const fn = new Function('T3', 'P', 'log', `
+    let fi = 0;
+    const ELEV_DIRS = { north: { x: 0, y: -1 }, east: { x: 1, y: 0 }, south: { x: 0, y: 1 }, west: { x: -1, y: 0 } };
+    const exitWalk = () => log.push('exitWalk'), enterWalk = () => log.push('enterWalk'), fitOrtho = () => log.push('fitOrtho');
+    const setProjection = o => { log.push('ortho:' + o); T3.ortho = o; };
+    const camAlong = (n, c, span, h) => log.push({ camAlong: n, c, span, h });
+    ${fnSrcOf(src, 'eyeRoom')}
+    ${fnSrcOf(src, 'set3DCam')}
+    return { set3DCam, eyeRoom };`);
+  const api = fn(T3, { wallH: 270, floors: [{ rooms }] }, log);
+  if (kind) api.set3DCam(kind);
+  const p = T3.cam.position, t = T3.ctl.target;
+  return { pos: [p.x, p.y, p.z], target: [t.x, t.y, t.z], log, T3, api };
 }
-
-/**
- * Mirror of set3DCam() in app.js. Keep in sync with the source; the last test
- * asserts the constants it can read back, so a silent revert fails here.
- */
-function presets(f, rooms) {
-  const { cx, cz, sz, elev } = f;
-  const x0 = f.x0 != null ? f.x0 : cx - sz / 2, x1 = f.x1 != null ? f.x1 : cx + sz / 2;
-  const z0 = f.z0 != null ? f.z0 : cz - sz / 2, z1 = f.z1 != null ? f.z1 : cz + sz / 2;
-  const w = Math.max(x1 - x0, 200), d = Math.max(z1 - z0, 200);
-  const dist = Math.max(w, d) * 1.15 + 300;
-
-  const r = eyeRoom(rooms);
-  const px0 = r ? r.x0 : x0, px1 = r ? r.x1 : x1;
-  const pz0 = r ? r.z0 : z0, pz1 = r ? r.z1 : z1;
-  const eCx = (px0 + px1) / 2;
-  const longZ = (pz1 - pz0) >= (px1 - px0);
-  const eye = longZ
-    ? { pos: [eCx, elev + 165, pz1 - Math.min(60, (pz1 - pz0) / 4)], target: [eCx, elev + 115, pz0 + (pz1 - pz0) * 0.35] }
-    : { pos: [px1 - Math.min(60, (px1 - px0) / 4), elev + 165, (pz0 + pz1) / 2], target: [px0 + (px1 - px0) * 0.35, elev + 115, (pz0 + pz1) / 2] };
-
-  return {
-    top: { pos: [cx, elev + sz * 2.1, cz + 1], target: [cx, 0, cz] },
-    eye,
-    fit: { pos: [cx + w * 0.35, elev + dist * 0.85, cz + dist], target: [cx, elev + 40, cz] },
-  };
-}
+const presets = (f, rooms) => ({ top: runPreset('top', f, rooms), eye: runPreset('eye', f, rooms), fit: runPreset('fit', f, rooms) });
+const eyeRoom = rooms => runPreset(null, {}, rooms).api.eyeRoom();
 
 const cases = [
   { name: 'small flat  ', cx: 500, cz: 400, sz: 900, elev: 0, x0: 50, x1: 950, z0: 0, z1: 800 },
@@ -122,21 +101,6 @@ test('every preset keeps a usable near/far distance', () => {
   }
 });
 
-test('the source keeps the fixed layout (guards against a revert)', () => {
-  const js = read('app.js');
-  const start = js.indexOf('function set3DCam');
-  assert.ok(start > 0, 'set3DCam() is gone');
-  const body = js.slice(start, js.indexOf('\n}\n', start));
-
-  // The bug: standing beyond the far edge, cz + ~1.0 * sz.
-  assert.doesNotMatch(body, /cz \+ sz \* 0\.9[05]/, 'the eye camera is outside the plan again');
-  assert.match(body, /eyeRoom\(\)/, 'eye preset should stand in the largest room');
-  assert.match(body, /elev \+ 165/, 'eye height changed — update presets() in this test too');
-  assert.match(js, /function eyeRoom\(\)/, 'eyeRoom() helper is gone');
-  // and the bounds must reach set3DCam at all
-  assert.match(js, /T3\.fit = \{[^}]*\bz0:/, 'T3.fit must expose z0/z1 bounds for the presets');
-});
-
 test('eyeRoom picks the largest room and ignores slivers', () => {
   const rooms = [
     { pts: [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 400 }, { x: 0, y: 400 }] },       // 80 000
@@ -149,4 +113,38 @@ test('eyeRoom picks the largest room and ignores slivers', () => {
   assert.strictEqual(r.x1, 900);
   assert.strictEqual(eyeRoom([]), null);
   assert.strictEqual(eyeRoom([{ pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }] }]), null, 'slivers must not be used');
+});
+
+test('the eye preset stands in the largest room, not the bounding box of the building', () => {
+  const f = cases[1];
+  const room = [{ pts: [{ x: 600, y: 200 }, { x: 1400, y: 200 }, { x: 1400, y: 700 }, { x: 600, y: 700 }] }];
+  const p = runPreset('eye', f, room);
+  assert.ok(p.pos[0] > 600 && p.pos[0] < 1400 && p.pos[2] > 200 && p.pos[2] < 700, 'camera is not inside the room: ' + p.pos);
+  assert.ok(p.log.includes('enterWalk'), 'the eye preset starts walk mode (#46)');
+  assert.ok(!p.log.includes('exitWalk'), 'the eye preset must not leave walk mode first');
+});
+
+test('iso switches to the parallel camera and looks from the south-east at 35° (#74)', () => {
+  const f = cases[0];
+  const p = runPreset('iso', f);
+  assert.ok(p.log.includes('ortho:true'), 'iso must switch to the orthographic camera');
+  const dx = p.pos[0] - p.target[0], dy = p.pos[1] - p.target[1], dz = p.pos[2] - p.target[2];
+  assert.ok(dx > 0 && dz > 0 && Math.abs(dx - dz) < 1e-6, 'iso looks along the 45° diagonal from +x / +z');
+  const alt = Math.atan2(dy, Math.hypot(dx, dz)) * 180 / Math.PI;
+  assert.ok(Math.abs(alt - 35.26) < 0.1, 'iso elevation is ' + alt.toFixed(2) + '°');
+  assert.ok(p.log.includes('fitOrtho'));
+});
+
+test('facade presets hand off to camAlong with the facade width', () => {
+  const f = cases[1];
+  const north = runPreset('north', f).log.find(x => x.camAlong);
+  const east = runPreset('east', f).log.find(x => x.camAlong);
+  assert.ok(north && east, 'facade presets no longer use camAlong');
+  assert.strictEqual(north.span, f.x1 - f.x0, 'a north facade spans the x extent');
+  assert.strictEqual(east.span, f.z1 - f.z0, 'an east facade spans the z extent');
+  assert.deepStrictEqual(north.c, { x: (f.x0 + f.x1) / 2, y: (f.z0 + f.z1) / 2 });
+});
+
+test('without T3.fit set3DCam does nothing', () => {
+  assert.doesNotThrow(() => runPreset('fit', undefined));
 });

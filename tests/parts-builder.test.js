@@ -6,7 +6,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock } = require('./helpers/repo');
 
 const src = read('app.js').replace(/\r\n/g, '\n');
 
@@ -18,11 +18,7 @@ const lineSrc = name => {
   return src.slice(start, src.indexOf('\n', start));
 };
 
-const engineOf = text => {
-  const a = text.indexOf('/* PARTS-ENGINE:BEGIN'), b = text.indexOf('/* PARTS-ENGINE:END */');
-  assert.ok(a >= 0 && b > a, 'PARTS-ENGINE block missing');
-  return text.slice(a, b);
-};
+const engineOf = text => markerBlock(text, 'PARTS-ENGINE');
 
 const blocksSrc = src.slice(src.indexOf('const FS_BLOCKS = ['), src.indexOf('function pbStart('));
 const viewsSrc = src.slice(src.indexOf('const FS_VIEWS = ['), src.indexOf('function fsProj('))

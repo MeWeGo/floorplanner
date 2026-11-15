@@ -2,15 +2,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, markerBlock } = require('./helpers/repo');
 
 const appJs = read('app.js').replace(/\r\n/g, '\n');
 
-const blockOf = src => {
-  const a = src.indexOf('/* IFC-IMPORT:BEGIN'), b = src.indexOf('/* IFC-IMPORT:END */');
-  assert.ok(a >= 0 && b > a, 'IFC-IMPORT block missing');
-  return src.slice(a, b);
-};
+const blockOf = src => markerBlock(src, 'IFC-IMPORT');
 
 // eslint-disable-next-line no-new-func
 const { ifcToProject } = new Function(blockOf(appJs) + '; return { ifcToProject };')();

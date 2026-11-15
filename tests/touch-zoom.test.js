@@ -3,17 +3,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const css = read('style.css');
 
-function sliceFunc(name) {
-  const start = src.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, `function ${name} not found in app.js`);
-  const end = src.indexOf('\n}', start) + 2;
-  return src.slice(start, end);
-}
+const sliceFunc = name => fnSrcOf(src, name);
 
 function makeHarness(initialTool = 'select') {
   const blockStart = src.indexOf('// Dokunmatik iki parmakla yakınlaştırma ve kaydırma (#80)');

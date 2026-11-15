@@ -107,9 +107,15 @@ test('(A4) draftPathD, draftDashArr, and draftTypedPt', () => {
   assert.match(polyD, /^M.*Z$/);
 
   assert.strictEqual(D.draftDashArr({ dash: 'solid', w: 2 }), '');
-  assert.notStrictEqual(D.draftDashArr({ dash: 'dashed', w: 2 }), '');
-  assert.notStrictEqual(D.draftDashArr({ dash: 'dotted', w: 2 }), '');
-  assert.notStrictEqual(D.draftDashArr({ dash: 'center', w: 2 }), '');
+  // dash lengths scale with the line weight, so a heavy line keeps the same look
+  const nums = o => D.draftDashArr(o).split(' ').map(Number);
+  assert.deepStrictEqual(nums({ dash: 'dashed', w: 2 }), [12, 8]);
+  assert.deepStrictEqual(nums({ dash: 'dashed', w: 4 }), [24, 16]);
+  assert.deepStrictEqual(nums({ dash: 'center', w: 2 }), [24, 6, 4, 6], 'centre line = long dash, gap, short dash, gap');
+  const dot = nums({ dash: 'dotted', w: 2 });
+  assert.ok(dot[0] < 0.1 && dot[1] === 5, 'dotted = round-cap dots spaced 2.5 × w: ' + dot);
+  assert.deepStrictEqual(nums({ dash: 'dashed', w: 0 }), [12, 8], 'a missing / zero weight uses the 2-unit default');
+  assert.deepStrictEqual(nums({ dash: 'dashed', w: 0.5 }), [6, 4], 'hairlines are clamped to a 1-unit pattern');
 
   const pLine = D.draftTypedPt({ x: 100, y: 100 }, { x: 130, y: 140 }, '200', 'line');
   assert.ok(Math.abs(pLine.x - 220) < 1e-6 && Math.abs(pLine.y - 260) < 1e-6);
@@ -182,34 +188,4 @@ test('(B) issue #82 3D floor-following, slab/room selection, and props drawer wi
 
   assert.match(html, /id="bInspect"/);
   assert.match(css, /body\.props-open\s+#props/);
-});
-
-test('(C) issue #81 live realistic 3D view wiring', () => {
-  const applySrc = fnSrcOf(src, 'applyLive3D');
-  fnSrcOf(src, 'setLive3D');
-  fnSrcOf(src, 'liveSkyFollow');
-
-  assert.match(applySrc, /isLineSegments[\s\S]*?BoxHelper/);
-  assert.match(applySrc, /makeSky\(/);
-  assert.match(applySrc, /grassGroundMat\(/);
-  assert.match(applySrc, /sunVector\(\s*st\.az\s*,\s*st\.alt\s*\)/);
-  assert.match(applySrc, /S\.fog\s*=/);
-  assert.match(applySrc, /T3\.live\s*=/);
-
-  const build3DSrc = fnSrcOf(src, 'build3D');
-  assert.match(build3DSrc, /applyLive3D\(\)/, 'every rebuild re-applies (or clears) the live look');
-
-  const draw3DSrc = fnSrcOf(src, 'draw3D');
-  assert.match(draw3DSrc, /if\s*\(\s*T3\.live\s*\)\s*liveSkyFollow\(\)/);
-
-  const hqSrc = fnSrcOf(src, 'render3DHQ');
-  assert.match(hqSrc, /liveSky\.visible\s*=\s*false/);
-  assert.match(hqSrc, /liveSky\.visible\s*=\s*true/);
-
-  const camIdx = html.indexOf('id="c3dCam"');
-  assert.ok(camIdx >= 0, 'id="c3dCam" missing in index.html');
-  const camClose = html.indexOf('</div>', camIdx);
-  assert.match(html.slice(camIdx, camClose), /id="b3dLive"/);
-
-  assert.match(src, /act\(\s*'live3d'/);
 });

@@ -1,14 +1,13 @@
 /* AutoCAD-style 2D Outline / Wireframe view mode (Çizgisel / CAD).
    Tests the real SVG builders and palette extracted from app.js against
-   both normal (solid) and outline (ui.outline = true) modes, plus DOM and
-   keyboard / command-palette wiring. */
+   both normal (solid) and outline (ui.outline = true) modes, plus the view switch and
+   its J / command-palette bindings. */
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
 const { read, fnSrcOf, wallTopSrc } = require('./helpers/repo');
 
 const src = read('app.js');
-const html = read('index.html');
 const fnSrc = name => fnSrcOf(src, name);
 
 const env = new Function(`
@@ -221,12 +220,31 @@ test('furniture and parts render unfilled with CAD detail linework and no emoji 
   assert.ok(pSvg.includes('fill="none"'), 'multi-part furniture renders unfilled outlines in outline mode');
 });
 
-test('UI buttons, footer checkbox, command palette and U shortcut are wired', () => {
-  assert.ok(html.includes('id="bCad"'), 'index.html must include #bCad button');
-  assert.ok(html.includes('id="cOutline"'), 'index.html must include #cOutline checkbox');
-  assert.ok(html.includes('id="lblOutline"'), 'index.html must include #lblOutline label');
-  assert.match(src, /function syncViewSwitch\(/);
-  assert.match(src, /function setOutline\(/);
+test('setOutline() switches the 2D / CAD / 3D buttons and the footer checkbox; leaving 3D goes to the outline view', () => {
+  const el = () => { const on = new Set(); return { checked: false, on, classList: { toggle: (c, v) => (v ? on.add(c) : on.delete(c)) } }; };
+  const run = new Function('ui', 'els', `
+    const calls = [];
+    const $ = q => els[q.slice(1)];
+    const render = () => calls.push('render');
+    const show3D = on => { calls.push('show3D:' + on); ui.view3d = on; syncViewSwitch(); };
+    ${fnSrc('syncViewSwitch')}
+    ${fnSrc('setOutline')}
+    return { setOutline, calls };`);
+  const els = { b2d: el(), bCad: el(), b3d: el(), cOutline: el() };
+  const ui = { view3d: false, outline: false };
+  const api = run(ui, els);
+  api.setOutline(true);
+  assert.deepStrictEqual([els.b2d.on.has('on'), els.bCad.on.has('on'), els.b3d.on.has('on')], [false, true, false]);
+  assert.strictEqual(els.cOutline.checked, true, 'the footer checkbox follows the mode');
+  assert.deepStrictEqual(api.calls, ['render']);
+  api.setOutline(false);
+  assert.deepStrictEqual([els.b2d.on.has('on'), els.bCad.on.has('on'), els.cOutline.checked], [true, false, false]);
+  // from 3D: picking the CAD view leaves 3D instead of only re-rendering the hidden 2D canvas
+  ui.view3d = true; api.calls.length = 0;
+  api.setOutline(true);
+  assert.deepStrictEqual(api.calls, ['show3D:false']);
+  assert.strictEqual(els.bCad.on.has('on'), true);
+  // the J key and the command palette both toggle it
   assert.match(src, /if \(k === 'j'\) \{ setOutline\(!ui\.outline\); return; \}/);
   assert.match(src, /act\('outline',[^\n]+setOutline\(!ui\.outline\)/);
 });

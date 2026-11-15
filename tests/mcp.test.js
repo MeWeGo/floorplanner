@@ -3,38 +3,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { spawn } = require('node:child_process');
-const path = require('node:path');
-const { ROOT, read } = require('./helpers/repo');
+const { read, mcpClient } = require('./helpers/repo');
 
-const SERVER = path.join(ROOT, 'mcp', 'server.js');
 
-/** Minimal JSON-RPC client over the server's stdio. */
-function client() {
-  const proc = spawn(process.execPath, [SERVER], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
-  const pending = new Map();
-  let nextId = 1, buf = '';
-  proc.stdout.setEncoding('utf8');
-  proc.stdout.on('data', chunk => {
-    buf += chunk;
-    let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).trim();
-      buf = buf.slice(i + 1);
-      if (!line) continue;
-      let msg;
-      try { msg = JSON.parse(line); } catch (e) { continue; }
-      if (msg.id != null && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-    }
-  });
-  const call = (method, params) => new Promise((resolve, reject) => {
-    const id = nextId++;
-    const t = setTimeout(() => reject(new Error(`timeout on ${method}`)), 10000);
-    pending.set(id, msg => { clearTimeout(t); resolve(msg); });
-    proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-  });
-  return { proc, call, stop: () => proc.kill() };
-}
+const client = mcpClient;
 
 const text = res => res.result.content[0].text;
 

@@ -157,8 +157,50 @@ function wallTopSrc(js) {
   return js.slice(s, js.indexOf('\n', s)) + '\n' + js.slice(a, b);
 }
 
+/** Text between `/* TAG:BEGIN` and `/* TAG:END *\/` — the blocks pasted verbatim into app.js and mcp/server.js. */
+function markerBlock(src, tag) {
+  const a = src.indexOf('/* ' + tag + ':BEGIN'), b = src.indexOf('/* ' + tag + ':END */');
+  if (a < 0 || b < a) throw new Error(tag + ' block missing');
+  return src.slice(a, b).replace(/\r\n/g, '\n');
+}
+
+/**
+ * Minimal JSON-RPC client over mcp/server.js stdio.
+ * `call(method, params)` resolves with the raw message; `tool(name, args)` with `{ err, text }`.
+ */
+function mcpClient() {
+  const { spawn } = require('child_process');
+  const proc = spawn(process.execPath, [path.join(ROOT, 'mcp', 'server.js')], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+  const pending = new Map();
+  let nextId = 1, buf = '';
+  proc.stdout.setEncoding('utf8');
+  proc.stdout.on('data', chunk => {
+    buf += chunk;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch (e) { continue; }
+      if (msg.id != null && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    }
+  });
+  const call = (method, params) => new Promise((resolve, reject) => {
+    const id = nextId++;
+    const t = setTimeout(() => reject(new Error('timeout on ' + method)), 10000);
+    pending.set(id, msg => { clearTimeout(t); resolve(msg); });
+    proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+  });
+  const tool = async (name, args) => {
+    const r = await call('tools/call', { name, arguments: args || {} });
+    return { err: r.result.isError, text: r.result.content[0].text };
+  };
+  return { proc, call, tool, stop: () => proc.kill() };
+}
+
 module.exports = {
-  wallTopSrc,
+  wallTopSrc, markerBlock, mcpClient,
   ROOT, read, exists, parseJsonc, fnSrcOf,
   htmlIds, runtimeIds, domLookups, domContractViolations, fatalBindings,
 };
