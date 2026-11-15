@@ -341,7 +341,7 @@ function rotatePoint(p, c, rad) {
   const dx = p.x - c.x, dy = p.y - c.y, cs = Math.cos(rad), sn = Math.sin(rad);
   return { x: Math.round((c.x + dx * cs - dy * sn) * 100) / 100, y: Math.round((c.y + dx * sn + dy * cs) * 100) / 100 };
 }
-function rotateSelection(deg, os = selObjs(), bb = selectionBounds(os), origAll = null) {
+function rotateSelection(deg, os = unlocked(selObjs()), bb = selectionBounds(os), origAll = null) {
   if (!bb) return false;
   const c = { x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2 }, rad = deg * Math.PI / 180;
   let changed = false;
@@ -430,7 +430,7 @@ function scaleObjs(os, orig, tx, ty, sx, sy, scaleT = false) {
   }
 }
 // Seçimi bbox merkezine göre s katı ölçekle; duvar kalınlığı varsayılan olarak korunur
-function scaleSelection(sc, scaleT = false, os = selObjs()) {
+function scaleSelection(sc, scaleT = false, os = unlocked(selObjs())) {
   const bb = selectionBounds(os); if (!bb || !(sc > 0)) return false;
   const c = { x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2 }, snap = new Map();
   for (const { o } of os) snap.set(o.id, JSON.parse(JSON.stringify(o)));
@@ -442,7 +442,9 @@ function scaleSelection(sc, scaleT = false, os = selObjs()) {
 const XFORM_KINDS = new Set(['wall', 'dim', 'furn', 'text', 'room', 'slab', 'void', 'sketch', 'draft']);
 function afterXform() { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
 function flipSel(dir) {
-  const os = selObjs().filter(x => XFORM_KINDS.has(x.kind)), bb = selectionBounds(os); if (!bb) return;
+  const all = selObjs().filter(x => XFORM_KINDS.has(x.kind)), os = unlocked(all), bb = selectionBounds(os);
+  if (os.length < all.length) lockToast(all.length - os.length);
+  if (!bb) return;
   const c = { x: (bb.x0 + bb.x1) / 2, y: (bb.y0 + bb.y1) / 2 };
   if (mirrorObjs(os, c, dir === 'h' ? { x: 0, y: 1 } : { x: 1, y: 0 })) afterXform();
 }
@@ -3890,7 +3892,9 @@ function handleSvg() {
     if (kind === 'draft') s += `<path d="${draftPathD(o)}" fill="none" stroke="#f59e0b" stroke-width="${(+o.w || 2) + 4 / z}" stroke-linecap="round" stroke-linejoin="round" opacity=".45" pointer-events="none"/>`;
     if (kind === 'bg') s += `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="none" stroke="#f59e0b" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
   }
-  if (os.length === 1) {
+  for (const x of os) if (isLocked(x.o)) { const b = selectionBounds([x]); if (b) s += `<text x="${b.x1}" y="${b.y0}" font-size="${16 / z}" text-anchor="middle" dominant-baseline="central" pointer-events="none">🔒</text>`; }
+  if (os.length === 1 && isLocked(os[0].o)) { /* kilitli: tutamak yok */ }
+  else if (os.length === 1) {
     const { kind, o } = os[0];
     if (kind === 'wall') {
       const pv = o[wallPivot(o)], fr = o[wallFree(o)], L = wLen(o) || 1, ux = (fr.x - pv.x) / L, uy = (fr.y - pv.y) / L;
@@ -3923,7 +3927,7 @@ function handleSvg() {
       s += hnd(o.x + o.w / 2, o.y, 'bgN', 'ns-resize') + hnd(o.x + o.w, o.y + o.h / 2, 'bgE', 'ew-resize')
         + hnd(o.x + o.w / 2, o.y + o.h, 'bgS', 'ns-resize') + hnd(o.x, o.y + o.h / 2, 'bgW', 'ew-resize');
     }
-  } else if (os.length > 1 && os.some(x => GRESIZE[x.kind])) {
+  } else if (os.length > 1 && os.some(x => GRESIZE[x.kind]) && !os.some(x => isLocked(x.o))) {
     const bb = selectionBounds(os);
     if (bb && bb.x1 - bb.x0 > 5 && bb.y1 - bb.y0 > 5) {
       s += `<rect x="${bb.x0}" y="${bb.y0}" width="${bb.x1 - bb.x0}" height="${bb.y1 - bb.y0}" fill="none" stroke="#f59e0b" stroke-width="${1.6 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
@@ -4162,7 +4166,13 @@ function deleteIds(ids) {
   pruneGroups();
   sel = sel.filter(id => !s.has(id));
 }
-function deleteSel() { if (!sel.length) return; deleteIds(sel.filter(pickable)); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
+function deleteSel() {
+  if (!sel.length) return;
+  const ids = sel.filter(pickable), del = ids.filter(id => !isLocked(find(id)?.o));
+  if (del.length < ids.length) lockToast(ids.length - del.length);
+  if (!del.length) return;
+  deleteIds(del); commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+}
 
 /* ---------- Duvar uzunluğunu sayıyla değiştirme (issue #36) ----------
    Serbest uç (menteşeli duvarda pim sabit kalır) duvarın kendi açısı boyunca taşınır; bitişik duvar uçları
@@ -4856,7 +4866,48 @@ function stackLevels(list, kind) {
   return lv;
 }
 // Sağ tık (Seç aracı): imlecin altındaki nesnelerin listesi + katman komutları
-function closeCtxMenu() { const m = document.getElementById('ctxMenu'); if (m) m.remove(); }
+function closeCtxMenu() { const m = document.getElementById('ctxMenu'); if (m) { if (m._onClose) m._onClose(); m.remove(); } }
+/* Nesne kilidi (o.lock): kilitli nesne seçilebilir (kilidi açmak ve panelden düzenlemek için) ama fareyle / klavyeyle
+   taşınmaz, boyutlanmaz, döndürülmez, aynalanmaz, silinmez ve silgiyle silinmez; 2B ve 3B. Tutamak yerine 🔒 rozeti çizilir. */
+const isLocked = o => !!(o && o.lock);
+const unlocked = os => os.filter(x => !isLocked(x.o));
+function lockToast(n) {
+  toast(n > 1 ? L(`🔒 ${n} kilitli nesne değişmedi (kilidi panelden açın)`, `🔒 ${n} locked objects were left as they are (unlock them in the panel)`)
+    : L('🔒 Kilitli nesne değişmedi (kilidi panelden açın)', '🔒 Locked object left as it is (unlock it in the panel)'));
+}
+function toggleLockSel() {
+  const os = selObjs().filter(x => x.kind !== 'bg'); if (!os.length) return;
+  const on = !os.every(x => isLocked(x.o));
+  for (const { o } of os) { if (on) o.lock = true; else delete o.lock; }
+  commit(); refresh();
+  toast(on ? L('🔒 Kilitlendi: fareyle / klavyeyle taşınmaz, silinmez', '🔒 Locked: it cannot be moved or deleted by mouse or keys') : L('🔓 Kilit açıldı', '🔓 Unlocked'));
+}
+/* Üst üste binen nesneler: düz bir tıkta imlecin altındaki seçilebilir nesneler (üstten alta). Oda / döşeme / boşluk
+   zemindir, kapı / pencerenin kendi duvarı sayılmaz, yalnızca duvarların kesiştiği köşe sormaz. 2'den azsa [] döner. */
+function overlapIds(x, y) {
+  const objs = idsAt(x, y).filter(id => id !== 'bg').map(id => find(id)).filter(fd => fd && !['room', 'slab', 'void'].includes(fd.kind));
+  const hosts = new Set(objs.filter(fd => fd.kind === 'op').map(fd => fd.o.wall));
+  const c = objs.filter(fd => !(fd.kind === 'wall' && hosts.has(fd.o.id)));
+  return c.length < 2 || c.every(fd => fd.kind === 'wall') ? [] : c.map(fd => fd.o.id);
+}
+/** "Hangisi?" listesi: üzerine gelmek seçimi önizler, tık seçer, Esc / dışarı tık önceki seçimi geri getirir. */
+function openPickMenu(e, ids) {
+  closeCtxMenu();
+  const keep = sel.slice(), m = document.createElement('div'); m.id = 'ctxMenu'; m.className = 'ctxmenu pickmenu';
+  m.innerHTML = `<div class="cm-h">${L('Hangisi? (üstten alta)', 'Which one? (top to bottom)')}</div>`
+    + ids.map(id => `<button data-pk="${id}" class="${keep.length === 1 && keep[0] === id ? 'on' : ''}">${isLocked(find(id)?.o) ? '🔒 ' : ''}${esc(objLabel(id))}</button>`).join('')
+    + `<div class="cm-h" style="font-weight:400">${L('Ctrl + tık: sıradakine geç', 'Ctrl + click: next one down')}</div>`;
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(4, Math.min(e.clientX + 8, innerWidth - r.width - 6)) + 'px';
+  m.style.top = Math.max(4, Math.min(e.clientY + 8, innerHeight - r.height - 6)) + 'px';
+  let picked = false, shown = keep.join(); // yalnızca önizlemenin değiştirdiği seçim geri alınır (aynı anda Ctrl + tık vb. bozulmaz)
+  m._onClose = () => { if (!picked && sel.join() === shown && shown !== keep.join()) { sel = keep; refresh(); } };
+  m.addEventListener('pointerdown', ev => ev.stopPropagation());
+  m.addEventListener('pointerover', ev => { const b = ev.target.closest('[data-pk]'); if (b && !(sel.length === 1 && sel[0] === b.dataset.pk)) { sel = [b.dataset.pk]; shown = sel.join(); render(); } });
+  m.addEventListener('click', ev => { const b = ev.target.closest('[data-pk]'); if (!b) return; picked = true; sel = [b.dataset.pk]; closeCtxMenu(); refresh(); });
+  return true;
+}
 function openCtxMenu(e) {
   closeCtxMenu();
   const ids = idsAt(e.clientX, e.clientY);
@@ -4865,7 +4916,7 @@ function openCtxMenu(e) {
   let h = '';
   if (ids.length) {
     h += `<div class="cm-h">${L('Buradaki nesneler (üstten alta)', 'Objects here (top to bottom)')}</div>`;
-    h += ids.map(id => `<button data-cmsel="${id}" class="${sel.includes(id) ? 'on' : ''}">${esc(objLabel(id))}</button>`).join('');
+    h += ids.map(id => `<button data-cmsel="${id}" class="${sel.includes(id) ? 'on' : ''}">${isLocked(find(id)?.o) ? '🔒 ' : ''}${esc(objLabel(id))}</button>`).join('');
   }
   const canLayer = (ids.length || sel.length) && (sel.length ? selObjs() : [find(ids[0])]).some(x => x && LAYER_ARR[x.kind]);
   if (canLayer) {
@@ -4886,7 +4937,8 @@ function openCtxMenu(e) {
     h += `<div class="cm-sep"></div>`
       + (sel.length ? `<button data-cmed="copy">📋 ${L('Kopyala', 'Copy')} <kbd>Ctrl+C</kbd></button>` : '')
       + (ui.clip && ui.clip.length ? `<button data-cmed="paste">📥 ${L('Yapıştır', 'Paste')} <kbd>Ctrl+V</kbd></button>` : '')
-      + (sel.length ? `<button data-cmed="dup">⧉ ${L('Çoğalt', 'Duplicate')} <kbd>Ctrl+D</kbd></button><button data-cmed="del">🗑 ${L('Sil', 'Delete')} <kbd>Del</kbd></button>` : '');
+      + (sel.length ? `<button data-cmed="dup">⧉ ${L('Çoğalt', 'Duplicate')} <kbd>Ctrl+D</kbd></button><button data-cmed="del">🗑 ${L('Sil', 'Delete')} <kbd>Del</kbd></button>` : '')
+      + (sel.some(id => id !== 'bg') ? `<button data-cmed="lock">${selObjs().filter(x => x.kind !== 'bg').every(x => isLocked(x.o)) ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button>` : '');
   }
   if (!h) return;
   m.innerHTML = h; document.body.appendChild(m);
@@ -5069,8 +5121,10 @@ function cvDown(e) {
     case 'eraser': {
       const t = pickDataId(e);
       if (t) {
-        if (t.dataset.varBadge === 'group' && t.dataset.grp) deleteIds(groupMemberIds(t.dataset.grp)); // rozet = grubun tamamı
-        else deleteIds([t.dataset.id]);
+        const ids = t.dataset.varBadge === 'group' && t.dataset.grp ? groupMemberIds(t.dataset.grp) : [t.dataset.id]; // rozet = grubun tamamı
+        const del = ids.filter(id => !isLocked(find(id)?.o)); if (del.length < ids.length) lockToast(ids.length - del.length);
+        if (!del.length) return;
+        deleteIds(del);
         commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
       }
       return;
@@ -5111,7 +5165,7 @@ function cvDown(e) {
       const u = { x: (cur.x - ui.mAxis.x) / l, y: (cur.y - ui.mAxis.y) / l }, o = ui.mAxis;
       const erase = confirm(L('Orijinal nesneler silinsin mi?\n\nTamam = taşı (sil) • İptal = aynalı kopya oluştur', 'Erase the original objects?\n\nOK = move (erase) • Cancel = keep them and add a mirrored copy'));
       if (!erase) { sel = [...new Set([...sel, ...F().ops.filter(op => sel.includes(op.wall)).map(op => op.id)])]; paste(true, 0); } // duvarların kapı/pencereleriyle birlikte kopya; kopya seçili hale gelir ve aynalanır
-      mirrorObjs(selObjs().filter(x => XFORM_KINDS.has(x.kind)), o, u);
+      mirrorObjs(unlocked(selObjs().filter(x => XFORM_KINDS.has(x.kind))), o, u);
       ui.mAxis = null; tool = 'select'; ui.btn = 'select'; updateTools(); afterXform();
       return;
     }
@@ -5312,6 +5366,7 @@ function cvUp(e) {
       }
       if (fd && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; // düzenleme modunda tık düzen değiştirmez
       if (fd && fd.kind === 'room' && cycleRoomVars(fd.o)) return;
+      if (tool === 'select' && !e.fp && !e.ctrlKey && !e.metaKey) { const ov = overlapIds(e.clientX, e.clientY); if (ov.length) { refresh(); openPickMenu(e, ov); return; } }
     }
     if (d.moved) commit();
     refresh();
@@ -5328,34 +5383,36 @@ cv.addEventListener('pointercancel', e => {
 function startMove(raw, e) {
   const join = e && e.altKey ? !ui.connWalls : ui.connWalls;
   const objs = selObjs(), orig = new Map(), conn = [];
-  for (const { o } of objs) orig.set(o.id, JSON.parse(JSON.stringify(o)));
-  const selWalls = objs.filter(x => x.kind === 'wall').map(x => x.o), sset = new Set(selWalls.map(w => w.id));
+  for (const { o } of objs) if (!isLocked(o)) orig.set(o.id, JSON.parse(JSON.stringify(o))); // kilitli nesne yerinde kalır
+  const selWalls = objs.filter(x => x.kind === 'wall' && !isLocked(x.o)).map(x => x.o), sset = new Set(selWalls.map(w => w.id));
   if (selWalls.length && join) for (const w of F().walls) {
-    if (sset.has(w.id)) continue;
+    if (sset.has(w.id) || isLocked(w)) continue;
     for (const e of ['a', 'b']) for (const sw of selWalls) {
       const ends = Array.isArray(sw.angles) && sw.angles.length ? [wallPivot(sw)] : ['a', 'b'];
       for (const se of ends) if (dist(w[e], sw[se]) < 1) { conn.push({ w, e, o: { x: w[e].x, y: w[e].y } }); }
     }
   }
   const roomInner = [];
-  if (objs.length === 1 && objs[0].kind === 'room' && !(e && e.altKey)) {
+  if (objs.length === 1 && objs[0].kind === 'room' && !isLocked(objs[0].o) && !(e && e.altKey)) {
     const r = objs[0].o;
-    for (const fn of furnInRoom(r)) roomInner.push({ kind: 'furn', o: fn, g: JSON.parse(JSON.stringify(fn)) });
-    for (const tx of F().texts.filter(t => pointInPoly(t, r.pts))) roomInner.push({ kind: 'text', o: tx, g: JSON.parse(JSON.stringify(tx)) });
+    for (const fn of furnInRoom(r)) if (!isLocked(fn)) roomInner.push({ kind: 'furn', o: fn, g: JSON.parse(JSON.stringify(fn)) });
+    for (const tx of F().texts.filter(t => pointInPoly(t, r.pts) && !isLocked(t))) roomInner.push({ kind: 'text', o: tx, g: JSON.parse(JSON.stringify(tx)) });
   }
-  const first = objs[0]; let anchor = { x: raw.x, y: raw.y };
+  const first = objs.find(x => orig.has(x.o.id)); let anchor = { x: raw.x, y: raw.y };
   if (first) { const o = orig.get(first.o.id); anchor = AB_KINDS.has(first.kind) ? o.a : PTS_KINDS.has(first.kind) ? o.pts[0] : first.kind === 'op' ? anchor : { x: o.x, y: o.y }; }
-  ui.drag = { type: 'move', start: raw, orig, conn, roomInner, anchor, moved: false };
+  ui.drag = { type: 'move', start: raw, orig, conn, roomInner, anchor, moved: false, locked: objs.length - orig.size };
 }
 function doMove(raw, e) {
   const d = ui.drag; let dx = raw.x - d.start.x, dy = raw.y - d.start.y;
-  if (!d.moved && Math.hypot(dx, dy) * view.z < 3) return; d.moved = true;
+  if (!d.moved && Math.hypot(dx, dy) * view.z < 3) return;
+  if (!d.moved && d.locked) lockToast(d.locked);
+  d.moved = true;
   if (ui.snap && !e.shiftKey) {
     const sp = snapToGrid({ x: d.anchor.x + dx, y: d.anchor.y + dy });
     dx = sp.x - d.anchor.x; dy = sp.y - d.anchor.y;
   }
   for (const { kind, o } of selObjs()) {
-    const g = d.orig.get(o.id);
+    const g = d.orig.get(o.id); if (!g) continue; // kilitli
     if (AB_KINDS.has(kind)) { o.a = { x: g.a.x + dx, y: g.a.y + dy }; o.b = { x: g.b.x + dx, y: g.b.y + dy }; }
     else if (PTS_KINDS.has(kind)) o.pts = g.pts.map(p => ({ x: p.x + dx, y: p.y + dy }));
     else if (kind === 'furn') {
@@ -5379,6 +5436,7 @@ function doMove(raw, e) {
 }
 function startHandle(h, raw, e) {
   const os = selObjs(); if (!os.length) return;
+  if (os.some(x => isLocked(x.o))) { lockToast(os.filter(x => isLocked(x.o)).length); return; }
   const o = os[0].o, orig = JSON.parse(JSON.stringify(o)), conn = [];
   const join = e && e.altKey ? !ui.connWalls : ui.connWalls;
   if ((h === 'wa' || h === 'wb') && join) {
@@ -5502,7 +5560,10 @@ function renderProps() {
   }
   const kinds = [...new Set(os.map(x => x.kind))];
   const xf = os.some(x => XFORM_KINDS.has(x.kind)) ? `<div class="row"><button class="btn sm" data-act="flipH" title="Shift+H">${L('⇋ Yatay aynala', '⇋ Flip H')}</button><button class="btn sm" data-act="flipV" title="Shift+V">${L('⇵ Dikey aynala', '⇵ Flip V')}</button><button class="btn sm" data-act="mirror" title="I">${L('🪞 Eksene göre…', '🪞 Mirror…')}</button><button class="btn sm" data-act="scale">${L('⤢ Ölçekle…', '⤢ Scale…')}</button></div>` : '';
-  const acts = (extra = '') => floorBadgeHtml() + selLayerHtml(os) + xf + `<div class="row">${extra}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+  const lockable = os.filter(x => x.kind !== 'bg'), allLk = lockable.length && lockable.every(x => isLocked(x.o));
+  const lockBtn = lockable.length ? `<button class="btn sm${allLk ? ' on' : ''}" data-act="lock" title="${L('Kilitli nesne fareyle / klavyeyle taşınmaz, boyutlanmaz, silinmez', 'A locked object cannot be moved, resized or deleted by mouse or keys')}">${allLk ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button>` : '';
+  const lockNote = allLk ? `<p class="muted lockline">🔒 ${L('Kilitli: sürüklenmez, boyutlanmaz, silinmez. Alanlar yine düzenlenebilir.', 'Locked: no dragging, resizing or deleting. The fields below still edit it.')}</p>` : '';
+  const acts = (extra = '') => floorBadgeHtml() + lockNote + selLayerHtml(os) + xf + `<div class="row">${extra}${lockBtn}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
   if (kinds.length > 1) {
     const gs = os.filter(x => GROUPABLE[x.kind]);
     const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
@@ -5860,6 +5921,7 @@ $('#props').addEventListener('click', e => {
   if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
+  if (a === 'lock') return toggleLockSel();
   if (a === 'copy') { copySel(); return renderProps(); }
   if (a === 'paste') return paste(false);
   if (a === 'flipH' || a === 'flipV') return flipSel(a === 'flipH' ? 'h' : 'v');
@@ -6585,7 +6647,7 @@ function variantBodyHtml() {
   <div class="row"><button class="btn sm" data-act="varSave" title="${L('Mevcut konumu/boyutu bu düzene kaydet', 'Save current position/size to this layout')}">💾 ${L('Kaydet', 'Save')}</button><button class="btn sm primary" data-act="varNew">➕ ${L('Yeni', 'New')}</button>${vars.length >= 2 ? `<button class="btn sm" data-act="varNext" title="${L('Sıradaki düzene geç', 'Cycle to next layout')}">↻</button>` : ''}<button class="btn sm" data-act="varDel" style="color:var(--danger)" title="${L('Bu düzeni sil', 'Delete this layout')}">🗑</button></div>
   <p class="muted" style="margin:4px 0 6px">${L('Aktif düzendeki konum ve boyut değişiklikleri otomatik kaydedilir. Tuvalde "👆 Tıkla" göstergesine tıklayarak düzenler arasında geçin.', 'Position & size changes in the active layout are auto-saved. Click the "👆 Click me" badge on canvas to cycle layouts.')}</p>`;
 }
-function copySel() { ui.clip = selObjs().map(({ kind, o }) => ({ kind, o: JSON.parse(JSON.stringify(o)) })); pasteN = 0; if (ui.clip.length) toast(ui.clip.length + L(' nesne kopyalandı · başka bir sekmede de yapıştırılabilir', ' object(s) copied · can be pasted in another tab too')); syncTouchBar(); }
+function copySel() { ui.clip = selObjs().map(({ kind, o }) => { const c = JSON.parse(JSON.stringify(o)); delete c.lock; return { kind, o: c }; }); pasteN = 0; if (ui.clip.length) toast(ui.clip.length + L(' nesne kopyalandı · başka bir sekmede de yapıştırılabilir', ' object(s) copied · can be pasted in another tab too')); syncTouchBar(); }
 function paste(fromSel, at = null) {
   if (fromSel) copySel();
   const items = ui.clip; if (!items || !items.length) return;
@@ -6623,6 +6685,7 @@ function touchAct(a) {
   if (a === 'paste') return paste(false);
   if (a === 'dup') return paste(true);
   if (a === 'del') return deleteSel();
+  if (a === 'lock') return toggleLockSel();
   if (a === 'all') { sel = allPickableIds(); return refresh(); }
   if (a === 'none') { sel = []; refresh(); if (ui.view3d && T3) refreshSel3D(); return; }
   if (a === 'multi') { ui.multiSel = !ui.multiSel; toast(ui.multiSel ? L('Çoklu seçim açık: dokunduğun her nesne eklenir / çıkarılır', 'Multi-select on: each tap adds or removes an object') : L('Çoklu seçim kapalı', 'Multi-select off')); return syncTouchBar(); }
@@ -6943,7 +7006,8 @@ window.addEventListener('keydown', e => {
     if (k === 's' && placing.type === 'op') { placeSide(); return; }
   }
   if (e.key === '[' || e.key === ']') {
-    const d = e.key === ']' ? 15 : -15, os = selObjs(); let ch = false;
+    const d = e.key === ']' ? 15 : -15, all = selObjs(), os = unlocked(all); let ch = false;
+    if (os.length < all.length) lockToast(all.length - os.length);
     if (os.length > 1) ch = rotateSelection(d, os);
     else os.forEach(({ kind, o }) => {
       if (kind === 'furn' || kind === 'text') { o.rot = ((o.rot || 0) + d + 360) % 360; ch = true; }
@@ -6954,7 +7018,8 @@ window.addEventListener('keydown', e => {
   }
   if (e.key.startsWith('Arrow') && sel.length) {
     e.preventDefault(); const st = e.shiftKey ? 10 : 1; const dx = e.key === 'ArrowLeft' ? -st : e.key === 'ArrowRight' ? st : 0, dy = e.key === 'ArrowUp' ? -st : e.key === 'ArrowDown' ? st : 0;
-    selObjs().forEach(({ kind, o }) => { if (AB_KINDS.has(kind)) { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (PTS_KINDS.has(kind)) o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
+    const all = selObjs(), mv = unlocked(all); if (mv.length < all.length) lockToast(all.length - mv.length); if (!mv.length) return;
+    mv.forEach(({ kind, o }) => { if (AB_KINDS.has(kind)) { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (PTS_KINDS.has(kind)) o.pts.forEach(p => { p.x += dx; p.y += dy; }); else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
     commit(); render(); if (sel.includes('bg')) renderProps(); if (ui.view3d && T3) schedBuild3D(); return;
   }
   const map = { v: 'select', h: 'pan', w: 'wall', q: 'railing', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen', u: 'draft', k: 'slab', y: 'void', i: 'mirror', l: 'section', a: 'attach' };
@@ -10167,7 +10232,7 @@ function init3D() {
       e.stopImmediatePropagation(); // orbit başlamasın
       sel = [fo.o.id]; followSelFloor(fo);
       const p0 = opDragHit(rc.ray, wd, cur.userData.elev || 0);
-      d3 = { op: true, id: fo.o.id, wallId: wd.id, elev: cur.userData.elev || 0, sx: e.clientX, sy: e.clientY, moved: false, alt: e.altKey, d0: fo.o.d, t0: p0 ? p0.t : null };
+      d3 = { op: true, id: fo.o.id, wallId: wd.id, elev: cur.userData.elev || 0, sx: e.clientX, sy: e.clientY, moved: false, alt: e.altKey, d0: fo.o.d, t0: p0 ? p0.t : null, locked: isLocked(fo.o) };
       refreshSel3D(); renderProps();
       return;
     }
@@ -10180,6 +10245,7 @@ function init3D() {
     d3 = { id: o.id, elev, sx: e.clientX, sy: e.clientY, moved: false, offX: p0.x - o.x, offZ: p0.z - o.y,
       orig: new Map(sel.map(sid => { const fo = findAnyFloor(sid)?.o; return [sid, fo ? JSON.parse(JSON.stringify(fo)) : null]; })),
       members: sel.slice(), conn: [], pins: [] };
+    d3.locked = d3.members.filter(sid => isLocked(findAnyFloor(sid)?.o)).length;
     // 2B ile aynı davranış: seçili duvarların bitişik uçları da birlikte taşınır (kat başına)
     const sws = d3.members.map(sid => findAnyFloor(sid)).filter(x => x && x.kind === 'wall');
     for (const sw of sws) {
@@ -10199,6 +10265,7 @@ function init3D() {
     if (T3 && T3.walk && T3.walk.drag) { walkLook(e.clientX - T3.walk.drag.x, e.clientY - T3.walk.drag.y); T3.walk.drag = { x: e.clientX, y: e.clientY }; return; }
     if (!d3) return;
     if (!d3.moved && Math.hypot(e.clientX - d3.sx, e.clientY - d3.sy) < 4) return;
+    if (d3.locked) { if (!d3.moved) lockToast(+d3.locked); d3.moved = true; return; } // kilitli: seçili kalır, taşınmaz
     d3.moved = true;
     if (d3.op) {
       const fo = findAnyFloor(d3.id), w = fo && fo.floor.walls.find(x => x.id === d3.wallId); if (!w || d3.t0 == null) return;
