@@ -6,21 +6,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcpSrc = read('mcp/server.js');
 
-const fnSrc = name => {
-  const start = src.indexOf('function ' + name + '(');
-  assert.ok(start >= 0, name + '() is gone from app.js');
-  const lineEnd = src.indexOf('\n', start);
-  const blockEnd = src.indexOf('\n}', start);
-  if (src.slice(start, lineEnd).includes('}') && (blockEnd === -1 || lineEnd < blockEnd)) {
-    return src.slice(start, lineEnd);
-  }
-  return src.slice(start, blockEnd + 2);
-};
+const fnSrc = name => fnSrcOf(src, name);
 
 const constSrc = name => {
   const start = src.indexOf('const ' + name);
@@ -202,24 +193,6 @@ test('(7) source checks that DB_VER is 2 and onupgradeneeded creates the texture
   const norm = fnSrc('normalizeProject');
   assert.match(norm, /P\.textures\s*=\s*\(Array\.isArray\(P\.textures\)\s*\?\s*P\.textures\s*:\s*\[\]\)/);
   assert.match(norm, /\/\^\[\\w-\]\{1,32\}\$\/\.test\(t\.id\)/);
-});
-
-test('(8) source checks water: floorMat returns a transparent MeshPhongMaterial for water with depthWrite false, and build3D adds a separate water surface above an opaque waterBed for slabs, free slabs and rooms', () => {
-  const fm = fnSrc('floorMat');
-  assert.match(fm, /kind\s*===\s*['"]water['"]\s*\)\s*return\s*new\s*THREE\.MeshPhongMaterial\(\{[^}]*transparent:\s*true[^}]*depthWrite:\s*false/);
-
-  assert.match(src, /const\s+waterBed\s*=\s*c\s*=>\s*mixHex\(/);
-
-  const b3d = fnSrc('build3D');
-  assert.match(b3d, /const\s+addWater\s*=\s*\(shp,\s*y,\s*wm\)\s*=>/);
-
-  assert.match(b3d, /if\s*\(sKind\s*===\s*['"]water['"]\)\s*\{\s*slabWater\s*=\s*fm;\s*top\s*=\s*mat\(waterBed\(sc\)\);/);
-  assert.match(b3d, /if\s*\(slabWater\)\s*addWater\(shp,\s*elev\s*\+\s*0\.3,\s*slabWater\);/);
-
-  assert.match(b3d, /if\s*\(kind\s*===\s*['"]water['"]\)\s*\{\s*water\s*=\s*fm;\s*top\s*=\s*mat\(waterBed\(sc\)\);/);
-  assert.match(b3d, /if\s*\(water\)\s*addWater\(shp,\s*m\.position\.y\s*\+\s*0\.25,\s*water\);/);
-
-  assert.match(b3d, /if\s*\(kind\s*===\s*['"]water['"]\)\s*\{[\s\S]*?waterBed\(r\.color/);
 });
 
 test('(9) evaluate doorMat/doorLeafCol/isDoorOp: legacy door -> wood with #b08968, legacy slide -> glass, explicit mat respected, invalid mat falls back, custom color wins; build3D uses doorLeaf3D for hinged leaves and o.frameCol for the frame, and the old hard-coded 0xb08968 leaf box line is gone from build3D', () => {

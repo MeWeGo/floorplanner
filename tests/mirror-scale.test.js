@@ -4,14 +4,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
-const fnSrc = name => {
-  const start = src.indexOf('function ' + name + '(');
-  assert.ok(start >= 0, name + '() is gone from app.js');
-  return src.slice(start, src.indexOf('\n}', start) + 2);
-};
+const fnSrc = name => fnSrcOf(src, name);
 const normDegStart = src.indexOf('const normDeg');
 assert.ok(normDegStart >= 0, 'const normDeg is gone from app.js');
 const normDegSrc = src.slice(normDegStart, src.indexOf('\n', normDegStart)).trim();

@@ -49,7 +49,7 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 5. **Never hardcode plan colors** in SVG builders — use `pal()` (see §7). Exports must stay on white paper.
 6. **Do not break the export pipeline:** `exportSvg()` sets `ui.exporting = true` and `view.z = 0.5` while calling builders; builders must be pure functions of `(object, live)`.
 7. **Preserve existing comments/docstrings** unrelated to your change.
-8. Run `node --check app.js` before every commit. There is no test suite; verify visually (see §10).
+8. Run `node --check app.js` and the test suite (`node --test tests/*.test.js`, `node tests/browser-smoke.js`) before every commit, then verify visually what tests cannot judge (see §10).
 
 ---
 
@@ -556,7 +556,8 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/mcp.test.js` | tool surface shrinking, a broken plan round-trip, `CATALOG`/`OPENINGS` drifting from `app.js` |
 | `tests/bridge.test.js` | plan store/revisioning, the request queue, SSE, **`FP_WAKE`** (a request reaches the agent, an unknown origin only queues), **snapshot save/restore** (AI pushes only, restore is a new rev, history survives a restart) and the **`Access-Control-Allow-Private-Network`** header the deployed page needs |
 | `tests/render3d.test.js` | the 3D render export: oversampling maths (2–3×, ≤4K/12 MP), the **synchronous** `render()` → `toDataURL()` contract for the quick path, the render-vs-screenshot guarantees (no CAD outlines, studio backdrop, single shadow build, jittered passes) and viewport restore; sky backdrop defaults, inline-shader sky with sun-driven colours and horizon fog, toon materials, and their restore (#45) |
-| `tests/camera-sync.test.js` | the 2D → 3D hand-off (issue #37): the target lands on the 2D viewport centre or the selected object, distance follows `view.z`, and a plain 2D ⇄ 3D round-trip keeps the orbit unless the user panned > 200 cm |
+| `tests/camera-sync.test.js` | the 2D → 3D hand-off (issue #37) on the real `view3DFocus` / `orient3DFrom2D` / `keepCam3D`: the target lands on the 2D viewport centre or the selected object at the floor's 3D elevation, distance follows `view.z`, and a plain 2D ⇄ 3D round-trip keeps the orbit unless the user panned > 200 cm |
+| `tests/camera-presets.test.js` | the real `set3DCam` / `eyeRoom`: eye preset inside the largest room at standing height (starts walk mode), fit / top framing, iso = parallel 35.26° from the south-east, facades through `camAlong` |
 | `tests/wall-joints.test.js` | wall corners closing: miter/bevel maths of `wallJoints()` and that both 2D and 3D draw the fillers |
 | `tests/wall-trim.test.js` | trim tool / split at intersection / join corner geometry and opening re-basing |
 | `tests/snap-tracking.test.js` | object snap tracking: L→U closes exactly with/without angle lock, Shift disables it, guides reach the preview |
@@ -617,6 +618,11 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 ### Adding a test
 
 Tests are **zero-dependency** (`node:test`, `node:assert`, global `fetch`/`WebSocket`). No `package.json`, no `npm install` — keep it that way so the app stays double-clickable. Put pure logic in `tests/helpers/` so it can be proven against synthetic input (see the `#b3dFit` regression test).
+
+- **Run the real code, never a copy.** Cut functions out of `app.js` with `fnSrcOf(src, name)` (brace-aware; never `indexOf('
+}')`) and run them in a `new Function` sandbox with small stubs. A hand-written "mirror" of an app function keeps passing after the app changes (the old camera tests did). If logic is buried inline in a big function, extract a small named helper first (e.g. `keepCam3D`).
+- **Shared helpers** (`tests/helpers/repo.js`): `read`, `fnSrcOf`, `markerBlock(src, 'PARTS-ENGINE' | 'IFC-IMPORT' | 'TEXGEN' | …)` for the blocks shared with `mcp/server.js`, `mcpClient()` (`call` / `tool` over stdio), `wallTopSrc`. Reuse them instead of copying slicers or JSON-RPC clients into a test file.
+- **Source-text regexes** are a last resort for what neither a sandbox nor `browser-smoke.js` can reach (event-handler ordering, the synchronous capture contract). Don't add one that only re-checks an id (`dom-contract.test.js` covers every lookup) or a flow a smoke check already drives.
 
 When you add a toolbar button or panel, add its id to `index.html` **and** to the `DOM contract` expectation list in `tests/dom-contract.test.js` if it is user-facing.
 

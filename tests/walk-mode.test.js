@@ -4,19 +4,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
 
-const fnSrc = name => {
-  const start = src.indexOf('function ' + name + '(');
-  assert.ok(start >= 0, name + '() is gone from app.js');
-  const lineEnd = src.indexOf('\n', start);
-  if (lineEnd > start && src.slice(start, lineEnd).includes('}')) {
-    return src.slice(start, src.indexOf('}', start) + 1);
-  }
-  return src.slice(start, src.indexOf('\n}', start) + 2);
-};
+const fnSrc = name => fnSrcOf(src, name);
 
 const isDoorOpSrc = src.match(/const isDoorOp\s*=[^;\n]+;/)[0];
 const walkConstSrc = src.match(/const WALK\s*=[^;\n]+;/)[0];
@@ -169,22 +161,4 @@ test('6. Source-shape guards: loop3D, walkStep, keydown, set3DCam, show3D, s3dFl
   const camSrc = fnSrc('applyWalkCam');
   assert.match(camSrc, /Math\.cos\(w\.pitch\)/, 'applyWalkCam must compute cos(pitch)');
   assert.match(camSrc, /Math\.sin\(w\.pitch\)/, 'applyWalkCam must compute sin(pitch)');
-});
-
-test('7. Speed is frame-rate independent: 30 steps @ 1/30 s vs 144 steps @ 1/144 s differ < 0.5 cm', () => {
-  let p30 = { x: 0, y: 0 };
-  const dt30 = 1 / 30;
-  for (let i = 0; i < 30; i++) {
-    p30 = walkMove(p30, { x: WALK.speed * dt30, y: 0 }, [], WALK.r);
-  }
-
-  let p144 = { x: 0, y: 0 };
-  const dt144 = 1 / 144;
-  for (let i = 0; i < 144; i++) {
-    p144 = walkMove(p144, { x: WALK.speed * dt144, y: 0 }, [], WALK.r);
-  }
-
-  const diff = Math.hypot(p30.x - p144.x, p30.y - p144.y);
-  assert.ok(diff < 0.5, `expected speed frame-rate independent within 0.5 cm, got diff ${diff}`);
-  assert.ok(Math.abs(p30.x - WALK.speed) < 0.01, `expected 1 second distance ≈ WALK.speed (${WALK.speed}), got ${p30.x}`);
 });

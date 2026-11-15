@@ -9961,6 +9961,11 @@ function sync3DFloors() {
    bıraktığı 3B kamera korunur; belirgin biçimde başka bir yere kaydıysa ya da
    yeni bir nesne seçiliyse kamera 2B'de bakılan alana taşınır. */
 const CAM_KEEP_RADIUS = 200; // cm — 2B merkezi bu kadar kayarsa kamera yeniden yönlenir
+/** Aynı 2B noktası (± CAM_KEEP_RADIUS) + aynı seçim => kullanıcının bıraktığı 3B kamera korunur. */
+function keepCam3D(t3, c, focus, selKey) {
+  const moved = !t3.center2d || dist(t3.center2d, c) > CAM_KEEP_RADIUS;
+  return !!t3.lastCam && !moved && !(focus.sel && selKey !== (t3.selKey || ''));
+}
 
 /** 2B tuvalin merkezindeki dünya koordinatı (cm). */
 function view2DCenter() {
@@ -10012,9 +10017,7 @@ function show3D(on) {
   if (on) {
     init3D();
     const focus = view3DFocus(), c = view2DCenter(), selKey = sel.slice().sort().join(',');
-    // aynı 2B noktası + aynı seçim => kullanıcının bıraktığı 3B kamera korunur
-    const moved = !T3.center2d || dist(T3.center2d, c) > CAM_KEEP_RADIUS;
-    const keep = !!T3.lastCam && !moved && !(focus.sel && selKey !== (T3.selKey || ''));
+    const keep = keepCam3D(T3, c, focus, selKey);
     T3.selKey = selKey;
     if (keep) { T3.cam.position.copy(T3.lastCam.pos); T3.ctl.target.copy(T3.lastCam.target); }
     build3D(keep);

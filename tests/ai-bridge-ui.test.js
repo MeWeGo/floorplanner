@@ -13,15 +13,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf } = require('./helpers/repo');
 
 const js = read('app.js');
-const sliceFn = name => {
-  const start = js.indexOf('function ' + name);
-  assert.ok(start > 0, name + '() is gone');
-  const end = js.indexOf('\n}', start);
-  return js.slice(start, end);
-};
+const sliceFn = name => fnSrcOf(js, name);
 
 test('the AI pill carries a pending-request counter', () => {
   assert.match(js, /id = AI_PILL_ID/, 'the AI pill was renamed');

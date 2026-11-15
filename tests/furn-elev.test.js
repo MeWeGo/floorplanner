@@ -4,13 +4,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { spawn } = require('node:child_process');
-const path = require('node:path');
-const { ROOT, read } = require('./helpers/repo');
+const { read, fnSrcOf, mcpClient } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcpSrc = read('mcp/server.js');
-const SERVER = path.join(ROOT, 'mcp', 'server.js');
 
 const constLine = name => {
   const start = src.indexOf('const ' + name);
@@ -18,11 +15,7 @@ const constLine = name => {
   return src.slice(start, src.indexOf('\n', start));
 };
 
-const fnSrc = name => {
-  const start = src.indexOf('function ' + name + '(');
-  assert.ok(start >= 0, name + '() is gone from app.js');
-  return src.slice(start, src.indexOf('\n}', start) + 2);
-};
+const fnSrc = name => fnSrcOf(src, name);
 
 const {
   FURN_ELEV_MAX,
@@ -96,16 +89,15 @@ test('(2) CAT_ELEV keys exist in CAT_DEFS, values in (0, 500], and tv is not pre
   assert.ok(!('tv' in CAT_ELEV), 'tv key must not exist in CAT_ELEV');
 });
 
-test('(3) mcp/server.js CAT_ELEV object text equals app.js CAT_ELEV and every key in server CATALOG', () => {
+test('(3) mcp/server.js CAT_ELEV has the same values as app.js and every key in server CATALOG', () => {
   const extractCatElev = fileSrc => {
     const m = fileSrc.match(/const\s+CAT_ELEV\s*=\s*(\{[^}]+\})/);
     assert.ok(m, 'CAT_ELEV definition not found');
-    return m[1].trim();
+    return new Function('return ' + m[1])();
   };
 
-  const appCatElevText = extractCatElev(src);
-  const mcpCatElevText = extractCatElev(mcpSrc);
-  assert.strictEqual(mcpCatElevText, appCatElevText, 'CAT_ELEV object text in mcp/server.js must match app.js');
+  const CAT_ELEV = extractCatElev(src);
+  assert.deepStrictEqual(extractCatElev(mcpSrc), CAT_ELEV, 'CAT_ELEV in mcp/server.js must hold the same items and heights as app.js');
 
   const mcpCatStart = mcpSrc.indexOf('const CATALOG = [');
   assert.ok(mcpCatStart >= 0, 'CATALOG not found in mcp/server.js');
@@ -113,7 +105,6 @@ test('(3) mcp/server.js CAT_ELEV object text equals app.js CAT_ELEV and every ke
   const mcpCatalog = new Function(mcpSrc.slice(mcpCatStart, mcpCatEnd + 3) + '\nreturn CATALOG;')();
   const serverCatIds = new Set(mcpCatalog.map(x => x.id));
 
-  const CAT_ELEV = new Function('return ' + appCatElevText)();
   for (const id of Object.keys(CAT_ELEV)) {
     assert.ok(serverCatIds.has(id), `CAT_ELEV item "${id}" must exist in mcp/server.js CATALOG`);
   }
@@ -176,32 +167,7 @@ test('(5) furn3D tv case no longer uses bright #0ea5e9 screen colour and builds 
 });
 
 test('(6) MCP round trip: elevation defaults, overrides, and bounds check', async t => {
-  /** Minimal JSON-RPC client over the server's stdio. */
-  function client() {
-    const proc = spawn(process.execPath, [SERVER], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
-    const pending = new Map();
-    let nextId = 1, buf = '';
-    proc.stdout.setEncoding('utf8');
-    proc.stdout.on('data', chunk => {
-      buf += chunk;
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (!line) continue;
-        let msg;
-        try { msg = JSON.parse(line); } catch (e) { continue; }
-        if (msg.id != null && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-      }
-    });
-    const call = (method, params) => new Promise((resolve, reject) => {
-      const id = nextId++;
-      const timeout = setTimeout(() => reject(new Error(`timeout on ${method}`)), 10000);
-      pending.set(id, msg => { clearTimeout(timeout); resolve(msg); });
-      proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-    });
-    return { proc, call, stop: () => proc.kill() };
-  }
+  const client = mcpClient;
 
   const text = res => res.result.content[0].text;
 

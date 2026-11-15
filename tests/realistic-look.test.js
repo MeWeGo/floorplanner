@@ -154,13 +154,6 @@ test('(A3) floorTexture caches by (kind, color, lt, real) in C.floorTex', () => 
 
 // ---------- (B) Source-shape & constant checks for issue #87 ----------
 
-test('(B1) realLook, realEnv, realClass, and contactTex functions exist', () => {
-  for (const name of ['realLook', 'realEnv', 'realClass', 'contactTex']) {
-    const fn = fnSrcOf(src, name);
-    assert.ok(fn.includes(`function ${name}(`), `${name}() should be defined`);
-  }
-});
-
 test('(B2) realLook upgrades materials, skips T3.ground, regenerates floor textures, and restores/disposes', () => {
   const start = src.indexOf('function realLook(');
   const end = src.indexOf('function applyLive3D(');
