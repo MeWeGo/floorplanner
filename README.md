@@ -141,7 +141,22 @@ Tools: `new_project` · `load_project` / `import_ifc` / `save_project` / `get_pr
 | :-- | :-- |
 | **IndexedDB** (`FloorPlannerDB`) | Background autosave + named projects with live SVG thumbnails, plus custom texture image data (`textures` store) kept outside undo snapshots — hundreds of MB capacity |
 | **JSON files** | Backup, sharing, moving between machines (`⬇ JSON` / `📂 Aç`); exports bundle custom texture data, imports absorb them into IndexedDB |
-| `localStorage` | Theme & language preferences only (legacy data is auto-migrated to IndexedDB) |
+| `localStorage` | Theme & language preferences, Google Drive sync settings (legacy data is auto-migrated to IndexedDB) |
+
+### ☁ Sync & share
+Click **☁ Sync** in the top bar to keep your plans on every device or to hand one over:
+
+- **Google Drive:** connect once and the project you are working on is saved to a **Floor Planner** folder in your own Google Drive. It stays up to date on every device where you open the app with the same Google account — the app picks up changes from the other device by itself. If a plan was changed on two devices, it asks which one to keep (or keeps both). A green dot on ☁ means syncing; amber means it needs a click (sign in again after about an hour, or choose a version).
+- **Send to another device:** make a **link** with the plan inside it (shown as a **QR code** for small plans — scan it with the phone), a short **Drive link** (same Google account), or **send the JSON file** through the share menu.
+- **Several windows:** with the same project open in two browser windows, the one you save last updates the other instead of overwriting it.
+- **Privacy:** a plan link carries the plan itself — anyone with the link can see it. Drive sync uses the `drive.file` permission, so the app can only see the files it created. Nothing goes to any other server.
+
+#### Setting up Google Drive sync (site owners)
+The public site needs a Google OAuth client ID once (forks and self-hosted copies need their own):
+1. [Google Cloud Console](https://console.cloud.google.com/) → create a project → **APIs & Services → Library** → enable **Google Drive API**.
+2. **OAuth consent screen**: *External*, app name and support e-mail, add the scope `.../auth/drive.file`, then **Publish app** (`drive.file` is a non-sensitive scope, so no Google verification review is needed).
+3. **Credentials → Create credentials → OAuth client ID → Web application**, *Authorised JavaScript origins*: `https://mewego.github.io` (add `http://localhost:8080` or similar for local testing). No redirect URI is needed.
+4. Put the client ID into `GDRIVE_CLIENT_ID` in `app.js` — or paste it under **☁ Sync → Advanced** (stored in that browser only). Drive sync does not work from a `file://` copy; the dialog links to the web version.
 
 ### 📤 Export
 - **PNG** and **SVG** with title block and scale bar.

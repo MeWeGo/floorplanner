@@ -46,7 +46,7 @@ jobs:
       - name: Stage the static site
         run: |
           mkdir _site
-          cp index.html app.js style.css _site/
+          cp index.html app.js style.css privacy.html _site/
 
       - name: Upload the static site
         uses: actions/upload-pages-artifact@v3

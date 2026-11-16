@@ -1574,3 +1574,20 @@ body.fs-open #toast { position: fixed; z-index: 140; }
 .bimtip { margin: 12px 0 8px; font-size: 13px; }
 .bimskip { display: flex; gap: 6px; align-items: center; font-size: 12px; cursor: pointer; }
 @media (max-width: 700px) { .bimgrid { grid-template-columns: 1fr; } }
+
+/* ☁ Eşitle: durum noktası, QR kodu, Drive listesi */
+.sync-btn { position: relative; }
+.sync-btn[data-st]:not([data-st=""])::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
+.sync-btn[data-st="busy"]::after { background: #38bdf8; animation: syncPulse 1s ease-in-out infinite; }
+.sync-btn[data-st="warn"]::after { background: #f59e0b; }
+@keyframes syncPulse { 50% { opacity: 0.3; } }
+.sh-out { margin-top: 10px; }
+.sh-qr { display: flex; justify-content: center; margin: 6px 0 10px; }
+.sh-qr svg { width: min(260px, 70vw); height: auto; border-radius: 6px; }
+.gd-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; }
+.gd-row { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border-radius: 6px; background: var(--panel2, rgba(127, 127, 127, 0.08)); }
+.gd-row > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-out input, #gdCid { background: var(--panel2); color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 8px; font: 12px var(--font-mono); }
+#syncDrive a { color: var(--accent); }
+.sync-btn[data-st="ok"]::after { background: var(--ok); }
+.sync-btn[data-st="warn"]::after { background: var(--warn); }
