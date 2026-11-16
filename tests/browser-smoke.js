@@ -2404,6 +2404,17 @@ check('sync & share: ☁ modal, share link + QR round trip, hostile link sanitis
     out.opened = P.id === id0 && F().walls.length === walls0 && P.name === name0;
     out.hashCleared = !location.hash;
     out.reusedTab = tabs.length === tabsBefore; // same P.id was already open → that tab is reused
+    // an older link for a project that has changed since does not overwrite it: it opens as a separate copy
+    addRectWalls(600, 0, 800, 200); commit();
+    const newer = F().walls.length, tabsB = tabs.length;
+    templatesModal();                           // first-visit picker must not stay in front of the link
+    location.hash = url.slice(url.indexOf('#'));
+    await wait(400);
+    out.staleAsCopy = tabs.length === tabsB + 1 && P.id !== id0 && F().walls.length === walls0 && / \\(link\\)$/.test(P.name);
+    out.newerKept = tabs.some(t => t.P && t.P.id === id0 && t.P.floors[0].walls.length === newer);
+    out.pickerClosed = ui.modal !== 'templates';
+    // a file / My Projects copy of an open project gets a fresh id; an unknown id is kept
+    out.freshId = freshIdIfTaken({ id: id0 }).id !== id0 && freshIdIfTaken({ id: 'unknown123' }).id === 'unknown123';
     // hostile link: attribute break-out in bg.src and a name with markup
     const evil = newProject(); evil.id = 'evil' + uid(); evil.name = '<img src=x onerror="window.__xss=1">Kötü';
     evil.bg = { src: '" onload="window.__xss=2', x: 0, y: 0, w: 100, h: 100, op: 1 };

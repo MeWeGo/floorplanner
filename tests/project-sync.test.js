@@ -79,6 +79,7 @@ function makeDriveEnv(initialP) {
     const dbPut = async () => {};
     const cacheTex = () => {};
     const adoptActive = o => { P = o; return true; };
+    const syncIdle = () => true;
     ${fnSrc('isPristine')}
 
     ${fnSrc('sanitizePlan')}
@@ -573,11 +574,25 @@ test('(6) gdSyncOnce against a fake in-memory Drive', async t => {
   assert.strictEqual(env.gdState().proj1.v, '3');
   assert.strictEqual(env.gdState().proj1.h, env.strHash(JSON.stringify(env.P)));
 
+  // (d2) Drive bumped the version without changing the content (rename / star / move) while the plan changed here:
+  //      not a conflict — the local plan is uploaded
+  env.P.floors[0].walls[0].b.x = 920;
+  uploadedFiles[0].version = 5;
+  uploadedFiles[0].name = 'renamed in Drive.fp.json';
+  ctx.resetCounters();
+  drive.requests.length = 0;
+  await env.gdSyncOnce(false);
+  assert.strictEqual(env.gd.conflict, null, 'a metadata-only change must not raise a conflict');
+  assert.strictEqual(ctx.syncModalCalls, 0);
+  assert.ok(drive.requests.some(r => r.method === 'PATCH' && r.pathname.startsWith('/upload/')), 'the local change is uploaded');
+  assert.strictEqual(JSON.parse(uploadedFiles[0].content).floors[0].walls[0].b.x, 920);
+  assert.strictEqual(env.gdState().proj1.v, '6');
+
   // (e) Both changed -> gd.conflict is set and nothing is uploaded
   env.P.floors[0].walls[0].b.x = 950; // local change
   const remoteConflictPlan = makePlan('proj1', 'Villa Conflict Remote', 1100);
   uploadedFiles[0].content = JSON.stringify(remoteConflictPlan);
-  uploadedFiles[0].version = 4; // remote change
+  uploadedFiles[0].version = 7; // remote change
   ctx.resetCounters();
   drive.requests.length = 0;
   await env.gdSyncOnce(false);
@@ -585,7 +600,7 @@ test('(6) gdSyncOnce against a fake in-memory Drive', async t => {
   assert.ok(env.gd.conflict, 'gd.conflict should be set');
   assert.strictEqual(env.gd.conflict.id, 'proj1');
   assert.strictEqual(env.gd.conflict.f, uploadedFiles[0].id);
-  assert.strictEqual(env.gd.conflict.v, '4');
+  assert.strictEqual(env.gd.conflict.v, '7');
   assert.strictEqual(env.gd.conflict.remote.name, 'Villa Conflict Remote');
   assert.strictEqual(ctx.syncModalCalls, 1);
   env.gd.conflict = null;

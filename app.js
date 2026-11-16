@@ -8375,7 +8375,7 @@ async function projectsModal() {
   $('#mSync').onclick = syncModal;
   $('#modal').querySelectorAll('[data-open]').forEach(b => b.onclick = () => {
     const it = list[+b.dataset.open];
-    if (it) { newTabSlot(); loadProject(JSON.parse(JSON.stringify(it.project)), isEN() ? `Opened “${it.name}”` : `“${it.name}” açıldı`); closeModal(); }
+    if (it) { newTabSlot(); loadProject(freshIdIfTaken(JSON.parse(JSON.stringify(it.project))), isEN() ? `Opened “${it.name}”` : `“${it.name}” açıldı`); closeModal(); }
   });
   $('#modal').querySelectorAll('[data-dl]').forEach(b => b.onclick = () => {
     const it = list[+b.dataset.dl];
@@ -8605,10 +8605,25 @@ function adoptActive(o) {
   restore(s); ensureTextures(P); syncTab(); autosave(); updateUndo();
   return true;
 }
+// bir eylemin ortasında (sürükleme, çizim, mobilya stüdyosu) plan dışarıdan değiştirilmez
+const syncIdle = () => !(ui.drag || ui.draw || ui.polyPts || ui.dimStart || ui.pen || ui.dr || ui.modal === 'parts' || ui.modal === 'tex');
+// Aynı proje (P.id) zaten açıksa link onu ezmez (link eski olabilir): aynıysa o sekmeye geçilir, farklıysa kopya olarak açılır
 function openSharedPlan(o, msg) {
+  if (ui.modal === 'templates') closeModal(); // ilk ziyaret: şablon seçici linkin önünde açık kalmasın
   const i = tabIndexOf(o.id);
-  if (i >= 0) { if (i !== tabIdx) switchTab(i); adoptActive(o); toast(msg); return; }
+  if (i >= 0) {
+    if (i !== tabIdx) switchTab(i);
+    if (JSON.stringify(normalizeProject(JSON.parse(JSON.stringify(o)))) === JSON.stringify(P)) { toast(msg); return; }
+    o.id = pid(); o.name = (o.name || L('Proje', 'Project')) + L(' (link)', ' (link)');
+    msg = L('Bu proje zaten açık — linkteki sürüm ayrı bir kopya olarak açıldı', 'This project is already open — the version in the link opened as a separate copy');
+  }
   newTabSlot(); loadProject(o, msg);
+}
+// dosyadan / Projelerim'den açılan bir proje, açık ya da Drive ile eşitlenen bir projenin kimliğini taşıyorsa
+// yeni kimlik alır: eski bir kopya eşitlenen projenin üstüne yazılmasın
+function freshIdIfTaken(o) {
+  if (o && typeof o.id === 'string' && (tabIndexOf(o.id) >= 0 || gdState()[o.id])) o.id = pid();
+  return o;
 }
 // #fp=… (plan linkte) ya da #fpd=… (Drive dosyası) ile açılış; adres çubuğu temizlenir ki yenileme yeniden açmasın
 async function openShareHash() {
@@ -8636,7 +8651,8 @@ function bcInit() {
     if (saveTimer) return; // bu pencerede kaydedilmeyi bekleyen değişiklik var: onunki de birazdan gelir, son düzenleme kazanır
     let o; try { o = JSON.parse(d.s); } catch (er) { return; }
     if (P && P.id === d.id) {
-      if (ui.drag || ui.draw || ui.polyPts || ui.modal === 'parts') return; // çizim / sürükleme ortasında plan değişmesin
+      if (!syncIdle()) return; // çizim / sürükleme ortasında plan değişmesin
+      bcLast = d.s;
       if (adoptActive(o)) toast(L('Bu proje başka bir pencerede değişti — güncellendi (geri al: Ctrl+Z)', 'This project changed in another window — updated (undo: Ctrl+Z)'));
       return;
     }
@@ -8646,9 +8662,13 @@ function bcInit() {
     });
   };
 }
+let bcLast = ''; // son gönderilen / alınan plan: değişmeyen plan (sekme geçişi, aynı kayıt) yeniden gönderilmez
 function bcPost() {
   if (!bc || !P || !P.id) return;
-  try { bc.postMessage({ t: 'proj', win: WIN_ID, id: P.id, s: JSON.stringify(P) }); } catch (e) { }
+  const s = JSON.stringify(P);
+  if (s === bcLast) return;
+  bcLast = s;
+  try { bc.postMessage({ t: 'proj', win: WIN_ID, id: P.id, s }); } catch (e) { }
 }
 // autosave() başarılı olunca çağrılır
 function syncNoteSave() { bcPost(); gdSyncSoon(); }
@@ -8712,6 +8732,7 @@ async function gdOnToken(r) {
   if (google.accounts.oauth2.hasGrantedAllScopes && !google.accounts.oauth2.hasGrantedAllScopes(r, GD_SCOPE)) {
     gd.status = 'off'; gd.err = L('Drive izni verilmedi — izin ekranında Drive kutusunu işaretleyin.', 'Drive access was not granted — tick the Drive box on the consent screen.'); gdUI(); return;
   }
+  gd.texDone.clear(); gd.folder = null; // başka bir hesap olabilir
   gd.token = r.access_token; gd.exp = Date.now() + Math.max(60, (+r.expires_in || 3600) - 120) * 1000; gd.err = '';
   try { sessionStorage.setItem('fp_gd_tok', JSON.stringify({ t: gd.token, exp: gd.exp })); } catch (e) { }
   const c = gdCfg(); c.on = true; gdSetCfg(c);
@@ -8728,7 +8749,7 @@ function gdExpired() {
 function gdDisconnect() {
   try { if (gd.token && gisReady()) google.accounts.oauth2.revoke(gd.token, () => { }); } catch (e) { }
   const c = gdCfg(); c.on = false; delete c.user; gdSetCfg(c);
-  gd.conflict = null; gd.list = null; gd.folder = null; gdExpired();
+  gd.conflict = null; gd.list = null; gd.folder = null; gd.texDone.clear(); gdExpired();
   toast(L('Google Drive bağlantısı kesildi. Drive’daki dosyalar duruyor.', 'Disconnected from Google Drive. Your files stay in Drive.'));
 }
 async function gdFetch(url, opt = {}) {
@@ -8791,6 +8812,7 @@ async function gdSync(manual) {
   if (!gd.token) { if (manual) gdConnect(); return; }
   if (gd.busy) { gd.again = true; return; }
   if (gd.conflict || !P) { gdUI(); return; }
+  if (!syncIdle()) { gdSyncSoon(2000); return; }
   gd.busy = true; gd.status = 'busy'; gdUI();
   try {
     await gdSyncOnce(manual);
@@ -8830,11 +8852,18 @@ async function gdSyncOnce(manual, retry) {
     return;
   }
   const rs = await (await gdFetch(`${GD_API}/files/${st.f}?alt=media`)).text();
-  if (strHash(rs) === h) { gdSetState(p.id, { f: st.f, v: String(meta.version), h }); return; }
-  let o; try { o = sanitizePlan(JSON.parse(rs)); } catch (e) { throw new Error(L('Drive’daki dosya okunamadı', 'The file in Drive could not be read')); }
+  const rh = strHash(rs);
+  if (rh === h) { gdSetState(p.id, { f: st.f, v: String(meta.version), h }); return; }
+  if (rh === st.h) {                                                 // içerik aynı, yalnız Drive sürümü arttı (ad, yıldız, taşıma): yalnız burada değişti
+    await gdPushTex(p);
+    const r = await gdUpload(st.f, { name: gdName(p) }, new Blob([s], { type: 'application/json' }));
+    gdSetState(p.id, { f: st.f, v: String(r.version), h });
+    return;
+  }
+  let o; try { o = JSON.parse(rs); } catch (e) { throw new Error(L('Drive’daki dosya okunamadı', 'The file in Drive could not be read')); }
   if (!o || !Array.isArray(o.floors)) throw new Error(L('Drive’daki dosya bir plan değil', 'The file in Drive is not a plan'));
   o.id = p.id;
-  if (!P || P.id !== p.id || JSON.stringify(P) !== s) { gd.again = true; return; } // bu arada sekme / plan değişti: sonra tekrar
+  if (!P || P.id !== p.id || JSON.stringify(P) !== s || !syncIdle()) { gd.again = true; return; } // bu arada sekme / plan değişti ya da kullanıcı bir eylemin ortasında: sonra tekrar
   if (!localChanged) {
     await gdPullTex(o);
     if (adoptActive(o)) toast(L('Başka bir cihazdaki değişiklikler alındı (geri al: Ctrl+Z)', 'Changes from another device were applied (undo: Ctrl+Z)'));
@@ -8846,9 +8875,10 @@ async function gdSyncOnce(manual, retry) {
 }
 // çakışma: 'mine' = bu cihazdakini yükle, 'theirs' = Drive'dakini al, 'both' = ikisini de ayrı proje olarak tut
 async function gdResolve(how) {
-  const c = gd.conflict; if (!c) return;
+  const c = gd.conflict; if (!c || gd.busy) return;
   gd.conflict = null;
   if (!P || P.id !== c.id) { gdUI(); return; }
+  gd.busy = true; gd.status = 'busy'; gdUI();
   try {
     if (how === 'mine') {
       const s = JSON.stringify(P); await gdPushTex(P);
@@ -8867,6 +8897,7 @@ async function gdResolve(how) {
     }
     gd.status = 'on';
   } catch (e) { if (e.message !== 'auth') { gd.status = 'err'; gd.err = e.message; } }
+  finally { gd.busy = false; gd.again = false; }
   if (ui.modal === 'sync') closeModal();
   gdUI(); gdSyncSoon(1500);
 }
@@ -8875,7 +8906,7 @@ async function gdOpenFile(fileId) {
     gd.status = 'busy'; gdUI();
     const meta = await (await gdFetch(`${GD_API}/files/${fileId}?fields=id,name,version,appProperties`)).json();
     const s = await (await gdFetch(`${GD_API}/files/${fileId}?alt=media`)).text();
-    const o = sanitizePlan(JSON.parse(s));
+    const o = JSON.parse(s);
     if (!o || !Array.isArray(o.floors)) throw new Error(L('geçersiz plan', 'invalid plan'));
     o.id = (meta.appProperties && meta.appProperties.fpId) || o.id || pid();
     await gdPullTex(o);
@@ -9031,8 +9062,9 @@ async function syncBoot() {
   setInterval(() => { if (gd.token && !document.hidden) gdSync(false); }, 60000);         // başka cihazdaki değişiklikleri al
   document.addEventListener('visibilitychange', () => { if (!document.hidden && gd.token) gdSyncSoon(400); });
 }
-// link / Drive'dan gelen planlar: hiçbir metin bir HTML / SVG özniteliğinden taşamasın (" < > ` atılır; uygulamada
-// tek tırnaklı öznitelik yok), arka plan görseli yalnızca data:image/… olabilir
+// başkasından gelebilen link planları (#fp=): hiçbir metin bir HTML / SVG özniteliğinden taşamasın (" < > ` atılır;
+// uygulamada tek tırnaklı öznitelik yok), arka plan görseli yalnızca data:image/… olabilir. Drive dosyaları kullanıcının
+// kendi dosyalarıdır (drive.file: yalnız bu uygulamanın oluşturdukları), 📂 Aç gibi olduğu gibi alınır.
 function sanitizePlan(o, depth = 0) {
   if (depth > 40) return null;
   if (typeof o === 'string') return o.replace(/["<>`]/g, '');
@@ -13746,7 +13778,7 @@ function openPlanFile(file) {
     try {
       if (ifc) { importIfcText(r.result, file.name); return; }
       const o = JSON.parse(r.result); if (!o.floors) throw new Error(L('geçersiz dosya', 'invalid file'));
-      newTabSlot(); loadProject(o, L('Dosya açıldı', 'File opened')); closeModal();
+      freshIdIfTaken(o); newTabSlot(); loadProject(o, L('Dosya açıldı', 'File opened')); closeModal();
     } catch (er) { toast(L('Dosya açılamadı: ', 'Could not open file: ') + er.message); }
   }, 30);
   r.readAsText(file);
