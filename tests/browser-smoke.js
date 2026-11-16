@@ -2382,6 +2382,51 @@ check('touch action bar: shown on touch / hidden with a mouse, copy an object in
   return `pasted ${r.type} across tabs, undo ok`;
 });
 
+check('sync & share: ☁ modal, share link + QR round trip, hostile link sanitised, another window updates the project', async page => {
+  const info = await page.evaluate(`(async () => {
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    loadProject(newProject()); addRectWalls(0, 0, 500, 400); commit(); refresh();
+    const id0 = P.id, out = { idOk: /^[\\w-]{6,40}$/.test(id0) };
+    document.getElementById('bSync').click();
+    out.modal = ui.modal; out.sendTo = /Send to another device|Başka cihaza gönder/.test(document.getElementById('modal').textContent);
+    out.driveNote = !!document.getElementById('syncDrive');
+    await shareShow('link');
+    const url = document.getElementById('shUrl').value;
+    out.link = url.indexOf('#fp=1.') > 0; out.qr = !!document.querySelector('#shOut .sh-qr svg path');
+    closeModal();
+    // the link opens in a new tab; the hash is cleared
+    const name0 = P.name, walls0 = F().walls.length;
+    newTabSlot(); loadProject(newProject()); addRectWalls(0, 0, 100, 100); commit();
+    const tabsBefore = tabs.length;
+    P.id = 'other' + uid(); commit();
+    location.hash = url.slice(url.indexOf('#'));
+    await wait(400);
+    out.opened = P.id === id0 && F().walls.length === walls0 && P.name === name0;
+    out.hashCleared = !location.hash;
+    out.reusedTab = tabs.length === tabsBefore; // same P.id was already open → that tab is reused
+    // hostile link: attribute break-out in bg.src and a name with markup
+    const evil = newProject(); evil.id = 'evil' + uid(); evil.name = '<img src=x onerror="window.__xss=1">Kötü';
+    evil.bg = { src: '" onload="window.__xss=2', x: 0, y: 0, w: 100, h: 100, op: 1 };
+    evil.floors[0].texts.push({ id: 'tx' + uid(), x: 0, y: 0, text: '"><img src=x onerror="window.__xss=3">', size: 20, color: '#000', rot: 0 });
+    location.hash = '#fp=' + await shareEncode(evil);
+    await wait(400); render(); await wait(200);
+    out.evilOpened = /^evil/.test(P.id); out.noXss = window.__xss === undefined; out.bgDropped = P.bg === null; out.nameKept = /Kötü/.test(P.name) && !/[<>"]/.test(P.name);
+    // another window saves the same project: this one takes it, undo goes back
+    await wait(500);
+    const mod = JSON.parse(JSON.stringify(P)); mod.name = 'From another window';
+    const ch = new BroadcastChannel('fp-projects');
+    ch.postMessage({ t: 'proj', win: 'otherwin', id: P.id, s: JSON.stringify(mod) });
+    await wait(300); ch.close();
+    out.bc = P.name === 'From another window';
+    undo(); out.bcUndo = P.name !== 'From another window';
+    out.cmd = cmdList().some(c => c.id === 'sync') && cmdList().some(c => c.id === 'share');
+    return out;
+  })()`);
+  const bad = Object.entries(info).filter(([, v]) => v !== true && v !== 'sync').map(([k, v]) => k + '=' + v);
+  if (info.modal !== 'sync') bad.push('modal=' + info.modal);
+  if (bad.length) throw new Error('sync / share: ' + bad.join(', '));
+});
+
 check('Revit export: levels, walls, doors with swing, floors, rooms and furniture solids in feet with y up; the button downloads it', async page => {
   const r = await page.evaluate(`(() => {
     if (ui.view3d) show3D(false);

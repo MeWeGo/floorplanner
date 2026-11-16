@@ -2054,6 +2054,7 @@ function newProject(a) {
   a = a || {};
   return {
     v: 2,
+    id: uid() + uid(), // stable project id (the app's P.id): sync and share links know the project by it
     name: a.name || 'New Project',
     grid: num(a.grid, 10, 'grid'),
     gridType: 'square',
@@ -2078,6 +2079,7 @@ function normalizeProject(obj) {
   if (!obj || typeof obj !== 'object' || !Array.isArray(obj.floors) || !obj.floors.length)
     throw new Error('Not a floor planner project: expected an object with a non-empty "floors" array (export JSON from the app, or start from new_project)');
   obj.v = obj.v || 2;
+  if (typeof obj.id !== 'string' || !/^[\w-]{6,40}$/.test(obj.id)) obj.id = uid() + uid();
   obj.name = obj.name || 'New Project';
   obj.grid = +obj.grid || 10; obj.gridType = obj.gridType || 'square';
   obj.wallT = +obj.wallT || 20; obj.wallH = +obj.wallH || 270;

@@ -4,6 +4,7 @@
 
 const $ = s => document.querySelector(s);
 const uid = () => Math.random().toString(36).slice(2, 9);
+const pid = () => uid() + uid(); // kalıcı proje kimliği (P.id): eşitleme ve paylaşım projeyi adından bağımsız tanır
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const rnd = (v, n = 1) => Math.round(v / n) * n;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -138,7 +139,7 @@ const FLOOR_H_MIN = 100, FLOOR_H_MAX = 800; // kat yüksekliği alanı ve MCP ad
 // { key: [tr, en] } → <select> seçenekleri (merdiven / rampa / cam alanları)
 const biOpts = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
 const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], dims: [], texts: [], sketches: [], drafts: [], groups: [], slabFloor: 'none', slabColor: null });
-const newProject = () => ({ v: 2, name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, textures: [], floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
+const newProject = () => ({ v: 2, id: pid(), name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, textures: [], floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
 const F = () => P.floors[fi];
 const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', dims: 'dim', texts: 'text', sketches: 'sketch', drafts: 'draft' };
 // Köşe listesiyle (pts) tanımlanan türler; POLY_KINDS kapalı poligonlar (köşe/kenar tutamaçları)
@@ -568,7 +569,8 @@ function commit() {
 function autosave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
-    try { await dbPut('state', JSON.parse(JSON.stringify(P)), 'auto'); await dbPut('state', tabsState(), 'tabs'); }
+    saveTimer = null;
+    try { await dbPut('state', JSON.parse(JSON.stringify(P)), 'auto'); await dbPut('state', tabsState(), 'tabs'); syncNoteSave(); }
     catch (e) {
       try { localStorage.setItem('fp_auto', JSON.stringify(P)); }
       catch (e2) { toast(L('Otomatik kayıt başarısız', 'Autosave failed')); }
@@ -979,6 +981,7 @@ function doorLeaf3D(par, o, lw, H, cx, y0, cz, sgn, C, flush = false) {
   }
 }
 function normalizeProject(P) {
+  if (typeof P.id !== 'string' || !/^[\w-]{6,40}$/.test(P.id)) P.id = uid() + uid(); // eski projeler bir kez kimlik alır
   if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
@@ -6997,6 +7000,8 @@ function cmdList() {
     act('iso', '◇', 'İzometrik görünüş (3B)', 'Isometric view (3D)', '', () => { if (!ui.view3d) show3D(true); set3DCam('iso'); }, true, 'axonometric aksonometrik isometric parallel paralel'),
     act('proj', '▱', 'Perspektif / paralel izdüşüm (3B)', 'Perspective / parallel projection (3D)', '', () => { if (!ui.view3d) show3D(true); if (T3) setProjection(!(T3.ortho || T3.orthoAfterWalk)); }, true, 'orthographic ortografik perspective camera kamera'),
     act('save', '💾', 'Kaydet', 'Save project', 'Ctrl+S', saveBrowser, true),
+    act('sync', '☁', 'Eşitle ve paylaş (Google Drive)', 'Sync & share (Google Drive)', '', () => syncModal(), true, 'drive google cloud bulut senkron sync eşitle'),
+    act('share', '📲', 'Başka cihaza gönder (link / QR)', 'Send to another device (link / QR)', '', () => { syncModal(); shareShow('link'); }, true, 'share link qr telefon phone tablet paylaş gönder'),
     act('print', '🖨', 'Yazdır / çıktı', 'Print / plot', '', exportPrint, true, 'pdf paper kağıt'),
     act('png', '🖼', 'PNG dışa aktar', 'Export PNG', '', () => $('#bPng').click(), true, 'image görsel render'),
     act('svg', '⬇', 'SVG dışa aktar', 'Export SVG', '', () => $('#bSvg').click(), false),
@@ -8347,6 +8352,7 @@ async function projectsModal() {
     <button class="btn primary" id="mSave">💾 ${L('Aktif projeyi kaydet', 'Save active project')} (“${esc(P.name)}”)</button>
     <button class="btn" id="mJson">⬇ ${L('JSON indir', 'Download JSON')}</button>
     <button class="btn" id="mOpenF">📂 ${L('Dosya aç (JSON / IFC)', 'Open file (JSON / IFC)')}</button>
+    <button class="btn" id="mSync">☁ ${L('Eşitle ve paylaş…', 'Sync & share…')}</button>
   </div>
   <h4 class="muted" style="margin:12px 0 8px">${L('Tarayıcıda kayıtlı projeler', 'Projects saved in browser')} (${list.length})</h4>
   ${list.length ? `<div class="cards">${list.map((it, idx) => {
@@ -8366,6 +8372,7 @@ async function projectsModal() {
   $('#mSave').onclick = async () => { await saveBrowser(); projectsModal(); };
   $('#mJson').onclick = () => downloadJson(P);
   $('#mOpenF').onclick = () => $('#fileOpen').click();
+  $('#mSync').onclick = syncModal;
   $('#modal').querySelectorAll('[data-open]').forEach(b => b.onclick = () => {
     const it = list[+b.dataset.open];
     if (it) { newTabSlot(); loadProject(JSON.parse(JSON.stringify(it.project)), isEN() ? `Opened “${it.name}”` : `“${it.name}” açıldı`); closeModal(); }
@@ -8378,6 +8385,669 @@ async function projectsModal() {
     const it = list[+b.dataset.rm];
     if (it && confirm(isEN() ? `Delete “${it.name}”?` : `“${it.name}” silinsin mi?`)) { await dbDel('projects', it.name); projectsModal(); }
   });
+}
+
+/* ---------- Proje eşitleme: başka cihaza gönder (link / QR) + Google Drive + pencereler arası ----------
+   Sunucu yok. Üç yol, hepsi ☁ Eşitle penceresinde (syncModal):
+   • Başka cihaza gönder: plan sıkıştırılıp linkin #fp= kısmına konur (shareLink); kısa linkler QR kodu olarak
+     da gösterilir (QR-ENCODE bloğu). Link açılınca openShareHash() planı yeni sekmede açar. Doku görselleri linke girmez.
+   • Google Drive: kullanıcının kendi Drive'ındaki "Floor Planner" klasörüne her proje bir JSON dosyası
+     (appProperties.fpId = P.id), her doku ayrı bir dosya (appProperties.fpTex) olarak yazılır. Yalnızca drive.file
+     izni istenir (uygulamanın oluşturduğu dosyalar). Etkin sekmenin projesi her otomatik kayıttan sonra eşitlenir;
+     çakışma (iki cihazda da değişmiş) kullanıcıya sorulur. Drive linki (#fpd=<dosya>) aynı hesaptaki başka cihazda açar.
+   • Aynı tarayıcıdaki pencereler: BroadcastChannel ile kaydedilen proje diğer pencerelere gider; aynı projeyi
+     açık tutan pencere onu alır (geri al ile eski hâline dönülür), böylece iki pencere birbirinin kaydını ezmez. */
+/* QR-ENCODE:BEGIN — pure QR Code encoder (byte mode, ECC L / M, versions 1–40), no DOM.
+   qrEncode(text, ecl = 'M') → { size, mods: Uint8Array(size*size) (1 = dark) } or null if too long.
+   qrSvg(text, ecl) → an SVG string (4-module quiet zone), or '' when it does not fit. */
+const QR_ECC = {
+  L: [[-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
+      [-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25], 1],
+  M: [[-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28],
+      [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49], 0],
+};
+function qrRawModules(v) {
+  let r = (16 * v + 128) * v + 64;
+  if (v >= 2) { const n = Math.floor(v / 7) + 2; r -= (25 * n - 10) * n - 55; if (v >= 7) r -= 36; }
+  return r;
+}
+function qrMul(x, y) {
+  let z = 0;
+  for (let i = 7; i >= 0; i--) { z = (z << 1) ^ ((z >>> 7) * 0x11d); z ^= ((y >>> i) & 1) * x; }
+  return z & 0xff;
+}
+function qrDivisor(deg) {
+  const r = new Array(deg).fill(0); r[deg - 1] = 1; let root = 1;
+  for (let i = 0; i < deg; i++) {
+    for (let j = 0; j < deg; j++) { r[j] = qrMul(r[j], root); if (j + 1 < deg) r[j] ^= r[j + 1]; }
+    root = qrMul(root, 2);
+  }
+  return r;
+}
+function qrRemainder(data, div) {
+  const r = div.map(() => 0);
+  for (const b of data) { const f = b ^ r.shift(); r.push(0); div.forEach((c, i) => { r[i] ^= qrMul(c, f); }); }
+  return r;
+}
+function qrAlign(v) {
+  if (v === 1) return [];
+  const n = Math.floor(v / 7) + 2, size = v * 4 + 17;
+  const step = v === 32 ? 26 : Math.ceil((v * 4 + 4) / (n * 2 - 2)) * 2;
+  const r = [6];
+  for (let p = size - 7; r.length < n; p -= step) r.splice(1, 0, p);
+  return r;
+}
+function qrEncode(text, ecl = 'M') {
+  const bytes = Array.from(new TextEncoder().encode(String(text)));
+  const T = QR_ECC[ecl] || QR_ECC.M;
+  let v = 1, cap = 0;
+  for (; v <= 40; v++) {
+    cap = Math.floor(qrRawModules(v) / 8) - T[0][v] * T[1][v];
+    if (4 + (v < 10 ? 8 : 16) + bytes.length * 8 <= cap * 8) break;
+  }
+  if (v > 40) return null;
+  // data bits
+  const bits = [];
+  const put = (val, n) => { for (let i = n - 1; i >= 0; i--) bits.push((val >>> i) & 1); };
+  put(4, 4); put(bytes.length, v < 10 ? 8 : 16); bytes.forEach(b => put(b, 8));
+  put(0, Math.min(4, cap * 8 - bits.length));
+  put(0, (8 - bits.length % 8) % 8);
+  const data = [];
+  for (let i = 0; i < bits.length; i += 8) { let b = 0; for (let j = 0; j < 8; j++) b = (b << 1) | bits[i + j]; data.push(b); }
+  for (let p = 0xec; data.length < cap; p ^= 0xec ^ 0x11) data.push(p);
+  // error correction + interleave
+  const nb = T[1][v], el = T[0][v], raw = Math.floor(qrRawModules(v) / 8);
+  const nShort = nb - raw % nb, shortLen = Math.floor(raw / nb), div = qrDivisor(el);
+  const blocks = [];
+  for (let i = 0, k = 0; i < nb; i++) {
+    const dat = data.slice(k, k + shortLen - el + (i < nShort ? 0 : 1)); k += dat.length;
+    const ecc = qrRemainder(dat, div);
+    if (i < nShort) dat.push(0);
+    blocks.push(dat.concat(ecc));
+  }
+  const cw = [];
+  for (let i = 0; i < blocks[0].length; i++) {
+    blocks.forEach((b, j) => { if (i !== shortLen - el || j >= nShort) cw.push(b[i]); });
+  }
+  // function patterns
+  const size = v * 4 + 17, M = new Uint8Array(size * size), F = new Uint8Array(size * size);
+  const set = (x, y, d) => { M[y * size + x] = d ? 1 : 0; F[y * size + x] = 1; };
+  for (let i = 0; i < size; i++) { set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+  [[3, 3], [size - 4, 3], [3, size - 4]].forEach(([x, y]) => {
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      const d = Math.max(Math.abs(dx), Math.abs(dy)), xx = x + dx, yy = y + dy;
+      if (xx >= 0 && xx < size && yy >= 0 && yy < size) set(xx, yy, d !== 2 && d !== 4);
+    }
+  });
+  const al = qrAlign(v), last = al.length - 1;
+  al.forEach((ax, i) => al.forEach((ay, j) => {
+    if ((i === 0 && j === 0) || (i === 0 && j === last) || (i === last && j === 0)) return;
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(ax + dx, ay + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+  }));
+  const fmt = mask => {
+    const d = (T[2] << 3) | mask; let r = d;
+    for (let i = 0; i < 10; i++) r = (r << 1) ^ ((r >>> 9) * 0x537);
+    const b = ((d << 10) | r) ^ 0x5412, g = i => ((b >>> i) & 1) === 1;
+    for (let i = 0; i <= 5; i++) set(8, i, g(i));
+    set(8, 7, g(6)); set(8, 8, g(7)); set(7, 8, g(8));
+    for (let i = 9; i < 15; i++) set(14 - i, 8, g(i));
+    for (let i = 0; i < 8; i++) set(size - 1 - i, 8, g(i));
+    for (let i = 8; i < 15; i++) set(8, size - 15 + i, g(i));
+    set(8, size - 8, true);
+  };
+  fmt(0);
+  if (v >= 7) {
+    let r = v;
+    for (let i = 0; i < 12; i++) r = (r << 1) ^ ((r >>> 11) * 0x1f25);
+    const b = (v << 12) | r;
+    for (let i = 0; i < 18; i++) {
+      const bit = ((b >>> i) & 1) === 1, a = size - 11 + i % 3, c = Math.floor(i / 3);
+      set(a, c, bit); set(c, a, bit);
+    }
+  }
+  // codewords (zig-zag)
+  let bi = 0;
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right = 5;
+    for (let vert = 0; vert < size; vert++) for (let j = 0; j < 2; j++) {
+      const x = right - j, up = ((right + 1) & 2) === 0, y = up ? size - 1 - vert : vert;
+      if (!F[y * size + x] && bi < cw.length * 8) { M[y * size + x] = (cw[bi >>> 3] >>> (7 - (bi & 7))) & 1; bi++; }
+    }
+  }
+  // mask: pick the lowest (simplified) penalty
+  const inv = (m, x, y) => [
+    (x + y) % 2 === 0, y % 2 === 0, x % 3 === 0, (x + y) % 3 === 0,
+    (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0, (x * y) % 2 + (x * y) % 3 === 0,
+    ((x * y) % 2 + (x * y) % 3) % 2 === 0, ((x + y) % 2 + (x * y) % 3) % 2 === 0][m];
+  const applyMask = m => { for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (!F[y * size + x] && inv(m, x, y)) M[y * size + x] ^= 1; };
+  const penalty = () => {
+    let p = 0, dark = 0;
+    for (let a = 0; a < 2; a++) for (let i = 0; i < size; i++) {
+      let run = 0, prev = -1;
+      for (let j = 0; j < size; j++) {
+        const c = a ? M[j * size + i] : M[i * size + j];
+        if (c === prev) { run++; if (run === 5) p += 3; else if (run > 5) p++; } else { run = 1; prev = c; }
+      }
+    }
+    for (let y = 0; y < size - 1; y++) for (let x = 0; x < size - 1; x++) {
+      const c = M[y * size + x];
+      if (c === M[y * size + x + 1] && c === M[(y + 1) * size + x] && c === M[(y + 1) * size + x + 1]) p += 3;
+    }
+    for (let i = 0; i < M.length; i++) dark += M[i];
+    return p + Math.floor(Math.abs(dark * 20 - M.length * 10) / M.length) * 10;
+  };
+  let best = 0, bestP = Infinity;
+  for (let m = 0; m < 8; m++) {
+    applyMask(m); fmt(m);
+    const p = penalty();
+    if (p < bestP) { bestP = p; best = m; }
+    applyMask(m);
+  }
+  applyMask(best); fmt(best);
+  return { size, mods: M, version: v };
+}
+function qrSvg(text, ecl = 'M', px = 6) {
+  const q = qrEncode(text, ecl);
+  if (!q) return '';
+  const n = q.size + 8;
+  let d = '';
+  for (let y = 0; y < q.size; y++) for (let x = 0; x < q.size; x++) if (q.mods[y * q.size + x]) d += 'M' + (x + 4) + ' ' + (y + 4) + 'h1v1h-1z';
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + n + ' ' + n + '" width="' + n * px + '" height="' + n * px +
+    '" shape-rendering="crispEdges"><rect width="' + n + '" height="' + n + '" fill="#fff"/><path d="' + d + '" fill="#000"/></svg>';
+}
+/* QR-ENCODE:END */
+const APP_URL = /^https?:$/.test(location.protocol) ? location.origin + location.pathname : 'https://mewego.github.io/floorplanner/';
+const SHARE_QR_MAX = 1600; // karakter: daha uzun bir linkin QR kodu ekrandan güvenle okunmaz
+function b64url(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function unb64url(s) {
+  s = String(s).replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '=';
+  const b = atob(s), a = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+  return a;
+}
+const streamBytes = async (bytes, ts) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(ts)).arrayBuffer());
+// plan → "1.<deflate-raw, base64url>" ("0.<base64url>" = sıkıştırılmamış, CompressionStream olmayan tarayıcılar)
+async function shareEncode(p) {
+  const raw = new TextEncoder().encode(JSON.stringify(p));
+  if (typeof CompressionStream === 'function') { try { return '1.' + b64url(await streamBytes(raw, new CompressionStream('deflate-raw'))); } catch (e) { } }
+  return '0.' + b64url(raw);
+}
+async function shareDecode(s) {
+  const m = /^([01])\.([\w-]+)$/.exec(String(s || '').trim());
+  if (!m) throw new Error(L('geçersiz link', 'invalid link'));
+  let b = unb64url(m[2]);
+  if (m[1] === '1') {
+    if (typeof DecompressionStream !== 'function') throw new Error(L('bu tarayıcı sıkıştırılmış linki açamıyor', 'this browser cannot open compressed links'));
+    b = await streamBytes(b, new DecompressionStream('deflate-raw'));
+  }
+  const o = sanitizePlan(JSON.parse(new TextDecoder().decode(b)));
+  if (!o || !Array.isArray(o.floors)) throw new Error(L('geçersiz plan', 'invalid plan'));
+  return o;
+}
+const shareLink = async (p = P) => APP_URL + '#fp=' + await shareEncode(JSON.parse(JSON.stringify(p)));
+const driveLink = fileId => APP_URL + '#fpd=' + fileId;
+// aynı projeyi (P.id) taşıyan sekme: etkin olan önce
+function tabIndexOf(id) {
+  if (!id) return -1;
+  if (P && P.id === id) return tabIdx;
+  return tabs.findIndex((t, i) => i !== tabIdx && t.P && t.P.id === id);
+}
+// başka yerden gelen sürümü etkin sekmeye koyar; geri al önceki hâle döndürür. Değişiklik yoksa false.
+function adoptActive(o) {
+  absorbTextures(o);
+  const s = JSON.stringify(normalizeProject(o));
+  if (s === JSON.stringify(P)) return false;
+  hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 150) hist.shift(); hi = hist.length - 1;
+  restore(s); ensureTextures(P); syncTab(); autosave(); updateUndo();
+  return true;
+}
+function openSharedPlan(o, msg) {
+  const i = tabIndexOf(o.id);
+  if (i >= 0) { if (i !== tabIdx) switchTab(i); adoptActive(o); toast(msg); return; }
+  newTabSlot(); loadProject(o, msg);
+}
+// #fp=… (plan linkte) ya da #fpd=… (Drive dosyası) ile açılış; adres çubuğu temizlenir ki yenileme yeniden açmasın
+async function openShareHash() {
+  const m = /^#(fp|fpd)=(.+)$/.exec(location.hash || '');
+  if (!m) return;
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
+  if (m[1] === 'fp') {
+    try { openSharedPlan(await shareDecode(m[2]), L('Paylaşılan proje açıldı', 'Shared project opened')); }
+    catch (e) { toast(L('Link açılamadı: ', 'Could not open the link: ') + e.message); }
+  } else if (/^[\w-]{10,200}$/.test(m[2])) {
+    if (gd.token) gdOpenFile(m[2]); else { gd.pendingOpen = m[2]; syncModal(); }
+  }
+}
+window.addEventListener('hashchange', openShareHash);
+
+/* --- pencereler arası (BroadcastChannel) --- */
+const WIN_ID = uid() + uid();
+let bc = null;
+function bcInit() {
+  if (bc || typeof BroadcastChannel !== 'function') return;
+  try { bc = new BroadcastChannel('fp-projects'); } catch (e) { return; }
+  bc.onmessage = e => {
+    const d = e.data;
+    if (!d || d.t !== 'proj' || d.win === WIN_ID || typeof d.s !== 'string' || !d.id) return;
+    if (saveTimer) return; // bu pencerede kaydedilmeyi bekleyen değişiklik var: onunki de birazdan gelir, son düzenleme kazanır
+    let o; try { o = JSON.parse(d.s); } catch (er) { return; }
+    if (P && P.id === d.id) {
+      if (ui.drag || ui.draw || ui.polyPts || ui.modal === 'parts') return; // çizim / sürükleme ortasında plan değişmesin
+      if (adoptActive(o)) toast(L('Bu proje başka bir pencerede değişti — güncellendi (geri al: Ctrl+Z)', 'This project changed in another window — updated (undo: Ctrl+Z)'));
+      return;
+    }
+    tabs.forEach((t, i) => {
+      if (i === tabIdx || !t.P || t.P.id !== d.id || JSON.stringify(t.P) === d.s) return;
+      t.P = normalizeProject(o); t.hist = (t.hist || []).slice(0, (t.hi ?? 0) + 1).concat(d.s); t.hi = t.hist.length - 1;
+    });
+  };
+}
+function bcPost() {
+  if (!bc || !P || !P.id) return;
+  try { bc.postMessage({ t: 'proj', win: WIN_ID, id: P.id, s: JSON.stringify(P) }); } catch (e) { }
+}
+// autosave() başarılı olunca çağrılır
+function syncNoteSave() { bcPost(); gdSyncSoon(); }
+
+/* --- Google Drive --- */
+// Google Cloud Console → OAuth istemci kimliği (Web uygulaması, yetkili JavaScript kaynağı: https://mewego.github.io).
+// Boşsa ☁ Eşitle penceresinin "Gelişmiş" bölümünden bir kimlik girilebilir (çatallar / kendi sunucusu için).
+const GDRIVE_CLIENT_ID = '995148037458-0su6gsdurmfjs1l0u1kpqgp0tu3rsddd.apps.googleusercontent.com';
+const GD_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const GD_API = 'https://www.googleapis.com/drive/v3', GD_UP = 'https://www.googleapis.com/upload/drive/v3';
+const GD_FOLDER = 'Floor Planner';
+const gd = { token: null, exp: 0, busy: false, again: false, status: 'off', err: '', last: 0, folder: null, client: null, timer: null, pendingOpen: null, texDone: new Set(), conflict: null, list: null };
+const lsJson = k => { try { return JSON.parse(localStorage.getItem(k) || '{}') || {}; } catch (e) { return {}; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } };
+const gdCfg = () => lsJson('fp_gdrive');            // { on, user, cid }
+const gdSetCfg = c => lsSet('fp_gdrive', c);
+const gdClientId = () => String(gdCfg().cid || GDRIVE_CLIENT_ID || '').trim();
+const gdWeb = () => /^https?:$/.test(location.protocol);
+const gdUsable = () => gdWeb() && !!gdClientId();
+const gdState = () => lsJson('fp_gdrive_state');    // { [P.id]: { f: dosya id, v: Drive sürümü, h: son eşitlenen içeriğin özeti } }
+function gdSetState(id, v) { const s = gdState(); if (v) s[id] = v; else delete s[id]; lsSet('fp_gdrive_state', s); }
+// FNV-1a + uzunluk: "son eşitlenen içerik bu mu?" sorusu için yeterli
+function strHash(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36) + ':' + s.length;
+}
+const gdName = p => String(p.name || 'plan').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 100) + '.fp.json';
+const gdQ = s => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+let gisProm = null;
+const gisReady = () => !!(window.google && google.accounts && google.accounts.oauth2);
+function gdLoadGis() {
+  if (gisReady()) return Promise.resolve();
+  if (!gisProm) gisProm = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+    s.onload = () => res();
+    s.onerror = () => { gisProm = null; s.remove(); rej(new Error(L('Google oturum açma yüklenemedi (internet bağlantısı?)', 'Could not load Google sign-in (internet connection?)'))); };
+    document.head.appendChild(s);
+  });
+  return gisProm;
+}
+// Açılır pencere tıklamanın içinde açılmalı: betik henüz yoksa önce yüklenir, kullanıcı bir kez daha tıklar
+function gdConnect() {
+  if (!gdUsable()) { syncModal(); return; }
+  if (!gisReady()) { gd.status = 'busy'; gdUI(); gdLoadGis().then(() => { gd.status = gdCfg().on ? 'auth' : 'off'; gdUI(); toast(L('Google hazır — bağlanmak için bir kez daha tıklayın', 'Google is ready — click once more to connect')); }, e => { gd.status = 'off'; gd.err = e.message; gdUI(); }); return; }
+  const cid = gdClientId();
+  if (!gd.client || gd.client._cid !== cid) {
+    gd.client = google.accounts.oauth2.initTokenClient({
+      client_id: cid, scope: GD_SCOPE, callback: gdOnToken,
+      error_callback: e => { gd.status = gd.token ? 'on' : (gdCfg().on ? 'auth' : 'off'); gd.err = e && e.type === 'popup_closed' ? '' : ((e && (e.message || e.type)) || ''); gdUI(); },
+    });
+    gd.client._cid = cid;
+  }
+  const c = gdCfg(), o = { prompt: c.on ? '' : 'consent' };
+  if (c.user) o.login_hint = c.user;
+  gd.client.requestAccessToken(o);
+}
+async function gdOnToken(r) {
+  if (!r || r.error || !r.access_token) { gd.status = gdCfg().on ? 'auth' : 'off'; gd.err = (r && (r.error_description || r.error)) || ''; gdUI(); return; }
+  if (google.accounts.oauth2.hasGrantedAllScopes && !google.accounts.oauth2.hasGrantedAllScopes(r, GD_SCOPE)) {
+    gd.status = 'off'; gd.err = L('Drive izni verilmedi — izin ekranında Drive kutusunu işaretleyin.', 'Drive access was not granted — tick the Drive box on the consent screen.'); gdUI(); return;
+  }
+  gd.token = r.access_token; gd.exp = Date.now() + Math.max(60, (+r.expires_in || 3600) - 120) * 1000; gd.err = '';
+  try { sessionStorage.setItem('fp_gd_tok', JSON.stringify({ t: gd.token, exp: gd.exp })); } catch (e) { }
+  const c = gdCfg(); c.on = true; gdSetCfg(c);
+  gd.status = 'on'; gdUI();
+  try { const a = await (await gdFetch(`${GD_API}/about?fields=user(emailAddress,displayName)`)).json(); c.user = (a.user && a.user.emailAddress) || ''; gdSetCfg(c); } catch (e) { }
+  if (gd.pendingOpen) { const f = gd.pendingOpen; gd.pendingOpen = null; await gdOpenFile(f); }
+  gd.list = null; gdUI(); gdSync(false);
+}
+function gdExpired() {
+  gd.token = null; gd.exp = 0;
+  try { sessionStorage.removeItem('fp_gd_tok'); } catch (e) { }
+  gd.status = gdCfg().on ? 'auth' : 'off'; gdUI();
+}
+function gdDisconnect() {
+  try { if (gd.token && gisReady()) google.accounts.oauth2.revoke(gd.token, () => { }); } catch (e) { }
+  const c = gdCfg(); c.on = false; delete c.user; gdSetCfg(c);
+  gd.conflict = null; gd.list = null; gd.folder = null; gdExpired();
+  toast(L('Google Drive bağlantısı kesildi. Drive’daki dosyalar duruyor.', 'Disconnected from Google Drive. Your files stay in Drive.'));
+}
+async function gdFetch(url, opt = {}) {
+  if (!gd.token || Date.now() > gd.exp) { gdExpired(); throw new Error('auth'); }
+  const r = await fetch(url, { ...opt, headers: { ...(opt.headers || {}), Authorization: 'Bearer ' + gd.token } });
+  if (r.status === 401) { gdExpired(); throw new Error('auth'); }
+  if (!r.ok) {
+    let m = 'HTTP ' + r.status;
+    try { const j = await r.json(); m = (j.error && j.error.message) || m; } catch (e) { }
+    const er = new Error(m); er.status = r.status; throw er;
+  }
+  return r;
+}
+async function gdList(q, fields) {
+  const out = []; let tok = '';
+  do {
+    const r = await (await gdFetch(`${GD_API}/files?q=${encodeURIComponent(q + ' and trashed=false')}&fields=${encodeURIComponent('nextPageToken,' + fields)}&pageSize=200&spaces=drive${tok ? '&pageToken=' + encodeURIComponent(tok) : ''}`)).json();
+    out.push(...(r.files || [])); tok = r.nextPageToken || '';
+  } while (tok);
+  return out;
+}
+async function gdFolder() {
+  if (gd.folder) return gd.folder;
+  const f = await gdList(`mimeType='application/vnd.google-apps.folder' and name='${gdQ(GD_FOLDER)}'`, 'files(id)');
+  if (f.length) return (gd.folder = f[0].id);
+  const r = await (await gdFetch(`${GD_API}/files?fields=id`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: GD_FOLDER, mimeType: 'application/vnd.google-apps.folder' }) })).json();
+  return (gd.folder = r.id);
+}
+// id null = yeni dosya; çok parçalı yükleme (üst veri + içerik) tek istekte
+async function gdUpload(id, meta, blob) {
+  const b = 'fp' + uid() + uid();
+  const body = new Blob([`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: ${blob.type || 'application/octet-stream'}\r\n\r\n`, blob, `\r\n--${b}--`]);
+  return (await gdFetch(`${GD_UP}/files${id ? '/' + id : ''}?uploadType=multipart&fields=id,version`, { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + b }, body })).json();
+}
+const gdTexFile = async id => (await gdList(`appProperties has { key='fpTex' and value='${gdQ(id)}' }`, 'files(id)'))[0];
+async function gdPushTex(p) {
+  for (const t of p.textures || []) {
+    if (gd.texDone.has(t.id)) continue;
+    const e = TEX.get(t.id); if (!e || !e.data) continue;
+    if (!(await gdTexFile(t.id))) await gdUpload(null, { name: 'texture-' + t.id, parents: [await gdFolder()], appProperties: { fpTex: t.id } }, dataUrlBlob(e.data));
+    gd.texDone.add(t.id);
+  }
+}
+async function gdPullTex(p) {
+  for (const t of p.textures || []) {
+    if (TEX.has(t.id)) continue;
+    try { const r = await dbGet('textures', t.id); if (r && r.data) { cacheTex(t.id, r.data); continue; } } catch (e) { }
+    const f = await gdTexFile(t.id); if (!f) continue;
+    const blob = await (await gdFetch(`${GD_API}/files/${f.id}?alt=media`)).blob();
+    const data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); });
+    if (typeof data === 'string' && data.startsWith('data:image/')) { cacheTex(t.id, data); dbPut('textures', { id: t.id, data }).catch(() => { }); gd.texDone.add(t.id); }
+  }
+}
+function gdSyncSoon(ms = 3000) {
+  clearTimeout(gd.timer);
+  if (gd.token) gd.timer = setTimeout(() => gdSync(false), ms);
+}
+// Etkin sekmenin projesini Drive ile eşitler: yalnız burada değiştiyse yükler, yalnız orada değiştiyse alır, ikisinde de değiştiyse sorar
+async function gdSync(manual) {
+  if (!gd.token) { if (manual) gdConnect(); return; }
+  if (gd.busy) { gd.again = true; return; }
+  if (gd.conflict || !P) { gdUI(); return; }
+  gd.busy = true; gd.status = 'busy'; gdUI();
+  try {
+    await gdSyncOnce(manual);
+    gd.status = gd.conflict ? 'conflict' : 'on'; gd.err = ''; gd.last = Date.now();
+  } catch (e) {
+    if (e.message !== 'auth') { gd.status = 'err'; gd.err = e.message; if (manual) toast(L('Drive eşitlemesi başarısız: ', 'Drive sync failed: ') + e.message); }
+  } finally {
+    gd.busy = false; gdUI();
+    if (gd.again) { gd.again = false; gdSyncSoon(1500); }
+  }
+}
+async function gdSyncOnce(manual, retry) {
+  const s = JSON.stringify(P), p = JSON.parse(s), h = strHash(s);
+  let st = gdState()[p.id];
+  if (!st) {
+    const found = await gdList(`appProperties has { key='fpId' and value='${gdQ(p.id)}' }`, 'files(id)');
+    if (found.length) st = { f: found[0].id, v: '', h: '' };          // bu proje Drive'da var, bu cihaz henüz eşitlemedi
+    else {
+      if (isPristine(p)) return;                                     // boş planlar Drive'ı doldurmasın
+      await gdPushTex(p);
+      const r = await gdUpload(null, { name: gdName(p), parents: [await gdFolder()], mimeType: 'application/json', appProperties: { fp: '1', fpId: p.id } }, new Blob([s], { type: 'application/json' }));
+      gdSetState(p.id, { f: r.id, v: String(r.version), h });
+      if (manual) toast(L('Proje Google Drive’a kaydedildi', 'Project saved to Google Drive'));
+      return;
+    }
+  }
+  let meta = null;
+  try { meta = await (await gdFetch(`${GD_API}/files/${st.f}?fields=id,version,trashed`)).json(); }
+  catch (e) { if (e.status !== 404) throw e; }
+  if (!meta || meta.trashed) { gdSetState(p.id, null); if (!retry) await gdSyncOnce(manual, true); return; } // Drive'da silinmiş: yeniden oluştur
+  const remoteChanged = String(meta.version) !== st.v, localChanged = h !== st.h;
+  if (!remoteChanged && !localChanged) { if (manual) toast(L('Drive ile eşit ✓', 'In sync with Drive ✓')); return; }
+  if (!remoteChanged) {
+    await gdPushTex(p);
+    const r = await gdUpload(st.f, { name: gdName(p) }, new Blob([s], { type: 'application/json' }));
+    gdSetState(p.id, { f: st.f, v: String(r.version), h });
+    return;
+  }
+  const rs = await (await gdFetch(`${GD_API}/files/${st.f}?alt=media`)).text();
+  if (strHash(rs) === h) { gdSetState(p.id, { f: st.f, v: String(meta.version), h }); return; }
+  let o; try { o = sanitizePlan(JSON.parse(rs)); } catch (e) { throw new Error(L('Drive’daki dosya okunamadı', 'The file in Drive could not be read')); }
+  if (!o || !Array.isArray(o.floors)) throw new Error(L('Drive’daki dosya bir plan değil', 'The file in Drive is not a plan'));
+  o.id = p.id;
+  if (!P || P.id !== p.id || JSON.stringify(P) !== s) { gd.again = true; return; } // bu arada sekme / plan değişti: sonra tekrar
+  if (!localChanged) {
+    await gdPullTex(o);
+    if (adoptActive(o)) toast(L('Başka bir cihazdaki değişiklikler alındı (geri al: Ctrl+Z)', 'Changes from another device were applied (undo: Ctrl+Z)'));
+    gdSetState(p.id, { f: st.f, v: String(meta.version), h: strHash(JSON.stringify(P)) });
+    return;
+  }
+  gd.conflict = { id: p.id, f: st.f, v: String(meta.version), remote: o };
+  if (!ui.modal || ui.modal === 'sync') syncModal(); // başka bir pencere açıksa yalnız ☁ düğmesi uyarır
+}
+// çakışma: 'mine' = bu cihazdakini yükle, 'theirs' = Drive'dakini al, 'both' = ikisini de ayrı proje olarak tut
+async function gdResolve(how) {
+  const c = gd.conflict; if (!c) return;
+  gd.conflict = null;
+  if (!P || P.id !== c.id) { gdUI(); return; }
+  try {
+    if (how === 'mine') {
+      const s = JSON.stringify(P); await gdPushTex(P);
+      const r = await gdUpload(c.f, { name: gdName(P) }, new Blob([s], { type: 'application/json' }));
+      gdSetState(c.id, { f: c.f, v: String(r.version), h: strHash(s) });
+      toast(L('Bu cihazdaki sürüm Drive’a yazıldı', 'This device’s version was written to Drive'));
+    } else if (how === 'theirs') {
+      await gdPullTex(c.remote); adoptActive(c.remote);
+      gdSetState(c.id, { f: c.f, v: c.v, h: strHash(JSON.stringify(P)) });
+      toast(L('Drive’daki sürüm alındı (geri al: Ctrl+Z)', 'The Drive version was applied (undo: Ctrl+Z)'));
+    } else {
+      P.id = pid(); P.name = P.name + L(' (bu cihaz)', ' (this device)'); $('#pname').value = P.name; commit();
+      await gdPullTex(c.remote);
+      newTabSlot(); loadProject(c.remote, L('Drive’daki sürüm yeni sekmede açıldı', 'The Drive version opened in a new tab'));
+      gdSetState(c.id, { f: c.f, v: c.v, h: strHash(JSON.stringify(P)) });
+    }
+    gd.status = 'on';
+  } catch (e) { if (e.message !== 'auth') { gd.status = 'err'; gd.err = e.message; } }
+  if (ui.modal === 'sync') closeModal();
+  gdUI(); gdSyncSoon(1500);
+}
+async function gdOpenFile(fileId) {
+  try {
+    gd.status = 'busy'; gdUI();
+    const meta = await (await gdFetch(`${GD_API}/files/${fileId}?fields=id,name,version,appProperties`)).json();
+    const s = await (await gdFetch(`${GD_API}/files/${fileId}?alt=media`)).text();
+    const o = sanitizePlan(JSON.parse(s));
+    if (!o || !Array.isArray(o.floors)) throw new Error(L('geçersiz plan', 'invalid plan'));
+    o.id = (meta.appProperties && meta.appProperties.fpId) || o.id || pid();
+    await gdPullTex(o);
+    if (ui.modal === 'sync') closeModal();
+    const msg = isEN() ? `Opened “${o.name || meta.name}” from Google Drive` : `“${o.name || meta.name}” Google Drive’dan açıldı`;
+    const i = tabIndexOf(o.id);
+    if (i >= 0) { if (i !== tabIdx) switchTab(i); toast(msg); gd.status = 'on'; gdSync(false); return; } // açık sekme: eşitleme uzlaştırır
+    newTabSlot(); loadProject(o, msg);
+    gdSetState(o.id, { f: fileId, v: String(meta.version), h: strHash(JSON.stringify(P)) });
+    gd.status = 'on';
+  } catch (e) {
+    gd.status = gd.token ? 'on' : gd.status;
+    if (e.message !== 'auth') toast(L('Drive dosyası açılamadı: ', 'Could not open the Drive file: ') + e.message);
+  }
+  gdUI();
+}
+async function gdLoadList() {
+  try {
+    gd.list = (await gdList(`appProperties has { key='fp' and value='1' }`, 'files(id,name,modifiedTime,appProperties)'))
+      .sort((a, b) => String(b.modifiedTime).localeCompare(String(a.modifiedTime)));
+  } catch (e) { gd.list = []; if (e.message !== 'auth') gd.err = e.message; }
+  gdUI();
+}
+const GD_ST = {
+  off: ['', 'Eşitle ve paylaş: Google Drive, başka cihaza gönder', 'Sync & share: Google Drive, send to another device'],
+  on: ['ok', 'Google Drive ile eşitleniyor', 'Syncing with Google Drive'],
+  busy: ['busy', 'Google Drive ile eşitleniyor…', 'Syncing with Google Drive…'],
+  auth: ['warn', 'Google Drive oturumu sona erdi — yeniden bağlanmak için tıklayın', 'Google Drive session ended — click to reconnect'],
+  conflict: ['warn', 'Bu proje iki cihazda da değişti — seçmek için tıklayın', 'This project changed on two devices — click to choose'],
+  err: ['warn', 'Google Drive eşitlemesi başarısız — ayrıntı için tıklayın', 'Google Drive sync failed — click for details'],
+};
+function gdUI() {
+  const b = $('#bSync');
+  if (b) { const s = GD_ST[gd.status] || GD_ST.off; b.dataset.st = s[0]; b.title = L(s[1], s[2]); }
+  const el = document.getElementById('syncDrive');
+  if (el && ui.modal === 'sync') el.innerHTML = gdSectionHtml();
+}
+function gdSectionHtml() {
+  const loc = isEN() ? 'en-US' : 'tr-TR', c = gdCfg();
+  const adv = `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer;font-size:12px">${L('Gelişmiş: Google OAuth istemci kimliği', 'Advanced: Google OAuth client ID')}</summary>
+    <p class="muted" style="font-size:12px">${L('Uygulamayı kendi adresinizde yayınlıyorsanız Google Cloud Console’da bir OAuth istemci kimliği (Web uygulaması) oluşturun, bu adresi yetkili JavaScript kaynağı olarak ekleyin ve kimliği buraya yapıştırın.', 'If you host the app at your own address, create an OAuth client ID (web application) in Google Cloud Console, add this address as an authorised JavaScript origin and paste the ID here.')}</p>
+    <div class="row"><input id="gdCid" style="flex:1;min-width:200px" placeholder="…apps.googleusercontent.com" value="${esc(c.cid || '')}"><button class="btn sm" id="gdCidSave">${L('Kaydet', 'Save')}</button></div></details>`;
+  if (!gdWeb()) return `<p class="muted">${L('Google Drive eşitlemesi web sürümünde çalışır:', 'Google Drive sync works in the web version:')} <a href="${APP_URL}" target="_blank" rel="noopener">${APP_URL}</a></p>`;
+  if (!gdClientId()) return `<p class="muted">${L('Google Drive eşitlemesi bu adreste henüz ayarlanmadı.', 'Google Drive sync is not set up at this address yet.')}</p>${adv}`;
+  const err = gd.err ? `<p style="color:var(--danger);font-size:12px">⚠ ${esc(gd.err)}</p>` : '';
+  const pend = gd.pendingOpen ? `<p><b>☁ ${L('Google Drive ile paylaşılan bir proje açılmayı bekliyor — açmak için bağlanın.', 'A project shared through Google Drive is waiting — connect to open it.')}</b></p>` : '';
+  if (!gd.token) {
+    const re = c.on;
+    return `${pend}<p class="muted">${re ? L('Oturum sona erdi. Eşitlemeye devam etmek için yeniden bağlanın.', 'The session ended. Reconnect to continue syncing.')
+      : L('Projeleriniz Google Drive’ınızdaki <b>Floor Planner</b> klasörüne kaydedilir ve aynı Google hesabıyla girdiğiniz her cihazda güncel kalır. Uygulama yalnızca kendi oluşturduğu dosyaları görebilir.', 'Your projects are saved to a <b>Floor Planner</b> folder in your Google Drive and stay up to date on every device where you sign in with the same Google account. The app can only see the files it created.')} <a href="https://mewego.github.io/floorplanner/privacy.html${isEN() ? '' : '#tr'}" target="_blank" rel="noopener">${L('Gizlilik', 'Privacy')}</a></p>
+      <div class="row"><button class="btn primary" data-gd="connect">☁ ${re ? L('Yeniden bağlan', 'Reconnect') : L('Google Drive’a bağlan', 'Connect Google Drive')}</button>${re ? `<button class="btn" data-gd="off">${L('Eşitlemeyi kapat', 'Turn sync off')}</button>` : ''}</div>${err}${re ? '' : adv}`;
+  }
+  if (gd.conflict) {
+    return `<p><b>⚠ ${L('Bu proje hem bu cihazda hem başka bir cihazda değişti.', 'This project changed on this device and on another device.')}</b> ${L('Hangisi kalsın?', 'Which one should stay?')}</p>
+      <div class="row"><button class="btn primary" data-gd="mine">💻 ${L('Bu cihazdakini tut', 'Keep this device’s')}</button><button class="btn" data-gd="theirs">☁ ${L('Drive’dakini al', 'Use the Drive version')}</button><button class="btn" data-gd="both">⧉ ${L('İkisini de tut', 'Keep both')}</button></div>
+      <p class="muted" style="font-size:12px">${L('“İkisini de tut” bu cihazdakini yeni bir proje yapar ve Drive’dakini yeni sekmede açar. Geri al her zaman çalışır.', '“Keep both” makes this device’s copy a new project and opens the Drive version in a new tab. Undo always works.')}</p>`;
+  }
+  const st = P && gdState()[P.id];
+  const stat = gd.status === 'busy' ? L('eşitleniyor…', 'syncing…') : st ? L('bu proje eşitlendi', 'this project is synced') + (gd.last ? ' • ' + new Date(gd.last).toLocaleTimeString(loc, { timeStyle: 'short' }) : '')
+    : (P && isPristine(P) ? L('boş proje — çizince kaydedilir', 'empty project — saved once you draw') : L('bu proje henüz Drive’da değil', 'this project is not in Drive yet'));
+  const list = gd.list == null ? `<p class="muted">${L('Yükleniyor…', 'Loading…')}</p>` : gd.list.length ? `<div class="gd-list">${gd.list.map(f => {
+    const open = P && f.appProperties && f.appProperties.fpId === P.id;
+    return `<div class="gd-row"><span>📐 ${esc(String(f.name).replace(/\.fp\.json$/i, ''))}</span><span class="muted">${f.modifiedTime ? new Date(f.modifiedTime).toLocaleString(loc, { dateStyle: 'short', timeStyle: 'short' }) : ''}</span>${open ? `<span class="muted">${L('açık', 'open')}</span>` : `<button class="btn sm" data-gdopen="${esc(f.id)}">${L('Aç', 'Open')}</button>`}</div>`;
+  }).join('')}</div>` : `<p class="muted">${L('Drive’da henüz proje yok.', 'No projects in Drive yet.')}</p>`;
+  return `${pend}<p>✅ ${L('Bağlı', 'Connected')}${c.user ? ': <b>' + esc(c.user) + '</b>' : ''} — <span class="muted">${stat}</span></p>
+    <div class="row"><button class="btn primary" data-gd="sync">⟳ ${L('Şimdi eşitle', 'Sync now')}</button><button class="btn" data-gd="list">📂 ${L('Listeyi yenile', 'Refresh list')}</button><button class="btn" data-gd="off">${L('Bağlantıyı kes', 'Disconnect')}</button></div>${err}
+    <h4 class="muted" style="margin:10px 0 6px">${L('Drive’daki projelerim', 'My projects in Drive')}</h4>${list}`;
+}
+// ☁ Eşitle penceresi: Drive bölümü + başka cihaza gönder
+function syncModal() {
+  if (gdUsable() && !gisReady()) gdLoadGis().catch(() => { }); // bağlan düğmesi tek tıkla açılabilsin
+  openModal(`<h2>☁ ${L('Eşitle ve paylaş', 'Sync & share')} <button class="btn sm" data-close>✕</button></h2>
+  <h3 style="margin:4px 0 6px">Google Drive</h3>
+  <div id="syncDrive">${gdSectionHtml()}</div>
+  <h3 style="margin:16px 0 6px">📲 ${L('Başka cihaza gönder', 'Send to another device')}</h3>
+  <p class="muted" style="margin-top:0">${L('Bu projeyi telefonda, tablette ya da başka bir bilgisayarda açmak için bir link oluşturun: QR kodunu okutun ya da linki kendinize gönderin.', 'Make a link to open this project on a phone, a tablet or another computer: scan the QR code or send the link to yourself.')}</p>
+  <div class="row">
+    <button class="btn primary" data-sh="link">🔗 ${L('Link oluştur', 'Make a link')}</button>
+    ${gd.token ? `<button class="btn" data-sh="drive" title="${L('Kısa link; aynı Google hesabıyla açılır', 'Short link; opens with the same Google account')}">☁ ${L('Drive linki', 'Drive link')}</button>` : ''}
+    <button class="btn" data-sh="file">📤 ${L('Dosya olarak gönder', 'Send as a file')}</button>
+  </div>
+  <div id="shOut"></div>`, 'sync');
+  if (gd.token && gd.list == null) gdLoadList();
+}
+async function shareShow(kind) {
+  const out = document.getElementById('shOut'); if (!out) return;
+  out.innerHTML = `<p class="muted">${L('Hazırlanıyor…', 'Preparing…')}</p>`;
+  let url = '', note = '';
+  try {
+    if (kind === 'drive') {
+      await gdSync(false);
+      const st = P && gdState()[P.id];
+      if (!st) throw new Error(isPristine(P) ? L('boş proje Drive’a kaydedilmez', 'an empty project is not saved to Drive') : L('proje Drive’a kaydedilemedi', 'the project could not be saved to Drive'));
+      url = driveLink(st.f);
+      note = L('Aynı Google hesabıyla giriş yapılan cihazda açılır ve eşitlenmeye devam eder.', 'Opens on a device signed in to the same Google account and keeps syncing.');
+    } else {
+      url = await shareLink(P);
+      note = (P.textures || []).length ? L('Özel doku görselleri linke girmez (yüzeyler düz renk görünür); onlar için dosya gönderin ya da Google Drive kullanın.', 'Custom texture images are not in the link (surfaces show a plain colour); send a file or use Google Drive for them.') : '';
+    }
+  } catch (e) { out.innerHTML = `<p style="color:var(--danger)">⚠ ${esc(e.message)}</p>`; return; }
+  const qr = url.length <= SHARE_QR_MAX ? qrSvg(url, url.length > 600 ? 'L' : 'M', 4) : '';
+  out.innerHTML = `<div class="sh-out">
+    ${qr ? `<div class="sh-qr">${qr}</div>` : `<p class="muted">${L('Bu plan bir QR koduna sığmayacak kadar büyük — linki kopyalayıp kendinize gönderin ya da Google Drive kullanın.', 'This plan is too large for a QR code — copy the link and send it to yourself, or use Google Drive.')}</p>`}
+    <div class="row"><input id="shUrl" readonly value="${esc(url)}" style="flex:1;min-width:200px"><button class="btn sm primary" data-sh="copy">📋 ${L('Kopyala', 'Copy')}</button>${navigator.share ? `<button class="btn sm" data-sh="share">📤 ${L('Paylaş…', 'Share…')}</button>` : ''}</div>
+    ${note ? `<p class="muted" style="font-size:12px">${note}</p>` : ''}
+    <p class="muted" style="font-size:12px">${L('Link yalnızca bu projenin şu anki hâlini taşır; sonraki değişiklikler için yeni link gerekir.', 'The link carries this project as it is now; later changes need a new link.')}${kind === 'drive' ? '' : ' ' + L('Linki alan herkes planı görebilir.', 'Anyone who gets the link can see the plan.')}</p></div>`;
+}
+async function shareFile() {
+  const name = fname('json'), blob = new Blob([JSON.stringify(bundleTextures(P))], { type: 'application/json' });
+  try {
+    const file = new File([blob], name, { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: P.name }); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  download(name, blob);
+  toast(L('JSON indirildi — diğer cihazda 📂 Aç ile açın', 'JSON downloaded — open it on the other device with 📂 Open'));
+}
+$('#modal').addEventListener('click', e => {
+  if (ui.modal !== 'sync') return;
+  const g = e.target.closest('[data-gd]'), o = e.target.closest('[data-gdopen]'), s = e.target.closest('[data-sh]');
+  if (o) { gdOpenFile(o.dataset.gdopen); return; }
+  if (e.target.closest('#gdCidSave')) {
+    const v = ($('#gdCid').value || '').trim(), c = gdCfg();
+    if (v && !/^[\w.-]+\.apps\.googleusercontent\.com$/.test(v)) { toast(L('Geçersiz istemci kimliği', 'Invalid client ID')); return; }
+    if (v) c.cid = v; else delete c.cid; gdSetCfg(c); gd.client = null; syncModal(); return;
+  }
+  if (g) {
+    const a = g.dataset.gd;
+    if (a === 'connect') gdConnect();
+    else if (a === 'sync') gdSync(true);
+    else if (a === 'list') { gd.list = null; gdUI(); gdLoadList(); }
+    else if (a === 'off') gdDisconnect();
+    else gdResolve(a);
+    return;
+  }
+  if (s) {
+    const a = s.dataset.sh;
+    if (a === 'link' || a === 'drive') shareShow(a);
+    else if (a === 'file') shareFile();
+    else if (a === 'copy') copyText($('#shUrl').value).then(ok => toast(ok ? L('Link kopyalandı', 'Link copied') : L('Kopyalanamadı — linki seçip kopyalayın', 'Could not copy — select the link and copy it')));
+    else if (a === 'share') navigator.share({ title: P.name, url: $('#shUrl').value }).catch(() => { });
+  }
+});
+// açılışta: oturum belirteci (aynı sekmede yenileme), pencereler arası kanal, #fp / #fpd linki
+async function syncBoot() {
+  bcInit();
+  try { const t = JSON.parse(sessionStorage.getItem('fp_gd_tok') || 'null'); if (t && t.t && t.exp > Date.now() + 60000) { gd.token = t.t; gd.exp = t.exp; } } catch (e) { }
+  const c = gdCfg();
+  gd.status = gd.token ? 'on' : (c.on && gdUsable() ? 'auth' : 'off');
+  if (c.on && gdUsable()) gdLoadGis().catch(() => { });
+  gdUI();
+  await openShareHash();
+  if (gd.token) gdSyncSoon(800);
+  setInterval(() => { if (gd.token && !document.hidden) gdSync(false); }, 60000);         // başka cihazdaki değişiklikleri al
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && gd.token) gdSyncSoon(400); });
+}
+// link / Drive'dan gelen planlar: hiçbir metin bir HTML / SVG özniteliğinden taşamasın (" < > ` atılır; uygulamada
+// tek tırnaklı öznitelik yok), arka plan görseli yalnızca data:image/… olabilir
+function sanitizePlan(o, depth = 0) {
+  if (depth > 40) return null;
+  if (typeof o === 'string') return o.replace(/["<>`]/g, '');
+  if (typeof o === 'number') return isFinite(o) ? o : 0;
+  if (Array.isArray(o)) return o.map(v => sanitizePlan(v, depth + 1));
+  if (o && typeof o === 'object') {
+    const r = {};
+    for (const k of Object.keys(o)) if (k !== '__proto__' && k !== 'constructor' && k !== 'prototype') r[k.replace(/["<>`]/g, '')] = sanitizePlan(o[k], depth + 1);
+    if (depth === 0) {
+      if (r.bg && !(typeof r.bg.src === 'string' && /^data:image\/[\w.+-]+;base64,[\w+/=]+$/.test(r.bg.src))) r.bg = null;
+      if (r.texData && typeof r.texData === 'object') for (const id of Object.keys(r.texData)) if (!/^data:image\/[\w.+-]+(;base64)?,/.test(r.texData[id])) delete r.texData[id];
+    }
+    return r;
+  }
+  return typeof o === 'boolean' || o === null ? o : null;
 }
 
 /* ---------- Şablonlar ---------- */
@@ -8815,13 +9485,6 @@ function shot3DScale(w, h, maxSide = 3840, maxPixels = 12e6) {
   return Math.max(1, Math.min(ideal, maxSide / side, Math.sqrt(maxPixels / (w * h))));
 }
 
-function dataUrlBlob(url) {
-  const parts = String(url).split(','), head = parts[0] || '', b64 = parts[1] || '';
-  const mime = (head.match(/data:([^;]+)/) || [])[1] || 'image/png';
-  const bin = atob(b64), bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
-}
 
 /** PNG data URL of the current camera, oversampled. '' when 3D is not running. */
 function render3DDataUrl(scale) {
@@ -12920,6 +13583,7 @@ function applyLangUI() {
   $('#bNew').textContent = L('📄 Yeni', '📄 New');
   if (P) renderTabs();
   $('#bProjects').textContent = L('📁 Projelerim', '📁 My Projects');
+  $('#bSync').textContent = L('☁ Eşitle', '☁ Sync'); gdUI();
   $('#bSave').textContent = L('💾 Kaydet', '💾 Save');
   $('#bSave').title = L('Tarayıcıya kaydet (Ctrl+S)', 'Save to browser (Ctrl+S)');
   $('#bJson').title = L('JSON dosyası olarak indir', 'Download as JSON file');
@@ -13003,7 +13667,8 @@ function setLang(nl) {
   applyLangUI();
 }
 
-$('#bNew').onclick = templatesModal; $('#bProjects').onclick = projectsModal; $('#bSave').onclick = saveBrowser;
+$('#bNew').onclick = templatesModal; $('#bProjects').onclick = projectsModal;
+$('#bSync').onclick = () => (gd.status === 'auth' ? gdConnect() : syncModal()); $('#bSave').onclick = saveBrowser;
 $('#bJson').onclick = () => downloadJson(P);
 $('#bRevit').onclick = () => exportBim('revit');
 $('#bIfc').onclick = () => exportBim('ifc');
@@ -13145,6 +13810,7 @@ applyLangUI();
   if (saved && saved.floors) { loadProject(saved); translateDefaultNames(); refresh(); }
   else { P = newProject(); loadProject(P); templatesModal(); }
   try { restoreTabs(await dbGet('state', 'tabs')); } catch (e) { }
+  syncBoot();              // pencereler arası kanal, Google Drive oturumu, #fp / #fpd paylaşım linki
   setTimeout(fit, 50);
   aiBridgeBoot();          // connect to a running local bridge, if any
   prewarm3D();             // 3B'yi boşta hazırla: ilk 3B düğmesi bekletmesin (#106)
