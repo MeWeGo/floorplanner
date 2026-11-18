@@ -4699,7 +4699,7 @@ const FP3D_2D_ONLY = new Set(['calib', 'plotwin']); // 3B'de anlamı olmayan ara
 let fp3DPick = null; // 3B'den iletilen olay sırasında ışının kestiği nesne kimlikleri (idsAt / pickDataId bunları döndürür)
 function setTool(t) {
   ui.draw = null; ui.typed = ''; ui.dimStart = null; ui.polyPts = null; ui.calib = null; ui.drag = null; ui.pen = null; ui.mAxis = null; ui.secStart = null; ui.dr = null; ui.attRef = null;
-  ui.btn = t; placing = null;
+  ui.btn = t; placing = null; stopWalkPick();
   if (t === 'attach') { const r = selObjs().find(x => x.kind === 'furn' && surfFaces(x.o).length); if (r) ui.attRef = r.o.id; toast(r ? L('2/2: Bu yüzeye göre şekillenecek duvarlara tıkla', '2/2: Click the walls to shape to this surface') : L('1/2: Önce çatıya ya da eğik bir öğeye tıkla', '1/2: Click a roof or tilted item first')); }
   if (t === 'mirror' && !selObjs().some(x => XFORM_KINDS.has(x.kind))) toast(L('Aynalamak için önce nesneleri seç', 'Select the objects to mirror first'));
   if (t === 'door') { placing = { type: 'op', def: OPDEF.door, rot: 0 }; tool = 'place'; }
@@ -7096,6 +7096,7 @@ window.addEventListener('keydown', e => {
     if (e.key === 'Escape' && fp3DOn()) { escTool(); fp3DPreview(); return; } // 3B çizim aracı: Esc aracı / yarım çizimi bitirir, 3B'de kalınır
     if (!ctrl && fp3DOn() && fp3DTypedKey(e, k)) { /* Enter ve yazılan ölçü aşağıdaki 2B tuş yoluna düşer */ } else {
     if (e.key === 'Escape' && tool === 'place') { setTool('select'); return; } // 3B yerleştirmeyi bitir, 3B'de kal
+    if (ui.walkPick && (e.key === 'Escape' || e.key === 'Enter')) { e.preventDefault(); if (e.key === 'Enter') startWalkPick(); else stopWalkPick(); return; } // 👁 başlangıç seçimi: Enter = en büyük oda
     if (e.key === 'Escape') { if (T3 && T3.walk) exitWalk(true); else show3D(false); return; }
     if (tool === 'place' && placing && !ctrl && k === 'r') { // 3B yerleştirme: R = döndür (mobilya) / menteşe yönü (kapı)
       if (placing.type === 'furn') placing.rot = ((placing.rot || 0) + 90) % 360; else placing.flip = placing.flip ? 0 : 1;
@@ -11029,6 +11030,7 @@ function setOutline(on) {
 }
 function show3D(on) {
   if (on && (!window.THREE || !THREE.OrbitControls)) { toast(L('3B için internet bağlantısı gerekli (Three.js yüklenemedi)', 'Internet connection required for 3D (Three.js failed to load)')); return; }
+  if (!on) stopWalkPick();
   ui.view3d = on; keys3D.clear(); $('#v3d').style.display = on ? 'block' : 'none'; syncViewSwitch();
   $('#zoomctl').style.display = on ? 'none' : ''; updateTools(); syncExportTitles();
   if (on) {
@@ -11233,6 +11235,7 @@ function init3D() {
     d3 = null;
   }, { passive: true });
   r.domElement.addEventListener('pointerdown', e => { if (e.button === 0) downPt = { x: e.clientX, y: e.clientY }; });
+  r.domElement.addEventListener('pointermove', e => { if (ui.walkPick && !e.buttons) walkPickMove(e); }); // 👁: yürüme başlangıç işareti imleci izler
   r.domElement.addEventListener('pointermove', e => { if (place3DOn() && !e.buttons) place3DMove(e); }); // hayalet imleci izler (sürüklerken değil)
   r.domElement.addEventListener('pointermove', e => { if (!fp3DDrag && !e.buttons && fp3DOn()) fp3DMoveSoon(e); }); // araç önizlemesi imleci izler
   window.addEventListener('pointermove', e => { if (fp3DDrag) fp3DMoveSoon(e); });
@@ -11242,6 +11245,7 @@ function init3D() {
   r.domElement.addEventListener('pointerup', e => {
     const dp = downPt; downPt = null; // eski bir basış konumu sonraki tıkı tetiklemesin
     if (!dp || e.button !== 0 || Math.hypot(e.clientX - dp.x, e.clientY - dp.y) > 5) return;
+    if (ui.walkPick) { walkPickClick(e); return; } // 👁: tıklanan noktada yürümeye başla
     if (place3DOn()) { place3DMove(e); place3DClick(); return; } // 3B yerleştirme (yürüme modunda da)
     T3.cam.updateMatrixWorld(); scene.updateMatrixWorld();
     const rect = r.domElement.getBoundingClientRect();
@@ -11499,14 +11503,67 @@ function walkGroundAt(lv, p, z) {
   }
   return { g, block };
 }
-function enterWalk() {
+// at = { i, x, y }: kullanıcının seçtiği başlangıç noktası (👁 + tık); yoksa kameranın bulunduğu yer (set3DCam('eye'))
+function enterWalk(at) {
   if (!T3) return;
-  const c = T3.cam.position.clone(), t = T3.ctl.target.clone(), i = walkFloorIdx(); // göz noktası: izdüşüm değişmeden önce
+  const c = T3.cam.position.clone(), t = T3.ctl.target.clone(), i = at ? at.i : walkFloorIdx(); // göz noktası: izdüşüm değişmeden önce
   if (T3.ortho) { T3.orthoAfterWalk = true; setProjection(false); } // yürüme hep perspektif (#74); çıkınca paralele döner
-  const p = walkMove({ x: c.x, y: c.z }, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); // duvarın içinde başlamasın
-  T3.walk = { fi: i, x: p.x, y: p.y, z: 0, gz: 0, yaw: Math.atan2(t.z - c.z, t.x - c.x), pitch: -0.15, drag: null };
+  const p = walkMove(at ? { x: at.x, y: at.y } : { x: c.x, y: c.z }, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); // duvarın içinde başlamasın
+  T3.walk = { fi: i, x: p.x, y: p.y, z: 0, gz: 0, yaw: at ? walkSpawnYaw(c, t, at) : Math.atan2(t.z - c.z, t.x - c.x), pitch: -0.15, drag: null };
   T3.ctl.enabled = false; T3.ctl.maxPolarAngle = Math.PI; // yukarı bakınca render'daki ctl.update() bakışı kırpmasın
   applyWalkCam(); syncWalkUI();
+}
+/* --- Yürüme başlangıç noktası: 👁 önce "nerede duracaksın?" diye sorar; 3B'de tıklanan nokta (kat imlecin altındaki kat)
+   başlangıç olur ve bakış kameranın o noktaya baktığı yöndür. 👁 tekrar / Enter: en büyük oda (set3DCam('eye')); Esc: vazgeç. */
+// bakış: kameradan seçilen noktaya (yatay); tepeden bakarken kameranın hedef yönü, o da yoksa kuzey
+function walkSpawnYaw(c, t, at) {
+  const dx = at.x - c.x, dz = at.y - c.z;
+  if (Math.hypot(dx, dz) > 30) return Math.atan2(dz, dx);
+  const tx = t.x - c.x, tz = t.z - c.z;
+  return Math.hypot(tx, tz) > 1 ? Math.atan2(tz, tx) : -Math.PI / 2;
+}
+function startWalkPick() {
+  if (!T3 || !T3.fit) return;
+  if (ui.walkPick) { stopWalkPick(); set3DCam('eye'); return; } // ikinci basış: otomatik (en büyük oda)
+  if (T3.walk) exitWalk(true);
+  if (tool !== 'select') setTool('select'); // çizim / yerleştirme araçları tıkı almasın
+  ui.walkPick = true; ui.walkSpot = null; syncWalkUI();
+  toast(L('👁 Nerede durmak istediğinize tıklayın · 👁 / Enter: en büyük oda · Esc: vazgeç', '👁 Click where you want to stand · 👁 / Enter: largest room · Esc: cancel'));
+}
+function stopWalkPick() {
+  if (!ui.walkPick) return;
+  ui.walkPick = false; ui.walkSpot = null;
+  if (T3) { if (T3.ghost) T3.ghost.visible = false; if (T3.r) T3.r.domElement.style.cursor = ''; req3D(); }
+  syncWalkUI();
+}
+// imlecin altındaki ilk yüzey (yoksa yürüyenin katının zemin düzlemi) → { i: kat, x, y }; işareti oraya taşır
+function walkPickMove(e) {
+  if (!ui.walkPick || !T3 || !T3.scene) return;
+  const rect = T3.r.domElement.getBoundingClientRect();
+  T3.cam.updateMatrixWorld(); T3.scene.updateMatrixWorld();
+  const rc = camRay(new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1));
+  const h = rc.intersectObjects(T3.scene.children, true).find(x => x.object.isMesh && x.object.visible && !x.object.userData.ghost && !x.object.userData.fpDecal && !(x.object.material && x.object.material.isShaderMaterial));
+  let spot = null;
+  if (h) spot = { i: fp3DFloorAtY(h.point.y), x: h.point.x, y: h.point.z };
+  else { const i = walkFloorIdx(), v = new THREE.Vector3(); if (rc.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -walkElev(i)), v)) spot = { i, x: v.x, y: v.z }; }
+  ui.walkSpot = spot;
+  T3.r.domElement.style.cursor = 'crosshair';
+  const g = ghost3D();
+  if (!spot) g.visible = false;
+  else {
+    const p = walkMove({ x: spot.x, y: spot.y }, { x: 0, y: 0 }, walkSegsAt(spot.i), WALK.r); // duvara tıklanınca önüne çıkar
+    g.scale.set(WALK.r * 2, WALK.eye, WALK.r * 2); g.rotation.set(0, 0, 0);
+    g.position.set(p.x, walkElev(spot.i) + WALK.eye / 2, p.y); g.visible = true;
+  }
+  req3D();
+}
+function walkPickClick(e) {
+  if (e) walkPickMove(e);
+  const at = ui.walkSpot; if (!at || !P.floors[at.i]) return;
+  stopWalkPick();
+  if (at.i !== fi) { fi = at.i; sel = []; refresh(); } // 2B'deki etkin kat yürüyenin katı olur
+  T3.walkSaved = { pos: T3.cam.position.clone(), target: T3.ctl.target.clone() }; // Esc buraya döner
+  enterWalk(at);
 }
 function exitWalk(restore) {
   if (!T3 || !T3.walk) return;
@@ -11581,7 +11638,7 @@ function walkClick(obj, alt) {
 // 👁 düğmesi etkin görünür; kısa iki dilli ipucu (#walkHint, ilk kullanımda oluşturulur)
 function syncWalkUI() {
   const on = !!(T3 && T3.walk);
-  if ($('#b3dEye')) $('#b3dEye').classList.toggle('on', on);
+  if ($('#b3dEye')) $('#b3dEye').classList.toggle('on', on || !!ui.walkPick);
   if ($('#hud') && ui.view3d) $('#hud').style.display = on ? 'none' : ''; // yörünge ipucu (Q/E, Fare: Döndür) yürürken yanlış olur
   let h = document.getElementById('walkHint');
   if (!on) { if (h) h.style.display = 'none'; return; }
@@ -13451,11 +13508,8 @@ function place3DClick() {
   placeAt(ui.raw);
   if (F()[placing.type === 'op' ? 'ops' : 'furn'].length !== n) build3D(true); // eklendi → sahneyi tazele, araç açık kalır (art arda yerleştirme)
 }
-function place3DSync() {
-  if (!T3 || !T3.scene) return;
-  const o = place3DOn() ? ui.ghost : null;
-  T3.r.domElement.style.cursor = place3DOn() ? 'crosshair' : '';
-  if (!o) { if (T3.ghost) T3.ghost.visible = false; req3D(); return; }
+// kalıcı yarı saydam kutu (birim küp, ölçekle boyutlanır): 3B yerleştirme hayaleti ve yürüme başlangıç işareti; ışın görmez
+function ghost3D() {
   if (!T3.ghost) {
     const geo = new THREE.BoxGeometry(1, 1, 1), g = new THREE.Group();
     const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.35, depthWrite: false }));
@@ -13463,8 +13517,15 @@ function place3DSync() {
     m.userData.ghost = ln.userData.ghost = true; m.raycast = ln.raycast = () => {}; // ışın hayaleti görmez
     g.add(m, ln); g.userData = { ghost: true }; T3.ghost = g;
   }
-  const g = T3.ghost, elev = T3.ghostElev || 0;
-  if (g.parent !== T3.scene) T3.scene.add(g);
+  if (T3.ghost.parent !== T3.scene) T3.scene.add(T3.ghost);
+  return T3.ghost;
+}
+function place3DSync() {
+  if (!T3 || !T3.scene) return;
+  const o = place3DOn() ? ui.ghost : null;
+  T3.r.domElement.style.cursor = place3DOn() ? 'crosshair' : '';
+  if (!o) { if (T3.ghost && !ui.walkPick) T3.ghost.visible = false; req3D(); return; }
+  const g = ghost3D(), elev = T3.ghostElev || 0;
   if (placing.type === 'furn') {
     g.scale.set(Math.max(1, o.w), Math.max(1, o.h || 1), Math.max(1, o.d));
     g.position.set(o.x, elev + furnElev(o) + (o.h || 1) / 2, o.y); g.rotation.set(0, -(o.rot || 0) * Math.PI / 180, 0);
@@ -13671,7 +13732,7 @@ function applyLangUI() {
   if ($('#b3dIso')) $('#b3dIso').title = L('İzometrik görünüş (paralel)', 'Isometric view (parallel)');
   syncProjUI();
   if ($('#b3dTop')) $('#b3dTop').title = L('Üstten görünüm', 'Top view');
-  if ($('#b3dEye')) $('#b3dEye').title = L('Yürüme modu: göz hizasında gez (Esc: çık)', 'Walk mode: walk through at eye level (Esc: exit)');
+  if ($('#b3dEye')) $('#b3dEye').title = L('Yürüme modu: tıklayıp nerede duracağını seç, göz hizasında gez (Esc: çık)', 'Walk mode: click where to stand, then walk at eye level (Esc: exit)');
   syncWalkUI();
   if ($('#lblLayer')) $('#lblLayer').textContent = L('Katman', 'Layer');
   if ($('#b3dFloors')) $('#b3dFloors').title = L('Katları ayrı ayrı göster / gizle', 'Show / hide individual floors');
@@ -13717,7 +13778,7 @@ $('#b3dFit').onclick = () => set3DCam('fit');
 $('#b3dIso').onclick = () => set3DCam('iso');
 $('#b3dProj').onclick = () => { if (T3) setProjection(!(T3.ortho || T3.orthoAfterWalk)); };
 $('#b3dTop').onclick = () => set3DCam('top');
-$('#b3dEye').onclick = () => set3DCam('eye');
+$('#b3dEye').onclick = () => startWalkPick(); // önce nerede durulacağı seçilir (tekrar basış: en büyük oda)
 $('#sLayer').onchange = e => { if (layerById(e.target.value)) { P.activeLayer = e.target.value; commit(); refresh(); } };
 for (const [id, k] of [['b3dN', 'north'], ['b3dE', 'east'], ['b3dS', 'south'], ['b3dW', 'west']]) $('#' + id).onclick = () => set3DCam(k);
 $('#b3dShot').onclick = e => export3DRender(e && e.shiftKey);

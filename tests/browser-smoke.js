@@ -1740,7 +1740,7 @@ check('3D walk mode: climb a stair to the upper floor and walk back down through
   const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
   if (!ok || !in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
   const r = await page.evaluate(`(() => {
-    document.getElementById('b3dEye').click();
+    document.getElementById('b3dEye').click(); document.getElementById('b3dEye').click(); // 👁 twice = automatic spawn
     const w = T3.walk; if (!w) return { err: 'no walk mode' };
     const run = (yaw, secs) => { w.yaw = yaw; keys3D.add('w'); for (let i = 0; i < secs * 60; i++) walkStep(1 / 60); keys3D.delete('w'); for (let i = 0; i < 30; i++) walkStep(1 / 60); };
     w.x = 400; w.y = 570; w.yaw = -Math.PI / 2; applyWalkCam();
@@ -1799,11 +1799,24 @@ check('3D walk mode: W stops at a wall, passes an open door, Esc restores the or
   if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
 
   const entered = await page.evaluate(`(() => {
-    const orbit = T3.cam.position.clone();
-    document.getElementById('b3dEye').click();
-    const w = T3.walk; if (!w) return { err: 'eye button did not enter walk mode' };
+    document.getElementById('b3dEye').click();          // 👁 first asks where to stand
+    if (!ui.walkPick || T3.walk) return { err: 'eye button did not start picking a spawn point' };
+    // click the floor of the right-hand room (600, 200) on the real canvas, from the top view so no wall is in the way
+    set3DCam('top'); if (!ui.walkPick) return { err: 'a camera preset cancelled picking' };
+    T3.cam.updateMatrixWorld();
+    const cv = T3.r.domElement, rect = cv.getBoundingClientRect(), v = new THREE.Vector3(600, 0, 200).project(T3.cam);
+    const cx = rect.left + (v.x + 1) / 2 * rect.width, cy = rect.top + (1 - v.y) / 2 * rect.height;
+    const ev = t => cv.dispatchEvent(new PointerEvent(t, { clientX: cx, clientY: cy, button: 0, bubbles: true, pointerId: 1, isPrimary: true }));
+    ev('pointermove'); const mark = !!(T3.ghost && T3.ghost.visible); ev('pointerdown'); ev('pointerup');
+    let w = T3.walk; if (!w) return { err: 'clicking the floor did not start walk mode (spot ' + JSON.stringify(ui.walkSpot) + ')' };
+    if (!mark) return { err: 'no spawn marker under the cursor' };
+    if (Math.hypot(w.x - 600, w.y - 200) > 40) return { err: 'walk did not start at the clicked spot: ' + w.x.toFixed(0) + ', ' + w.y.toFixed(0) };
+    if (T3.ghost.visible) return { err: 'spawn marker still visible in walk mode' };
+    exitWalk(true); const orbit2 = T3.cam.position.clone(); // Esc later returns here
+    document.getElementById('b3dEye').click(); document.getElementById('b3dEye').click(); // twice = largest room
+    w = T3.walk; if (!w || ui.walkPick) return { err: 'pressing 👁 twice did not use the automatic spawn' };
     w.x = 200; w.y = 200; w.yaw = 0; w.pitch = 0; applyWalkCam();           // face the partition
-    return { orbit: [orbit.x, orbit.y, orbit.z], on: document.getElementById('b3dEye').classList.contains('on'),
+    return { orbit: [orbit2.x, orbit2.y, orbit2.z], on: document.getElementById('b3dEye').classList.contains('on'),
       hint: !!document.getElementById('walkHint') && document.getElementById('walkHint').style.display !== 'none' };
   })()`);
   if (entered.err) throw new Error(entered.err);
@@ -1927,7 +1940,7 @@ check('live realistic 3D view: sky on, CAD edges hidden, walk mode works, CAD vi
       r.grassContrast = mx - mn;
     }
     r.on = document.getElementById('b3dLive').classList.contains('on');
-    document.getElementById('b3dEye').click();
+    document.getElementById('b3dEye').click(); document.getElementById('b3dEye').click(); // 👁 twice = automatic spawn
     r.walk = !!T3.walk && !!T3.live;
     draw3D(performance.now());
     r.follow = !!T3.live && T3.live.sky.position.distanceTo(T3.cam.position) < 0.01;
@@ -2001,7 +2014,7 @@ check('3D: floors toggle individually and keep their relative heights (#85)', as
     r.lastLocked = box(ids[1]).disabled;
     document.querySelector('#v3dFloorList [data-vfall]').click(); r.back = ys();
     v3dOnly(ids[2]); v3dApply();
-    document.getElementById('b3dEye').click(); r.walkFi = T3.walk ? T3.walk.fi : -1; exitWalk(true);
+    document.getElementById('b3dEye').click(); document.getElementById('b3dEye').click(); r.walkFi = T3.walk ? T3.walk.fi : -1; exitWalk(true);
     P.floors.splice(2, 1); commit(); refresh(); sync3DFloors(); r.afterDelete = P.floors.every(v3dShown) && ui.v3dHide.size === 0;
     undo(); v3dOnly('all');
     r.same = JSON.stringify(P) === json0;
