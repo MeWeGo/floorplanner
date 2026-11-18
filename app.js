@@ -183,7 +183,7 @@ const view = { x: 0, y: 0, z: 0.5 };
 const MIN_ZOOM = 0.002, MAX_ZOOM = 40; // 40 px/cm: 1 mm = 4 px (detay çizimi); sınırda kısa bir uyarı çıkar
 let tool = 'select', sel = [], placing = null;
 const ui = { snap: true, angle: true, dims: true, outline: false, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
-const layersVis = { bg: true, rooms: true, walls: true, furn: true, furnLabel: true, furnIcon: true, dims: true, sketch: true, underlay: true }; // furnLabel / furnIcon (#84): yalnızca görünüm, veriye dokunmaz
+const layersVis = { bg: true, rooms: true, walls: true, furn: true, furnLabel: true, furnIcon: true, lightArea: false, dims: true, sketch: true, underlay: true }; // furnLabel / furnIcon (#84): yalnızca görünüm, veriye dokunmaz
 // Kat izdüşümü (issue #26): hangi kat altlık olarak gösterilir ('prev' = bir alt kat) ve opaklığı — görünüm ayarı, projeye kaydedilmez
 const underlay = { floor: 'prev', op: 0.2 };
 
@@ -1888,6 +1888,13 @@ function furnBody(f) {
 /* ---------- Aydınlatma sembolleri (#120) ----------
    Tavan / sarkıt / avize: daire + çarpı; gömme spot: iç içe daire; ray spot: çubuk + spotlar; aplik: duvara yaslı gövde + yarım daire
    (ön = +y, sırt duvarda); lambader / masa lambası / bahçe: daire + merkez nokta; LED şerit: ince çubuk + kesikli eksen. Açık ışığın ortasında ışık renginde nokta; kapalı ışık içi boş çizilir. */
+// ışık alanları katmanı (#121): açık armatürün etki alanı (lmToThree menzilinin yarısı), yalnızca tuvalde; dışa aktarılmaz
+function lightAreaSvg(f) {
+  let s = '';
+  for (const o of f.furn) { const q = lightP(o); if (!q || !q.on) continue; const r = lmToThree(q.lm).d * (q.kind === 'spot' ? 0.32 : 0.5);
+    s += `<circle cx="${o.x}" cy="${o.y}" r="${r}" fill="${q.col}" fill-opacity="0.1" stroke="${q.col}" stroke-opacity="0.45" stroke-dasharray="6 6" vector-effect="non-scaling-stroke" pointer-events="none"/>`; }
+  return s;
+}
 function lightSvg(f) {
   const C = pal(), q = lightP(f), hw = f.w / 2, hd = f.d / 2, sk = C.furnStroke, R = Math.min(hw, hd), col = f.color;
   const fop = `fill-opacity="${C.outline || !q.on ? 0 : C.furnOp}"`, sw = Math.max(1, Math.min(2, R / 8));
@@ -4082,7 +4089,7 @@ function layerStrings(f, live) {
     roomLabels: f.rooms.map(r => roomSvg(r, live)[1]).join('') + groupVarsSvg(f, live),
     walls: jointsSvg(f) + f.walls.map(w => wallSvg(w, live, f)).join('') + wallHollowSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
     ops: f.ops.map(o => opSvg(o, live)).join(''),
-    furn: f.furn.map(x => furnSvg(x, live)).join(''),
+    furn: (live && !ui.exporting && layersVis.lightArea ? lightAreaSvg(f) : '') + f.furn.map(x => furnSvg(x, live)).join(''),
     dims: f.dims.map(d => dimSvg(d, live)).join('') + (f.sections || []).map(x => sectionSvg(x, live)).join(''),
     texts: f.texts.map(t => textSvg(t, live)).join(''),
     sketches: (f.drafts || []).map(d => draftSvg(d, live)).join('') + (f.sketches || []).map(s => sketchSvg(s, live)).join(''),
@@ -6179,7 +6186,7 @@ function projectPanel() {
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
   h += `<div class="row"><button class="btn sm" data-act="wallhall" title="${L('Tüm katlardaki mevcut duvarları bu yüksekliğe getirir; kat bazlı yükseklikler sıfırlanır', 'Sets every existing wall on every floor to this height; per-floor heights are cleared')}">⬆ ${L('Mevcut tüm duvarlara uygula', 'Apply to all existing walls')}</button></div>`;
   h += layersPanelHtml();
-  h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['furnLabel', L('　↳ Mobilya yazıları', '　↳ Furniture labels')], ['furnIcon', L('　↳ Mobilya simgeleri (emoji)', '　↳ Furniture icons (emoji)')], ['dims', L('Ölçüler', 'Dimensions')], ['sketch', L('Çizimler (kalem & 2B çizim)', 'Sketches & 2D drafting')]].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
+  h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['furnLabel', L('　↳ Mobilya yazıları', '　↳ Furniture labels')], ['furnIcon', L('　↳ Mobilya simgeleri (emoji)', '　↳ Furniture icons (emoji)')], ['lightArea', L('　↳ Işık alanları', '　↳ Light areas')], ['dims', L('Ölçüler', 'Dimensions')], ['sketch', L('Çizimler (kalem & 2B çizim)', 'Sketches & 2D drafting')]].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
   if (P.floors.length > 1) {
     // Kat izdüşümü (issue #26): aç/kapa, referans kat, opaklık
     const opts = [['prev', L('Bir alt kat', 'Floor below')], ...P.floors.filter(x => x !== f).map(x => [x.id, x.name])];
@@ -9867,6 +9874,75 @@ function halton(i, base) {
 const nextFrame = () => new Promise(r => setTimeout(r, 0));
 
 /** Shadow-casting directional lights of the scene. */
+/* ---------- 3B aydınlatma (#121) ----------
+   Sabit ışık havuzu: T3.fix = 8 nokta + 4 spot ışık, bir kez kurulur. Sahnedeki ışık sayısı değişince bütün malzemeler yeniden
+   derlenir (#106); havuz sayıyı sabit tutar, armatürler havuza sıralanarak atanır (fixRank: parlaklık / uzaklık, yürüyenin / etkin
+   katın armatürleri öne). Havuzun dışında kalanlar da ampul (ember), hale (sprite) ve zemin ışık lekesiyle "yanık" görünür.
+   T3.fixList = build3D'de toplanan armatürler { o, fidx, on, kind, lm, col, beam, x, y, z } (y = ışığın çıktığı dünya kotu). */
+const FIX_PTS = 8, FIX_SPOTS = 4;
+// parlaklık → Three ışık şiddeti + menzil (eski ışık modu: şiddet kaynakta, menzilde sıfıra iner); tek eşleme
+function lmToThree(lm) { const v = Math.max(100, Math.min(10000, +lm || 800)); return { i: 0.55 * Math.sqrt(v / 800), d: Math.round(300 + 9 * Math.sqrt(v)) }; }
+// ışığın çıktığı yükseklik (eşyanın tabanından, cm)
+function fixAnchor(o) {
+  const h = +o.h || 0;
+  switch (o.type) { case 'pendant': return h * 0.12; case 'chandelier': return h * 0.3 + 7; case 'sconce': case 'wallOut': return h * 0.5; case 'floorLamp': return h - 15; case 'tableLamp': return h * 0.8; case 'bollard': return h - 8; case 'streetLamp': return h - 30; default: return 0; }
+}
+// açık ışığın gündüz katkısı: canlı görünümde güneş yükseldikçe azalır, CAD görünümünde sabit
+function fixDayFactor() {
+  if (!ui.live3d) return 0.45;
+  return clamp(1.15 - (ui.studio && Number.isFinite(ui.studio.alt) ? ui.studio.alt : 42) / 45, 0.25, 1);
+}
+// en etkili n armatür (yalnızca açık olanlar, kind filtresiyle): skor = lm / uzaklık², odak katındakiler ×3
+function fixRank(list, focus, n, spot) {
+  const sc = e => e.lm / ((e.x - focus.x) ** 2 + 0.5 * (e.y - focus.y) ** 2 + (e.z - focus.z) ** 2 + 40000) * (e.fidx === focus.fi ? 3 : 1);
+  return list.filter(e => e.on && (e.kind === 'spot') === !!spot).map(e => [sc(e), e]).sort((a, b) => b[0] - a[0]).slice(0, n).map(x => x[1]);
+}
+function fixFocus() {
+  const w = T3.walk;
+  return w ? { x: w.x, y: T3.cam.position.y, z: w.y, fi: w.fi } : { x: T3.ctl.target.x, y: T3.ctl.target.y, z: T3.ctl.target.z, fi };
+}
+function fixPool() {
+  if (!T3.fix) {
+    const pts = [], spots = [];
+    for (let i = 0; i < FIX_PTS; i++) pts.push(new THREE.PointLight(0xffffff, 0, 500, 2));
+    for (let i = 0; i < FIX_SPOTS; i++) { const l = new THREE.SpotLight(0xffffff, 0, 600, 0.4, 0.5, 2); spots.push(l); }
+    T3.fix = { pts, spots };
+  }
+  return T3.fix;
+}
+function assignFixLights() {
+  const pool = T3.fix; if (!pool) return;
+  const list = T3.fixList || [], fc = fixFocus(), k = fixDayFactor();
+  const set = (l, e) => { if (!e) { l.intensity = 0; return; } const t = lmToThree(e.lm); l.color.set(e.col); l.intensity = t.i * k; l.distance = t.d; l.position.set(e.x, e.y, e.z); };
+  fixRank(list, fc, FIX_PTS, false).concat(Array(FIX_PTS)).slice(0, FIX_PTS).forEach((e, i) => set(pool.pts[i], e));
+  fixRank(list, fc, FIX_SPOTS, true).concat(Array(FIX_SPOTS)).slice(0, FIX_SPOTS).forEach((e, i) => {
+    const l = pool.spots[i]; set(l, e); if (!e) return;
+    l.angle = clamp((e.beam || 40) / 2, 5, 60) * Math.PI / 180; l.target.position.set(e.x, e.y - 100, e.z); l.target.updateMatrixWorld();
+  });
+  T3.fixAt = { x: fc.x, y: fc.y, z: fc.z, t: performance.now() };
+}
+// her çizimde: odak 1 m'den fazla kaydıysa en çok 250 ms'de bir yeniden sırala (kare başına ayırma yok)
+function fixTick(now) {
+  if (!T3.fix || !T3.fixList || !T3.fixList.length) return;
+  const a = T3.fixAt; if (a && now - a.t < 250) return;
+  const fc = fixFocus(); if (a && (fc.x - a.x) ** 2 + (fc.y - a.y) ** 2 + (fc.z - a.z) ** 2 < 10000) return;
+  assignFixLights();
+}
+// yumuşak radyal doku (hale + zemin lekesi); tek, kalıcı
+let _glowTex = null;
+function glowTex() {
+  if (_glowTex) return _glowTex;
+  const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'), gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.25, 'rgba(255,255,255,0.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = gr; x.fillRect(0, 0, 64, 64); _glowTex = new THREE.CanvasTexture(c); return _glowTex;
+}
+// açık abajur kumaşı: ışık rengi ile beyaz arası (tam doygun turuncu görünmesin)
+function shade0(col) { const c = new THREE.Color(col).lerp(new THREE.Color(0xffffff), 0.45); return '#' + c.getHexString(); }
+function toggleLight3D(o) {
+  if (lightP(o).on) o.lon = 0; else delete o.lon;
+  commit(); refresh(); build3D(true);
+  toast(lightP(o).on ? L('💡 Işık açıldı', '💡 Light on') : L('Işık kapandı', 'Light off'));
+}
 function shadowLights(scene) {
   const out = [];
   if (scene && scene.traverse) scene.traverse(o => { if (o.isDirectionalLight && o.castShadow) out.push(o); });
@@ -9954,7 +10030,7 @@ async function render3DHQ(opts) {
       return toonOf.get(m);
     };
     scene.traverse(o => {
-      if (!o.isMesh || o === T3.ground || (sky && o === sky.mesh)) return;
+      if (!o.isMesh || o === T3.ground || (sky && o === sky.mesh) || o.userData.fpDecal) return; // ışık lekeleri / temas gölgeleri kendi malzemesinde kalır
       swapped.push({ m: o, mat: o.material }); o.material = Array.isArray(o.material) ? o.material.map(toon) : toon(o.material);
     });
     const ink = new THREE.LineBasicMaterial({ color: 0x111827 }); styleMats.push(ink);
@@ -9967,7 +10043,7 @@ async function render3DHQ(opts) {
     const glassM = new THREE.MeshLambertMaterial({ color: 0xdbe7ef, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
     styleMats.push(solid, glassM);
     scene.traverse(o => {
-      if (!o.isMesh || o === T3.ground || (sky && o === sky.mesh)) return;
+      if (!o.isMesh || o === T3.ground || (sky && o === sky.mesh) || o.userData.fpDecal) return; // ışık lekeleri / temas gölgeleri kendi malzemesinde kalır
       const m0 = Array.isArray(o.material) ? o.material[0] : o.material;
       swapped.push({ m: o, mat: o.material }); o.material = m0 && m0.transparent && !o.userData.roomId ? glassM : isFloor(o, m0) ? woodM : solid;
     });
@@ -11415,7 +11491,7 @@ function init3D() {
     if (!rc.ray.intersectPlane(floorPlane(elev), p0)) return;
     e.stopImmediatePropagation(); // orbit başlamasın
     sel = o.grp && !grpEditing(o) ? groupMemberIdsAny(o.grp) : [o.id]; followSelFloor(fd);
-    d3 = { id: o.id, elev, sx: e.clientX, sy: e.clientY, moved: false, offX: p0.x - o.x, offZ: p0.z - o.y,
+    d3 = { id: o.id, elev, sx: e.clientX, sy: e.clientY, moved: false, alt: e.altKey, offX: p0.x - o.x, offZ: p0.z - o.y,
       orig: new Map(sel.map(sid => { const fo = findAnyFloor(sid)?.o; return [sid, fo ? JSON.parse(JSON.stringify(fo)) : null]; })),
       members: sel.slice(), conn: [], pins: [] };
     d3.locked = d3.members.filter(sid => isLocked(findAnyFloor(sid)?.o)).length;
@@ -11497,7 +11573,7 @@ function init3D() {
       return;
     }
     if (d3.rs) { const { moved } = d3; d3 = null; showSizeTip(null); if (moved) { commit(); refresh(); build3D(true); } return; } // boyut oku bırakıldı
-    const { id, moved } = d3, d3o = d3.orig; d3 = null;
+    const { id, moved, alt } = d3, d3o = d3.orig; d3 = null;
     const fd = findAnyFloor(id); if (!fd || fd.kind !== 'furn') return;
     if (moved) {
       if (sel.length === 1 && fd.floorIdx === fi) { // 2B ile aynı: yakın duvara yapış / merdiven kapıya ya da duvar arasına (yalnızca kendi katında)
@@ -11506,7 +11582,7 @@ function init3D() {
       }
       commit(); refresh();
       schedBuild3D(); // tutkal/rotasyon/pin değişimi olabilir -> sahne tazelensin
-    } else { if (fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
+    } else { if (!alt && isLightFix(fd.o) && sel.length === 1) { toggleLight3D(fd.o); return; } if (fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // ışık: tık = aç / kapa (#121), Alt = yalnızca seç // düz tık: pointerdown'daki seçim (grup/tek) korunur
   });
   // Tekerlek (perspektif): imlecin altındaki yüzeye doğru yaklaş. OrbitControls hedefe uzaklığı oranla küçültür; yakında
   // adım sıfıra yaklaşır ve "sonsuz yakınlaştırma"da takılır. Burada adım imleçteki yüzeye uzaklıktan gelir, dönüş merkezi
@@ -11959,6 +12035,7 @@ function walkClick(obj, alt) {
   if (!fd || !pickable(id)) { if (sel.length) { sel = []; render(); refreshSel3D(); renderProps(); } return; }
   followSelFloor(fd); sel = [id];
   if (fd.kind === 'op' && !alt && isDoorOp(fd.o)) toggleDoor3D(fd.o);
+  else if (fd.kind === 'furn' && !alt && isLightFix(fd.o)) toggleLight3D(fd.o); // yürürken lambaya tık: aç / kapa (#121)
   else { refresh(); refreshSel3D(); }
 }
 // 👁 düğmesi etkin görünür; kısa iki dilli ipucu (#walkHint, ilk kullanımda oluşturulur)
@@ -11998,7 +12075,7 @@ function loop3D() {
   }
   if (T3.ctl.update() || due) draw3D(now);
 }
-function draw3D(now) { T3.dirty = false; T3.drawT = now; if (T3.live) liveSkyFollow(); T3.r.render(T3.scene, T3.cam); flush3DLater(); }
+function draw3D(now) { T3.dirty = false; T3.drawT = now; fixTick(now); if (T3.live) liveSkyFollow(); T3.r.render(T3.scene, T3.cam); flush3DLater(); }
 /* ---------- Canlı gerçekçi 3B görünüm (#81) ----------
    Render stüdyosunun "gerçekçi" görünümü canlı pencerede: CAD kenar çizgileri gizlenir, gökyüzü + ufuk sisi,
    açık zemin / döşeme ve stüdyodaki güneş (ui.studio.az / alt) uygulanır. Tek geçiş: çizim döngüsü ve boşta
@@ -13324,6 +13401,37 @@ function furn3D(g, o, C) {
       }
       break;
     }
+    case 'lampCeil': case 'pendant': case 'chandelier': case 'downlight': case 'trackSpot': case 'sconce':
+    case 'floorLamp': case 'tableLamp': case 'ledStrip': case 'bollard': case 'streetLamp': case 'wallOut': {
+      // aydınlatma (#121): ampul / difüzör açıkken ışık renginde kendinden parlar (ember), kapalıyken mat beyaz
+      const q = lightP(o), R = Math.min(w, d) / 2, bulb = q.on ? sf('ember', q.col) : PL('#e5e7eb'), shade = q.on ? sf('ember', shade0(q.col)) : FB(col), dk2 = PL('#1f2937');
+      if (o.type === 'lampCeil') { cy(R, h * 0.35, PL(white), 0, h * 0.65, 0, 28); cy(R * 0.92, h * 0.65, bulb, 0, 0, 0, 28); }
+      else if (o.type === 'pendant') { cy(5, 2, dk2, 0, h - 2, 0, 16); cy(0.4, h * 0.62, dk2, 0, h * 0.36, 0, 6); cy(R * 0.9, h * 0.3, MT(col), 0, h * 0.08, 0, 24); sph(g, Math.max(3, R * 0.28), bulb, 0, h * 0.1, 0); }
+      else if (o.type === 'chandelier') {
+        const gold = MT(col), n = ed ? 6 : 4; cy(6, 2, gold, 0, h - 2, 0, 16); cy(1, h * 0.55, gold, 0, h * 0.43, 0, 8); cy(R * 0.85, 2, gold, 0, h * 0.3, 0, 32);
+        for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, x = Math.cos(a) * R * 0.8, z = Math.sin(a) * R * 0.8; cy(2.5, 4, gold, x, h * 0.3, z, 10); sph(g, 3.2, bulb, x, h * 0.3 + 7, z); }
+      }
+      else if (o.type === 'downlight') { cy(R, h, PL(white), 0, 0.6, 0, 20); cy(R * 0.7, 0.8, bulb, 0, 0, 0, 20); }
+      else if (o.type === 'trackSpot') {
+        bb(w, 3, Math.min(d, 4), dk2, 0, h - 3, 0); const n = clamp(Math.round(w / 40), 2, 6);
+        for (let i = 0; i < n; i++) { const x = -w / 2 + (i + 0.5) * w / n; cy(0.8, h * 0.3, dk2, x, h - 3 - h * 0.3, 0, 6); cy(4, h * 0.42, PL(col), x, 0.6, 0, 14); cy(3.2, 0.7, bulb, x, 0, 0, 14); }
+      }
+      else if (o.type === 'sconce' || o.type === 'wallOut') {
+        const out = o.type === 'wallOut'; bb(w * 0.55, h * 0.7, 2, out ? dk2 : MT('#a9b4c0'), 0, h * 0.15, -d / 2 + 1);
+        if (out) { bb(w * 0.7, h * 0.65, d * 0.6, bulb, 0, h * 0.18, d * 0.1); bb(w * 0.8, 3, d * 0.75, dk2, 0, h * 0.83, d * 0.1); }
+        else cy(Math.min(w / 2, d) * 0.8, h * 0.6, shade, 0, h * 0.25, d * 0.05, 20);
+      }
+      else if (o.type === 'floorLamp' || o.type === 'tableLamp') {
+        const tbl = o.type === 'tableLamp', sh0 = tbl ? h * 0.42 : 30;
+        if (tbl) sph(g, R * 0.42, PC(col), 0, R * 0.42, 0, 1, 1.1, 1); else cy(R * 0.6, 3, dk2, 0, 0, 0, 20);
+        cy(tbl ? 1 : 1.2, h - sh0 - (tbl ? R * 0.6 : 3), MT('#a9b4c0'), 0, tbl ? R * 0.6 : 3, 0, 8);
+        cy(R, sh0, shade, 0, h - sh0, 0, 24);
+      }
+      else if (o.type === 'ledStrip') bb(w, h, d, bulb, 0, 0, 0);
+      else if (o.type === 'bollard') { cy(R, h - 12, dk2, 0, 0, 0, 16); cy(R * 0.85, 8, bulb, 0, h - 12, 0, 16); cy(R * 1.05, 4, dk2, 0, h - 4, 0, 16); }
+      else { /* sokak lambası */ cy(R * 0.6, 20, dk2, 0, 0, 0, 16); cy(4, h - 46, dk2, 0, 20, 0, 10); cy(R * 0.95, 20, dk2, 0, h - 26, 0, 6); cy(R * 0.8, 6, bulb, 0, h - 32, 0, 6); cy(R, 6, dk2, 0, h - 6, 0, 6); }
+      break;
+    }
     default: {
       if (o.k === 'poly' && o.pts && o.pts.length >= 3) {
         const shp = new THREE.Shape(o.pts.map(p => new THREE.Vector2(p.x, -p.y)));
@@ -13488,6 +13596,27 @@ function build3D(keepCam = false) {
   // parçalı mobilya malzemesi: mat (matte | gloss | metal | glass, #93: wood | fabric | stone … | tex:<id>); matCache'te tutulur ki sonraki build'de dispose edilsin
   const pmat = (c, kind) => partMat(c, kind, mat, sctx);
   const furnCtx = { box, cyl, sph, mat, det, pmat, pgeo: (type, ex, ey, ez, kind) => surfGeo(type, ex, ey, ez, sf(kind, 0), sctx), unit: { box: unitBox, cyl: unitCyl, sph: unitSph } };
+  // aydınlatma (#121): armatür listesi + hale / zemin lekesi (malzemeler renk başına bu kurulumda bir kez, sonraki kurulumda atılır)
+  T3.fixList = [];
+  const glowMats = new Map(), glowMat = (col, op, plane) => {
+    const key = (plane ? 'p' : 's') + col + op; let m = glowMats.get(key); if (m) return m;
+    const o2 = { map: glowTex(), color: new THREE.Color(col), transparent: true, opacity: op, depthWrite: false, blending: THREE.AdditiveBlending };
+    m = plane ? new THREE.MeshBasicMaterial({ ...o2, polygonOffset: true, polygonOffsetFactor: -2 }) : new THREE.SpriteMaterial(o2);
+    glowMats.set(key, m); extraMats.push(m); return m;
+  };
+  let patchGeo = null;
+  const fixGlow3D = (o, fidx, fy, floorY) => {
+    const q = lightP(o), ay = fy + fixAnchor(o);
+    T3.fixList.push({ o, fidx, on: q.on, kind: q.kind, lm: q.lm, col: q.col, beam: q.beam, x: o.x, y: ay, z: o.y });
+    if (!q.on) return;
+    const t = lmToThree(q.lm), k = fixDayFactor();
+    const sp = new THREE.Sprite(glowMat(q.col, Math.round((0.35 + 0.4 * k) * 20) / 20)); const sz = 16 + Math.sqrt(q.lm) * 0.9;
+    sp.scale.set(sz, sz, 1); sp.position.set(o.x, ay - (q.kind === 'spot' ? 2 : 0), o.y); sp.userData.fpDecal = true; sp.raycast = () => {}; S.add(sp);
+    if (ay - floorY < 20 || ay - floorY > 900) return;
+    if (!patchGeo) { patchGeo = new THREE.PlaneGeometry(1, 1); patchGeo.rotateX(-Math.PI / 2); }
+    const pr = t.d * (q.kind === 'spot' ? 0.32 : 0.5), pm = new THREE.Mesh(patchGeo, glowMat(q.col, Math.round(0.22 * k * 20) / 20, true));
+    pm.scale.set(pr * 2, 1, pr * 2); pm.position.set(o.x, floorY + 1.3, o.y); pm.renderOrder = 2; pm.userData.fpDecal = true; pm.raycast = () => {}; S.add(pm);
+  };
   let elev = 0;
   P.floors.forEach((f, fidx) => {
     if (!v3dShown(f)) return;
@@ -13739,6 +13868,7 @@ function build3D(keepCam = false) {
       let ig = g; if (furnLv[fi3]) { ig = new THREE.Group(); ig.position.y = furnLv[fi3] * 0.5; g.add(ig); }
       if (furnTilted(o)) ig = furnTiltGroup(ig, o); // tüm eksenlerde döndürülmüş eşya: en alt noktası zemine oturur
       furn3D(ig, o, furnCtx);
+      if (isLightFix(o)) { ig.traverse(m => { m.castShadow = false; }); fixGlow3D(o, fidx, fy, elev + furnOff(o)); } // armatür güneş gölgesi düşürmez (ışık kaynağıdır)
     });
     (f.sketches || []).forEach(sk => {
       if (!sk.pts || sk.pts.length < 2) return;
@@ -13759,6 +13889,7 @@ function build3D(keepCam = false) {
   prune3DCache(T3.cache, S); // bu sahnede kullanılmayan önbellek girdileri bırakılır (canlı görünüm malzemeleri değiştirmeden ÖNCE)
   T3.ctl.update();
   if (T3.walk) applyWalkCam();
+  if (T3.fixList.length) { const pool = fixPool(); for (const l of pool.pts) S.add(l); for (const l of pool.spots) { S.add(l); S.add(l.target); } assignFixLights(); } // sabit havuz: sayı değişmez (#121)
   refreshSel3D(); applySecClip(); applyLive3D(); place3DSync(); fp3DPreview();
 }
 
