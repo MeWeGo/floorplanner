@@ -94,7 +94,7 @@ test('(2) snapPose for room includes floor, color, glass, slabT and deep-copies 
   assert.strictEqual(barePose.slabT, 20);
 });
 
-test('(3) snapPose for slab and void returns only pts', () => {
+test('(3) snapPose: slab keeps pts + level offset + thickness, void only pts', () => {
   const slab = {
     id: 's1',
     pts: [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 150 }],
@@ -108,7 +108,10 @@ test('(3) snapPose for slab and void returns only pts', () => {
   const slabPose = snapPose('slab', slab);
   assert.deepStrictEqual(slabPose, {
     pts: [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 150 }],
+    off: 10,
+    t: 25,
   });
+  assert.notStrictEqual(slabPose.pts[0], slab.pts[0], 'pts must be deep-copied');
   assert.strictEqual(slabPose.floor, undefined);
   assert.strictEqual(slabPose.color, undefined);
   assert.strictEqual(slabPose.glass, undefined);
@@ -239,4 +242,29 @@ test('(8) mcp/server.js add_room declares slabThickness and validates 0..200 ran
     /slabThickness[\s\S]*?(?:<\s*0\s*\|\|\s*\w+\s*>\s*200|>\s*200\s*\|\|\s*\w+\s*<\s*0)[\s\S]*?throw/,
     'mcp/server.js must validate slabThickness between 0 and 200 and throw if out of range'
   );
+});
+
+test('(3b) slabs are groupable and applyVarPoses restores their polygon, offset and thickness', () => {
+  const m = src.match(/const GROUPABLE = \{[^}]*\}/);
+  assert.ok(m && /slab:\s*1/.test(m[0]), 'GROUPABLE must include slab');
+  const slab = { id: 's1', pts: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }], off: 0, t: 20 };
+  const voidObj = { id: 'v1', pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }] };
+  const objs = { s1: { kind: 'slab', o: slab }, v1: { kind: 'void', o: voidObj } };
+  const { applyVarPoses } = new Function('find', 'F', 'clamp', 'wallDeg', 'wLen', `
+    ${constLine('PTS_KINDS')}
+    ${fnSrc('applyVarPoses')}
+    return { applyVarPoses };
+  `)(id => objs[id], () => ({ ops: [] }), (v, a, b) => Math.min(b, Math.max(a, v)), () => 0, () => 0);
+  applyVarPoses({
+    s1: { pts: [{ x: 50, y: 50 }, { x: 150, y: 50 }, { x: 150, y: 150 }], off: -15, t: 30 },
+    v1: { pts: [{ x: 5, y: 5 }, { x: 15, y: 5 }, { x: 15, y: 15 }] },
+  });
+  assert.deepStrictEqual(slab.pts[0], { x: 50, y: 50 });
+  assert.strictEqual(slab.off, -15);
+  assert.strictEqual(slab.t, 30);
+  assert.ok(!('x' in slab) && !('rot' in slab), 'polygon kinds must not get x / y / rot');
+  assert.deepStrictEqual(voidObj.pts[2], { x: 15, y: 15 });
+  applyVarPoses({ s1: { pts: slab.pts } }); // old pts-only pose keeps offset / thickness
+  assert.strictEqual(slab.off, -15);
+  assert.strictEqual(slab.t, 30);
 });
