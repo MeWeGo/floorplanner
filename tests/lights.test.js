@@ -247,3 +247,123 @@ test('(5) MCP stdio: add_furniture lights, clamping, add_room, set_lights, summa
   assert.strictEqual(spotItem.beam, 120);
   assert.strictEqual(spotItem.lon, undefined);
 });
+
+function loadLight3DSandbox() {
+  return new Function(`
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const ui = { live3d: false, studio: { alt: 42 } };
+    ${fnSrcOf(src, 'lmToThree')}
+    ${fnSrcOf(src, 'fixAnchor')}
+    ${fnSrcOf(src, 'fixDayFactor')}
+    ${fnSrcOf(src, 'fixRank')}
+    return { ui, lmToThree, fixAnchor, fixDayFactor, fixRank };
+  `)();
+}
+
+test('(6a) lmToThree: monotonic i and d, clamping, and 800 lm baseline', () => {
+  const { lmToThree } = loadLight3DSandbox();
+  const levels = [100, 400, 800, 1600, 3000, 10000];
+  const res = levels.map(lmToThree);
+  for (let idx = 1; idx < res.length; idx++) {
+    assert.ok(res[idx].i > res[idx - 1].i, `i should strictly increase from ${levels[idx - 1]} to ${levels[idx]}`);
+    assert.ok(res[idx].d > res[idx - 1].d, `d should strictly increase from ${levels[idx - 1]} to ${levels[idx]}`);
+  }
+  assert.deepStrictEqual(lmToThree(50), lmToThree(100));
+  assert.deepStrictEqual(lmToThree(20000), lmToThree(10000));
+  assert.ok(Math.abs(lmToThree(800).i - 0.55) < 1e-6, `800 lm should give i ~ 0.55, got ${lmToThree(800).i}`);
+});
+
+test('(6b) fixRank: filtering, limit, distance, floor priority, and stability', () => {
+  const { fixRank } = loadLight3DSandbox();
+  const focus = { x: 0, y: 100, z: 0, fi: 0 };
+
+  const offLight = { on: false, kind: 'point', lm: 5000, fidx: 0, x: 0, y: 100, z: 0 };
+  const nearPt = { on: true, kind: 'point', lm: 800, fidx: 0, x: 50, y: 100, z: 0 };
+  const farPt = { on: true, kind: 'point', lm: 800, fidx: 0, x: 500, y: 100, z: 0 };
+  const otherFloorPt = { on: true, kind: 'point', lm: 800, fidx: 1, x: 50, y: 100, z: 0 };
+  const spotA = { on: true, kind: 'spot', lm: 1000, fidx: 0, x: 100, y: 200, z: 0 };
+  const spotB = { on: true, kind: 'spot', lm: 1000, fidx: 1, x: 100, y: 200, z: 0 };
+
+  const list = [offLight, farPt, otherFloorPt, nearPt, spotB, spotA];
+
+  // spot=false: only on=true, never spots, at most n
+  const pts = fixRank(list, focus, 2, false);
+  assert.strictEqual(pts.length, 2);
+  assert.ok(pts.every(e => e.on && e.kind !== 'spot'));
+  assert.strictEqual(pts[0], nearPt, 'nearer light on focus floor ranks first');
+  assert.ok(pts.indexOf(farPt) === -1 || pts.indexOf(nearPt) < pts.indexOf(farPt));
+
+  // focus floor outranks equally far light on another floor
+  const allPts = fixRank([otherFloorPt, nearPt], focus, 10, false);
+  assert.deepStrictEqual(allPts, [nearPt, otherFloorPt]);
+
+  // nearer light outranks farther light of same lm
+  const distPts = fixRank([farPt, nearPt], focus, 10, false);
+  assert.deepStrictEqual(distPts, [nearPt, farPt]);
+
+  // spot=true: only on=true and kind==='spot'
+  const spots = fixRank(list, focus, 5, true);
+  assert.strictEqual(spots.length, 2);
+  assert.ok(spots.every(e => e.on && e.kind === 'spot'));
+  assert.deepStrictEqual(spots, [spotA, spotB]);
+
+  // 4x brighter at 2x distance: deterministic and stable when called twice
+  const near = { on: true, kind: 'point', lm: 800, fidx: 0, x: 200, y: 100, z: 0 };
+  const brightFar = { on: true, kind: 'point', lm: 3200, fidx: 0, x: 400, y: 100, z: 0 };
+  const r1 = fixRank([near, brightFar], focus, 2, false);
+  const r2 = fixRank([near, brightFar], focus, 2, false);
+  assert.deepStrictEqual(r1, r2);
+  assert.strictEqual(r1[0], brightFar);
+});
+
+test('(6c) fixAnchor: mounting offsets by fixture type', () => {
+  const { fixAnchor } = loadLight3DSandbox();
+  assert.strictEqual(fixAnchor({ type: 'pendant', h: 100 }), 12);
+  assert.strictEqual(fixAnchor({ type: 'floorLamp', h: 160 }), 145);
+  assert.strictEqual(fixAnchor({ type: 'lampCeil', h: 20 }), 0);
+  assert.strictEqual(fixAnchor({ type: 'sconce', h: 30 }), 15);
+  assert.strictEqual(fixAnchor({ type: 'unknownType', h: 100 }), 0);
+});
+
+test('(6d) fixDayFactor: CAD mode, live3d sun altitude, and 0.25..1 clamping', () => {
+  const { ui, fixDayFactor } = loadLight3DSandbox();
+  ui.live3d = false;
+  assert.strictEqual(fixDayFactor(), 0.45);
+
+  ui.live3d = true;
+  ui.studio = { alt: 6 };
+  const lowSun = fixDayFactor();
+  ui.studio = { alt: 60 };
+  const highSun = fixDayFactor();
+  assert.ok(lowSun > highSun, `alt 6 (${lowSun}) should be higher than alt 60 (${highSun})`);
+
+  for (const alt of [-10, 0, 6, 30, 45, 60, 90]) {
+    ui.studio = { alt };
+    const f = fixDayFactor();
+    assert.ok(f >= 0.25 && f <= 1, `alt ${alt} gave ${f} outside 0.25..1`);
+  }
+});
+
+test('(6e) 3D lighting wiring in app.js', () => {
+  assert.match(src, /\bconst\s+FIX_PTS\s*=\s*8\s*,\s*FIX_SPOTS\s*=\s*4\b/, 'FIX_PTS is 8 and FIX_SPOTS is 4');
+  assert.match(src, /\bconst\s+layersVis\s*=\s*\{[^}]*\blightArea\s*:\s*false\b/, 'layersVis has lightArea: false by default');
+
+  const build3DSrc = fnSrcOf(src, 'build3D');
+  assert.match(
+    build3DSrc,
+    /if\s*\(\s*T3\.fixList\.length\s*\)\s*\{[\s\S]*?fixPool\s*\(\s*\)[\s\S]*?assignFixLights\s*\(\s*\)/,
+    'build3D adds the pool only when T3.fixList has entries and calls assignFixLights'
+  );
+  assert.match(
+    build3DSrc,
+    /if\s*\(\s*isLightFix\s*\(\s*o\s*\)\s*\)\s*\{[^}]*castShadow\s*=\s*false/,
+    'isLightFix items get castShadow = false in build3D'
+  );
+
+  const draw3DSrc = fnSrcOf(src, 'draw3D');
+  assert.match(draw3DSrc, /\bfixTick\s*\(/, 'draw3D calls fixTick');
+
+  const walkClickSrc = fnSrcOf(src, 'walkClick');
+  assert.match(walkClickSrc, /isLightFix\s*\([^)]*\)\s*\)\s*toggleLight3D\s*\(/, 'walkClick toggles lights via toggleLight3D');
+});
+

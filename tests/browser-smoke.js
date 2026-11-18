@@ -1800,6 +1800,62 @@ check('light fixtures: placed on the ceiling, panel on / off and brightness, roo
   return 'on the ceiling at ' + r.elev + ' cm, panel + room switch + undo + storey height + export + IFC round trip';
 });
 
+check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light pool (no new shaders), 30 lamps build fast (#121)', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400);
+    const o = mkFurn(BYID.floorLamp, 300, 200, 0); F().furn.push(o); commit(); refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(() => {
+    const o = F().furn[0], out = {};
+    set3DCam('top');
+    // floor brightness next to the lamp: render, copy the canvas in the same tick, read a pixel
+    const lum = () => {
+      draw3D(performance.now());
+      const cv = T3.r.domElement, v = new THREE.Vector3(300 + 60, 1, 200).project(T3.cam);
+      const x = Math.round((v.x + 1) / 2 * cv.width), y = Math.round((1 - v.y) / 2 * cv.height);
+      const c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0);
+      const d = g.getImageData(x - 2, y - 2, 5, 5).data; let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2]; return s / (d.length / 4) / 3;
+    };
+    out.pool = T3.fix && T3.fix.pts.length === 8 && T3.fix.spots.length === 4;
+    const nLights = () => { let n = 0; T3.scene.traverse(x => { if (x.isLight) n++; }); return n; };
+    out.lightsOn = nLights(); out.on = lum();
+    o.lon = 0; commit(); build3D(true); out.off = lum(); out.lightsOff = nLights();
+    delete o.lon; commit(); build3D(true); lum();
+    const prog0 = T3.r.info.programs.length;
+    // click the lamp (pointer down + up on the canvas at its shade)
+    T3.cam.updateMatrixWorld(); T3.scene.updateMatrixWorld();
+    const cv = T3.r.domElement, rect = cv.getBoundingClientRect(), p = new THREE.Vector3(300, o.h - 10, 200).project(T3.cam);
+    const pt = { clientX: rect.left + (p.x + 1) / 2 * rect.width, clientY: rect.top + (1 - p.y) / 2 * rect.height, button: 0, bubbles: true, pointerId: 1, isPrimary: true };
+    cv.dispatchEvent(new PointerEvent('pointerdown', pt)); window.dispatchEvent(new PointerEvent('pointerup', pt));
+    out.clickOff = F().furn[0].lon === 0;
+    cv.dispatchEvent(new PointerEvent('pointerdown', pt)); window.dispatchEvent(new PointerEvent('pointerup', pt));
+    out.clickOn = lightP(F().furn[0]).on;
+    lum(); const prog1 = T3.r.info.programs.length; out.selProg = prog1 - prog0; // first click selects: box + size arrows compile once
+    cv.dispatchEvent(new PointerEvent('pointerdown', pt)); window.dispatchEvent(new PointerEvent('pointerup', pt)); lum();
+    cv.dispatchEvent(new PointerEvent('pointerdown', pt)); window.dispatchEvent(new PointerEvent('pointerup', pt)); lum();
+    for (let i = 0; i < 6; i++) { T3.ctl.target.x += 150; T3.fixAt = null; lum(); } // orbiting: the pool is re-ranked, never resized
+    out.progNew = T3.r.info.programs.length - prog1;
+    // 30 lamps: rebuild cost
+    for (let i = 0; i < 30; i++) F().furn.push(mkFurn(BYID[i % 3 ? 'downlight' : 'lampCeil'], 40 + (i % 6) * 100, 40 + Math.floor(i / 6) * 70, 0));
+    commit(); build3D(true); const t0 = performance.now(); build3D(true); out.buildMs = performance.now() - t0;
+    out.lights30 = nLights();
+    show3D(false);
+    return out;
+  })()`);
+  if (!r.pool) throw new Error('no fixed light pool of 8 point + 4 spot lights');
+  if (!(r.on > r.off + 6)) throw new Error('the lamp does not brighten the floor next to it: on ' + r.on.toFixed(1) + ' vs off ' + r.off.toFixed(1));
+  if (r.lightsOn !== r.lightsOff || r.lightsOn !== r.lights30) throw new Error('scene light count changed: ' + [r.lightsOn, r.lightsOff, r.lights30]);
+  if (!r.clickOff || !r.clickOn) throw new Error('clicking the lamp in 3D did not toggle it: ' + JSON.stringify(r));
+  if (r.progNew > 0) throw new Error(r.progNew + ' new shader program(s) while toggling / orbiting');
+  if (r.buildMs > 400) throw new Error('3D rebuild with 30 lamps took ' + r.buildMs.toFixed(0) + ' ms');
+  return 'floor ' + r.off.toFixed(0) + ' → ' + r.on.toFixed(0) + ' when on, ' + r.lightsOn + ' lights always, rebuild with 30 lamps ' + r.buildMs.toFixed(0) + ' ms';
+});
+
 check('stairs line up between walls, open a stairwell above that follows them, resize with 3D arrows and continue upward', async page => {
   const r = await page.evaluate(`(() => {
     show3D(false); closeModal();
