@@ -258,7 +258,7 @@ python -m http.server 8080      # then open http://localhost:8080
 | `R` / `S` *(while placing)* | Rotate furniture / flip door hinge · flip swing side |
 | Arrow keys | Nudge selection / background image 1 cm (`Shift` = 10 cm) |
 | `WASD` / `Q` / `E` *(in 3D orbit)* | Fly / move camera in 3D orbit (`Q`/`E`: down/up, `Shift`: faster) |
-| `👁` *(in 3D)* | **Walk mode** — walk at eye level: `WASD` / Arrow keys walk, `Shift` runs, drag to look around, collision blocks walls/closed doors, open doors pass, click door to open/close, walk onto stairs / ramps to climb to the next floor, `Esc` returns to orbit |
+| `👁` *(in 3D)* | **Walk mode** — first click where you want to stand (a marker follows the cursor; press 👁 again or `Enter` to start in the largest room, `Esc` cancels), then walk at eye level: `WASD` / Arrow keys walk, `Shift` runs, drag to look around, collision blocks walls/closed doors, open doors pass, click door to open/close, walk onto stairs / ramps to climb to the next floor, `Esc` returns to orbit |
 | `Ctrl+C / V / D` | Copy / Paste / Duplicate |
 | `Ctrl+Z / Ctrl+Y` | Undo / Redo (also works while the 3D view is open) |
 | `Ctrl+A` · `Ctrl+S` · `Del` | Select all · Save to browser · Delete |
