@@ -1604,3 +1604,12 @@ body.fs-open #toast { position: fixed; z-index: 140; }
 #syncDrive a { color: var(--accent); }
 .sync-btn[data-st="ok"]::after { background: var(--ok); }
 .sync-btn[data-st="warn"]::after { background: var(--warn); }
+
+/* kat kotu, kat sekmesinde (bodrum katlar ve elle girilen kotlar) */
+.ftab .flv {
+  margin-left: 5px;
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}

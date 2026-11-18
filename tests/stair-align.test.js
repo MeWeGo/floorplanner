@@ -56,6 +56,7 @@ function makeSandbox() {
     const mkVoid = (pts, type, name) => ({ id: uid(), name, type, pts });
     const floorH = f => f.wallH || 270;
     const curFloorH = () => floorH(F());
+    const floorPitch = i => (P.floors[i] ? floorH(P.floors[i]) : 270) + 20, curFloorPitch = () => floorPitch(getFi()); // floor levels: glass-ramp-floorh.test.js
     const furnElev = o => o.elev || 0;
     const furnTilted = () => false;
     const findAnyFloor = id => {

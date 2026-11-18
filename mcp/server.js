@@ -1939,6 +1939,8 @@ function ifcToProject(text, opts = {}) {
     const fh = Math.round(nx.b.s.z - b.s.z - 20);
     if (fh >= 100 && fh <= 800 && fh !== wallH) f.wallH = fh;
   });
+  // bodrum katlı model: zemin altındaki kat varsa her kat gerçek kotunu alır (Floor.lvl, ±0 = zemin); yoksa eskisi gibi dizilir
+  if (floors.some(({ b }) => b.s && b.s.z < -50)) floors.forEach(({ b, f }) => { if (b.s && Number.isFinite(b.s.z)) f.lvl = Math.round(b.s.z); });
   stats.floors = floors.length; stats.levelsMerged = merged;
   const pa = proj ? A(proj) : [];
   const nm = String(pa[5] || pa[2] || '').trim();
@@ -2194,12 +2196,15 @@ function normalizeProject(obj) {
     for (const o of f.ops) if (o.open == null) o.open = 0;
     for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
     for (const sl of f.slabs) { if (!(sl.t > 0)) sl.t = 20; sl.floor = sl.floor || 'concrete'; sl.off = +sl.off || 0; }
-    for (const v of f.voids) if (!VOID_TYPES.includes(v.type)) v.type = 'stair';
+    for (const v of f.voids) { if (!VOID_TYPES.includes(v.type)) v.type = 'stair'; if (v.dep != null) { const d = Math.max(0, Math.min(1000, Math.round(+v.dep || 0))); if (d) v.dep = d; else delete v.dep; } } // pit depth (cm)
+    if (f.lvl != null) { const n = typeof f.lvl === 'number' || (typeof f.lvl === 'string' && f.lvl.trim()) ? +f.lvl : NaN; if (Number.isFinite(n)) f.lvl = Math.max(-50000, Math.min(50000, Math.round(n))); else delete f.lvl; } // floor level (cm, ±0 = ground)
     for (const o of f.furn) { cleanParts(o); cleanRoof(o); cleanLight(o); if (o.mount !== undefined && o.mount !== 'ceil') delete o.mount; } // multi-part furniture; items without "parts" are untouched; parametric roofs clamped (#115)
   });
   return obj;
 }
 function proj() { if (!P) P = newProject(); return P; }
+// floor level in cm (mirrors floorElev in app.js): Floor.lvl when set, else stacked on the floor below (height + 20 cm slab), first floor ±0
+function floorElevOf(p, i) { let e = 0; for (let k = 0; k <= i && k < p.floors.length; k++) { const f = p.floors[k], l = typeof f.lvl === 'number' && Number.isFinite(f.lvl) ? f.lvl : null; e = l != null ? l : k ? e + (+p.floors[k - 1].wallH > 0 ? +p.floors[k - 1].wallH : p.wallH) + 20 : 0; } return e; }
 function floorOf(args) {
   const p = proj();
   const i = args && args.floorIndex !== undefined && args.floorIndex !== null ? args.floorIndex : 0;
@@ -2445,7 +2450,7 @@ function summarize() {
   if ((p.textures || []).length) out.push('Custom textures: ' + p.textures.map(t => 'tex:' + t.id + ' "' + t.name + '" ' + t.w + '×' + t.h + ' cm').join(', '));
   p.floors.forEach((f, i) => {
     out.push('');
-    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + (f.noSlab ? ', no floor slab' : '') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts, ' + (f.drafts || []).length + ' 2D drafting');
+    out.push('Floor ' + i + ' "' + f.name + '" (id ' + f.id + ', level ' + floorElevOf(p, i) + ' cm' + (typeof f.lvl === 'number' ? ' set' : '') + ', wall height ' + (+f.wallH > 0 ? +f.wallH : p.wallH) + ' cm' + (+f.wallH > 0 ? '' : ' default') + (f.noSlab ? ', no floor slab' : '') + '): ' + f.walls.length + ' walls, ' + f.ops.length + ' openings, ' + f.rooms.length + ' rooms, ' + (f.slabs || []).length + ' slabs, ' + (f.voids || []).length + ' voids, ' + f.furn.length + ' furniture, ' + f.texts.length + ' texts, ' + (f.drafts || []).length + ' 2D drafting');
     for (const d of f.drafts || []) out.push('  draft ' + d.id + ' ' + (d.shape === 'pline' ? (d.closed ? 'closed polyline' : d.pts.length === 2 ? 'line' : 'polyline') : d.shape) + ' pts ' + d.pts.map(q => '(' + q.x + ',' + q.y + ')').join(' ') + (d.dash ? ' ' + d.dash : ''));
     for (const w of f.walls)
       out.push('  wall ' + w.id + ': (' + w.a.x + ',' + w.a.y + ') → (' + w.b.x + ',' + w.b.y + ')  length ' + Math.round(wLen(w)) + ' cm, t=' + w.t + ', h=' + w.h + (w.elev ? ', base ' + (w.elev > 0 ? '+' : '') + w.elev : '') + (Array.isArray(w.top) ? ', sloped top ' + Math.min(...w.top.map(p => p[1])) + '–' + Math.max(...w.top.map(p => p[1])) : '') + (w.wt !== 'solid' ? ', ' + w.wt : ''));
@@ -2715,8 +2720,10 @@ tool('set_lights',
   });
 
 tool('add_floor',
-  'Add a new empty floor on top of the existing ones and return its index.',
-  { name: { type: 'string', description: 'Floor name, e.g. "1. Kat" / "First Floor".' },
+  'Add a new empty floor on top of the existing ones (or, with basement: true, below the lowest one, underground) and return its index. Floor levels: each floor starts at its level (cm, ±0 = ground, negative = basement); without a level it stacks on the floor below (its wall height + 20 cm slab).',
+  { name: { type: 'string', description: 'Floor name, e.g. "1. Kat" / "First Floor" / "Bodrum Kat".' },
+    basement: { type: 'boolean', description: 'true = insert it as the new lowest floor, one storey below the current lowest (which keeps its level, e.g. the ground floor stays at ±0). Every existing floorIndex shifts up by one.' },
+    level: { type: 'number', description: 'Optional floor level in cm (±0 = ground, -300 = 3 m underground). Overrides the automatic stacking for this floor.' },
     wallH: { type: 'number', description: 'Optional wall height of this floor in cm, 100–800 (default: project wallH). New walls on it get this height and the floors above stack on it in 3D.' },
     noSlab: { type: 'boolean', description: 'true = no automatic floor slab under this floor in 3D and sections (free slabs and room floors still show). Default false.' } },
   [],
@@ -2728,8 +2735,18 @@ tool('add_floor',
       f.wallH = h;
     }
     if (a.noSlab === true) f.noSlab = true;
-    proj().floors.push(f);
-    return 'Added floor ' + (P.floors.length - 1) + ' "' + f.name + '" (id ' + f.id + '). Pass floorIndex=' + (P.floors.length - 1) + ' to the other tools to draw on it.';
+    const p = proj(), h = +f.wallH > 0 ? +f.wallH : p.wallH;
+    if (a.level != null) { const l = num(a.level, undefined, 'level'); if (l < -50000 || l > 50000) throw new Error('level must be between -50000 and 50000 cm'); f.lvl = Math.round(l); }
+    if (a.basement === true) {
+      const g = p.floors[0], e0 = floorElevOf(p, 0);
+      if (!(typeof g.lvl === 'number')) g.lvl = e0; // the old lowest floor keeps its level
+      if (f.lvl == null) f.lvl = e0 - (h + 20);
+      if (!a.name) f.name = 'Basement';
+      p.floors.unshift(f);
+      return 'Added basement floor 0 "' + f.name + '" (id ' + f.id + ') at level ' + f.lvl + ' cm. Existing floors moved up one index (the old floor 0 is now floorIndex=1). Pass floorIndex=0 to draw on the basement.';
+    }
+    p.floors.push(f);
+    return 'Added floor ' + (P.floors.length - 1) + ' "' + f.name + '" (id ' + f.id + ') at level ' + floorElevOf(p, p.floors.length - 1) + ' cm. Pass floorIndex=' + (P.floors.length - 1) + ' to the other tools to draw on it.';
   });
 
 tool('add_wall',
@@ -2976,12 +2993,15 @@ tool('add_void',
     pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: '3+ corners in order (cm, Y down).' },
     type: { type: 'string', enum: VOID_TYPES, description: 'stair | shaft | atrium. Default stair.' },
     name: { type: 'string', description: 'Optional label; default is the type name.' },
+    depth: { type: 'number', description: 'Optional pit depth in cm (1-1000): the void gets a floor that far below this floor (pool, lift pit, sunken area). 0 / absent = open void through the slab. Furniture placed inside a void sits on its bottom (a pit floor, or the floor below for an open void).' },
     floorIndex: floorArg,
   },
   ['pts'],
   a => {
+    if (a.depth != null) { const d = num(a.depth, undefined, 'depth'); if (d < 0 || d > 1000) throw new Error('depth must be between 0 and 1000 cm'); }
     const v = mkVoid(floorOf(a), a);
-    return 'Added ' + v.type + ' void ' + v.id + ' — area ' + fmtArea(polyArea(v.pts)) + '.';
+    if (+a.depth > 0) v.dep = Math.round(+a.depth);
+    return 'Added ' + v.type + (v.dep ? ' pit (' + v.dep + ' cm deep)' : ' void') + ' ' + v.id + ' — area ' + fmtArea(polyArea(v.pts)) + '.';
   });
 
 // 2D drafting (#83): mirrors addDraft() in app.js; stored as pts so the app's move / mirror / scale work unchanged

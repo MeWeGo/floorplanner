@@ -1909,6 +1909,54 @@ check('light parts: studio bulb / spot / LED strip blocks, a custom lamp lights 
   return 'floor ' + r.off.toFixed(0) + ' → ' + r.on.toFixed(0) + ' with the custom lamp, LED strip at ' + r.shelfY.toFixed(0) + ' cm';
 });
 
+check('basement & floor levels: ＋ Basement keeps the ground floor at ±0.00, levels typed in metres, pit / open voids hold furniture at their bottom, ground opens over the basement', async page => {
+  const r = await page.evaluate(`(() => {
+    show3D(false); closeModal(); loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); refresh();
+    const out = {};
+    document.querySelector('#floors [data-fa="addb"]').click();
+    out.n = P.floors.length; out.fi = fi; out.lv = [floorElev(0), floorElev(1)]; out.tab = !!document.querySelector('#floors .ftab .flv');
+    // panel: basement from −3.50 m to −0.30 m
+    sel = []; renderProps();
+    const set = (p, v) => { const i = document.querySelector('#props input[data-p="' + p + '"]'); if (!i) return false; i.value = v; i.dispatchEvent(new Event('change', { bubbles: true })); return true; };
+    out.fields = set('lvlB', '-3.5') && set('lvlT', '-0.3');
+    out.base = [floorElev(0), floorH(P.floors[0]), floorElev(1)];
+    addRectWalls(0, 0, 600, 400); commit();
+    // ground floor: a 120 cm pit with a table in it, an open void with a chair in it
+    fi = 1; const f = F();
+    const pit = mkVoid([{ x: 50, y: 50 }, { x: 250, y: 50 }, { x: 250, y: 250 }, { x: 50, y: 250 }], 'atrium'); pit.dep = 120; f.voids.push(pit);
+    const hole = mkVoid([{ x: 350, y: 50 }, { x: 550, y: 50 }, { x: 550, y: 250 }, { x: 350, y: 250 }], 'atrium'); f.voids.push(hole);
+    const t = mkFurn(BYID.table4, 150, 150, 0), c = mkFurn(BYID.chair, 450, 150, 0), s = mkFurn(BYID.sofa3, 300, 330, 0); f.furn.push(t, c, s);
+    commit(); refresh();
+    out.drop = [voidDrop(f, 1, t), voidDrop(f, 1, c), voidDrop(f, 1, s)];
+    sel = [pit.id]; renderProps(); out.depField = !!document.querySelector('#props input[data-p="dep"]'); sel = []; renderProps();
+    const svg = archSvg(elevationSpec('south'), 'S'); out.sect = !!svg && /−3\\.50/.test(typeof svg === 'string' ? svg : svg.svg || '');
+    document.getElementById('b3d').click();
+    return out;
+  })()`);
+  if (r.n !== 2 || r.fi !== 0) throw new Error('＋ Basement did not add a floor at the bottom: ' + JSON.stringify(r));
+  if (r.lv.join() !== '-290,0') throw new Error('basement / ground floor levels ' + r.lv);
+  if (!r.tab) throw new Error('floor tabs show no levels');
+  if (!r.fields) throw new Error('the floor panel has no level fields');
+  if (r.base.join() !== '-350,320,0') throw new Error('typed levels not applied (basement level, height, ground level): ' + r.base);
+  if (r.drop.join() !== '-120,-350,0') throw new Error('furniture in voids (pit, open, outside): ' + r.drop);
+  if (!r.depField) throw new Error('the void panel has no pit depth field');
+  if (!r.sect) throw new Error('the south elevation does not reach the basement level −3.50');
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped 3D: WebGL/Three.js unavailable'; }
+  const g = await page.evaluate(`(() => {
+    const f = P.floors[1], y = id => { let v = null; T3.scene.traverse(o => { if (o.userData && o.userData.furnId === id) v = o.position.y; }); return v; };
+    const out = { e1: v3dElev(1), table: y(f.furn[0].id), chair: y(f.furn[1].id), sofa: y(f.furn[2].id), groundY: T3.ground.position.y, groundHoles: T3.ground.geometry.type, pit: 0 };
+    T3.scene.traverse(o => { if (o.userData && o.userData.voidId) out.pit++; });
+    show3D(false); return out;
+  })()`);
+  if (g.e1 !== 350) throw new Error('3D: ground floor should sit 350 cm above the basement, got ' + g.e1);
+  if (g.table !== 230 || g.chair !== 0 || g.sofa !== 350) throw new Error('3D furniture heights (pit 230, open void 0, floor 350): ' + JSON.stringify(g));
+  if (g.groundY !== 329 || g.groundHoles !== 'ShapeGeometry') throw new Error('3D ground should be at ±0.00 with a hole over the basement: ' + JSON.stringify(g));
+  if (g.pit < 1) throw new Error('3D: the pit has no floor');
+  return 'basement −3.50 → −0.30, pit table at ' + g.table + ', chair down to the basement, ground opened';
+});
+
 check('night mode: 🌙 turns on the live view, night sky, moon, auto room light, flashlight, and day restores everything (#122)', async page => {
   await page.evaluate(`(() => {
     show3D(false); closeModal(); setLive3D(false);

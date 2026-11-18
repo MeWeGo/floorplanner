@@ -178,7 +178,7 @@ test('(5) defsSvg, build3D, and mkWall wiring in app.js', () => {
   assert.match(b3d, /glassRooms/, 'build3D must reference glassRooms');
   assert.match(b3d, /withHoles[\s\S]*?glassRooms/, 'build3D withHoles must incorporate glassRooms as holes');
   assert.match(b3d, /slabPolys[\s\S]*?glass/, 'build3D slabPolys loop must handle glass finish');
-  assert.match(b3d, /elev\s*\+=\s*floorH\s*\(\s*f\s*\)\s*\+\s*20/, 'build3D must advance elev by floorH(f) + 20');
+  assert.match(b3d, /elev\s*=\s*v3dElev\s*\(\s*fidx\s*\)/, 'build3D must place every floor at its level (v3dElev → floorElev: per-floor height #59 and floor levels)');
 
   // mkWall uses curFloorH
   const mkWallSrc = fnSrc('mkWall');
