@@ -34,7 +34,7 @@ const SERVER_NAME = 'floorplanner';
 const SERVER_VERSION = '1.0.0';
 
 /* ---------- Catalogue (mirror of CAT_DEFS / OPENINGS / ROOMCOL in app.js) ---------- */
-const CATS = ['Living', 'Bedroom', 'Kitchen', 'Bathroom', 'Office', 'Structure & Outdoor'];
+const CATS = ['Living', 'Bedroom', 'Kitchen', 'Bathroom', 'Office', 'Structure & Outdoor', 'Lighting'];
 const CATALOG = [
   { id: 'sofa3', cat: 0, name: '3 Kişilik Koltuk', en: '3-Seat Sofa', w: 210, d: 90, h: 85, icon: '🛋️', k: 'sofa', color: '#a5b4fc' },
   { id: 'sofa2', cat: 0, name: '2 Kişilik Koltuk', en: '2-Seat Sofa', w: 160, d: 90, h: 85, icon: '🛋️', k: 'sofa', color: '#a5b4fc' },
@@ -95,10 +95,69 @@ const CATALOG = [
   { id: 'ac', cat: 0, name: 'Klima', en: 'Air Conditioner', w: 90, d: 25, h: 30, icon: '❄️', k: 'rect', color: '#f8fafc' },
   { id: 'cabU', cat: 2, name: 'Üst Dolap', en: 'Wall Cabinet', w: 80, d: 35, h: 70, icon: '🗄️', k: 'rect', color: '#e2e8f0' },
   { id: 'wmirror', cat: 3, name: 'Ayna', en: 'Mirror', w: 60, d: 3, h: 90, icon: '🪞', k: 'rect', color: '#cbd5e1' },
+  // lighting (#120): light fields come from LIGHT_DEFS; ceiling fixtures follow the storey height (mount: 'ceil')
+  { id: 'lampCeil', cat: 6, name: 'Tavan Lambası', en: 'Ceiling Light', w: 40, d: 40, h: 12, icon: '💡', k: 'round', color: '#f8fafc' },
+  { id: 'pendant', cat: 6, name: 'Sarkıt Lamba', en: 'Pendant Light', w: 40, d: 40, h: 70, icon: '💡', k: 'round', color: '#334155' },
+  { id: 'chandelier', cat: 6, name: 'Avize', en: 'Chandelier', w: 80, d: 80, h: 70, icon: '✨', k: 'round', color: '#d4af37' },
+  { id: 'downlight', cat: 6, name: 'Gömme Spot', en: 'Recessed Spot', w: 12, d: 12, h: 4, icon: '🔆', k: 'round', color: '#f1f5f9' },
+  { id: 'trackSpot', cat: 6, name: 'Ray Spot', en: 'Track Spots', w: 120, d: 10, h: 15, icon: '🔦', k: 'rect', color: '#1f2937' },
+  { id: 'sconce', cat: 6, name: 'Aplik', en: 'Wall Sconce', w: 25, d: 12, h: 25, icon: '🕯️', k: 'rect', color: '#e2e8f0' },
+  { id: 'floorLamp', cat: 6, name: 'Lambader', en: 'Floor Lamp', w: 45, d: 45, h: 165, icon: '💡', k: 'round', color: '#e7d8bf' },
+  { id: 'tableLamp', cat: 6, name: 'Masa Lambası', en: 'Table Lamp', w: 30, d: 30, h: 50, icon: '💡', k: 'round', color: '#e7d8bf' },
+  { id: 'ledStrip', cat: 6, name: 'LED Şerit', en: 'LED Strip', w: 200, d: 3, h: 2, icon: '➖', k: 'rect', color: '#fef3c7' },
+  { id: 'bollard', cat: 6, name: 'Bahçe Aydınlatma Babası', en: 'Garden Bollard', w: 20, d: 20, h: 80, icon: '🏮', k: 'round', color: '#374151' },
+  { id: 'streetLamp', cat: 6, name: 'Sokak Lambası', en: 'Street Lamp', w: 40, d: 40, h: 400, icon: '🏮', k: 'round', color: '#374151' },
+  { id: 'wallOut', cat: 6, name: 'Dış Aplik', en: 'Outdoor Wall Light', w: 20, d: 20, h: 30, icon: '🏮', k: 'rect', color: '#374151' },
 ];
 const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
 // height above the floor (cm) that wall-mounted catalogue items get by default — mirror of app.js CAT_ELEV (#61)
-const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110 };
+const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110, sconce: 170, wallOut: 220, tableLamp: 75 };
+/* LIGHT-PARAM:BEGIN — aydınlatma elemanları (#120): saf JS, mcp/server.js ile birebir aynı (tests/lights.test.js karşılaştırır).
+   Alanların hepsi isteğe bağlı, eski projeler değişmez: lon (0 = kapalı; yoksa açık), lm (lümen), lk (Kelvin) ya da lcol (özel renk),
+   beam (spot açısı). Tek okuyucu lightP(o); temizleyici cleanLight(o). Tavan montajı mount: 'ceil' (kat yüksekliğini izler) ayrı bir alan. */
+const LIGHT_DEFS = {
+  lampCeil: { kind: 'point', lm: 1200, mount: 'ceil' }, pendant: { kind: 'point', lm: 800, mount: 'ceil' }, chandelier: { kind: 'point', lm: 2400, mount: 'ceil' },
+  downlight: { kind: 'spot', lm: 600, mount: 'ceil', beam: 40 }, trackSpot: { kind: 'spot', lm: 1200, mount: 'ceil', beam: 30 },
+  sconce: { kind: 'point', lm: 500, mount: 'wall' }, floorLamp: { kind: 'point', lm: 1000, mount: 'floor' }, tableLamp: { kind: 'point', lm: 450, mount: 'floor' },
+  ledStrip: { kind: 'strip', lm: 900, mount: 'ceil' }, bollard: { kind: 'point', lm: 300, mount: 'floor' }, streetLamp: { kind: 'point', lm: 3000, mount: 'floor' },
+  wallOut: { kind: 'point', lm: 600, mount: 'wall' },
+};
+const LIGHT_LM_MIN = 100, LIGHT_LM_MAX = 10000, LIGHT_K_MIN = 2200, LIGHT_K_MAX = 6500, LIGHT_K_DEF = 2700, LIGHT_BEAM_MIN = 10, LIGHT_BEAM_MAX = 120;
+const LIGHT_TONES = { 2700: ['Sıcak', 'Warm'], 4000: ['Nötr', 'Neutral'], 6000: ['Soğuk', 'Cool'] };
+const LIGHT_LEVELS = { dim: [0.5, 'Loş', 'Dim'], normal: [1, 'Normal', 'Normal'], bright: [2, 'Parlak', 'Bright'] }; // varsayılan lümenin katı
+const isLightFix = o => !!(o && LIGHT_DEFS[o.type]);
+// renk sıcaklığı → #rrggbb (Tanner Helland yaklaşımı)
+function kelvinHex(k) {
+  const t = Math.max(1000, Math.min(40000, +k || LIGHT_K_DEF)) / 100, c = v => Math.max(0, Math.min(255, Math.round(v)));
+  const r = t <= 66 ? 255 : 329.698727446 * Math.pow(t - 60, -0.1332047592);
+  const g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661 : 288.1221695283 * Math.pow(t - 60, -0.0755148492);
+  const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+  return '#' + [r, g, b].map(v => c(v).toString(16).padStart(2, '0')).join('');
+}
+// → { kind, on, lm, k, col, beam, custom } ; aydınlatma değilse null
+function lightP(o) {
+  const d = o && LIGHT_DEFS[o.type]; if (!d) return null;
+  const cl = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lm = +o.lm > 0 ? cl(Math.round(+o.lm), LIGHT_LM_MIN, LIGHT_LM_MAX) : d.lm;
+  const k = +o.lk > 0 ? cl(Math.round(+o.lk), LIGHT_K_MIN, LIGHT_K_MAX) : LIGHT_K_DEF;
+  const custom = typeof o.lcol === 'string' && /^#[0-9a-f]{6}$/i.test(o.lcol);
+  return { kind: d.kind, on: o.lon !== 0, lm, k, col: custom ? o.lcol.toLowerCase() : kelvinHex(k), custom,
+    beam: d.kind === 'spot' ? (+o.beam > 0 ? cl(Math.round(+o.beam), LIGHT_BEAM_MIN, LIGHT_BEAM_MAX) : d.beam) : null };
+}
+// geçersiz / varsayılan alanları siler, sınırları uygular (panel, normalizeProject, MCP)
+function cleanLight(o) {
+  if (!isLightFix(o)) return o;
+  const d = LIGHT_DEFS[o.type], q = lightP(o);
+  if (o.lon !== 0) delete o.lon;
+  if (+o.lm > 0 && q.lm !== d.lm) o.lm = q.lm; else delete o.lm;
+  if (+o.lk > 0 && q.k !== LIGHT_K_DEF) o.lk = q.k; else delete o.lk;
+  if (q.custom) o.lcol = q.col; else delete o.lcol;
+  if (d.kind === 'spot' && +o.beam > 0 && q.beam !== d.beam) o.beam = q.beam; else delete o.beam;
+  return o;
+}
+// tavana sabit eşya (mount: 'ceil'): kotu = kat yüksekliği − eşya yüksekliği; f = eşyanın katı, H = o katın duvar yüksekliği
+function ceilElev(o, H) { return Math.max(0, Math.round((+H || 0) - (+o.h || 0))); }
+/* LIGHT-PARAM:END */
 const FURN_ELEV_MAX = 500, WALL_ELEV_MAX = 500; // duvar taban kotu (app.js wallElev ile aynı aralık)
 const OPENINGS = [
   { id: 'door', name: 'Kapı', en: 'Door', w: 90, h: 210, sill: 0 },
@@ -888,10 +947,13 @@ const ifcNeutral = hex => { const n = parseInt(String(hex).slice(1), 16), r = n 
 const IFC_RAIL_STYLE = [[/^(glass|glazed|glazing|cam|camli|camlı)$/, 'glass'], [/^(cable|wire|kablo|halat|horizontal|yatay|rod)$/, 'cable'], [/^(parapet|solid|dolu|concrete|beton|betonarme|masonry|duvar|brick|tugla|tuğla)$/, 'solid']];
 const IFC_LEVEL_MERGE = 100; // bundan yakın seviyeler (Revit yardımcı / referans seviyeleri) tek kat olur; = FLOOR_H_MIN
 const IFC_ROOF_MAX_FACES = 600; // çatı yüzü sınırı: üstü taban izinden düz çatıya düşer (proje / geri al hafif kalsın)
-const IFC_COMPONENTS = new Set(['IFCBUILDINGELEMENTPROXY', 'IFCFURNISHINGELEMENT', 'IFCFURNITURE', 'IFCSYSTEMFURNITUREELEMENT', 'IFCSANITARYTERMINAL', 'IFCELEMENTASSEMBLY', 'IFCFLOWTERMINAL', 'IFCELECTRICAPPLIANCE', 'IFCAUDIOVISUALAPPLIANCE']);
+const IFC_COMPONENTS = new Set(['IFCBUILDINGELEMENTPROXY', 'IFCFURNISHINGELEMENT', 'IFCFURNITURE', 'IFCSYSTEMFURNITUREELEMENT', 'IFCSANITARYTERMINAL', 'IFCELEMENTASSEMBLY', 'IFCFLOWTERMINAL', 'IFCELECTRICAPPLIANCE', 'IFCAUDIOVISUALAPPLIANCE', 'IFCLIGHTFIXTURE']);
 // Revit ailesi → katalog öğesi (#88). Önce bileşik adlar (tam metinde), sonra tek sözcükler: SON eşleşen sözcük kazanır
 // ("Dining Table" → table, "Yatak Odası Dolabı" → dolap). sofa / bed / table boyuta göre katalog çeşidine çevrilir.
-const IFC_CAT_PHRASE = [[/coffee\s*table|sehpa/, 'coffee'], [/bedside|night\s*stand|komodin/, 'night'], [/office\s*chair|task\s*chair|ofis\s*(sandalye|koltu)|çalışma\s*(sandalye|koltu)/, 'ochair'],
+const IFC_CAT_PHRASE = [[/outdoor\s*wall\s*light|exterior\s*wall\s*light|d[ıi]ş\s*aplik/, 'wallOut'], [/ceiling\s*(light|lamp)|tavan\s*lamba|plafonyer/, 'lampCeil'], [/pendant|sark[ıi]t/, 'pendant'], [/chandelier|avize/, 'chandelier'],
+  [/track\s*(light|spot)|ray\s*spot/, 'trackSpot'], [/down\s*light|recessed\s*(light|spot)|g[öo]mme\s*spot|spot\s*light/, 'downlight'], [/sconce|aplik/, 'sconce'], [/floor\s*lamp|standing\s*lamp|lambader/, 'floorLamp'],
+  [/table\s*lamp|desk\s*lamp|masa\s*lambas|abajur/, 'tableLamp'], [/led\s*(strip|tape)|led\s*şerit|şerit\s*led/, 'ledStrip'], [/bollard/, 'bollard'], [/street\s*(lamp|light)|sokak\s*lambas|lamp\s*post/, 'streetLamp'],
+  [/coffee\s*table|sehpa/, 'coffee'], [/bedside|night\s*stand|komodin/, 'night'], [/office\s*chair|task\s*chair|ofis\s*(sandalye|koltu)|çalışma\s*(sandalye|koltu)/, 'ochair'],
   [/dish\s*washer|bulaşık|bulasik/, 'dish'], [/washing|washer|tumble|çamaşır|camasir/, 'wm'], [/arm\s*chair|berjer/, 'armchair'], [/water\s*closet/, 'wc'],
   [/book\s*(case|shelf)|kitapl[ıi]k/, 'bookcase'], [/sink\s*vanity|vanity\s*sink|pedestal|wash\s*(hand\s*)?basin/, 'basin'], [/bath\s*tub/, 'tub'], [/bunk|ranza/, 'bunk']];
 const IFC_CAT_WORD = [[/^(wc|toilet|toilets|klozet[a-z0-9çğıöşü]*|tuvalet[a-z0-9çğıöşü]*|toiletpan|wcseat|alafranga)$/, 'wc'], [/^(bidet|bide)$/, 'bidet'], [/^(bath|tub|küvet[a-z0-9çğıöşü]*|kuvet[a-z0-9çğıöşü]*|jakuzi|jacuzzi)$/, 'tub'],
@@ -1667,7 +1729,7 @@ function ifcToProject(text, opts = {}) {
   const catFor = (id, ft) => {
     if (!cat) return null;
     const en = [...A(id), ...A(typeOf.get(id) || 0)].filter(v => v && v.e && !/^(NOTDEFINED|USERDEFINED)$/.test(v.e)).map(v => v.e).join(' ');
-    let key = ifcCatKey(nameOf(id) + ' ' + typeName(id) + ' ' + String(A(id)[4] || '') + ' ' + en); if (!key) return null;
+    let key = ifcCatKey(nameOf(id) + ' ' + typeName(id) + ' ' + String(A(id)[4] || '') + ' ' + en); if (!key && T(id) === 'IFCLIGHTFIXTURE') key = 'lampCeil'; if (!key) return null; // tanınmayan armatür: tavan lambası
     const rc = ifcRect(ft.pts.map(p => [p.x, p.y])) || { w: ft.x1 - ft.x0, d: ft.y1 - ft.y0 }, lg = Math.max(rc.w, rc.d), sh = Math.min(rc.w, rc.d);
     const round = ft.pts.length >= 8 && Math.abs(rc.w - rc.d) <= Math.max(2, rc.w * 0.06) && ft.ar / (Math.PI * rc.w * rc.d / 4) > 0.9;
     if (key === 'sofa') key = lg >= 190 ? 'sofa3' : lg >= 130 ? 'sofa2' : 'armchair';
@@ -2100,7 +2162,7 @@ function normalizeProject(obj) {
     for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
     for (const sl of f.slabs) { if (!(sl.t > 0)) sl.t = 20; sl.floor = sl.floor || 'concrete'; sl.off = +sl.off || 0; }
     for (const v of f.voids) if (!VOID_TYPES.includes(v.type)) v.type = 'stair';
-    for (const o of f.furn) { cleanParts(o); cleanRoof(o); } // multi-part furniture; items without "parts" are untouched; parametric roofs clamped (#115)
+    for (const o of f.furn) { cleanParts(o); cleanRoof(o); cleanLight(o); if (o.mount !== undefined && o.mount !== 'ceil') delete o.mount; } // multi-part furniture; items without "parts" are untouched; parametric roofs clamped (#115)
   });
   return obj;
 }
@@ -2279,6 +2341,15 @@ function mkFurn(f, a) {
     if (e < -FURN_ELEV_MAX || e > FURN_ELEV_MAX) throw new Error('elev must be between -' + FURN_ELEV_MAX + ' and ' + FURN_ELEV_MAX + ' cm (got ' + e + ')');
     if (e !== 0 || a.elev != null) o.elev = e;
   }
+  if (LIGHT_DEFS[def.id]) { // light fixture (#120): ceiling items follow the floor height; light fields validated by cleanLight
+    if (a.elev == null && LIGHT_DEFS[def.id].mount === 'ceil') { o.mount = 'ceil'; o.elev = ceilElev(o, +f.wallH > 0 ? +f.wallH : P.wallH); }
+    if (a.on === false) o.lon = 0;
+    if (a.lumens != null) o.lm = num(a.lumens, undefined, 'lumens');
+    if (a.kelvin != null) o.lk = num(a.kelvin, undefined, 'kelvin');
+    if (a.lightColor != null) { if (!/^#[0-9a-f]{6}$/i.test(a.lightColor)) throw new Error('lightColor must be #rrggbb'); o.lcol = a.lightColor; }
+    if (a.beam != null) o.beam = num(a.beam, undefined, 'beam');
+    cleanLight(o);
+  }
   if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } // multi-part catalogue item
   if (def.k === 'roof') { // parametric roof (#115): same defaults as the app; elev = top of the walls (floor wall height)
     if (a.roofType != null && !ROOF_TYPES[a.roofType]) throw new Error('roofType must be one of ' + Object.keys(ROOF_TYPES).join(', '));
@@ -2354,7 +2425,7 @@ function summarize() {
     for (const v of f.voids || [])
       out.push('  void ' + v.id + ': ' + v.type + (v.name ? ' "' + v.name + '"' : '') + ' ' + fmtArea(polyArea(v.pts)));
     for (const t of f.furn)
-      out.push('  furn ' + t.id + ': ' + t.name + ' ' + t.w + '×' + t.d + ' cm at (' + t.x + ',' + t.y + ') rot=' + t.rot + '°' + (t.elev > 0 ? ', ' + t.elev + ' cm above floor' : '') + (Array.isArray(t.parts) ? ', ' + t.parts.length + ' parts' : '') + (isParamRoof(t) ? ', ' + t.roofType + ' roof' + (t.roofType !== 'flat' ? ' ' + roofP(t).pitch + '°' : '') + ' ' + roofP(t).mat + ', overhang ' + roofP(t).over + ' cm, height ' + t.h + ' cm' : ''));
+      out.push('  furn ' + t.id + ': ' + t.name + ' ' + t.w + '×' + t.d + ' cm at (' + t.x + ',' + t.y + ') rot=' + t.rot + '°' + (t.elev > 0 ? ', ' + t.elev + ' cm above floor' : '') + (Array.isArray(t.parts) ? ', ' + t.parts.length + ' parts' : '') + (isLightFix(t) ? (q => ', light ' + (q.on ? 'on' : 'off') + ' ' + q.lm + ' lm ' + (q.custom ? q.col : q.k + ' K') + (q.beam ? ' beam ' + q.beam + '°' : '') + (t.mount === 'ceil' ? ', on the ceiling' : ''))(lightP(t)) : '') + (isParamRoof(t) ? ', ' + t.roofType + ' roof' + (t.roofType !== 'flat' ? ' ' + roofP(t).pitch + '°' : '') + ' ' + roofP(t).mat + ', overhang ' + roofP(t).over + ' cm, height ' + t.h + ' cm' : ''));
     for (const t of f.texts)
       out.push('  text ' + t.id + ': "' + t.text + '" at (' + t.x + ',' + t.y + ')');
   });
@@ -2592,6 +2663,24 @@ tool('ack_user_requests',
     return 'Acknowledged ' + j.acked + ' request(s); ' + j.pending + ' still pending.';
   });
 
+tool('set_lights',
+  'Turn light fixtures (Lighting category items) on or off: every light on a floor, the lights inside a room (roomId), or the given ids.',
+  {
+    on: { type: 'boolean', description: 'true = on, false = off.' },
+    roomId: { type: 'string', description: 'Only the lights whose centre is inside this room.' },
+    ids: { type: 'array', items: { type: 'string' }, description: 'Only these light fixture ids.' },
+    floorIndex: floorArg,
+  },
+  ['on'],
+  a => {
+    const f = floorOf(a); let ls = f.furn.filter(isLightFix);
+    const inPoly = (p, ps) => { let c = false; for (let i = 0, j = ps.length - 1; i < ps.length; j = i++) { const q = ps[i], r = ps[j]; if ((q.y > p.y) !== (r.y > p.y) && p.x < (r.x - q.x) * (p.y - q.y) / (r.y - q.y) + q.x) c = !c; } return c; };
+    if (a.roomId) { const r = f.rooms.find(x => x.id === a.roomId); if (!r) throw new Error('No room "' + a.roomId + '" on this floor'); ls = ls.filter(o => inPoly({ x: o.x, y: o.y }, r.pts)); }
+    if (Array.isArray(a.ids)) { const set = new Set(a.ids); ls = ls.filter(o => set.has(o.id)); }
+    for (const o of ls) { if (a.on) delete o.lon; else o.lon = 0; }
+    return (a.on ? 'Turned on ' : 'Turned off ') + ls.length + ' light(s).';
+  });
+
 tool('add_floor',
   'Add a new empty floor on top of the existing ones and return its index.',
   { name: { type: 'string', description: 'Floor name, e.g. "1. Kat" / "First Floor".' },
@@ -2703,6 +2792,11 @@ tool('add_furniture',
     hip: { type: 'number', description: 'Hip only: hip end run as a fraction of half the ridge-direction length (0.05–1; 1 = pyramid). Omit for equal pitch on all faces.' },
     over: { type: 'number', description: 'Roof only: eaves overhang in cm (0–300, default 50; flat 0).' },
     th: { type: 'number', description: 'Roof only: thickness in cm (2–80, default 20).' },
+    on: { type: 'boolean', description: 'Light fixtures only (Lighting category): false places it switched off. Default on.' },
+    lumens: { type: 'number', description: 'Light fixtures only: brightness in lumens (100–10000). Default per fixture (ceiling light 1200, pendant 800, downlight 600…).' },
+    kelvin: { type: 'number', description: 'Light fixtures only: colour temperature in Kelvin (2200–6500, default 2700 warm; 4000 neutral, 6000 cool).' },
+    lightColor: { type: 'string', description: 'Light fixtures only: custom light colour #rrggbb (overrides kelvin).' },
+    beam: { type: 'number', description: 'Spot fixtures only (downlight, trackSpot): beam angle in degrees (10–120).' },
     rmat: { type: 'string', enum: Object.keys(ROOF_MATS), description: 'Roof only: covering tile | shingle | metal | slate | concrete | none (default tile; flat concrete).' },
     floorIndex: floorArg,
   },
@@ -2932,7 +3026,7 @@ tool('update_object',
     if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
     if (found.kind === 'draft') { parsePts(found.o.pts, found.o.shape === 'arc' ? 3 : 2, 'pts'); if (!DRAFT_SHAPES.includes(found.o.shape)) found.o.shape = 'pline'; }
     if (found.kind === 'furn' && 'parts' in props) cleanParts(found.o);
-    if (found.kind === 'furn') cleanRoof(found.o); // parametric roof: clamp fields, height from the parameters (#115)
+    if (found.kind === 'furn') { cleanRoof(found.o); cleanLight(found.o); } // parametric roof (#115) / light fields (#120): clamp, drop defaults
     return 'Updated ' + found.kind + ' ' + found.o.id + ':\n' + JSON.stringify(found.o, null, 2);
   });
 

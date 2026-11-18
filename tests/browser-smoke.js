@@ -1759,6 +1759,47 @@ check('3D walk mode: climb a stair to the upper floor and walk back down through
   return 'up to floor 1 (eye +' + (r.top.camY - r.y0).toFixed(0) + ' cm) and back down';
 });
 
+check('light fixtures: placed on the ceiling, panel on / off and brightness, room all off, storey height followed, undo, export (#120)', async page => {
+  const r = await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400);
+    F().rooms.push(mkRoom([{ x: 0, y: 0 }, { x: 600, y: 0 }, { x: 600, y: 400 }, { x: 0, y: 400 }], 'Salon'));
+    commit(); refresh();
+    const cat = [...document.querySelectorAll('#cats [data-cat]')].find(b => /Lighting|Aydınlatma/.test(b.textContent));
+    if (!cat) return { err: 'no Lighting category in the library' };
+    cat.click();
+    if (!document.querySelector('#items [data-id="lampCeil"], #items [data-cid="lampCeil"], #items [data-type="lampCeil"]') && !document.getElementById('items').textContent.match(/Ceiling Light|Tavan Lambası/)) return { err: 'ceiling light card missing' };
+    startPlace('furn', BYID.lampCeil); ui.snap = true; ui.raw = { x: 300, y: 200 }; updateGhost(); placeAt(ui.raw); setTool('select');
+    const o = F().furn.find(x => x.type === 'lampCeil'); if (!o) return { err: 'not placed' };
+    const res = { mount: o.mount, elev: o.elev, want: floorH(F()) - o.h };
+    sel = [o.id]; refresh();
+    const on = document.querySelector('#props [data-p="lon"]'); on.checked = false; on.dispatchEvent(new Event('change', { bubbles: true }));
+    res.off = o.lon === 0 && !!document.querySelector('#gFurn').innerHTML;
+    document.querySelector('#props [data-act="lmset"][data-lv="bright"]').click(); res.lm = o.lm;
+    on.checked = true; document.querySelector('#props [data-p="lon"]').checked = true; document.querySelector('#props [data-p="lon"]').dispatchEvent(new Event('change', { bubbles: true }));
+    res.onAgain = lightP(o).on;
+    sel = [F().rooms[0].id]; refresh();
+    document.querySelector('#props [data-act="roomlights"][data-on="0"]').click(); res.roomOff = o.lon === 0;
+    undo(); res.undo = lightP(F().furn.find(x => x.id === o.id)).on;
+    F().wallH = 320; commit(); res.follow = F().furn.find(x => x.id === o.id).elev === 320 - o.h;
+    const svg = exportSvg().svg; res.export = svg.includes('<circle') && !/💡/.test(svg);
+    // IFC: lights export as IfcLightFixture and come back as the same catalogue fixtures
+    for (const id of ['pendant', 'sconce', 'floorLamp', 'downlight']) F().furn.push(mkFurn(BYID[id], 100 + F().furn.length * 80, 150, 0));
+    const txt = ifcFromExchange(revitExport(P)), back = ifcToProject(txt, { uid, L, catalog: BYID, colors: ROOMCOL }).project.floors[0];
+    res.ifcEnt = (txt.match(/IFCLIGHTFIXTURE\\(/g) || []).length;
+    res.ifcBack = back.furn.filter(isLightFix).map(x => x.type).sort().join(',');
+    return res;
+  })()`);
+  if (r.err) throw new Error(r.err);
+  if (r.mount !== 'ceil' || r.elev !== r.want) throw new Error('ceiling light not on the ceiling: ' + JSON.stringify(r));
+  if (!r.off || r.lm !== 2400 || !r.onAgain) throw new Error('panel on / off or brightness failed: ' + JSON.stringify(r));
+  if (!r.roomOff || !r.undo) throw new Error('room all off / undo failed: ' + JSON.stringify(r));
+  if (!r.follow) throw new Error('ceiling light did not follow a new storey height');
+  if (!r.export) throw new Error('exported SVG lost the light symbol or kept the emoji');
+  if (r.ifcEnt !== 5 || r.ifcBack !== 'downlight,floorLamp,lampCeil,pendant,sconce') throw new Error('IFC light round trip: ' + r.ifcEnt + ' IfcLightFixture, back as ' + r.ifcBack);
+  return 'on the ceiling at ' + r.elev + ' cm, panel + room switch + undo + storey height + export + IFC round trip';
+});
+
 check('stairs line up between walls, open a stairwell above that follows them, resize with 3D arrows and continue upward', async page => {
   const r = await page.evaluate(`(() => {
     show3D(false); closeModal();

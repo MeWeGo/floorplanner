@@ -25,6 +25,7 @@ CATEGORY = {
     'column': 'OST_Columns',
     'appliance': 'OST_SpecialityEquipment',
     'casework': 'OST_Casework',
+    'lighting': 'OST_LightingFixtures',
     'entourage': 'OST_Entourage',
     'stairs': 'OST_Stairs',
     'ramp': 'OST_Ramps',
