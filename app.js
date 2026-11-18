@@ -218,6 +218,7 @@ const curFloorH = () => floorH(P && P.floors ? P.floors[fi] : null);
 const ROOM_SLAB_T = 20, roomSlabT = r => (r && r.slabT != null && +r.slabT >= 0 ? Math.min(200, +r.slabT) : ROOM_SLAB_T);
 // odanın kendi düzenleri ya da içinde olduğu grubun düzenleri var mı (#66)
 const grpHasVars = (gid, min = 1) => !!gid && ((P.floors[fi] && P.floors[fi].groups) || []).some(g => g.id === gid && (g.vars || []).length >= min);
+const FLOOR_LVL_MAX = 50000, VOID_DEP_MAX = 1000; // kat kotu ±500 m; döşeme boşluğunun çukur derinliği en çok 10 m
 const FLOOR_H_MIN = 100, FLOOR_H_MAX = 800; // kat yüksekliği alanı ve MCP add_floor ile aynı aralık
 // { key: [tr, en] } → <select> seçenekleri (merdiven / rampa / cam alanları)
 const biOpts = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
@@ -388,6 +389,17 @@ function voidHoles(voids, pts) {
     out.push(v.pts.map(q => { const d = dist(q, c) || 1, k = Math.min(0.5, d / 2) / d; return { x: q.x + (c.x - q.x) * k, y: q.y + (c.y - q.y) * k }; }));
   }
   return out;
+}
+/* Döşeme boşluğuna konan eşya boşluğun dibine oturur: çukurda (v.dep) derinlik kadar aşağı, açık boşlukta alt katın döşemesine
+   (alt kat yoksa toprağa, 20 cm). Merdiven / rampa / çatı, tavana sabit eşya ve merdiven boşlukları (v.stair) hariç. f = kat, i = katın sırası. */
+function voidDrop(f, i, o) {
+  if (!f || !o || o.k === 'stairs' || o.k === 'ramp' || o.k === 'roof' || o.mount === 'ceil') return 0;
+  for (const v of f.voids || []) {
+    if (v.stair || !v.pts || v.pts.length < 3 || !pointInPoly(o, v.pts)) continue;
+    if (+v.dep > 0) return -v.dep;
+    return i > 0 ? -floorPitch(i - 1) : -20;
+  }
+  return 0;
 }
 function pointInPoly(p, pts) { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { if (((pts[i].y > p.y) !== (pts[j].y > p.y)) && (p.x < (pts[j].x - pts[i].x) * (p.y - pts[i].y) / (pts[j].y - pts[i].y) + pts[i].x)) c = !c; } return c; }
 function opPos(op) {
@@ -1081,7 +1093,8 @@ function normalizeProject(P) {
   if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; }
-    for (const v of f.voids) if (!VOID_TYPES[v.type]) v.type = 'stair';
+    if (f.lvl != null) { const n = typeof f.lvl === 'number' || (typeof f.lvl === 'string' && f.lvl.trim()) ? +f.lvl : NaN; if (Number.isFinite(n)) f.lvl = clamp(Math.round(n), -FLOOR_LVL_MAX, FLOOR_LVL_MAX); else delete f.lvl; } // kat kotu
+    for (const v of f.voids) { if (!VOID_TYPES[v.type]) v.type = 'stair'; if (v.dep != null) { const d = clamp(Math.round(+v.dep || 0), 0, VOID_DEP_MAX); if (d) v.dep = d; else delete v.dep; } } // çukur derinliği
     for (const o of f.furn) { cleanParts(o); cleanRoof(o); cleanLight(o); if (o.mount !== undefined && o.mount !== 'ceil') delete o.mount; } }); // parçalı mobilya: alanı olmayan eski öğelere dokunulmaz
   return P;
 }
@@ -3654,6 +3667,8 @@ function ifcToProject(text, opts = {}) {
     const fh = Math.round(nx.b.s.z - b.s.z - 20);
     if (fh >= 100 && fh <= 800 && fh !== wallH) f.wallH = fh;
   });
+  // bodrum katlı model: zemin altındaki kat varsa her kat gerçek kotunu alır (Floor.lvl, ±0 = zemin); yoksa eskisi gibi dizilir
+  if (floors.some(({ b }) => b.s && b.s.z < -50)) floors.forEach(({ b, f }) => { if (b.s && Number.isFinite(b.s.z)) f.lvl = Math.round(b.s.z); });
   stats.floors = floors.length; stats.levelsMerged = merged;
   const pa = proj ? A(proj) : [];
   const nm = String(pa[5] || pa[2] || '').trim();
@@ -4426,7 +4441,7 @@ function stairDirPick(ux, uy, rev, prefRot) {
   return r;
 }
 // yeni kütüphane merdiveni: kat arası yükseklik (üst kata ulaşır), rahat basamak (≈ 28 cm) için uzunluk
-function stairDefaults(o, H = curFloorH() + 20) {
+function stairDefaults(o, H = curFloorPitch()) {
   o.h = H; o.stepN = Math.round(H / 17.5);
   if (!STAIR_TYPES[o.stairType] || o.stairType === 'straight') o.d = Math.round(o.stepN * STAIR_TREAD / 10) * 10;
   return o;
@@ -4508,7 +4523,7 @@ function stairSnap(o, p, opt = {}, f = F()) {
 }
 // merdiven boşluğu (#stair): alt kattaki merdivenin üstünde, bir üst katta merdivenle bağlı döşeme boşluğu (void.stair = merdiven id)
 const stairVoidPts = o => furnCorners(o).map(q => ({ x: Math.round(q.x * 10) / 10, y: Math.round(q.y * 10) / 10 }));
-function stairReachesUp(o, f) { return furnElev(o) + (+o.h || 0) >= floorH(f) + 20 - 5; }
+function stairReachesUp(o, f) { const i = P.floors.indexOf(f); return furnElev(o) + (+o.h || 0) >= (i < 0 ? floorH(f) + 20 : floorPitch(i)) - 5; }
 function stairVoidOf(o, i = fi) { const up = P.floors[i + 1]; return up && (up.voids || []).find(v => v.stair === o.id) || null; }
 function linkStairVoid(o, i = fi) {
   const up = P.floors[i + 1]; if (!up) return null;
@@ -5980,6 +5995,17 @@ function doHandle(raw, e) {
 }
 
 /* ---------- Özellikler paneli ---------- */
+// kat kotu (bodrum katlar): taban ve tavan kotu metre cinsinden; kat bir alttakiyle çakışırsa uyarı
+function floorLevelHtml(f) {
+  const e = floorElev(fi), top = e + floorH(f), m = cm => (cm / 100).toFixed(2), dn = P.floors[fi - 1];
+  const gap = dn ? e - (floorElev(fi - 1) + floorH(dn)) : null; // alt katın tavanı ile bu katın tabanı arası (normalde 20 cm döşeme)
+  return `<h4>📏 ${L('Kat kotu', 'Floor level')} – ${esc(f.name)}</h4>`
+    + fld(L('Taban kotu (m)', 'Floor level (m)'), 'floor', 'lvlB', m(e), { step: 0.05 })
+    + fld(L('Tavan kotu (m)', 'Ceiling level (m)'), 'floor', 'lvlT', m(top), { step: 0.05 })
+    + `<p class="muted" style="margin:0 0 6px">${L(`Bu kat ${fmtLevel(e)} ile ${fmtLevel(top)} arasında (±0.00 = zemin; eksi kot = toprak altı, bodrum).`, `This floor runs from ${fmtLevel(e)} to ${fmtLevel(top)} (±0.00 = ground; a negative level is underground, a basement).`)}</p>`
+    + (gap != null && gap < 0 ? `<p class="muted" style="margin:0 0 6px;color:var(--danger,#e11d48)">⚠ ${L(`Alt katla ${Math.round(-gap)} cm çakışıyor.`, `Overlaps the floor below by ${Math.round(-gap)} cm.`)}</p>` : '')
+    + (floorLvl(f) != null && fi > 0 ? `<div class="row"><button class="btn sm" data-act="floorlvlreset" title="${L('Kotu siler; kat alttakinin üstüne dizilir', 'Clears the level; the floor stacks on the one below')}">↺ ${L('Alt katın üstüne diz', 'Stack on the floor below')}</button></div>` : '');
+}
 const fld = (lbl, k, p, v, o = {}) => {
   if (o.sel) return `<label class="f"><span>${lbl}</span><select data-k="${k}" data-p="${p}">${Object.entries(o.sel).map(([a, b]) => `<option value="${a}" ${String(a) === String(v) ? 'selected' : ''}>${b}</option>`).join('')}</select></label>`;
   const type = o.type || 'number';
@@ -6137,7 +6163,7 @@ function renderProps() {
         + `<div class="stat"><span>${L('Rıht yüksekliği', 'Riser height')}</span><b>${(Math.round(st.riser * 10) / 10)} cm</b></div>`
         + `<div class="stat"><span>${L('Basamak derinliği', 'Tread depth')}</span><b>${(Math.round(st.tread * 10) / 10)} cm</b></div>`
         + `<div class="stat" title="${L('Blondel kuralı: 2 × rıht + basamak ≈ 63 cm (60–64 rahat)', 'Blondel rule: 2 × riser + tread ≈ 63 cm (60–64 is comfortable)')}"><span>2r + t</span><b style="color:${bc}">${Math.round(bl.v * 10) / 10} cm ${bl.ok ? '✓' : bl.warn ? '≈' : '✗'}</b></div>`
-        + `<div class="row"><button class="btn sm" data-act="stairfit">${L('⇕ Kat yüksekliğine eşitle', '⇕ Match storey height')} (${curFloorH() + 20} cm)</button></div>`
+        + `<div class="row"><button class="btn sm" data-act="stairfit">${L('⇕ Kat yüksekliğine eşitle', '⇕ Match storey height')} (${curFloorPitch()} cm)</button></div>`
         + `<div class="row"><button class="btn sm" data-act="stairalign" title="${L('En yakın kapının ortasına ya da iki duvarın arasına hizala', 'Line up with the nearest door or with the gap between two walls')}">⇔ ${L('Kapıya / duvarlara hizala', 'Align to door / walls')}</button>`
         + `<button class="btn sm" data-act="stairwmode" title="${L('Hizalarken genişlik: boşluğa / kapıya eşit ya da merdivenin kendi genişliği (yerleştirirken S)', 'Width when aligning: fill the gap / door, or keep the stair width (S while placing)')}">↔ ${stairWidthMode() === 'fit' ? L('Genişlik: boşluğa eşit', 'Width: fit to space') : L('Genişlik: serbest', 'Width: free')}</button></div>`
         + (P.floors[fi + 1] ? (stairVoidOf(o) ? `<div class="stat"><span>${L('Üst katta boşluk', 'Stairwell above')}</span><b style="color:#16a34a">✓ ${L('merdiveni izler', 'follows the stair')}</b></div>` : `<div class="row"><button class="btn sm" data-act="stairvoid">⬚ ${L('Üst katta boşluk aç', 'Open stairwell above')}</button></div>`) : '')
@@ -6173,7 +6199,9 @@ function renderProps() {
         + fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'slab', 't', o.t ?? 20, { min: 5, max: 100 })
         + fld(L('Kot farkı (cm)', 'Level offset (cm)'), 'slab', 'off', o.off || 0, { min: -200, max: 200 });
       if (o.color) h += `<div class="row"><button class="btn sm" data-act="slabcolreset">${L('↺ Varsayılan renk', '↺ Default colour')}</button></div>`;
-    } else h += fld(L('Tür', 'Type'), 'void', 'type', o.type || 'stair', { sel: Object.fromEntries(Object.entries(VOID_TYPES).map(([id, [tr, en]]) => [id, L(tr, en)])) });
+    } else h += fld(L('Tür', 'Type'), 'void', 'type', o.type || 'stair', { sel: Object.fromEntries(Object.entries(VOID_TYPES).map(([id, [tr, en]]) => [id, L(tr, en)])) })
+      + fld(L('Çukur derinliği (cm)', 'Pit depth (cm)'), 'void', 'dep', +o.dep || 0, { min: 0, max: VOID_DEP_MAX, step: 10 })
+      + `<p class="muted" style="margin:0 0 6px">${+o.dep > 0 ? L('Tabanı olan bir çukur (havuz, asansör kuyusu…): içine koyduğunuz eşya tabana oturur.', 'A pit with a floor (pool, lift pit…): items you put in it sit on its floor.') : L('0 = açık boşluk: içine koyduğunuz eşya alt katın döşemesine iner. Derinlik girince tabanlı çukur olur.', '0 = open void: items you put in it go down to the floor below. Enter a depth for a pit with a floor.')}</p>`;
     if (n === 1) {
       const rb = bboxOf(k, o);
       if (rb) h += fld(L('Konum X (cm)', 'Position X (cm)'), k, 'rx', Math.round(rb.x0), { step: 10 })
@@ -6263,6 +6291,7 @@ function projectPanel() {
   if (P.bg) h += bgFields(false);
   else h += `<p class="muted" style="margin:0 0 6px">${L('Kroki / mevcut plan görselini altlık olarak ekleyip üzerinden çizebilirsin.', 'Import a blueprint or floor plan image as an underlay to trace over.')}</p><div class="row"><button class="btn sm" data-act="bgadd">${L('🖼 Görsel ekle', '🖼 Add image')}</button></div>`;
   h += `<h4>${L('Kesit & görünüş', 'Sections & elevations')}</h4><div class="row"><button class="btn sm" data-act="archview">${L('📐 Görünüşler ve kesitler', '📐 Elevations & sections')}</button></div><p class="muted" style="margin:0 0 6px">${L('Dört cephe görünüşü kat kotlarıyla; kesit eklemek için 🔪 Kesit aracı (L).', 'Four facade elevations with floor levels; add a section with the 🔪 Section tool (L).')}</p>`;
+  h += floorLevelHtml(f);
   h += `<h4>${L('Kat yüksekliği', 'Floor height')} – ${esc(f.name)}</h4>` + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'floor', 'wallH', floorH(f), { min: FLOOR_H_MIN, max: FLOOR_H_MAX })
     + `<div class="row"><button class="btn sm" data-act="wallhfloor">⬆ ${L('Bu kattaki duvarlara uygula', 'Apply to walls on this floor')}</button>${f.wallH ? `<button class="btn sm" data-act="floorhreset" title="${L('Proje varsayılanına dön', 'Back to the project default')}">↺ ${P.wallH} cm</button>` : ''}</div>`
     + `<p class="muted" style="margin:0 0 6px">${L('Yeni duvarlar bu yüksekliği alır; 3B’de üst katlar bu yüksekliğe göre dizilir.', 'New walls get this height; in 3D the floors above stack on it.')}</p>`;
@@ -6350,6 +6379,16 @@ function applyProp(t, final) {
   if (k === 'wall' && p === 'h') for (const x of selObjs()) if (x.kind === 'wall') delete x.o.top; // yükseklik yazmak eğimli üstü düzler (#96)
   if (k === 'room' && p === 'slabT') v = clamp(v, 0, 200); // 0 = ince yüzey (eski görünüm) (#63)
   if (k === 'floor' && p === 'wallH') { const n = +v; if (!(n > 0)) return; const hv = clamp(n, FLOOR_H_MIN, FLOOR_H_MAX); if (hv === P.wallH) delete F().wallH; else F().wallH = hv; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
+  if (k === 'void' && p === 'dep') { // çukur derinliği: 0 = açık boşluk (alan silinir)
+    const d = clamp(Math.round(+v || 0), 0, VOID_DEP_MAX); for (const { kind, o } of selObjs()) if (kind === 'void') { if (d) o.dep = d; else delete o.dep; }
+    if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
+  }
+  if (k === 'floor' && (p === 'lvlB' || p === 'lvlT')) { // kat kotu (m): taban = kat kotu, tavan = taban + duvar yüksekliği
+    const n = parseFloat(String(v).replace(',', '.')); if (!Number.isFinite(n)) return; const f = F(), cm = Math.round(n * 100);
+    if (p === 'lvlB') f.lvl = clamp(cm, -FLOOR_LVL_MAX, FLOOR_LVL_MAX);
+    else { const hv = clamp(cm - floorElev(fi), FLOOR_H_MIN, FLOOR_H_MAX); if (hv === P.wallH) delete f.wallH; else f.wallH = hv; }
+    if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); refresh(); } return;
+  }
   if (k === 'floor' && p === 'slabOn') { if (v) delete F().noSlab; else F().noSlab = true; if (ui.view3d && T3) schedBuild3D(); commit(); renderProps(); return; } // kat döşemesi aç / kapat
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
@@ -6436,6 +6475,7 @@ $('#props').addEventListener('click', e => {
   if (a === 'paste') return paste(false);
   if (a === 'flipH' || a === 'flipV') return flipSel(a === 'flipH' ? 'h' : 'v');
   if (a === 'archview') return archModal('elev:south');
+  if (a === 'floorlvlreset') { delete F().lvl; commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; } // kat yeniden alttakinin üstüne dizilir
   if (a === 'wallhfloor' || a === 'wallhall' || a === 'floorhreset') {
     // duvar yüksekliğini topluca değiştir (#59)
     const fl = F(), w = os.find(x => x.kind === 'wall')?.o;
@@ -6470,12 +6510,12 @@ $('#props').addEventListener('click', e => {
     const o = os[0] && os[0].o; if (!o || o.k !== 'stairs') return;
     if (!P.floors[fi + 1]) P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length));
     const up = P.floors[fi + 1], c = JSON.parse(JSON.stringify(o));
-    c.id = uid(); delete c.grp; delete c.lock; stairDefaults(c, floorH(up) + 20); c.d = o.d; // uzunluk aynı: üst üste oturur
+    c.id = uid(); delete c.grp; delete c.lock; stairDefaults(c, floorPitch(fi + 1)); c.d = o.d; // uzunluk aynı: üst üste oturur
     up.furn.push(c); linkStairVoid(o);
     fi++; sel = [c.id]; commit(); refresh(); if (ui.view3d && T3) { sync3DFloors(); schedBuild3D(); }
     toast(L('🪜 Merdiven üst kata devam ediyor', '🪜 The stair continues to the floor above')); return;
   }
-  if (a === 'stairfit') { for (const { o } of os) if (o.k === 'stairs') { o.h = curFloorH() + 20; o.stepN = Math.round(o.h / 17.5); } commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
+  if (a === 'stairfit') { for (const { o } of os) if (o.k === 'stairs') { o.h = curFloorPitch(); o.stepN = Math.round(o.h / 17.5); } commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a.startsWith('lyr')) return layerAct(a, b.dataset.lid);
   const sco = os.length === 1 && os[0].kind === 'section' ? os[0].o : null;
   if (sco && a === 'secflip') { sco.dir = -(sco.dir || 1); commit(); refresh(); if (ui.secCut === sco.id) { applySecClip(); lookAtSection(sco); } return; }
@@ -6677,18 +6717,33 @@ $('#items').addEventListener('click', e => {
 
 /* ---------- Katlar ---------- */
 function renderFloors() {
-  $('#floors').innerHTML = P.floors.map((f, i) => `<button class="ftab ${i === fi ? 'on' : ''}" data-fl="${i}" title="${L('Çift tıkla: yeniden adlandır', 'Double-click to rename')}">${esc(f.name)}</button>`).join('')
-    + `<button class="btn sm" data-fa="ren" title="${L('Katı yeniden adlandır', 'Rename floor')}">✎</button><button class="btn sm" data-fa="add" title="${L('Kat ekle', 'Add floor')}">${L('＋ Kat', '＋ Floor')}</button><button class="btn sm" data-fa="dup" title="${L('Katı kopyala', 'Duplicate floor')}">⧉</button><button class="btn sm" data-fa="del" title="${L('Katı sil', 'Delete floor')}">🗑</button>`;
+  // kot etiketi: bodrum kat varsa ya da bir kata elle kot girildiyse her sekmede (±0.00 / +3.00 / −3.00)
+  const lv = P.floors.some(f => floorLvl(f) != null), lvTxt = i => (lv ? `<small class="flv">${fmtLevel(floorElev(i))}</small>` : '');
+  $('#floors').innerHTML = P.floors.map((f, i) => `<button class="ftab ${i === fi ? 'on' : ''}" data-fl="${i}" title="${esc(f.name)} · ${fmtLevel(floorElev(i))} → ${fmtLevel(floorElev(i) + floorH(f))} · ${L('Çift tıkla: yeniden adlandır', 'Double-click to rename')}">${esc(f.name)}${lvTxt(i)}</button>`).join('')
+    + `<button class="btn sm" data-fa="ren" title="${L('Katı yeniden adlandır', 'Rename floor')}">✎</button><button class="btn sm" data-fa="add" title="${L('Kat ekle', 'Add floor')}">${L('＋ Kat', '＋ Floor')}</button><button class="btn sm" data-fa="addb" title="${L('En alta, toprak altına bir bodrum kat ekler (zemin kat ±0.00’da kalır)', 'Adds a basement below the lowest floor, under the ground (the ground floor stays at ±0.00)')}">${L('＋ Bodrum', '＋ Basement')}</button><button class="btn sm" data-fa="dup" title="${L('Katı kopyala', 'Duplicate floor')}">⧉</button><button class="btn sm" data-fa="del" title="${L('Katı sil', 'Delete floor')}">🗑</button>`;
 }
 $('#floors').addEventListener('click', e => {
   const t = e.target.closest('[data-fl]'); if (t) { fi = +t.dataset.fl; sel = []; refresh(); return; }
   const a = e.target.closest('[data-fa]'); if (!a) return;
   if (a.dataset.fa === 'ren') return renameFloor(fi); // dokunmatikte çift dokunma yerine
   if (a.dataset.fa === 'add') { P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length)); const bi = P.floors.length - 2; for (const o of P.floors[bi].furn) if (o.k === 'stairs' && stairReachesUp(o, P.floors[bi])) linkStairVoid(o, bi); fi = P.floors.length - 1; // alttaki merdivenlerin boşluğu yeni katta açılır
-  sel = []; commit(); fit(); refresh(); }
+  sel = []; commit(); fit(); refresh(); if (ui.view3d && T3) { sync3DFloors(); schedBuild3D(); } }
+  if (a.dataset.fa === 'addb') addBasement();
   if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); const gm = {}; for (const k in KINDS) c[k].forEach(o => { if (o.grp) o.grp = gm[o.grp] || (gm[o.grp] = uid()); }); c.groups = Object.values(gm).map(id => ({ id, vars: [], idx: 0 })); c.rooms.forEach(r => { delete r.vars; delete r.vIdx; }); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
   if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
 });
+// bodrum kat: en alta eklenir; en alttaki katın kotu sabitlenir (zemin kat ±0.00'da kalır), bodrum onun bir kat altında başlar
+function addBasement(h = P.wallH) {
+  const g = P.floors[0], e0 = floorElev(0), n = P.floors.filter((f, i) => floorElev(i) < 0).length;
+  const b = newFloor(n ? L(`${n + 1}. Bodrum Kat`, `Basement ${n + 1}`) : L('Bodrum Kat', 'Basement'));
+  if (floorLvl(g) == null) g.lvl = e0;
+  if (h !== P.wallH) b.wallH = h;
+  b.lvl = e0 - (h + 20);
+  P.floors.unshift(b); fi = 0; sel = []; commit(); fit(); refresh();
+  if (ui.view3d && T3) { sync3DFloors(); schedBuild3D(); }
+  toast(L(`⬇ ${b.name}: ${fmtLevel(b.lvl)} → ${fmtLevel(b.lvl + h)}`, `⬇ ${b.name}: ${fmtLevel(b.lvl)} → ${fmtLevel(b.lvl + h)}`));
+  return b;
+}
 function renameFloor(i) { const f = P.floors[i]; if (!f) return; const n = (prompt(L('Kat adı:', 'Floor name:'), f.name) || '').trim(); if (n && n !== f.name) { f.name = n; commit(); refresh(); } }
 $('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) renameFloor(+t.dataset.fl); });
 function refresh() { if (ui.lenTyped && !(sel.length === 1 && find(sel[0])?.kind === 'wall')) ui.lenTyped = ''; render(); renderProps(); renderFloors(); updateTools(); syncLayerUI(); }
@@ -9553,7 +9608,12 @@ function exportSvg() {
    Çizim koordinatları: s = düzlem boyunca (izleyicinin sağı, u = (-n.y, n.x)), z = yükseklik (cm, yukarı).
    Kesitte (cut) düzlemin önü (d ≤ 0) atılır, düzlemi kesen duvar ve döşemeler koyu (poché) çizilir;
    görünüşte her şey düzlemin arkasındadır. Uzaktan yakına (ressam algoritması) çizilir. */
-const floorElev = i => { let e = 0; for (let k = 0; k < i && k < P.floors.length; k++) e += floorH(P.floors[k]) + 20; return e; }; // build3D ile aynı kat aralığı (her kat sayılır, kat bazlı yükseklik #59)
+/* Kat kotları (bodrum katlar): Floor.lvl isteğe bağlı = katın taban kotu (cm, ±0.00 = zemin, eksi = toprak altı). Yoksa kat bir
+   alttakinin üstüne dizilir (kot = alt kat kotu + yükseklik + 20 cm döşeme; ilk kat ±0.00), böylece eski projeler aynı kalır. */
+const floorLvl = f => (f && typeof f.lvl === 'number' && Number.isFinite(f.lvl) ? f.lvl : null);
+const floorElev = i => { let e = 0; for (let k = 0; k <= i; k++) { const l = P.floors[k] && P.floors[k].lvl; e = typeof l === 'number' && Number.isFinite(l) ? l : k ? e + floorH(P.floors[k - 1]) + 20 : 0; } return e; }; // i = kat sayısı: en üst katın üstü // build3D ile aynı kat aralığı (kat bazlı yükseklik #59, kat kotu)
+// katın bir üstündekine olan kot farkı (merdiven yüksekliği, yürüme); en üst katta yükseklik + 20 cm döşeme
+const floorPitch = i => floorElev(i + 1) - floorElev(i), curFloorPitch = () => floorPitch(fi);
 const fmtLevel = cm => (Math.abs(cm) < 0.5 ? '±' : cm > 0 ? '+' : '−') + (Math.abs(cm) / 100).toFixed(2);
 // Doğru (O, u) ile poligonun kesiştiği aralıklar, doğru boyunca s cinsinden
 function lineCutIntervals(pts, O, u) {
@@ -9678,8 +9738,8 @@ function archSvg(spec, title) {
   const geo = prims.filter(p => p.t !== 'label');
   if (!geo.length) return null;
   let s0 = Math.min(...geo.map(p => p.s0)), s1 = Math.max(...geo.map(p => p.s1));
-  const zTop = Math.max(...geo.map(p => p.z1)), zBot = -20;
-  const M = 90, LM = 170, w = Math.round(s1 - s0 + LM + M), h = Math.round(zTop - zBot + M * 2 + 70);
+  const zTop = Math.max(...geo.map(p => p.z1)), zBot = -20, zLow = Math.min(zBot, ...geo.map(p => p.z0)); // zLow: bodrum katlar toprak çizgisinin altına iner
+  const M = 90, LM = 170, w = Math.round(s1 - s0 + LM + M), h = Math.round(zTop - zLow + M * 2 + 70);
   const X = s => s - s0 + LM, Y = z => zTop - z + M;
   let out = '';
   // kat kotları: kesikli seviye çizgisi + ▼ işareti + ±0.00
@@ -11535,6 +11595,34 @@ ui.v3dHide = new Set();
 const v3dShown = f => !ui.v3dHide.has(f.id);
 function v3dBase() { const i = P.floors.findIndex(v3dShown); return i < 0 ? 0 : i; }
 function v3dElev(i) { return floorElev(i) - floorElev(v3dBase()); }
+/* Toprak (zemin düzlemi): gerçek ±0.00 kotunda; yalnızca toprak üstü katlar görünüyorsa eskisi gibi en alttaki görünen katın altında.
+   Görünen bodrum katların (kot < 0) ve toprağın altına inen çukur boşlukların izdüşümü delik olarak açılır: içleri yukarıdan görülür. */
+function groundY3D() { return Math.max(0, -floorElev(v3dBase())) - 21; }
+function groundHoles3D() {
+  const gy = groundY3D() + 21, cand = [];
+  P.floors.forEach((f0, i) => {
+    if (!v3dShown(f0)) return;
+    const f = visFloor(f0), e = v3dElev(i);
+    if (e < gy - 0.5) for (const pts of slabPolys(f)) cand.push(pts);
+    else for (const v of f.voids || []) if (+v.dep > 0 && v.pts && v.pts.length > 2 && e - v.dep < gy - 0.5) cand.push(v.pts);
+  });
+  // en büyükten küçüğe; çakışan delik üçgenlemeyi bozar, iç içe / kesişenler atlanır
+  const kept = [];
+  for (const pts of cand.sort((a, b) => polyArea(b) - polyArea(a))) if (!kept.some(k => pts.some(p => pointInPoly(p, k)) || k.some(p => pointInPoly(p, pts)))) kept.push(pts);
+  return kept;
+}
+function groundMesh3D(material) {
+  const holes = groundHoles3D(), R = 20000;
+  let geo;
+  if (!holes.length) { geo = new THREE.PlaneGeometry(2 * R, 2 * R); geo.rotateX(-Math.PI / 2); } // eskisiyle aynı
+  else {
+    const shp = new THREE.Shape([[-R, -R], [R, -R], [R, R], [-R, R]].map(([x, y]) => new THREE.Vector2(x, y)));
+    for (const h of holes) shp.holes.push(new THREE.Path(h.map(p => new THREE.Vector2(p.x, -p.y))));
+    geo = new THREE.ShapeGeometry(shp); geo.rotateX(-Math.PI / 2); // (x, −y) → plan (x, y), normal yukarı
+    const pos = geo.attributes.position, uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, (pos.getX(i) + R) / (2 * R), (R - pos.getZ(i)) / (2 * R)); // düzlemle aynı UV
+  }
+  const m = new THREE.Mesh(geo, material); m.position.y = groundY3D(); m.receiveShadow = true; return m;
+}
 // kat listesi değişince (ekle / sil / geri al) eski kimlikler düşer; hiçbir kat görünmüyorsa hepsi açılır
 function v3dPrune() {
   const fl = P && P.floors ? P.floors : [], ids = new Set(fl.map(f => f.id));
@@ -12109,8 +12197,8 @@ function walkSurfAt(o, x, y) {
 function walkLevels(i) {
   const f = P.floors[i]; if (!f) return [];
   const out = [{ f: visFloor(f), base: 0 }], dn = P.floors[i - 1], up = P.floors[i + 1];
-  if (dn && v3dShown(dn)) out.push({ f: visFloor(dn), base: -(floorH(dn) + 20) });
-  if (up && v3dShown(up)) out.push({ f: visFloor(up), base: floorH(f) + 20 });
+  if (dn && v3dShown(dn)) out.push({ f: visFloor(dn), base: -floorPitch(i - 1) }); // kat kotları: gerçek kot farkı
+  if (up && v3dShown(up)) out.push({ f: visFloor(up), base: floorPitch(i) });
   return out;
 }
 /** p noktasında, ayak kotu z olan yürüyenin basacağı yüzey: g = adım yüksekliği içindeki en yüksek yüzey;
@@ -12129,7 +12217,8 @@ function walkGroundAt(lv, p, z) {
     else if (bot !== null && bot < z + WALK.head) block = true;
   };
   for (const { f, base } of lv) {
-    if (!(f.voids || []).some(v => v.pts && v.pts.length > 2 && pointInPoly(p, v.pts))) take(base, null);
+    const vd = (f.voids || []).find(v => v.pts && v.pts.length > 2 && pointInPoly(p, v.pts));
+    if (!vd) take(base, null); else if (+vd.dep > 0) take(base - +vd.dep, null); // çukur boşluğun tabanı
     for (const s of f.slabs || []) if (s.pts && s.pts.length > 2 && +s.off && pointInPoly(p, s.pts)) take(base + +s.off, +s.off > 0 ? base + +s.off - (+s.t || 20) : null);
     for (const o of f.furn || []) {
       if (o.k !== 'stairs' && o.k !== 'ramp') continue;
@@ -12242,10 +12331,10 @@ function walkStep(dt) {
   w.gz = walkGround(lv, w, w.gz).g; // ayak: basılan yüzey; kamera yumuşak izler (basamaklarda sarsılmasın)
   w.z = Math.abs(w.gz - w.z) < 0.5 ? w.gz : w.z + (w.gz - w.z) * Math.min(1, dt * 12);
   // kat geçişi: üst kat kotuna çıkınca / alt kata inince yürüyen o kata geçer (aynı dünya kotu)
-  const cur = P.floors[w.fi], up = P.floors[w.fi + 1], dn = P.floors[w.fi - 1], pitch = floorH(cur) + 20;
+  const cur = P.floors[w.fi], up = P.floors[w.fi + 1], dn = P.floors[w.fi - 1], pitch = floorPitch(w.fi);
   let nf = -1, dz = 0;
   if (up && v3dShown(up) && w.gz >= pitch - 0.5) { nf = w.fi + 1; dz = -pitch; }
-  else if (dn && v3dShown(dn) && w.gz <= -0.5) { nf = w.fi - 1; dz = floorH(dn) + 20; }
+  else if (dn && v3dShown(dn) && w.gz <= -0.5) { nf = w.fi - 1; dz = floorPitch(w.fi - 1); }
   if (nf >= 0) {
     w.fi = nf; w.gz += dz; w.z += dz;
     if (fi !== nf) { fi = nf; sel = []; refresh(); refreshSel3D(); } // 2B'deki etkin kat yürüyeni izler
@@ -13943,7 +14032,19 @@ function build3D(keepCam = false) {
       if (water) addWater(shp, m.position.y + 0.25, water);
     });
     // mobilya bir serbest döşemenin üstündeyse o döşemenin kotuna oturur (en üstteki döşeme kazanır)
-    const furnOff = o => { for (let i = slabs.length - 1; i >= 0; i--) if (pointInPoly(o, slabs[i].pts)) return +slabs[i].off || 0; return 0; };
+    const furnOff = o => { for (let i = slabs.length - 1; i >= 0; i--) if (pointInPoly(o, slabs[i].pts)) return +slabs[i].off || 0; return voidDrop(f, fidx, o); }; // boşluktaki eşya boşluğun dibine iner
+    // çukur boşluk (v.dep): taban plakası + çevre perdeleri (döşemenin altından tabana)
+    for (const v of f.voids || []) {
+      const dep = +v.dep || 0; if (!(dep > 0) || !v.pts || v.pts.length < 3) continue;
+      const shp = new THREE.Shape(v.pts.map(p => new THREE.Vector2(p.x, p.y))), geo = new THREE.ExtrudeGeometry(shp, { depth: 20, bevelEnabled: false });
+      geo.rotateX(Math.PI / 2); const m = new THREE.Mesh(geo, slabMat); m.position.y = elev - dep; m.receiveShadow = true; m.userData.voidId = v.id; S.add(m);
+      const c = polyCentroid(v.pts), WT = 15;
+      v.pts.forEach((p, i) => {
+        const q = v.pts[(i + 1) % v.pts.length], Ln = dist(p, q); if (Ln < 1) return;
+        let nx = -(q.y - p.y) / Ln, ny = (q.x - p.x) / Ln; const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2; if (nx * (c.x - mx) + ny * (c.y - my) > 0) { nx = -nx; ny = -ny; } // dışa doğru
+        box(S, Ln + WT, dep + 20, WT, slabCol, mx + nx * WT / 2, elev - dep - 20 + (dep + 20) / 2, my + ny * WT / 2, -Math.atan2(q.y - p.y, q.x - p.x), 0, false);
+      });
+    }
     const roomLv = stackLevels(f.rooms, 'room'), furnLv = stackLevels(f.furn, 'furn');
     // gece otomatik oda ışığı adayları (#122): içinde aydınlatma elemanı olmayan oda (≥ 2 m²), tavanın 30 cm altında, 700 lm
     for (const r of f.rooms) if (r.pts && r.pts.length > 2 && polyArea(r.pts) > 20000 && !f.furn.some(o => isLit(o) && litOn(o) && pointInPoly(o, r.pts))) {
@@ -14129,10 +14230,8 @@ function build3D(keepCam = false) {
       const geo = new THREE.BufferGeometry().setFromPoints(sk.pts.map(p => new THREE.Vector3(p.x, elev + 1.5, p.y)));
       S.add(new THREE.Line(geo, mat(col))); // malzeme matCache ile T3.mats'te dispose edilir
     });
-    elev += floorH(f) + 20; // kat bazlı yükseklik (#59)
   });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), mat(lt ? 0xd8d2c5 : 0x11161e));
-  ground.rotation.x = -Math.PI / 2; ground.position.y = -21; ground.receiveShadow = true; S.add(ground);
+  const ground = groundMesh3D(mat(lt ? 0xd8d2c5 : 0x11161e)); S.add(ground); // ±0.00'da; bodrum katların ve çukurların üstü açık
   T3.ground = ground;                                 // the render swaps its material for a studio backdrop
   T3.fit = { cx, cz, sz, elev, x0: all.x0, x1: all.x1, z0: all.y0, z1: all.y1 };
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); fitOrtho(); }
