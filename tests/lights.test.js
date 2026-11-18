@@ -255,6 +255,7 @@ function loadLight3DSandbox() {
     ${fnSrcOf(src, 'lmToThree')}
     ${fnSrcOf(src, 'fixAnchor')}
     ${fnSrcOf(src, 'fixDayFactor')}
+    ${fnSrcOf(src, 'fixScore')}
     ${fnSrcOf(src, 'fixRank')}
     return { ui, lmToThree, fixAnchor, fixDayFactor, fixRank };
   `)();
@@ -270,7 +271,7 @@ test('(6a) lmToThree: monotonic i and d, clamping, and 800 lm baseline', () => {
   }
   assert.deepStrictEqual(lmToThree(50), lmToThree(100));
   assert.deepStrictEqual(lmToThree(20000), lmToThree(10000));
-  assert.ok(Math.abs(lmToThree(800).i - 0.55) < 1e-6, `800 lm should give i ~ 0.55, got ${lmToThree(800).i}`);
+  assert.ok(Math.abs(lmToThree(800).i - 1) < 1e-6, `800 lm should give i = 1, got ${lmToThree(800).i}`);
 });
 
 test('(6b) fixRank: filtering, limit, distance, floor priority, and stability', () => {
@@ -345,7 +346,7 @@ test('(6d) fixDayFactor: CAD mode, live3d sun altitude, and 0.25..1 clamping', (
 });
 
 test('(6e) 3D lighting wiring in app.js', () => {
-  assert.match(src, /\bconst\s+FIX_PTS\s*=\s*8\s*,\s*FIX_SPOTS\s*=\s*4\b/, 'FIX_PTS is 8 and FIX_SPOTS is 4');
+  assert.match(src, /\bconst\s+FIX_PTS\s*=\s*8\s*,\s*FIX_SPOTS\s*=\s*6\b/, 'FIX_PTS is 8 and FIX_SPOTS is 6 (#128: the first 4 spots cast shadows)');
   assert.match(src, /\bconst\s+layersVis\s*=\s*\{[^}]*\blightArea\s*:\s*false\b/, 'layersVis has lightArea: false by default');
 
   const build3DSrc = fnSrcOf(src, 'build3D');
@@ -486,3 +487,18 @@ test('(7e) night mode (#122) wiring in app.js and index.html', () => {
   assert.match(src, /if\s*\(\s*k\s*===\s*'f'\s*&&\s*T3\s*&&\s*T3\.walk\s*\)\s*\{[^}]*toggleFlashlight\s*\(\s*\)/, 'keydown handler toggles flashlight with k === "f" while walking');
 });
 
+
+test('(8) fixShadowPick: the most relevant fixtures of any kind get the shadow slots (#128)', () => {
+  const { fixShadowPick } = new Function(`
+    ${fnSrcOf(src, 'fixScore')}
+    ${fnSrcOf(src, 'fixShadowPick')}
+    return { fixShadowPick };`)();
+  const focus = { x: 0, y: 150, z: 0, fi: 0 };
+  const e = (id, kind, x, on = true, fidx = 0) => ({ id, kind, on, lm: 800, fidx, x, y: 150, z: 0 });
+  const list = [e('farPoint', 'point', 900), e('nearSpot', 'spot', 50), e('nearPoint', 'point', 100), e('off', 'point', 10, false), e('otherFloor', 'point', 120, true, 1), e('mid', 'strip', 300)];
+  const ids = fixShadowPick(list, focus, 4).map(x => x.id);
+  assert.deepStrictEqual(ids, ['nearSpot', 'nearPoint', 'mid', 'otherFloor'], 'nearest first, spots and points mixed, focus floor preferred, switched-off lights never');
+  assert.strictEqual(fixShadowPick(list, focus, 2).length, 2);
+  assert.match(fnSrcOf(src, 'fixShadowSlots'), /i < FIX_SHADOWS/, 'only the first FIX_SHADOWS spots cast shadows');
+  assert.doesNotMatch(fnSrcOf(src, 'fixShadowSlots'), /pts\.forEach/, 'point lights never cast shadows (they black out the sun in r128)');
+});
