@@ -1759,6 +1759,61 @@ check('3D walk mode: climb a stair to the upper floor and walk back down through
   return 'up to floor 1 (eye +' + (r.top.camY - r.y0).toFixed(0) + ' cm) and back down';
 });
 
+check('stairs line up between walls, open a stairwell above that follows them, resize with 3D arrows and continue upward', async page => {
+  const r = await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 800, 600);
+    F().walls.push(mkWall({ x: 0, y: 200 }, { x: 800, y: 200 }));          // corridor y 0..200, clear width 180
+    commit(); refresh();
+    document.querySelector('#floors [data-fa="add"]').click();             // a floor above
+    fi = 0; sel = []; refresh();
+    setStairWidthMode('fit');
+    startPlace('furn', BYID.stairs); ui.snap = true; ui.raw = { x: 400, y: 90 }; updateGhost(); placeAt(ui.raw);
+    const o = F().furn.find(x => x.k === 'stairs'); setTool('select');
+    if (!o) return { err: 'no stair placed' };
+    const pitch = floorH(F()) + 20, res = { w: o.w, y: o.y, rot: o.rot, h: o.h, n: o.stepN, d: o.d, pitch };
+    const v = stairVoidOf(o); res.void = !!v && JSON.stringify(v.pts) === JSON.stringify(stairVoidPts(o));
+    o.x += 50; commit(); res.follows = JSON.stringify(stairVoidOf(o).pts) === JSON.stringify(stairVoidPts(o));
+    return res;
+  })()`);
+  if (r.err) throw new Error(r.err);
+  if (r.w !== 180 || Math.abs(r.y - 100) > 0.5 || r.rot % 180 !== 90) throw new Error('stair did not fill the gap between the walls: ' + JSON.stringify(r));
+  if (r.h !== r.pitch || r.n !== Math.round(r.pitch / 17.5)) throw new Error('a library stair does not reach the floor above: ' + JSON.stringify(r));
+  if (!r.void || !r.follows) throw new Error('stairwell above missing or not following the stair: ' + JSON.stringify(r));
+
+  await page.evaluate(`(() => { const o = F().furn.find(x => x.k === 'stairs'); sel = [o.id]; document.getElementById('b3d').click(); })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'placed and linked (3D skipped: WebGL unavailable)'; }
+  const a = await page.evaluate(`(() => {
+    refreshSel3D();
+    if (!T3.arr || T3.arr.meshes.length !== 4) return { err: 'no 4 resize arrows on the selected stair' };
+    const o = F().furn.find(x => x.k === 'stairs'), d0 = o.d, far0 = furnArrowSpots(o, 0).find(s => s.key === 'd-');
+    const m = T3.arr.meshes.find(x => x.userData.arrow === 'd+'), cv = T3.r.domElement, rect = cv.getBoundingClientRect();
+    T3.cam.updateMatrixWorld(); T3.scene.updateMatrixWorld();
+    const scr = p => { const v = p.clone().project(T3.cam); return { x: rect.left + (v.x + 1) / 2 * rect.width, y: rect.top + (1 - v.y) / 2 * rect.height }; };
+    const dir = furnArrowSpots(o, 0).find(s => s.key === 'd+'), elev = m.position.y;
+    const s0 = scr(m.position), s1 = scr(new THREE.Vector3(m.position.x + dir.ux * 60, elev, m.position.z + dir.uy * 60));
+    const ev = (t, s, el) => el.dispatchEvent(new PointerEvent(t, { clientX: s.x, clientY: s.y, button: 0, buttons: 1, bubbles: true, pointerId: 1, isPrimary: true }));
+    ev('pointerdown', s0, cv); ev('pointermove', s1, window); ev('pointerup', s1, window);
+    const far1 = furnArrowSpots(o, 0).find(s => s.key === 'd-');
+    const out = { d0, d1: o.d, farMoved: Math.hypot(far1.x - far0.x, far1.y - far0.y), follows: JSON.stringify(stairVoidOf(o).pts) === JSON.stringify(stairVoidPts(o)) };
+    show3D(false);
+    sel = [o.id]; refresh(); const n0 = P.floors.length;
+    document.querySelector('#props [data-act="stairup"]').click();
+    const up = P.floors[1], c = up.furn.find(x => x.k === 'stairs');
+    out.up = !!c && fi === 1 && P.floors.length === n0 && c.h === floorH(up) + 20 && c.x === o.x && c.y === o.y && !!stairVoidOf(o, 0);
+    undo(); out.undo = !P.floors[1].furn.some(x => x.k === 'stairs');
+    return out;
+  })()`);
+  if (a.err) throw new Error(a.err);
+  if (Math.abs(a.d1 - a.d0 - 60) > 6) throw new Error('dragging the length arrow 60 cm changed the length by ' + (a.d1 - a.d0));
+  if (a.farMoved > 0.5) throw new Error('the opposite end moved while resizing: ' + a.farMoved.toFixed(1) + ' cm');
+  if (!a.follows) throw new Error('stairwell did not follow the resized stair');
+  if (!a.up || !a.undo) throw new Error('continue to the floor above failed or did not undo: ' + JSON.stringify(a));
+  return 'fit 180 cm between the walls, stairwell follows, length ' + a.d0 + ' → ' + a.d1 + ' cm with the 3D arrow, continued upward';
+});
+
 check('3D wheel zoom keeps moving toward the cursor instead of stalling at the orbit target', async page => {
   await page.evaluate(`(() => { show3D(false); closeModal(); loadProject(newProject()); addRectWalls(0, 0, 800, 600); commit(); refresh(); document.getElementById('b3d').click(); })()`);
   await sleep(1200);
