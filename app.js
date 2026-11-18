@@ -7302,6 +7302,8 @@ function cmdList() {
     act('3d', '🧊', '3B görünüm', '3D view', '', () => show3D(true), true, 'model'),
     act('roof', '🏠', 'Çatı ekle', 'Add a roof', '', () => startPlace('furn', BYID.roof), true, 'roof çatı gable hip shed flat beşik kırma tek eğim düz'),
     act('light', '💡', 'Tavan lambası ekle', 'Add a ceiling light', '', () => startPlace('furn', BYID.lampCeil), true, 'light lamp lighting ışık lamba aydınlatma armatür avize spot'),
+    act('night', '🌙', 'Gece / gündüz (3B)', 'Night / day (3D)', '', () => { if (!ui.view3d) show3D(true); setNight3D(!isNight3D()); }, true, 'night day gece gündüz ay moon dark karanlık'),
+    act('autoroom', '💡', 'Gece otomatik oda ışıkları aç / kapat', 'Automatic room lights at night on / off', '', () => { ui.autoRoomLight = ui.autoRoomLight === false; try { localStorage.setItem('fp_autoroom', ui.autoRoomLight ? '1' : '0'); } catch (_) { } assignFixLights && T3 && T3.fix && assignFixLights(); req3D(); toast(ui.autoRoomLight ? L('Otomatik oda ışıkları açık', 'Automatic room lights on') : L('Otomatik oda ışıkları kapalı', 'Automatic room lights off')); }, true, 'auto room light night otomatik oda ışık gece'),
     act('lightsall', '💡', 'Bu kattaki ışıkları aç / kapat', 'Turn the lights on this floor on / off', '', () => toggleFloorLights(), true, 'lights on off ışıklar aç kapat'),
     act('fit', '⤢', 'Sığdır', 'Zoom to fit', '0', () => ui.view3d ? set3DCam('fit') : fit(), true, 'zoom extents yakınlaştır'),
     act('iso', '◇', 'İzometrik görünüş (3B)', 'Isometric view (3D)', '', () => { if (!ui.view3d) show3D(true); set3DCam('iso'); }, true, 'axonometric aksonometrik isometric parallel paralel'),
@@ -7430,6 +7432,7 @@ window.addEventListener('keydown', e => {
       return;                                   // never feed Ctrl+… to the walk keys
     }
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSel(); return; }
+    if (k === 'f' && T3 && T3.walk) { e.preventDefault(); toggleFlashlight(); return; } // el feneri (#122)
     if (['w', 'a', 's', 'd', 'q', 'e', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) { keys3D.add(k); e.preventDefault(); }
     return;
   } }
@@ -9880,6 +9883,7 @@ const nextFrame = () => new Promise(r => setTimeout(r, 0));
    katın armatürleri öne). Havuzun dışında kalanlar da ampul (ember), hale (sprite) ve zemin ışık lekesiyle "yanık" görünür.
    T3.fixList = build3D'de toplanan armatürler { o, fidx, on, kind, lm, col, beam, x, y, z } (y = ışığın çıktığı dünya kotu). */
 const FIX_PTS = 8, FIX_SPOTS = 4;
+let _flashDir = null;
 // parlaklık → Three ışık şiddeti + menzil (eski ışık modu: şiddet kaynakta, menzilde sıfıra iner); tek eşleme
 function lmToThree(lm) { const v = Math.max(100, Math.min(10000, +lm || 800)); return { i: 0.55 * Math.sqrt(v / 800), d: Math.round(300 + 9 * Math.sqrt(v)) }; }
 // ışığın çıktığı yükseklik (eşyanın tabanından, cm)
@@ -9912,18 +9916,24 @@ function fixPool() {
 }
 function assignFixLights() {
   const pool = T3.fix; if (!pool) return;
-  const list = T3.fixList || [], fc = fixFocus(), k = fixDayFactor();
+  const fc = fixFocus(), k = fixDayFactor(), night = isNight3D();
+  // gece, içinde yanan armatür olmayan odalara yumuşak otomatik tavan ışığı (ui.autoRoomLight, varsayılan açık) (#122)
+  const list = night && ui.autoRoomLight !== false ? (T3.fixList || []).concat(T3.autoLights || []) : (T3.fixList || []);
   const set = (l, e) => { if (!e) { l.intensity = 0; return; } const t = lmToThree(e.lm); l.color.set(e.col); l.intensity = t.i * k; l.distance = t.d; l.position.set(e.x, e.y, e.z); };
   fixRank(list, fc, FIX_PTS, false).concat(Array(FIX_PTS)).slice(0, FIX_PTS).forEach((e, i) => set(pool.pts[i], e));
-  fixRank(list, fc, FIX_SPOTS, true).concat(Array(FIX_SPOTS)).slice(0, FIX_SPOTS).forEach((e, i) => {
-    const l = pool.spots[i]; set(l, e); if (!e) return;
+  const flash = ui.flash && T3.walk ? 1 : 0; // el feneri: ilk spot kameranın önünde
+  if (flash) { const l = pool.spots[0], c = T3.cam.position, d = new THREE.Vector3(); T3.cam.getWorldDirection(d);
+    l.color.setHex(0xfff1dc); l.intensity = 1.6; l.distance = 1400; l.angle = 0.42; l.penumbra = 0.6; l.position.copy(c).addScaledVector(d, -10); l.target.position.copy(c).addScaledVector(d, 300); l.target.updateMatrixWorld(); }
+  fixRank(list, fc, FIX_SPOTS - flash, true).concat(Array(FIX_SPOTS)).slice(0, FIX_SPOTS - flash).forEach((e, j) => {
+    const i = j + flash, l = pool.spots[i]; set(l, e); if (!e) return;
     l.angle = clamp((e.beam || 40) / 2, 5, 60) * Math.PI / 180; l.target.position.set(e.x, e.y - 100, e.z); l.target.updateMatrixWorld();
   });
   T3.fixAt = { x: fc.x, y: fc.y, z: fc.z, t: performance.now() };
 }
 // her çizimde: odak 1 m'den fazla kaydıysa en çok 250 ms'de bir yeniden sırala (kare başına ayırma yok)
 function fixTick(now) {
-  if (!T3.fix || !T3.fixList || !T3.fixList.length) return;
+  if (ui.flash && T3.walk && T3.fix) { const l = T3.fix.spots[0], c = T3.cam.position, d = _flashDir || (_flashDir = new THREE.Vector3()); T3.cam.getWorldDirection(d); l.position.copy(c).addScaledVector(d, -10); l.target.position.copy(c).addScaledVector(d, 300); l.target.updateMatrixWorld(); }
+  if (!T3.fix || !((T3.fixList && T3.fixList.length) || (isNight3D() && T3.autoLights && T3.autoLights.length))) return;
   const a = T3.fixAt; if (a && now - a.t < 250) return;
   const fc = fixFocus(); if (a && (fc.x - a.x) ** 2 + (fc.y - a.y) ** 2 + (fc.z - a.z) ** 2 < 10000) return;
   assignFixLights();
@@ -10052,10 +10062,10 @@ async function render3DHQ(opts) {
   // güneş (#34): ana ışığı azimut / yüksekliğe taşı (alçak güneşte sıcak renk)
   const sunSaved = [];
   if (opts.sun) for (const l of lights) {
-    const tg = l.target.position, d0 = l.position.distanceTo(tg) || 1000, v = sunVector(opts.sun.az, opts.sun.alt);
+    const tg = l.target.position, d0 = l.position.distanceTo(tg) || 1000, v = litVector(opts.sun.az, opts.sun.alt); // gece: ay (#122)
     sunSaved.push({ l, pos: l.position.clone(), col: l.color.clone() });
     l.position.set(tg.x + v.x * d0, tg.y + v.y * d0, tg.z + v.z * d0);
-    if (opts.sun.alt < 20) l.color.setHex(0xffc58a);
+    if (opts.sun.alt < 20 && opts.sun.alt >= 1) l.color.setHex(0xffc58a);
   }
   // gerçekçi katman (#87): fiziksel malzemeler, yansıma, güneşe bağlı ışık, temas gölgesi. Maket: yalnızca ışık + temas gölgesi.
   // Canlı gerçekçi görünüm açıksa malzemeler ve temas gölgeleri zaten sahnededir.
@@ -10226,12 +10236,19 @@ const RENDER_BACKDROPS = { studio: ['⬜ Stüdyo', '⬜ Studio'], sky: ['🌤 G�
 const lerpHex = (a, b, t) => new THREE.Color(a).lerp(new THREE.Color(b), clamp(t, 0, 1));
 function skyColors(alt) {
   const t = clamp((alt - 6) / 50, 0, 1);              // 0 = alçak (altın saat), 1 = yüksek (öğle)
-  return {
+  const c = {
     zen: lerpHex(0x3d5a8f, 0x2f78c4, t),
     hor: lerpHex(0xf2b07a, 0xd6e8f5, Math.pow(t, 0.7)),
     gnd: lerpHex(0xb9a48c, 0xc7ccc9, t),
     glow: lerpHex(0xffb766, 0xfff4d6, t).multiplyScalar(0.35 + 0.65 * (1 - t)),
   };
+  const n = nightOf(alt); if (!n) return c;           // alacakaranlık → gece (#122): ufukta mor-turuncu, sonra lacivert
+  const tw = Math.sin(Math.min(1, n * 1.6) * Math.PI) * 0.6; // alacakaranlığın ortasında ufuk morumsu
+  c.zen.lerp(new THREE.Color(0x0a1230), n);
+  c.hor.lerp(new THREE.Color(0x7a4a6a), tw * (1 - n)).lerp(new THREE.Color(0x1a2444), n);
+  c.gnd.lerp(new THREE.Color(0x0d111c), n);
+  c.glow.multiplyScalar(1 - n);
+  return c;
 }
 // render seçeneklerinde güneş verilmediyse sahnedeki ana ışığın yönü
 function lightSunVector(lights) {
@@ -10241,16 +10258,22 @@ function lightSunVector(lights) {
 function makeSky(sv, cam, fit) {
   const alt = Math.asin(clamp(sv.y, -1, 1)) * 180 / Math.PI, c = skyColors(alt);
   const mat = new THREE.ShaderMaterial({
-    uniforms: { zen: { value: c.zen }, hor: { value: c.hor }, gnd: { value: c.gnd }, glow: { value: c.glow }, sun: { value: new THREE.Vector3(sv.x, sv.y, sv.z).normalize() } },
+    uniforms: { zen: { value: c.zen }, hor: { value: c.hor }, gnd: { value: c.gnd }, glow: { value: c.glow }, sun: { value: new THREE.Vector3(sv.x, sv.y, sv.z).normalize() },
+      night: { value: Math.pow(nightOf(alt), 1.5) }, moon: { value: new THREE.Vector3(-sv.x, 0.57, -sv.z).normalize() } },
     vertexShader: 'varying vec3 vDir;\nvoid main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: [
-      'uniform vec3 zen; uniform vec3 hor; uniform vec3 gnd; uniform vec3 glow; uniform vec3 sun; varying vec3 vDir;',
+      'uniform vec3 zen; uniform vec3 hor; uniform vec3 gnd; uniform vec3 glow; uniform vec3 sun; uniform float night; uniform vec3 moon; varying vec3 vDir;',
       'float rnd(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }',
       'void main() {',
       '  vec3 d = normalize(vDir); float h = d.y;',
       '  vec3 c = h > 0.0 ? mix(hor, zen, pow(h, 0.55)) : mix(hor, gnd, min(1.0, -h * 5.0));',
       '  float s = max(dot(d, sun), 0.0);',
       '  c += glow * (pow(s, 600.0) * 2.0 + pow(s, 24.0) * 0.45 + pow(s, 4.0) * 0.12);',
+      '  if (night > 0.0 && h > 0.0) {   // gece (#122): yıldızlar + ay',
+      '    vec2 g = floor(d.xz / (h + 0.35) * 340.0); float r = rnd(g);',
+      '    c += night * step(0.9955, r) * (0.35 + 0.65 * rnd(g + 1.7)) * smoothstep(0.02, 0.3, h) * vec3(0.92, 0.95, 1.0);',
+      '    float m = max(dot(d, moon), 0.0); c += night * (vec3(0.95, 0.96, 0.9) * smoothstep(0.99955, 0.99975, m) + vec3(0.35, 0.42, 0.6) * pow(m, 160.0) * 0.5);',
+      '  }',
       '  gl_FragColor = vec4(c, 1.0);',
       '  gl_FragColor.rgb += (rnd(gl_FragCoord.xy) - 0.5) / 255.0;   // titreşim: geçişlerde bantlanma olmasın',
       '}',
@@ -10270,8 +10293,40 @@ ui.studio = { style: 'realistic', az: 215, alt: 42, res: 'view', format: 'png', 
 const studioBackdrop = () => ui.studio.backdrop || (ui.studio.style === 'realistic' ? 'sky' : 'studio');
 // güneş yönü (az: kuzeyden saat yönünde, plan kuzeyi = −y = 3B −z; alt: ufuktan yükseklik)
 function sunVector(az, alt) {
-  const a = az * Math.PI / 180, e = clamp(alt, 1, 89) * Math.PI / 180;
+  const a = az * Math.PI / 180, e = clamp(alt, SUN_ALT_MIN, 89) * Math.PI / 180; // gece (#122): güneş ufkun 18° altına kadar iner (gökyüzü)
   return { x: Math.sin(a) * Math.cos(e), y: Math.sin(e), z: -Math.cos(a) * Math.cos(e) };
+}
+/* ---------- Gece (#122) ----------
+   alt ≥ 6: gündüz; 6 … −6: alacakaranlık; ≤ −6: gece. nightOf(alt) 0 → 1. Gökyüzü güneşi izler (ufkun altında da);
+   gölge düşüren ışık ise güneş batınca aya döner: litVector = karşı azimutta 35° yükseklik, soluk mavi ve zayıf. */
+const SUN_ALT_MIN = -18, NIGHT_ALT = -12;
+function nightOf(alt) { return clamp((6 - (Number.isFinite(+alt) ? +alt : 42)) / 12, 0, 1); }
+function litVector(az, alt) { return alt >= 1 ? sunVector(az, alt) : sunVector(az + 180, 35); }
+const isNight3D = () => !!(ui.live3d && ui.studio && ui.studio.alt < 1);
+function syncNightUI() { const b = $('#b3dNight'); if (b) b.classList.toggle('on', isNight3D()); }
+// 🌙 (#122): gece ↔ gündüz. Gece canlı gerçekçi görünümde olur (CAD 3B nötr kalır); açık değilse açılır. Gündüze dönünce önceki güneş geri gelir.
+function setNight3D(on) {
+  const st = ui.studio;
+  if (on) { if (st.alt >= 1) st.dayAlt = st.alt; st.alt = NIGHT_ALT; st.mood = 'night'; }
+  else { st.alt = st.dayAlt >= 1 ? st.dayAlt : 42; st.mood = 'day'; }
+  try { localStorage.setItem('fp_night', on ? '1' : '0'); } catch (_) { }
+  if (on && !ui.live3d) { ui.live3d = true; syncLiveUI(); try { localStorage.setItem('fp_live3d', '1'); } catch (_) { } }
+  if (T3 && ui.view3d) { if (on) ensureFixPool(); applyLive3D(); assignFixLights(); }
+  if (!on) ui.flash = false;
+  syncNightUI();
+  toast(on ? L('🌙 Gece · ışıklar yanıyor (🌙 tekrar: gündüz)', '🌙 Night · the lights are on (🌙 again: day)') : L('☀ Gündüz', '☀ Day'));
+}
+// ışık havuzu sahnede değilse (projede armatür yokken gece / el feneri için) ekle: tek seferlik derleme
+function ensureFixPool() {
+  if (!T3 || !T3.scene) return;
+  const pool = fixPool(), S = T3.scene;
+  if (pool.pts[0].parent !== S) { for (const l of pool.pts) S.add(l); for (const l of pool.spots) { S.add(l); S.add(l.target); } }
+  T3.fixList = T3.fixList || []; assignFixLights(); req3D();
+}
+// el feneri (#122): yürürken F; havuzun ilk spotu kameraya bağlanır (ışık sayısı değişmez)
+function toggleFlashlight() {
+  ui.flash = !ui.flash; if (ui.flash) ensureFixPool(); assignFixLights(); req3D();
+  toast(ui.flash ? L('🔦 El feneri açık (F: kapat)', '🔦 Flashlight on (F: off)') : L('El feneri kapalı', 'Flashlight off'));
 }
 // kurşun kalem son işlemi: gri ton + kontrast + kağıt dokusu + hafif tarama
 function sketchFilter(cnv) {
@@ -10290,7 +10345,7 @@ function studioHtml(preview) {
     <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 10px;align-items:center"><span>${L('Arka plan', 'Backdrop')}</span>${Object.entries(RENDER_BACKDROPS).map(([k, v]) => `<button class="btn sm${k === studioBackdrop() ? ' primary' : ''}" data-rs-bg="${k}">${L(...v)}</button>`).join('')}</div>
     <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center;margin-bottom:8px">
       <span>☀ ${L('Güneş yönü', 'Sun azimuth')}</span><input type="range" min="0" max="360" step="5" value="${st.az}" data-rs="az"><b>${st.az}°</b>
-      <span>⛰ ${L('Güneş yüksekliği', 'Sun altitude')}</span><input type="range" min="10" max="85" step="1" value="${st.alt}" data-rs="alt"><b>${st.alt}°</b>
+      <span>⛰ ${L('Güneş yüksekliği', 'Sun altitude')}</span><input type="range" min="${SUN_ALT_MIN}" max="85" step="1" value="${st.alt}" data-rs="alt"><b>${st.alt}°</b>
     </div>
     <div class="row" style="gap:6px;margin-bottom:8px">${Object.entries(SUN_PRESETS).map(([k, v]) => `<button class="btn sm" data-rs-sun="${k}">${L(...v[0])}</button>`).join('')}</div>
     <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 8px;align-items:center" title="${L('Gerçekçi ve Maket stillerinde ışık dengesi', 'Light balance for the Realistic and Maquette styles')}"><span>${L('Atmosfer', 'Atmosphere')}</span>${Object.entries(RENDER_MOODS).map(([k, v]) => `<button class="btn sm${k === (st.mood || 'day') ? ' primary' : ''}" data-rs-mood="${k}">${L(...v)}</button>`).join('')}</div>
@@ -10463,7 +10518,8 @@ $('#modal').addEventListener('click', async e => {
   const md = e.target.closest('[data-rs-mood]');
   if (md) { // sıcak akşam: alçak güneş + sıcak iç dolgu; gün ışığına dönünce güneş yeniden yükselir
     const st = ui.studio; st.mood = md.dataset.rsMood;
-    if (st.mood === 'evening') { st.az = 285; st.alt = 10; } else if (st.alt < 20) st.alt = 42;
+    if (st.mood === 'evening') { st.az = 285; st.alt = 10; } else if (st.mood === 'night') { if (st.alt > -6) st.alt = NIGHT_ALT; ensureFixPool(); } else if (st.alt < 20) st.alt = 42;
+    syncNightUI();
     applyLive3D(); openRenderStudio(); return;
   }
   const g = e.target.closest('[data-rs-go]'); if (!g || ui.shot) return;
@@ -11969,7 +12025,7 @@ function walkPickClick(e) {
 }
 function exitWalk(restore) {
   if (!T3 || !T3.walk) return;
-  T3.walk = null; T3.ctl.enabled = true; T3.ctl.maxPolarAngle = ORBIT_MAX_POLAR;
+  T3.walk = null; T3.ctl.enabled = true; T3.ctl.maxPolarAngle = ORBIT_MAX_POLAR; if (ui.flash) { ui.flash = false; assignFixLights(); }
   if (restore && T3.walkSaved) { T3.cam.position.copy(T3.walkSaved.pos); T3.ctl.target.copy(T3.walkSaved.target); }
   T3.walkSaved = null; T3.ctl.update(); syncWalkUI();
   if (T3.orthoAfterWalk) { T3.orthoAfterWalk = false; setProjection(true); fitOrtho(); }
@@ -12104,7 +12160,7 @@ function grassGroundMat() {
    Hiçbir şey P'ye yazılmaz; restore() sahneyi olduğu gibi geri verir, dispose() üretilen her şeyi bırakır. */
 const REAL_FLOOR = { wood: [0.5, 0.6], tile: [0.22, 1.2], marble: [0.12, 0.25], carpet: [0.97, 0.8], concrete: [0.85, 0.5], stone: [0.8, 1.4], grass: [0.95, 1.2], gravel: [0.95, 1.2], deck: [0.7, 1.2], asphalt: [0.9, 0.6] }; // [pürüzlülük, kabartma]
 const REAL_FURN = [[/^(wc|bidet|basin|tub|shower|sinkK)/, 0.14, 0], [/^(fridge|dish|wm|stove|ac|printer)/, 0.34, 0.65], [/^(sofa|armchair|bed|bunk|crib|rug|chair|ochair)/, 0.96, 0], [/^car$/, 0.28, 0.55], [/^(plant|tree)$/, 0.9, 0], [/^(tv|wmirror)/, 0.25, 0.2]]; // porselen, beyaz eşya, kumaş, oto boyası, bitki, ekran / ayna
-const RENDER_MOODS = { day: ['☀ Gün ışığı', '☀ Daylight'], evening: ['🌇 Sıcak akşam', '🌇 Warm evening'] };
+const RENDER_MOODS = { day: ['☀ Gün ışığı', '☀ Daylight'], evening: ['🌇 Sıcak akşam', '🌇 Warm evening'], night: ['🌙 Gece', '🌙 Night'] };
 // gökyüzünden ortam (yansıma) haritası; güneş yüksekliği değişmedikçe yeniden üretilmez
 function realEnv(sv) {
   if (!T3 || !T3.r || !THREE.PMREMGenerator) return null;
@@ -12188,15 +12244,18 @@ function realLook(S, sv, opts = {}) {
     swaps.push({ o, mat: o.material }); o.material = nm;
   });
   // ışık dengesi: güneş yüksekliğine bağlı gökyüzü / zemin yansıması, sıcak dolgu (kapalı odalar düz gri kalmasın)
-  const lit = [], sk = skyColors(alt), eve = opts.mood === 'evening';
+  const lit = [], sk = skyColors(alt), eve = opts.mood === 'evening', nt = nightOf(alt), moonC = new THREE.Color(0xa9bfff);
   S.traverse(o => {
     if (!o.isLight) return;
     lit.push({ l: o, i: o.intensity, c: o.color.clone(), g: o.groundColor ? o.groundColor.clone() : null });
-    if (o.isHemisphereLight) { o.color.copy(sk.hor).lerp(new THREE.Color(0xffffff), 0.5); o.groundColor.setHex(eve ? 0xffb877 : 0xb9a58c); o.intensity = eve ? 0.5 : 0.2 + 0.12 * sinA; }
-    else if (o.isDirectionalLight && o.castShadow) o.intensity = (0.75 + 0.75 * sinA) * (eve ? 0.75 : 1);
-    else if (o.isDirectionalLight) { o.color.setHex(eve ? 0xffc58a : 0xffe9cf); o.intensity = eve ? 0.5 : 0.22; }
+    if (o.isHemisphereLight) { o.color.copy(sk.hor).lerp(new THREE.Color(0xffffff), 0.5).lerp(new THREE.Color(0x5a6b9a), nt); o.groundColor.setHex(eve ? 0xffb877 : 0xb9a58c).multiplyScalar(1 - 0.8 * nt); o.intensity = (eve ? 0.5 : 0.2 + 0.12 * sinA) * (1 - 0.72 * nt); }
+    else if (o.isDirectionalLight && o.castShadow) { o.intensity = (0.75 + 0.75 * sinA) * (eve ? 0.75 : 1) * (1 - nt) + 0.16 * nt; if (nt) o.color.lerp(moonC, nt); } // gece: ay ışığı (#122)
+    else if (o.isDirectionalLight) { o.color.setHex(eve ? 0xffc58a : 0xffe9cf); o.intensity = (eve ? 0.5 : 0.22) * (1 - 0.85 * nt); }
   });
   const oldEnv = S.environment; S.environment = opts.mats !== false ? realEnv(sv) : oldEnv;
+  // gece (#122): pozlama hafif artar; pencere camları içeriden sıcak parlar (dışarıdan bakınca ev yaşıyor görünür)
+  const oldExp = T3.r ? T3.r.toneMappingExposure : null; if (T3.r && nt) T3.r.toneMappingExposure = oldExp + 0.35 * nt;
+  if (nt > 0.2 && opts.mats !== false) for (const sw of swaps) { const m = sw.o.material; if (m && m.isMeshStandardMaterial && m.transparent && realClass(sw.o, furnCls) === 'op' && m.emissive) { m.emissive.setHex(0xffb86b); m.emissiveIntensity = 0.45 * nt; } }
   // temas gölgesi: duvar dibi şeritleri ve mobilya altı lekeleri (yalnızca döşeme üstünde)
   const kids = S.children.filter(c => c.userData && (c.userData.furnId || (c.userData.wallId && !c.isMesh)));
   if (opts.contact !== false && kids.length && kids.length < 1200) {
@@ -12225,7 +12284,7 @@ function realLook(S, sv, opts = {}) {
     restore() {
       for (let i = swaps.length - 1; i >= 0; i--) swaps[i].o.material = swaps[i].mat;
       for (const s of lit) { s.l.intensity = s.i; s.l.color.copy(s.c); if (s.g) s.l.groundColor.copy(s.g); }
-      S.environment = oldEnv;
+      S.environment = oldEnv; if (T3.r && oldExp != null) T3.r.toneMappingExposure = oldExp;
       for (const d of decals) S.remove(d);
     },
     dispose() { for (const m of made) m.dispose(); for (const t of texs) t.dispose(); },
@@ -12240,22 +12299,24 @@ function applyLive3D() {
   if (!ui.live3d) return;
   const st = ui.studio, sv = sunVector(st.az, st.alt), sky = makeSky(sv, T3.cam, T3.fit);
   const ground = grassGroundMat(), slab = new THREE.MeshLambertMaterial({ color: 0xded8cc, side: THREE.DoubleSide });
+  const nt0 = nightOf(st.alt); if (nt0) { ground.color.setScalar(1 - 0.7 * nt0); slab.color.multiplyScalar(1 - 0.5 * nt0); } // gece (#122): çim karanlıkta; iç mekân ışığının duvardan sızması belirgin olmasın
   S.traverse(o => {
     if (o.isLineSegments) { if (o.type !== 'BoxHelper') o.visible = false; } // seçim kutusu görünür kalır
     else if (o.userData && o.userData.slab) o.material = slab;
   });
   if (T3.ground) T3.ground.material = ground;
+  const lv = litVector(st.az, st.alt); // güneş batınca gölge ışığı aydır (#122)
   for (const l of shadowLights(S)) {
     const tg = l.target.position, d0 = l.position.distanceTo(tg);
-    l.position.set(tg.x + sv.x * d0, tg.y + sv.y * d0, tg.z + sv.z * d0);
-    l.color.setHex(st.alt < 20 ? 0xffc58a : 0xfff6e8);
+    l.position.set(tg.x + lv.x * d0, tg.y + lv.y * d0, tg.z + lv.z * d0);
+    l.color.setHex(st.alt < 20 && st.alt >= 1 ? 0xffc58a : 0xfff6e8);
   }
   const real = realLook(S, sv, { mood: st.mood }); // fiziksel malzemeler + yansıma + güneşe bağlı ışık + temas gölgesi (#87)
   S.add(sky.mesh); S.fog = sky.fog; S.background = sky.horizon;
   T3.live = { sky: sky.mesh, fog: sky.fog, mats: [ground, slab], real };
   req3D();
 }
-function syncLiveUI() { const b = $('#b3dLive'); if (b) b.classList.toggle('on', !!ui.live3d); }
+function syncLiveUI() { const b = $('#b3dLive'); if (b) b.classList.toggle('on', !!ui.live3d); syncNightUI(); }
 function setLive3D(on) {
   ui.live3d = !!on; syncLiveUI();
   try { localStorage.setItem('fp_live3d', on ? '1' : '0'); } catch (_) {}
@@ -12264,6 +12325,7 @@ function setLive3D(on) {
   toast(on ? L('🌤 Canlı gerçekçi görünüm açık', '🌤 Live realistic view on') : L('CAD görünümü', 'CAD view'));
 }
 try { ui.live3d = localStorage.getItem('fp_live3d') === '1'; } catch (_) { ui.live3d = false; }
+try { if (localStorage.getItem('fp_night') === '1' && ui.live3d) { ui.studio.dayAlt = ui.studio.alt; ui.studio.alt = NIGHT_ALT; ui.studio.mood = 'night'; } ui.autoRoomLight = localStorage.getItem('fp_autoroom') !== '0'; } catch (_) { ui.autoRoomLight = true; }
 function req3D() { if (T3) T3.dirty = true; }
 /* ---------- 3B malzeme & mobilya detayı ---------- */
 // Renk yardımcıları: katalog renginden açık/koyu tonlar türetilir (t: -1..1)
@@ -13597,7 +13659,7 @@ function build3D(keepCam = false) {
   const pmat = (c, kind) => partMat(c, kind, mat, sctx);
   const furnCtx = { box, cyl, sph, mat, det, pmat, pgeo: (type, ex, ey, ez, kind) => surfGeo(type, ex, ey, ez, sf(kind, 0), sctx), unit: { box: unitBox, cyl: unitCyl, sph: unitSph } };
   // aydınlatma (#121): armatür listesi + hale / zemin lekesi (malzemeler renk başına bu kurulumda bir kez, sonraki kurulumda atılır)
-  T3.fixList = [];
+  T3.fixList = []; T3.autoLights = [];
   const glowMats = new Map(), glowMat = (col, op, plane) => {
     const key = (plane ? 'p' : 's') + col + op; let m = glowMats.get(key); if (m) return m;
     const o2 = { map: glowTex(), color: new THREE.Color(col), transparent: true, opacity: op, depthWrite: false, blending: THREE.AdditiveBlending };
@@ -13698,6 +13760,10 @@ function build3D(keepCam = false) {
     // mobilya bir serbest döşemenin üstündeyse o döşemenin kotuna oturur (en üstteki döşeme kazanır)
     const furnOff = o => { for (let i = slabs.length - 1; i >= 0; i--) if (pointInPoly(o, slabs[i].pts)) return +slabs[i].off || 0; return 0; };
     const roomLv = stackLevels(f.rooms, 'room'), furnLv = stackLevels(f.furn, 'furn');
+    // gece otomatik oda ışığı adayları (#122): içinde aydınlatma elemanı olmayan oda (≥ 2 m²), tavanın 30 cm altında, 700 lm
+    for (const r of f.rooms) if (r.pts && r.pts.length > 2 && polyArea(r.pts) > 20000 && !f.furn.some(o => isLightFix(o) && lightP(o).on && pointInPoly(o, r.pts))) {
+      const c = polyCentroid(r.pts); if (pointInPoly(c, r.pts)) T3.autoLights.push({ auto: true, fidx, on: true, kind: 'point', lm: 700, col: kelvinHex(3000), beam: null, x: c.x, y: elev + floorH(f) - 30, z: c.y });
+    }
     f.rooms.forEach((r, ri) => {
       if (!r.pts || r.pts.length < 3) return;
       if (glassRooms.includes(r)) { glassFloor(r.pts, elev + 0.6 + roomLv[ri] * 0.5, 4, r.glass === 'frosted', voidHoles(f.voids, r.pts)).userData.roomId = r.id; return; } // cam döşeme (#57)
@@ -13889,7 +13955,7 @@ function build3D(keepCam = false) {
   prune3DCache(T3.cache, S); // bu sahnede kullanılmayan önbellek girdileri bırakılır (canlı görünüm malzemeleri değiştirmeden ÖNCE)
   T3.ctl.update();
   if (T3.walk) applyWalkCam();
-  if (T3.fixList.length) { const pool = fixPool(); for (const l of pool.pts) S.add(l); for (const l of pool.spots) { S.add(l); S.add(l.target); } assignFixLights(); } // sabit havuz: sayı değişmez (#121)
+  if (T3.fixList.length || isNight3D() || ui.flash) { const pool = fixPool(); for (const l of pool.pts) S.add(l); for (const l of pool.spots) { S.add(l); S.add(l.target); } assignFixLights(); } // sabit havuz: sayı değişmez (#121)
   refreshSel3D(); applySecClip(); applyLive3D(); place3DSync(); fp3DPreview();
 }
 
@@ -14247,6 +14313,7 @@ function applyLangUI() {
   syncWalkUI();
   if ($('#lblLayer')) $('#lblLayer').textContent = L('Katman', 'Layer');
   if ($('#b3dFloors')) $('#b3dFloors').title = L('Katları ayrı ayrı göster / gizle', 'Show / hide individual floors');
+  if ($('#b3dNight')) $('#b3dNight').title = L('🌙 Gece / gündüz: gece gökyüzü, ay ışığı ve yanan lambalar (canlı gerçekçi görünüm)', '🌙 Night / day: night sky, moonlight and the lamps on (live realistic view)');
   if ($('#b3dLive')) $('#b3dLive').title = L('🌤 Canlı gerçekçi görünüm: gökyüzü, güneş ve gölgeyle gez / yürü (güneş: 🎨 Render stüdyosu)', '🌤 Live realistic view: orbit / walk with sky, sun and shadows (sun: 🎨 Render studio)');
   if ($('#b3dStudio')) $('#b3dStudio').title = L('🎨 Render stüdyosu: stil, güneş, çözünürlük', '🎨 Render studio: style, sun, resolution');
   for (const [id, k, tr, en] of [['b3dN', 'north', 'K', 'N'], ['b3dE', 'east', 'D', 'E'], ['b3dS', 'south', 'G', 'S'], ['b3dW', 'west', 'B', 'W']]) if ($('#' + id)) { $('#' + id).textContent = L(tr, en); $('#' + id).title = L(...ELEV_NAMES[k]); }
@@ -14295,6 +14362,7 @@ for (const [id, k] of [['b3dN', 'north'], ['b3dE', 'east'], ['b3dS', 'south'], [
 $('#b3dShot').onclick = e => export3DRender(e && e.shiftKey);
 $('#b3dStudio').onclick = () => openRenderStudio();
 if ($('#b3dLive')) $('#b3dLive').onclick = () => setLive3D(!ui.live3d);
+if ($('#b3dNight')) $('#b3dNight').onclick = () => setNight3D(!isNight3D());
 syncLiveUI();
 $('#bLang').onclick = () => setLang(isEN() ? 'tr' : 'en');
 $('#bTheme').onclick = () => {

@@ -1856,6 +1856,42 @@ check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light p
   return 'floor ' + r.off.toFixed(0) + ' → ' + r.on.toFixed(0) + ' when on, ' + r.lightsOn + ' lights always, rebuild with 30 lamps ' + r.buildMs.toFixed(0) + ' ms';
 });
 
+check('night mode: 🌙 turns on the live view, night sky, moon, auto room light, flashlight, and day restores everything (#122)', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal(); setLive3D(false);
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400);
+    F().rooms.push(mkRoom([{ x: 0, y: 0 }, { x: 600, y: 0 }, { x: 600, y: 400 }, { x: 0, y: 400 }], 'Salon')); // no fixtures: the auto room light covers it
+    commit(); refresh(); document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(() => {
+    const out = {}, exp0 = T3.r.toneMappingExposure, alt0 = ui.studio.alt;
+    document.getElementById('b3dNight').click();
+    out.live = ui.live3d; out.btn = document.getElementById('b3dNight').classList.contains('on');
+    out.sky = T3.live && T3.live.sky.material.uniforms.night.value;
+    out.exp = T3.r.toneMappingExposure - exp0;
+    const sun = shadowLights(T3.scene)[0]; out.moonUp = sun.position.y > sun.target.position.y; out.moonI = sun.intensity;
+    out.auto = !!T3.fix && T3.fix.pts.some(l => l.intensity > 0.3);
+    set3DCam('eye'); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }));
+    out.flash = !!ui.flash && T3.fix.spots[0].intensity > 1;
+    exitWalk(true); out.flashOff = !ui.flash;
+    document.getElementById('b3dNight').click();
+    out.dayAlt = ui.studio.alt === alt0; out.dayExp = Math.abs(T3.r.toneMappingExposure - exp0) < 1e-9;
+    out.daySky = T3.live && T3.live.sky.material.uniforms.night.value === 0; out.dayBtn = !document.getElementById('b3dNight').classList.contains('on');
+    setLive3D(false); show3D(false);
+    return out;
+  })()`);
+  if (!r.live || !r.btn) throw new Error('🌙 did not turn on the live view / button: ' + JSON.stringify(r));
+  if (!(r.sky > 0.9) || !(r.exp > 0.2)) throw new Error('no night sky / exposure lift: ' + JSON.stringify(r));
+  if (!r.moonUp || !(r.moonI < 0.3)) throw new Error('the shadow light is not a dim moon above the horizon: ' + JSON.stringify(r));
+  if (!r.auto) throw new Error('a room without fixtures got no automatic light at night');
+  if (!r.flash || !r.flashOff) throw new Error('F did not switch the walk flashlight: ' + JSON.stringify(r));
+  if (!r.dayAlt || !r.dayExp || !r.daySky || !r.dayBtn) throw new Error('day did not restore sun / exposure / sky: ' + JSON.stringify(r));
+  return 'night sky ' + r.sky.toFixed(2) + ', exposure +' + r.exp.toFixed(2) + ', moon ' + r.moonI.toFixed(2) + ', auto room light, flashlight, day restored';
+});
+
 check('stairs line up between walls, open a stairwell above that follows them, resize with 3D arrows and continue upward', async page => {
   const r = await page.evaluate(`(() => {
     show3D(false); closeModal();

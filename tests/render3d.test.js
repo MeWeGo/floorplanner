@@ -143,7 +143,8 @@ test('the sky is an inline shader (no files, no add-ons) whose colours follow th
   // colours: evaluate skyColors with a tiny THREE.Color stand-in
   const src = js.slice(js.indexOf('const lerpHex'), js.indexOf('// render seçeneklerinde güneş verilmediyse'));
   class C { constructor(h) { this.r = (h >> 16 & 255) / 255; this.g = (h >> 8 & 255) / 255; this.b = (h & 255) / 255; } lerp(o, t) { this.r += (o.r - this.r) * t; this.g += (o.g - this.g) * t; this.b += (o.b - this.b) * t; return this; } multiplyScalar(k) { this.r *= k; this.g *= k; this.b *= k; return this; } }
-  const skyColors = new Function('THREE', 'clamp', src + '\nreturn skyColors;')({ Color: C }, (v, a, b) => Math.max(a, Math.min(b, v)));
+  const cl = (v, a, b) => Math.max(a, Math.min(b, v)), nightOf = alt => cl((6 - alt) / 12, 0, 1); // night factor (#122, its own tests in lights.test.js)
+  const skyColors = new Function('THREE', 'clamp', 'nightOf', src + '\nreturn skyColors;')({ Color: C }, cl, nightOf);
   const noon = skyColors(68), golden = skyColors(12);
   assert.ok(noon.zen.b > noon.zen.r + 0.2, 'the noon zenith is not blue');
   assert.ok(golden.hor.r > golden.hor.b + 0.2, 'the golden-hour horizon is not warm');
