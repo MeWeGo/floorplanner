@@ -559,6 +559,7 @@ function commit() {
   if (typeof syncActiveVars === 'function') syncActiveVars();
   stampLayers(); // yeni nesneler etkin katmana (#32)
   for (const fl of P.floors) for (const o of fl.furn) if (isParamRoof(o)) o.h = roofHeight(o); // çatı yüksekliği parametrelerden (boyutlandırma / ölçek sonrası) (#115)
+  syncStairVoids(); // merdivene bağlı üst kat boşlukları merdiveni izler
   const s = JSON.stringify(P);
   if (hist[hi] === s) return;
   hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 150) hist.shift();
@@ -4241,6 +4242,135 @@ function magnet(f) {
   f.x = pr.q.x + nx * (w.t / 2 + f.d / 2); f.y = pr.q.y + ny * (w.t / 2 + f.d / 2);
 }
 
+/* ---------- Merdiven hizalama: kapıya, iki duvar arasındaki boşluğa; üst katta merdiven boşluğu ----------
+   Merdiven yerleştirilirken / tek başına taşınırken magnet() yerine stairSnap() çalışır:
+   1) bir kapının (ya da kemerin) yakınında: merdiven kapının ortasına hizalanır, kapıdan uzaklaşarak çıkar; kapı o yana
+      açılıyorsa önünde kanat kadar sahanlık bırakılır;
+   2) iki paralel duvarın arasında (koridor / merdiven kovası): duvarlar boyunca çıkar, ucu kesen duvara yaslanır;
+   genişlik ui.stairW: 'fit' = boşluğa / kapıya eşit, 'free' = merdivenin kendi genişliği (boşlukta yakın duvara yaslanır).
+   Yön: rev = ters (yerleştirirken R), prefRot = taşırken merdivenin eski yönüne en yakın yön korunur. */
+const STAIR_TREAD = 28, STAIR_GAP_MIN = 60, STAIR_GAP_MAX = 400;
+function stairWidthMode() {
+  if (!ui.stairW) { let v = null; try { v = localStorage.getItem('fp_stairw'); } catch (e) { } ui.stairW = v === 'free' ? 'free' : 'fit'; }
+  return ui.stairW;
+}
+function setStairWidthMode(v) { ui.stairW = v === 'free' ? 'free' : 'fit'; try { localStorage.setItem('fp_stairw', ui.stairW); } catch (e) { } }
+// çıkış yönü (birim, plan) → rot: yerel −y dünyada (sin r, −cos r)
+const stairRotOf = (ux, uy) => (Math.round(Math.atan2(ux, -uy) * 180 / Math.PI) + 360) % 360;
+function stairDirPick(ux, uy, rev, prefRot) {
+  let r = stairRotOf(ux, uy);
+  if (prefRot != null) { const d = Math.abs(((r - prefRot) % 360 + 540) % 360 - 180); if (d > 90) r = (r + 180) % 360; }
+  else if (rev) r = (r + 180) % 360;
+  return r;
+}
+// yeni kütüphane merdiveni: kat arası yükseklik (üst kata ulaşır), rahat basamak (≈ 28 cm) için uzunluk
+function stairDefaults(o, H = curFloorH() + 20) {
+  o.h = H; o.stepN = Math.round(H / 17.5);
+  if (!STAIR_TYPES[o.stairType] || o.stairType === 'straight') o.d = Math.round(o.stepN * STAIR_TREAD / 10) * 10;
+  return o;
+}
+/** Merdiveni p'ye göre hizalar (o'yu değiştirir); hizalandıysa 'door' | 'gap', yoksa null. */
+function stairSnap(o, p, opt = {}, f = F()) {
+  const fit = (opt.mode || stairWidthMode()) === 'fit', wid = id => f.walls.find(w => w.id === id);
+  // 1) kapı
+  let best = null;
+  for (const op of f.ops || []) {
+    if (!isDoorOp(op) && op.type !== 'arch') continue;
+    const w = wid(op.wall); if (!w) continue;
+    const L = wLen(w); if (L < 1) continue;
+    const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, nx = -uy, ny = ux, q = { x: w.a.x + ux * op.d, y: w.a.y + uy * op.d };
+    const al = (p.x - q.x) * ux + (p.y - q.y) * uy, ac = (p.x - q.x) * nx + (p.y - q.y) * ny;
+    const dd = Math.hypot(al, ac);
+    if (Math.abs(al) > op.w / 2 + 30 || Math.abs(ac) < w.t / 2 || dd > Math.max(160, op.w + 60) || (best && dd >= best.dd)) continue;
+    best = { dd, op, w, ux, uy, nx, ny, q, s: ac >= 0 ? 1 : -1 };
+  }
+  if (best) {
+    const { op, w, nx, ny, q, s } = best, swing = (op.type === 'door' || op.type === 'double') && (op.side || 1) === s;
+    const clr = swing ? (op.type === 'double' ? op.w / 2 : op.w) : 0;
+    if (fit) o.w = Math.max(STAIR_GAP_MIN, Math.round(op.w));
+    const off = w.t / 2 + clr + o.d / 2;
+    o.x = q.x + nx * s * off; o.y = q.y + ny * s * off;
+    o.rot = stairDirPick(nx * s, ny * s, opt.rev, opt.prefRot); // kapıdan uzaklaşarak çıkar (ters: kapıya iner)
+    return 'door';
+  }
+  // 2) iki paralel duvar arası
+  const near = [];
+  for (const w of f.walls) {
+    if (isLowWall(w)) continue;
+    const L = wLen(w); if (L < 1) continue;
+    const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, t = (p.x - w.a.x) * ux + (p.y - w.a.y) * uy;
+    if (t < 0 || t > L) continue;
+    const sd = (p.x - w.a.x) * -uy + (p.y - w.a.y) * ux;
+    if (Math.abs(sd) < STAIR_GAP_MAX + w.t) near.push({ w, ux, uy, sd });
+  }
+  let gap = null;
+  for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) {
+    const A = near[i], B = near[j];
+    if (Math.abs(A.ux * B.uy - A.uy * B.ux) > 0.05) continue;                // paralel değil
+    const sB = (p.x - B.w.a.x) * -A.uy + (p.y - B.w.a.y) * A.ux;              // B'ye işaretli uzaklık, A'nın normaliyle
+    if (Math.sign(A.sd) === Math.sign(sB) || !A.sd || !sB) continue;          // p ikisinin arasında değil
+    const clear = Math.abs(A.sd - sB) - A.w.t / 2 - B.w.t / 2;
+    if (clear < STAIR_GAP_MIN || clear > STAIR_GAP_MAX || (gap && clear >= gap.clear)) continue;
+    gap = { A, B, sA: A.sd, sB, clear };
+  }
+  if (!gap) return null;
+  const { A, B, sA, sB, clear } = gap, ux = A.ux, uy = A.uy, nx = -uy, ny = ux;
+  // yerel çerçeve: p'nin A çizgisi üzerindeki izdüşümü kökü; çapraz eksen A'nın normali
+  const o0 = { x: p.x - nx * sA, y: p.y - ny * sA };                          // p'nin A eksenindeki izdüşümü
+  const fA = Math.sign(sA) * A.w.t / 2, fB = (sA - sB) + Math.sign(sB) * B.w.t / 2; // iç yüzlerin çapraz konumu (A ekseninden; B ekseni sA − sB'de)
+  const lo = Math.min(fA, fB), hi = Math.max(fA, fB);
+  if (fit) o.w = Math.round(clear);
+  let cc;
+  if (o.w >= clear - 0.5) cc = (lo + hi) / 2;
+  else { const pc = sA; cc = Math.abs(pc - lo) <= Math.abs(pc - hi) ? lo + o.w / 2 : hi - o.w / 2; } // serbest: imlece yakın duvara yaslan
+  // boyuna: imleç (ızgaraya), sonra boşluğu kesen duvarın iç yüzüne yaslan / içine girme
+  let al = 0;
+  if (ui.snap && P.grid > 0) { const tA = (o0.x - A.w.a.x) * ux + (o0.y - A.w.a.y) * uy; al = rnd(tA, P.grid) - tA; } // boyuna ızgara
+  const half = o.d / 2;
+  for (const w of f.walls) {
+    if (w === A.w || w === B.w || isLowWall(w)) continue;
+    const L = wLen(w); if (L < 1) continue;
+    const wx = (w.b.x - w.a.x) / L, wy = (w.b.y - w.a.y) / L, den = ux * wy - uy * wx;
+    if (Math.abs(den) < 0.5) continue;                                         // eksene dik sayılmaz
+    const ax = o0.x + nx * cc, ay = o0.y + ny * cc;                            // merdiven ekseni üzerinde bir nokta
+    const tAx = ((w.a.x - ax) * wy - (w.a.y - ay) * wx) / den;                 // eksenin duvar çizgisini kestiği yer (boyuna)
+    const tW = ((w.a.x - ax) * uy - (w.a.y - ay) * ux) / den;                  // duvar üzerindeki yeri
+    if (tW < -w.t || tW > L + w.t) continue;
+    const ht = w.t / 2 / Math.abs(den);
+    if (tAx > al && al + half > tAx - ht - 40) al = tAx - ht - half;
+    else if (tAx < al && al - half < tAx + ht + 40) al = tAx + ht + half;
+  }
+  o.x = o0.x + nx * cc + ux * al; o.y = o0.y + ny * cc + uy * al;
+  o.rot = stairDirPick(ux, uy, opt.rev, opt.prefRot);
+  return 'gap';
+}
+// merdiven boşluğu (#stair): alt kattaki merdivenin üstünde, bir üst katta merdivenle bağlı döşeme boşluğu (void.stair = merdiven id)
+const stairVoidPts = o => furnCorners(o).map(q => ({ x: Math.round(q.x * 10) / 10, y: Math.round(q.y * 10) / 10 }));
+function stairReachesUp(o, f) { return furnElev(o) + (+o.h || 0) >= floorH(f) + 20 - 5; }
+function stairVoidOf(o, i = fi) { const up = P.floors[i + 1]; return up && (up.voids || []).find(v => v.stair === o.id) || null; }
+function linkStairVoid(o, i = fi) {
+  const up = P.floors[i + 1]; if (!up) return null;
+  let v = stairVoidOf(o, i);
+  if (!v) { v = mkVoid(stairVoidPts(o), 'stair', L('Merdiven boşluğu', 'Stairwell')); v.stair = o.id; (up.voids = up.voids || []).push(v); }
+  else v.pts = stairVoidPts(o);
+  return v;
+}
+// commit() öncesi: bağlı boşluklar merdiveni izler; merdiven silindiyse / başka kata taşındıysa boşluk kalkar
+function syncStairVoids() {
+  for (let i = 1; i < P.floors.length; i++) {
+    const up = P.floors[i]; if (!up.voids || !up.voids.some(v => v.stair)) continue;
+    const dn = P.floors[i - 1];
+    up.voids = up.voids.filter(v => {
+      if (!v.stair) return true;
+      const o = dn.furn.find(x => x.id === v.stair && x.k === 'stairs');
+      if (!o) return !!findAnyFloor(v.stair); // merdiven silindiyse boşluk da kalkar; başka katta duruyorsa (kat kopyası) boşluk olduğu gibi kalır
+      const pts = stairVoidPts(o);
+      if (JSON.stringify(pts) !== JSON.stringify(v.pts)) v.pts = pts;
+      return true;
+    });
+  }
+}
+
 /* ---------- Oluşturma ---------- */
 // duvar tipini değiştir (#73): korkuluk / çite geçerken tam kat yüksekliğindeki duvar korkuluk yüksekliğine iner; geri dönünce kat yüksekliği
 function setWallType(w, v) {
@@ -4681,6 +4811,7 @@ function buildTools() {
   }).join('');
 }
 function updateTools() {
+  if (ui.view3d && T3 && T3.scene) arrows3D(); // boyut okları yalnızca seçim aracında
   document.querySelectorAll('.tool').forEach(b => b.classList.toggle('on', b.dataset.tool === ui.btn));
   $('#hud').textContent = ui.view3d
     ? (tool === 'place' && placing ? L('3B yerleştirme: Tık: yerleştir • R: döndür • Shift: serbest • Sürükle: döndür / bak • Esc: bitir • ', '3D placing: Click: place • R: rotate • Shift: free • Drag: orbit / look • Esc: done • ')
@@ -4717,7 +4848,8 @@ function startPlace(type, def) {
   ui.draw = null; placing = { type, def, rot: 0, flip: def.flip || 0 }; tool = 'place'; ui.btn = type === 'op' ? (def.id.startsWith('w') ? 'window' : 'door') : null;
   if (document.body.classList.contains('lib-open')) { toggleDrawer('lib', false); if (!ui.view3d) toast(L('Plana dokun ve yerleştir', 'Tap the plan to place it')); } // çekmece kapanır: plana dokunarak yerleştirilir
   ui.ghost = null; place3DSync(); // 3B'de kalınır: hayalet imleçle gezer, tık = yerleştir
-  if (ui.view3d) toast(L('3B: zemine tıkla ve yerleştir • R: döndür • Esc: bitir', '3D: click to place • R: rotate • Esc: done'));
+  if (type === 'furn' && def.k === 'stairs') toast(L('🪜 Kapının önüne ya da iki duvarın arasına götür: kendiliğinden hizalanır • R: yönü çevir • S: genişlik ', '🪜 Move it to a door or between two walls: it lines up by itself • R: reverse • S: width ') + (stairWidthMode() === 'fit' ? L('(boşluğa eşit)', '(fit to space)') : L('(serbest)', '(free)')));
+  else if (ui.view3d) toast(L('3B: zemine tıkla ve yerleştir • R: döndür • Esc: bitir', '3D: click to place • R: rotate • Esc: done'));
   updateTools(); render();
 }
 
@@ -4856,8 +4988,11 @@ function updateGhost() {
   const p = ui.raw;
   if (placing.type === 'furn') {
     const f = mkFurn(placing.def, 0, 0, placing.rot);
+    if (f.k === 'stairs' && placing.def.id === 'stairs' && !placing.def.extra) stairDefaults(f); // kütüphane merdiveni bir üst kata ulaşır
     const g = ui.snap && !ui.shift, sp = g ? snapToGrid(p) : p;
     f.x = sp.x; f.y = sp.y;
+    // merdiven: kapıya / iki duvar arasına hizalan (R = ters yön); olmazsa diğer eşyalar gibi
+    if (f.k === 'stairs' && g) { const hit = stairSnap(f, p, { rev: Math.round((placing.rot || 0) / 90) % 2 === 1 }); if (hit) { ui.cur = null; ui.ghost = f; return; } }
     const c = g && nearCenter(p, ui.view3d ? 25 : 18 / view.z); // oda / grup merkezine kilitlen (#25), yoksa duvara yapış (3B: sabit 25 cm)
     if (c) { f.x = c.x; f.y = c.y; ui.cur = { x: c.x, y: c.y, hit: 'center' }; }
     else if (!ui.shift) magnet(f);
@@ -5399,7 +5534,13 @@ function finishShapeDrag(d, e) {
 function placeAt(raw) {
   const f = F();
   if (!ui.ghost) { if (placing.type === 'op') toast(L('Kapı/pencere için bir duvarın yakınına tıkla', 'Click near a wall to place a door/window')); return; }
-  if (placing.type === 'furn') { const o = { ...ui.ghost, id: uid() }; f.furn.push(o); sel = [o.id]; }
+  if (placing.type === 'furn') {
+    const o = { ...ui.ghost, id: uid() }; f.furn.push(o); sel = [o.id];
+    if (o.k === 'stairs' && stairReachesUp(o, f)) { // üst kata ulaşan merdiven: üst katta merdivenle birlikte hareket eden boşluk
+      if (P.floors[fi + 1]) { linkStairVoid(o); toast(L('🪜 Üst katta merdiven boşluğu açıldı', '🪜 Stairwell opened in the floor above')); }
+      else toast(L('🪜 Üst kata çıkmak için bir kat ekleyin — boşluk kendiliğinden açılır', '🪜 Add a floor above — the stairwell opens by itself'));
+    }
+  }
   else {
     const g = ui.ghost, o = { ...g, id: uid() }; f.ops.push(o); sel = [o.id];
     if (!placing.def.preset) ui.opSrc[o.id] = placing.def.id; // son kullanılan ölçü için kaynak (#42)
@@ -5559,6 +5700,7 @@ function doMove(raw, e) {
       o.x = g.x + dx; o.y = g.y + dy;
       if (sel.length === 1) {
         o.rot = g.rot; ui.cur = null;
+        if (o.k === 'stairs' && ui.snap && !e.shiftKey) { o.w = g.w; if (stairSnap(o, { x: g.x + raw.x - d.start.x, y: g.y + raw.y - d.start.y }, { prefRot: g.rot })) continue; o.w = g.w; o.x = g.x + dx; o.y = g.y + dy; o.rot = g.rot; } // merdiven: kapı / duvar arası; yönü korunur
         const c = ui.snap && !e.shiftKey && nearCenter({ x: g.x + raw.x - d.start.x, y: g.y + raw.y - d.start.y }, 18 / view.z);
         if (c) { o.x = c.x; o.y = c.y; ui.cur = { x: c.x, y: c.y, hit: 'center' }; } // oda / grup merkezi (#25)
         else { magnet(o); if (e.shiftKey) { o.x = g.x + dx; o.y = g.y + dy; o.rot = g.rot; } }
@@ -5826,7 +5968,11 @@ function renderProps() {
         + `<div class="stat"><span>${L('Rıht yüksekliği', 'Riser height')}</span><b>${(Math.round(st.riser * 10) / 10)} cm</b></div>`
         + `<div class="stat"><span>${L('Basamak derinliği', 'Tread depth')}</span><b>${(Math.round(st.tread * 10) / 10)} cm</b></div>`
         + `<div class="stat" title="${L('Blondel kuralı: 2 × rıht + basamak ≈ 63 cm (60–64 rahat)', 'Blondel rule: 2 × riser + tread ≈ 63 cm (60–64 is comfortable)')}"><span>2r + t</span><b style="color:${bc}">${Math.round(bl.v * 10) / 10} cm ${bl.ok ? '✓' : bl.warn ? '≈' : '✗'}</b></div>`
-        + `<div class="row"><button class="btn sm" data-act="stairfit">${L('⇕ Kat yüksekliğine eşitle', '⇕ Match storey height')} (${curFloorH() + 20} cm)</button></div>`;
+        + `<div class="row"><button class="btn sm" data-act="stairfit">${L('⇕ Kat yüksekliğine eşitle', '⇕ Match storey height')} (${curFloorH() + 20} cm)</button></div>`
+        + `<div class="row"><button class="btn sm" data-act="stairalign" title="${L('En yakın kapının ortasına ya da iki duvarın arasına hizala', 'Line up with the nearest door or with the gap between two walls')}">⇔ ${L('Kapıya / duvarlara hizala', 'Align to door / walls')}</button>`
+        + `<button class="btn sm" data-act="stairwmode" title="${L('Hizalarken genişlik: boşluğa / kapıya eşit ya da merdivenin kendi genişliği (yerleştirirken S)', 'Width when aligning: fill the gap / door, or keep the stair width (S while placing)')}">↔ ${stairWidthMode() === 'fit' ? L('Genişlik: boşluğa eşit', 'Width: fit to space') : L('Genişlik: serbest', 'Width: free')}</button></div>`
+        + (P.floors[fi + 1] ? (stairVoidOf(o) ? `<div class="stat"><span>${L('Üst katta boşluk', 'Stairwell above')}</span><b style="color:#16a34a">✓ ${L('merdiveni izler', 'follows the stair')}</b></div>` : `<div class="row"><button class="btn sm" data-act="stairvoid">⬚ ${L('Üst katta boşluk aç', 'Open stairwell above')}</button></div>`) : '')
+        + `<div class="row"><button class="btn sm" data-act="stairup" title="${L('Aynı merdiveni bir üst kata da koy (kat yoksa eklenir); yüksek binalar için', 'Put the same stair on the floor above too (adds the floor if needed); for tall buildings')}">⧉ ${P.floors[fi + 1] ? L('Üst kata devam ettir', 'Continue to the floor above') : L('Üst kat ekle + devam ettir', 'Add a floor above + continue')}</button></div>`;
     }
     if (Array.isArray(o.parts) && o.parts.length && n === 1) { // çok parçalı mobilya: parça sayısı + doğrulama (düzenleme şimdilik MCP / JSON ile)
       const v = validateParts(o);
@@ -6106,6 +6252,22 @@ $('#props').addEventListener('click', e => {
     if (!n) { toast(L('Bu katta dolu duvar yok', 'No solid walls on this floor')); return; }
     commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L('Çatı duvarlara oturtuldu', 'Roof fitted to the walls') + (nw ? L(` · ${nw} duvar çatıya uzatıldı`, ` · ${nw} wall(s) extended up to the roof`) : '')); return; }
   if (a === 'rampfit') { for (const { o } of os) if (o.k === 'ramp' && o.h > 0) o.d = Math.ceil(o.h / 0.08); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
+  if (a === 'stairwmode') { setStairWidthMode(stairWidthMode() === 'fit' ? 'free' : 'fit'); renderProps(); return; }
+  if (a === 'stairalign') {
+    let n = 0; for (const { o } of os) if (o.k === 'stairs' && !isLocked(o) && stairSnap(o, { x: o.x, y: o.y }, { prefRot: o.rot })) n++;
+    if (!n) return toast(L('Yakında kapı ya da iki duvar arası boşluk yok', 'No door or gap between two walls nearby'));
+    commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
+  if (a === 'stairvoid') { for (const { o } of os) if (o.k === 'stairs') linkStairVoid(o); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
+  if (a === 'stairup') {
+    const o = os[0] && os[0].o; if (!o || o.k !== 'stairs') return;
+    if (!P.floors[fi + 1]) P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length));
+    const up = P.floors[fi + 1], c = JSON.parse(JSON.stringify(o));
+    c.id = uid(); delete c.grp; delete c.lock; stairDefaults(c, floorH(up) + 20); c.d = o.d; // uzunluk aynı: üst üste oturur
+    up.furn.push(c); linkStairVoid(o);
+    fi++; sel = [c.id]; commit(); refresh(); if (ui.view3d && T3) { sync3DFloors(); schedBuild3D(); }
+    toast(L('🪜 Merdiven üst kata devam ediyor', '🪜 The stair continues to the floor above')); return;
+  }
   if (a === 'stairfit') { for (const { o } of os) if (o.k === 'stairs') { o.h = curFloorH() + 20; o.stepN = Math.round(o.h / 17.5); } commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a.startsWith('lyr')) return layerAct(a, b.dataset.lid);
   const sco = os.length === 1 && os[0].kind === 'section' ? os[0].o : null;
@@ -6315,7 +6477,8 @@ $('#floors').addEventListener('click', e => {
   const t = e.target.closest('[data-fl]'); if (t) { fi = +t.dataset.fl; sel = []; refresh(); return; }
   const a = e.target.closest('[data-fa]'); if (!a) return;
   if (a.dataset.fa === 'ren') return renameFloor(fi); // dokunmatikte çift dokunma yerine
-  if (a.dataset.fa === 'add') { P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length)); fi = P.floors.length - 1; sel = []; commit(); fit(); refresh(); }
+  if (a.dataset.fa === 'add') { P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length)); const bi = P.floors.length - 2; for (const o of P.floors[bi].furn) if (o.k === 'stairs' && stairReachesUp(o, P.floors[bi])) linkStairVoid(o, bi); fi = P.floors.length - 1; // alttaki merdivenlerin boşluğu yeni katta açılır
+  sel = []; commit(); fit(); refresh(); }
   if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); const gm = {}; for (const k in KINDS) c[k].forEach(o => { if (o.grp) o.grp = gm[o.grp] || (gm[o.grp] = uid()); }); c.groups = Object.values(gm).map(id => ({ id, vars: [], idx: 0 })); c.rooms.forEach(r => { delete r.vars; delete r.vIdx; }); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
   if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
 });
@@ -6974,7 +7137,11 @@ function escTool() {
   else if (tool !== 'select') setTool('select'); else if (ui.grpEdit) { stopGrpEdit(); refresh(); } else { sel = []; refresh(); }
 }
 function placeRotate() { if (!placing) return; if (placing.type === 'furn') placing.rot = ((placing.rot || 0) + 90) % 360; else placing.flip = placing.flip ? 0 : 1; updateGhost(); drawPreview(); place3DSync(); }
-function placeSide() { if (!placing || placing.type !== 'op') return; placing.side = -(placing.side || 1); updateGhost(); drawPreview(); place3DSync(); }
+const placingStair = () => !!(placing && placing.type === 'furn' && placing.def.k === 'stairs');
+// S: kapıda açılma yönü; merdivende hizalanınca genişlik (boşluğa eşit / serbest)
+function placeSide() {
+  if (placingStair()) { setStairWidthMode(stairWidthMode() === 'fit' ? 'free' : 'fit'); toast(stairWidthMode() === 'fit' ? L('↔ Merdiven genişliği: boşluğa / kapıya eşit', '↔ Stair width: fit to the space / door') : L('↔ Merdiven genişliği: serbest', '↔ Stair width: free')); updateGhost(); drawPreview(); place3DSync(); return; }
+  if (!placing || placing.type !== 'op') return; placing.side = -(placing.side || 1); updateGhost(); drawPreview(); place3DSync(); }
 
 /* ---------- Klavye ---------- */
 const keys3D = new Set();
@@ -7102,6 +7269,7 @@ window.addEventListener('keydown', e => {
       if (placing.type === 'furn') placing.rot = ((placing.rot || 0) + 90) % 360; else placing.flip = placing.flip ? 0 : 1;
       updateGhost(); place3DSync(); return;
     }
+    if (tool === 'place' && placingStair() && !ctrl && k === 's') { placeSide(); return; } // 3B: merdiven genişliği (boşluğa eşit / serbest)
     // Editing shortcuts must keep working while the user is looking at the 3D
     // model: undo/redo used to fall through to the early return below, so the
     // most-pressed key in the app silently did nothing in 3D. restore() already
@@ -7173,7 +7341,7 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Delete' || e.key === 'Backspace') { deleteSel(); return; }
   if (tool === 'place' && placing) {
     if (k === 'r') { placeRotate(); return; }
-    if (k === 's' && placing.type === 'op') { placeSide(); return; }
+    if (k === 's' && (placing.type === 'op' || placingStair())) { placeSide(); return; }
   }
   if (e.key === '[' || e.key === ']') {
     const d = e.key === ']' ? 15 : -15, all = selObjs(), os = unlocked(all); let ch = false;
@@ -11079,6 +11247,17 @@ function init3D() {
     if (fp3DOn()) { e.stopImmediatePropagation(); e.preventDefault(); fp3DDown(e); return; } // sol çubuk aracı: tık / sürükle araca gider, yörünge başlamaz
     if (place3DOn()) return; // 3B yerleştirme: sürükle = yörünge, tık (pointerup) = yerleştir
     const rc = ray3(e);
+    if (T3.arr && tool === 'select') { // boyut oku: o kenarı sürükle, karşı kenar yerinde kalır
+      const ah = rc.intersectObjects(T3.arr.meshes, false)[0], fd = ah && findAnyFloor(ah.object.userData.furnArrow);
+      const p0 = new THREE.Vector3(), elev = ah ? ah.object.position.y : 0; // sürükleme düzlemi okun yüksekliğinde
+      if (fd && fd.kind === 'furn' && rc.ray.intersectPlane(floorPlane(elev), p0)) {
+        e.stopImmediatePropagation(); e.preventDefault();
+        const key = ah.object.userData.arrow, o0 = JSON.parse(JSON.stringify(fd.o));
+        d3 = { rs: key, id: fd.o.id, elev, sx: e.clientX, sy: e.clientY, moved: false, locked: 0, grab: furnLocalAlong(o0, key, p0.x, p0.z) - o0[key[0]] / 2,
+          orig: new Map([[fd.o.id, o0]]), members: [fd.o.id], conn: [], pins: [] };
+        return;
+      }
+    }
     const hits = rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh);
     if (!hits.length) return;
     // en yakın mesh kazanır: duvar/döşeme arkasındaki mobilya seçilmez (örtücüye saygı)
@@ -11136,6 +11315,16 @@ function init3D() {
       fo.o.d = clamp(d, Math.min(fo.o.w / 2, L / 2), Math.max(L - fo.o.w / 2, L / 2));
       schedBuild3D(); return;
     }
+    if (d3.rs) { // boyut oku: yerinde önizleme (grup ölçeği), bırakınca sahne yeniden kurulur
+      const fo = findAnyFloor(d3.id)?.o, o0 = d3.orig.get(d3.id), p = new THREE.Vector3();
+      if (!fo || !o0 || !ray3(e).ray.intersectPlane(floorPlane(d3.elev), p)) return;
+      furnResizeSide(fo, o0, d3.rs, furnLocalAlong(o0, d3.rs, p.x, p.z) - d3.grab, ui.snap && !e.shiftKey ? 5 : 1);
+      const g = T3.scene.children.find(c => c.userData && c.userData.furnId === fo.id);
+      if (g) { g.position.x = fo.x; g.position.z = fo.y; g.scale.set(fo.w / o0.w, 1, fo.d / o0.d); }
+      if (T3.arr) { const sp = furnArrowSpots(fo, T3.arr.meshes[0].geometry.parameters.height * 0.8); T3.arr.meshes.forEach((m, i) => { m.position.x = sp[i].x; m.position.z = sp[i].y; }); }
+      for (const h of h3) h.update();
+      showSizeTip(e, fo, d3.rs); req3D(); return;
+    }
     const o = findAnyFloor(d3.id)?.o; if (!o) { d3 = null; return; }
     const p = new THREE.Vector3();
     if (!ray3(e).ray.intersectPlane(floorPlane(d3.elev), p)) return;
@@ -11174,10 +11363,14 @@ function init3D() {
       else { refresh(); refreshSel3D(); }
       return;
     }
-    const { id, moved } = d3; d3 = null;
+    if (d3.rs) { const { moved } = d3; d3 = null; showSizeTip(null); if (moved) { commit(); refresh(); build3D(true); } return; } // boyut oku bırakıldı
+    const { id, moved } = d3, d3o = d3.orig; d3 = null;
     const fd = findAnyFloor(id); if (!fd || fd.kind !== 'furn') return;
     if (moved) {
-      if (sel.length === 1 && fd.floorIdx === fi) magnet(fd.o); // 2B ile aynı: yakın duvara yapış (yalnızca kendi katında)
+      if (sel.length === 1 && fd.floorIdx === fi) { // 2B ile aynı: yakın duvara yapış / merdiven kapıya ya da duvar arasına (yalnızca kendi katında)
+        const o = fd.o, g0 = d3o && d3o.get(id);
+        if (!(o.k === 'stairs' && ui.snap && !e.shiftKey && stairSnap(o, { x: o.x, y: o.y }, { prefRot: g0 ? g0.rot : o.rot }))) magnet(o);
+      }
       commit(); refresh();
       schedBuild3D(); // tutkal/rotasyon/pin değişimi olabilir -> sahne tazelensin
     } else { if (fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // düz tık: pointerdown'daki seçim (grup/tek) korunur
@@ -11638,6 +11831,7 @@ function walkClick(obj, alt) {
 // 👁 düğmesi etkin görünür; kısa iki dilli ipucu (#walkHint, ilk kullanımda oluşturulur)
 function syncWalkUI() {
   const on = !!(T3 && T3.walk);
+  if (T3 && T3.scene) arrows3D(); // yürürken boyut okları yok
   if ($('#b3dEye')) $('#b3dEye').classList.toggle('on', on || !!ui.walkPick);
   if ($('#hud') && ui.view3d) $('#hud').style.display = on ? 'none' : ''; // yörünge ipucu (Q/E, Fare: Döndür) yürürken yanlış olur
   let h = document.getElementById('walkHint');
@@ -13458,6 +13652,59 @@ function refreshSel3D() {
     else if (!c.isMesh && u.wallId) for (const og of c.children) if (og.userData && ids.has(og.userData.opId)) h3.push(new THREE.BoxHelper(og, col));
   }
   for (const h of h3) T3.scene.add(h);
+  arrows3D();
+}
+/* ---------- 3B boyut okları: tek seçili eşyanın dört yanında genişlik / uzunluk okları ----------
+   Ok sürüklenince o kenar taşınır, karşı kenar yerinde kalır (furnResizeSide). Oklar her zaman görünür (derinlik testi yok),
+   T3.arr = { meshes, geo, mat } her refreshSel3D'de yeniden kurulur ve atılır. */
+// tek kenardan boyutlandır; key 'w+' | 'w-' | 'd+' | 'd-', v = yeni kenarın merkezden (o0) uzaklığı (yerel eksende, ok yönünde)
+function furnResizeSide(o, o0, key, v, st = 1) {
+  const ax = key[0], sg = key[1] === '+' ? 1 : -1, s0 = +o0[ax] || 10;
+  const size = Math.max(10, rnd(v + s0 / 2, st)), sh = (size - s0) / 2 * sg;
+  const r = (+o0.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+  o[ax] = size;
+  if (ax === 'w') { o.x = o0.x + c * sh; o.y = o0.y + sn * sh; } else { o.x = o0.x - sn * sh; o.y = o0.y + c * sh; }
+  if (o.k === 'poly' && o0.pts && o0.w && o0.d) o.pts = o0.pts.map(p => ({ x: Math.round(p.x * (o.w / o0.w) * 10) / 10, y: Math.round(p.y * (o.d / o0.d) * 10) / 10 }));
+  return o;
+}
+// p (plan) → o0'ın yerel ekseninde, key okunun yönünde konum
+function furnLocalAlong(o0, key, px, py) {
+  const r = (+o0.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r), dx = px - o0.x, dy = py - o0.y;
+  return (key[0] === 'w' ? dx * c + dy * sn : -dx * sn + dy * c) * (key[1] === '+' ? 1 : -1);
+}
+// sürüklerken imlecin yanında ölçü (G × D)
+function showSizeTip(e, o, key) {
+  let t = document.getElementById('sizeTip');
+  if (!e) { if (t) t.style.display = 'none'; return; }
+  if (!t) { t = document.createElement('div'); t.id = 'sizeTip'; t.className = 'sizetip'; document.body.appendChild(t); }
+  t.textContent = (key[0] === 'w' ? '↔ ' : '↕ ') + fmtLen(o.w) + ' × ' + fmtLen(o.d);
+  t.style.left = (e.clientX + 14) + 'px'; t.style.top = (e.clientY + 14) + 'px'; t.style.display = '';
+}
+// ok yerleri (plan): [{ key, x, y, ux, uy }] — kenarın ortasından biraz dışarıda, dışarı bakan
+function furnArrowSpots(o, gap) {
+  const r = (+o.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r), out = [];
+  for (const [key, lx, ly] of [['w+', 1, 0], ['w-', -1, 0], ['d+', 0, 1], ['d-', 0, -1]]) {
+    const ux = lx * c - ly * sn, uy = lx * sn + ly * c, e = (lx ? o.w : o.d) / 2 + gap;
+    out.push({ key, x: o.x + ux * e, y: o.y + uy * e, ux, uy });
+  }
+  return out;
+}
+function arrows3D() {
+  if (T3.arr) { for (const m of T3.arr.meshes) T3.scene.remove(m); T3.arr.geo.dispose(); T3.arr.mat.dispose(); T3.arr = null; }
+  if (!ui.view3d || T3.walk || sel.length !== 1 || tool !== 'select') return;
+  const fd = findAnyFloor(sel[0]); if (!fd || fd.kind !== 'furn') return;
+  const o = fd.o; if (isLocked(o) || furnTilted(o) || !pickable(o.id)) return;
+  const g = T3.scene.children.find(c => c.userData && c.userData.furnId === o.id); if (!g) return;
+  const sz = clamp(Math.min(o.w, o.d) / 5, 14, 30), ay = (g.userData.elev || 0) + clamp((+o.h || 0) / 2, 5, 150); // seçim kutusunun yan yüzlerinde (orta yükseklik)
+  const geo = new THREE.ConeGeometry(sz * 0.55, sz * 1.5, 14), mat = new THREE.MeshBasicMaterial({ color: isLight() ? 0x2563eb : 0x38bdf8, depthTest: false, transparent: true, opacity: 0.95 });
+  const up = new THREE.Vector3(0, 1, 0), meshes = [];
+  for (const s of furnArrowSpots(o, sz * 1.2)) {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(s.x, ay, s.y); m.quaternion.setFromUnitVectors(up, new THREE.Vector3(s.ux, 0, s.uy));
+    m.renderOrder = 999; m.userData = { arrow: s.key, furnArrow: o.id };
+    T3.scene.add(m); meshes.push(m);
+  }
+  T3.arr = { meshes, geo, mat }; req3D();
 }
 // eşya eğimi: merkez (yarı yükseklik) etrafında Ry(ry)·Rx(rx), sonra en alt köşe zemine (eşyanın kotuna) indirilir
 function furnTiltGroup(parent, o) {
