@@ -6750,7 +6750,7 @@ function refresh() { if (ui.lenTyped && !(sel.length === 1 && find(sel[0])?.kind
 
 /* ---------- Kopyala / yapıştır ---------- */
 let pasteN = 0;
-const GROUPABLE = { wall: 1, room: 1, furn: 1, dim: 1, text: 1 };
+const GROUPABLE = { wall: 1, room: 1, furn: 1, dim: 1, text: 1, slab: 1 }; // döşeme: balkon / teras grupla birlikte taşınır ve düzene girer
 function groupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind]);
   if (gs.length < 2) { toast(L('Gruplamak için en az 2 nesne seçin', 'Select at least 2 objects to group')); return; }
@@ -6950,6 +6950,7 @@ function snapPose(kind, o) {
     return p;
   }
   if (kind === 'room') return { pts: o.pts.map(p => ({ ...p })), floor: o.floor || 'none', color: o.color, glass: o.glass || null, slabT: roomSlabT(o) }; // kaplama + renk de düzene ait (#66)
+  if (kind === 'slab') return { pts: o.pts.map(p => ({ ...p })), off: +o.off || 0, t: o.t }; // kot farkı + kalınlık da düzene ait
   if (PTS_KINDS.has(kind)) return { pts: o.pts.map(p => ({ ...p })) };
   if (kind === 'dim') return { a: { ...o.a }, b: { ...o.b }, off: o.off };
   if (kind === 'furn') return { x: o.x, y: o.y, rot: o.rot, w: o.w, d: o.d, h: o.h };
@@ -7036,6 +7037,9 @@ function applyVarPoses(poses) {
       if (p.color != null) o.color = p.color;
       if (p.glass !== undefined) { if (p.glass) o.glass = p.glass; else delete o.glass; }
       if (p.slabT != null) o.slabT = p.slabT;
+    } else if (PTS_KINDS.has(fd.kind)) {
+      if (Array.isArray(p.pts)) o.pts = p.pts.map(q => ({ ...q })); // döşeme vb. çokgen: x/y/rot yok
+      if (fd.kind === 'slab') { if (p.off != null) o.off = p.off; if (p.t != null) o.t = p.t; }
     } else if (fd.kind === 'dim') {
       o.a = { ...p.a }; o.b = { ...p.b }; o.off = p.off;
     } else if (fd.kind === 'furn') {
@@ -11994,7 +11998,12 @@ function init3D() {
     else if (cur && cur.userData?.slabId) {
       // serbest döşeme (#82): tıkla → seç; alan, kaplama, kalınlık ve kot farkı yan panelde
       const fd = findAnyFloor(cur.userData.slabId);
-      if (fd && fd.kind === 'slab' && pickable(fd.o.id)) { followSelFloor(fd); sel = [fd.o.id]; refresh(); refreshSel3D(); hit3 = true; }
+      if (fd && fd.kind === 'slab' && pickable(fd.o.id)) {
+        followSelFloor(fd);
+        if (fd.o.grp && !e.altKey && !grpEditing(fd.o)) { if (cycleGroupVars(fd.o.grp)) { sel = groupMemberIdsAny(fd.o.grp); build3D(true); hit3 = true; return; } sel = groupMemberIdsAny(fd.o.grp); } // gruplu döşeme: grup seçilir / düzen değişir, Alt = tek döşeme
+        else sel = [fd.o.id];
+        refresh(); refreshSel3D(); hit3 = true;
+      }
     }
     else if (cur && cur.userData?.wallId && findAnyFloor(cur.userData.wallId) && (() => { const l = layerById(findAnyFloor(cur.userData.wallId).o.layer); return !l || !l.lock; })()) {
       const fd = findAnyFloor(cur.userData.wallId);
