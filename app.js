@@ -7585,6 +7585,8 @@ function helpModal() {
     ['S (while placing)', 'Flip door swing direction'],
     ['Arrow keys', 'Nudge selection / background image by 1 cm (Shift: 10 cm)'],
     ['WASD / Q / E (3D)', 'Walk around in 3D view (Q/E: down/up, Shift: faster)'],
+    ['💡 Lights', 'Lighting category: ceiling, pendant, chandelier, spots, sconce, floor / table lamps, LED strip, outdoor lights • panel: on / off, Dim / Normal / Bright (lumens), warm / neutral / cool or custom colour • ceiling lights follow the storey height • room panel: All on / All off • 3D: click a lamp to switch it (Alt+click selects)'],
+    ['🌙 (3D): night', 'Night sky, moonlight and the lamps on (live realistic view) • rooms without a lamp get a soft automatic light • F in walk mode: flashlight • 🌙 again: back to day • Render studio: Night atmosphere, Dusk exterior / Night interior presets, renders with more lights, lamp shadows and glow'],
     ['👁 (3D): walk mode', 'Walk through at eye level: WASD / arrows walk, Shift runs, drag to look around, walls block, open doors and arches let you through, click a door to open it • Esc: back to the orbit camera'],
     ['Ctrl+Z / Ctrl+Y (3D)', 'Undo / redo while staying in the 3D view (Del also works there; Ctrl+A / C / V / D / G / S too)'],
     ['3D: click / drag furniture', 'Select & highlight • drag to move on the floor (Shift: no grid snap) • resize via the side panel'],
@@ -7639,6 +7641,8 @@ function helpModal() {
     ['S (yerleştirirken)', 'Kapı açılış yönünü çevir'],
     ['Ok tuşları', 'Seçileni / arka plan görselini 1 cm kaydır (Shift: 10 cm)'],
     ['WASD / Q / E (3B)', '3B görünümde gezin (Q/E: alçal/yüksel, Shift: hızlı)'],
+    ['💡 Işıklar', 'Aydınlatma kategorisi: tavan, sarkıt, avize, spotlar, aplik, lambader / masa lambası, LED şerit, dış mekân ışıkları • panel: aç / kapa, Loş / Normal / Parlak (lümen), sıcak / nötr / soğuk ya da özel renk • tavan lambaları kat yüksekliğini izler • oda paneli: Hepsini aç / kapat • 3B: lambaya tıklayınca aç / kapa (Alt+tık seçer)'],
+    ['🌙 (3B): gece', 'Gece gökyüzü, ay ışığı ve yanan lambalar (canlı gerçekçi görünüm) • lambası olmayan odalara yumuşak otomatik ışık • yürürken F: el feneri • 🌙 tekrar: gündüz • Render stüdyosu: Gece atmosferi, Alacakaranlık (dış) / Gece (iç) hazır ayarları; render daha çok ışık, lamba gölgesi ve ışık taşmasıyla'],
     ['👁 (3B): yürüme modu', 'Göz hizasında gezin: WASD / oklar yürür, Shift koşar, sürükleyerek etrafa bakın; duvarlar durdurur, açık kapı ve kemerlerden geçilir, kapıya tıklayınca açılır • Esc: yörünge kamerasına dön'],
     ['Ctrl+Z / Ctrl+Y (3B)', '3B görünümden çıkmadan geri al / yinele (Del de çalışır; Ctrl+A / C / V / D / G / S dahil)'],
     ['3B: mobilyaya tıkla / sürükle', 'Seç & vurgula • zeminde sürükle (Shift: ızgara yok) • boyutu sağ panelden değiştir'],
@@ -10074,13 +10078,14 @@ async function render3DHQ(opts) {
     ? realLook(scene, opts.sun ? sunVector(opts.sun.az, opts.sun.alt) : lightSunVector(lights), { mats: style === 'realistic', mood: opts.mood, contact: !liveReal })
     : null;
   const fit = T3.fit, mime = opts.format === 'jpeg' ? 'image/jpeg' : 'image/png';
-  let url = '';
+  let url = '', boost = null;
   try {
     T3.run = false;                                   // the animation loop must not overwrite a sample
     ctl.update();
     r.setPixelRatio(1);                               // a device ratio would multiply the target size
     r.setSize(W, H, false);                           // false: the element keeps its CSS size
     setCamAspect(cam, w / h);
+    if (style === 'realistic' || style === 'maquette') boost = renderFixBoost(scene, opts.sun ? opts.sun.alt : ui.studio.alt); // gece / ışıklı render (#123)
     if (sky) sky.mesh.position.copy(cam.position);    // gökyüzü küresi kamerayı ortalar (sonsuz uzaklık gibi)
 
     for (const s of saved) {                          // crisper shadows for this render only
@@ -10137,10 +10142,12 @@ async function render3DHQ(opts) {
       fin = out;
     }
     if (style === 'sketch') sketchFilter(fin);         // kurşun kalem son işlemi (#34)
+    if (style === 'realistic' && boost) bloomCanvas(fin, opts.sun && opts.sun.alt < 1 ? 0.7 : 0.35); // lamba ışığı taşması (#123)
     url = fin.toDataURL(mime, 0.92);
   } catch (e) {
     url = '';
   } finally {
+    if (boost) boost.restore();
     if (r.shadowMap) { r.shadowMap.autoUpdate = true; r.shadowMap.needsUpdate = true; }
     for (const e of edges) e.visible = true;
     if (real) { real.restore(); real.dispose(); }
@@ -10171,6 +10178,50 @@ async function render3DHQ(opts) {
   return url;
 }
 
+/* ---------- Gece / ışıklı render (#123) ----------
+   Render süresince ışık havuzu büyür: canlı havuzun 8 + 4 ışığına geçici 8 nokta + 4 spot eklenir (render başına bir derleme),
+   en güçlü 2 spot gölge düşürür. alt < 1 ise otomatik oda ışıkları da sıralanır. Hepsi restore() ile geri alınır. */
+const RFIX_PTS = 8, RFIX_SPOTS = 4;
+function renderFixBoost(scene, alt) {
+  const night = alt < 1, list = (T3.fixList || []).concat(night && ui.autoRoomLight !== false ? (T3.autoLights || []) : []);
+  if (!list.some(e => e.on)) return null;
+  const pool = fixPool(), added = pool.pts[0].parent !== scene, extra = [], k = night ? 1 : clamp(1.15 - alt / 45, 0.25, 1);
+  if (added) { for (const l of pool.pts) scene.add(l); for (const l of pool.spots) { scene.add(l); scene.add(l.target); } }
+  for (let i = 0; i < RFIX_PTS; i++) { const l = new THREE.PointLight(0xffffff, 0, 500, 2); scene.add(l); extra.push(l); }
+  const exSpots = []; for (let i = 0; i < RFIX_SPOTS; i++) { const l = new THREE.SpotLight(0xffffff, 0, 600, 0.4, 0.5, 2); scene.add(l); scene.add(l.target); exSpots.push(l); }
+  const fc = fixFocus(), pts = pool.pts.concat(extra), spots = pool.spots.concat(exSpots);
+  const put = (l, e) => { if (!e) { l.intensity = 0; return; } const t = lmToThree(e.lm); l.color.set(e.col); l.intensity = t.i * k; l.distance = t.d; l.position.set(e.x, e.y, e.z); };
+  fixRank(list, fc, pts.length, false).concat(Array(pts.length)).slice(0, pts.length).forEach((e, i) => put(pts[i], e));
+  const rs = fixRank(list, fc, spots.length, true), shad = [];
+  spots.forEach((l, i) => {
+    const e = rs[i]; put(l, e); if (!e) return;
+    l.angle = clamp((e.beam || 40) / 2, 5, 60) * Math.PI / 180; l.target.position.set(e.x, e.y - 100, e.z); l.target.updateMatrixWorld();
+    if (i < 2) { l.castShadow = true; l.shadow.mapSize.set(1024, 1024); l.shadow.bias = -0.0005; shad.push(l); }
+  });
+  return {
+    lights: pts.length + spots.length,
+    restore() {
+      for (const l of extra) scene.remove(l);
+      for (const l of exSpots) { scene.remove(l); scene.remove(l.target); if (l.shadow.map) { l.shadow.map.dispose(); l.shadow.map = null; } }
+      for (const l of shad) { l.castShadow = false; if (l.shadow.map) { l.shadow.map.dispose(); l.shadow.map = null; } }
+      if (added) { for (const l of pool.pts) scene.remove(l); for (const l of pool.spots) { scene.remove(l); scene.remove(l.target); } }
+      assignFixLights();
+    },
+  };
+}
+// ışık taşması (bloom) — son resim üzerinde, kütüphanesiz: ¼ boyutta parlak alanlar süzülür, bulanıklaştırılıp eklenir
+function bloomCanvas(cnv, amt) {
+  const w = cnv.width, h = cnv.height, sw = Math.max(1, Math.round(w / 4)), sh = Math.max(1, Math.round(h / 4));
+  const sm = document.createElement('canvas'); sm.width = sw; sm.height = sh; const sx = sm.getContext('2d');
+  sx.drawImage(cnv, 0, 0, sw, sh);
+  const id = sx.getImageData(0, 0, sw, sh), d = id.data;
+  for (let i = 0; i < d.length; i += 4) { const k = Math.max(0, (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255 - 0.72) / 0.28; d[i] *= k; d[i + 1] *= k; d[i + 2] *= k; }
+  sx.putImageData(id, 0, 0);
+  const ctx = cnv.getContext('2d'); ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = amt;
+  if ('filter' in ctx) ctx.filter = `blur(${Math.max(2, Math.round(Math.max(w, h) / 160))}px)`;
+  ctx.drawImage(sm, 0, 0, w, h); ctx.restore();
+  return cnv;
+}
 /** Mild unsharp mask: downscaling softens an architectural render, and the
     edges of walls are exactly what the eye judges sharpness by. amount 0..1. */
 function sharpenCanvas(ctx, w, h, amount) {
@@ -10287,7 +10338,7 @@ function makeSky(sv, cam, fit) {
   const near = d + sz * 0.8, far = Math.min(17000, near + Math.max(5000, sz * 6));
   return { mesh, fog: new THREE.Fog(c.hor.clone(), near, Math.max(near + 1000, far)), horizon: c.hor.clone() };
 }
-const SUN_PRESETS = { morning: [['Sabah', 'Morning'], 100, 20], noon: [['Öğle', 'Noon'], 180, 68], golden: [['Altın saat', 'Golden hour'], 255, 12] };
+const SUN_PRESETS = { morning: [['Sabah', 'Morning'], 100, 20], noon: [['Öğle', 'Noon'], 180, 68], golden: [['Altın saat', 'Golden hour'], 255, 12], dusk: [['Alacakaranlık (dış)', 'Dusk exterior'], 280, -3], nightIn: [['Gece (iç)', 'Night interior'], 215, -12] };
 const RENDER_RES = { view: ['Ekran ×2–3', 'Viewport ×2–3', 0], hd: ['1080p (1920 px)', '1080p (1920 px)', 1920], qhd: ['2K (2560 px)', '2K (2560 px)', 2560], uhd: ['4K (3840 px)', '4K (3840 px)', 3840] };
 ui.studio = { style: 'realistic', az: 215, alt: 42, res: 'view', format: 'png', backdrop: null, mood: 'day' }; // backdrop null = stile göre (#45)
 const studioBackdrop = () => ui.studio.backdrop || (ui.studio.style === 'realistic' ? 'sky' : 'studio');
@@ -10514,7 +10565,7 @@ $('#modal').addEventListener('click', async e => {
   if (ui.modal !== 'studio') return;
   const s = e.target.closest('[data-rs-style]'); if (s) { ui.studio.style = s.dataset.rsStyle; openRenderStudio(); return; }
   const bg = e.target.closest('[data-rs-bg]'); if (bg) { ui.studio.backdrop = bg.dataset.rsBg; openRenderStudio(); return; }
-  const p = e.target.closest('[data-rs-sun]'); if (p) { const v = SUN_PRESETS[p.dataset.rsSun]; ui.studio.az = v[1]; ui.studio.alt = v[2]; applyLive3D(); openRenderStudio(); return; }
+  const p = e.target.closest('[data-rs-sun]'); if (p) { const v = SUN_PRESETS[p.dataset.rsSun]; ui.studio.az = v[1]; ui.studio.alt = v[2]; if (v[2] < 1) { ui.studio.mood = 'night'; ensureFixPool(); } else if (ui.studio.mood === 'night') ui.studio.mood = 'day'; syncNightUI(); applyLive3D(); assignFixLights(); openRenderStudio(); return; }
   const md = e.target.closest('[data-rs-mood]');
   if (md) { // sıcak akşam: alçak güneş + sıcak iç dolgu; gün ışığına dönünce güneş yeniden yükselir
     const st = ui.studio; st.mood = md.dataset.rsMood;
