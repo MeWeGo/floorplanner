@@ -651,6 +651,7 @@ async function migrateLegacyStorage() {
 let saveTimer = null;
 function commit() {
   if (typeof grpEditAbsorb === 'function') grpEditAbsorb(); // grup düzenleme modunda yeni çizilenler gruba katılır
+  for (const fl of P.floors) syncAccWalls(fl, true); // akordiyon duvarlar bağlı uçları izler (düzen pozundan önce)
   if (typeof syncActiveVars === 'function') syncActiveVars();
   stampLayers(); // yeni nesneler etkin katmana (#32)
   for (const fl of P.floors) for (const o of fl.furn) if (isParamRoof(o)) o.h = roofHeight(o); // çatı yüksekliği parametrelerden (boyutlandırma / ölçek sonrası) (#115)
@@ -708,6 +709,10 @@ const defaultLayer = () => ({ id: '0', name: L('Varsayılan', 'Default'), color:
 const layerById = id => (P.layers || []).find(l => l.id === (id || '0'));
 // Gizli (veya baskıda çıkmayan) katmanlardaki nesneler olmadan katın sığ kopyası; hepsi görünürse kat aynen döner
 function visFloor(f, print = false) {
+  if (f.walls && f.walls.some(w => w.acc && wLen(w) < 1)) { // kapanmış akordiyon duvar (boşluk yok) çizilmez
+    const g = Object.assign({}, f); g.walls = f.walls.filter(w => !(w.acc && wLen(w) < 1));
+    const wl = new Set(g.walls.map(w => w.id)); g.ops = f.ops.filter(o => wl.has(o.wall)); f = g;
+  }
   if (!P.layers || P.layers.length < 2) return f;
   const hide = new Set(P.layers.filter(l => !l.vis || (print && l.print === false)).map(l => l.id));
   if (!hide.size) return f;
@@ -1091,7 +1096,7 @@ function normalizeProject(P) {
   P.layers.forEach(l => { l.vis = l.vis !== false; l.lock = !!l.lock; l.print = l.print !== false; l.name = l.name || l.id; });
   if (!P.layers.some(l => l.id === P.activeLayer)) P.activeLayer = '0';
   if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
-  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
+  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; }
     if (f.lvl != null) { const n = typeof f.lvl === 'number' || (typeof f.lvl === 'string' && f.lvl.trim()) ? +f.lvl : NaN; if (Number.isFinite(n)) f.lvl = clamp(Math.round(n), -FLOOR_LVL_MAX, FLOOR_LVL_MAX); else delete f.lvl; } // kat kotu
     for (const v of f.voids) { if (!VOID_TYPES[v.type]) v.type = 'stair'; if (v.dep != null) { const d = clamp(Math.round(+v.dep || 0), 0, VOID_DEP_MAX); if (d) v.dep = d; else delete v.dep; } } // çukur derinliği
@@ -1550,7 +1555,7 @@ function wallDimSvg(w) {
   return `<text transform="translate(${mx} ${my}) rotate(${ang}) translate(0 ${-off})" text-anchor="middle" font-size="${fs}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" ${hit}>${fmtLen(L)}${wallTag(w)}</text>`;
 }
 // taban kotu etiketi: ▲ +220 / ▼ −50 (kat döşemesinden başlamayan duvar; IFC'de birleşen seviyeler)
-function wallTag(w) { const e = Math.round(wallElev(w)); return (e ? ` · ${e > 0 ? '▲ +' : '▼ −'}${Math.abs(e)}` : '') + (wallTopOn(w) ? ' · ⌂' : ''); }
+function wallTag(w) { const e = Math.round(wallElev(w)); return (e ? ` · ${e > 0 ? '▲ +' : '▼ −'}${Math.abs(e)}` : '') + (wallTopOn(w) ? ' · ⌂' : '') + (isAccWall(w) ? ' · ⇔' : ''); }
 function opSvg(op, live) {
   const p = opPos(op); if (!p) return '';
   const C = pal(), w = op.w, t = p.t, hw = w / 2, ht = t / 2, sd = op.side || 1, sw = sd > 0 ? 1 : 0;
@@ -4252,6 +4257,7 @@ function render() {
   rqFull = false;
   if (!P) return;
   const f = F();
+  syncAccWalls(f); // sürüklerken / döndürürken akordiyon duvar canlı uzar
   $('#defs').innerHTML = defsSvg();
   applyView();
   $('#gBg').innerHTML = (layersVis.bg ? bgSvg() : '') + underlaySvg();
@@ -4550,6 +4556,61 @@ function syncStairVoids() {
       return true;
     });
   }
+}
+
+/* ---------- Akordiyon duvar ----------
+   w.acc = { a: link | null, b: link | null }; link = { w: duvar id, e: 'a' | 'b', x, y } (x / y = bağlı ucun son bilinen yeri).
+   Bağlı uç hareket edince (oda döndürme, düzen değiştirme, sürükleme) akordiyonun ucu onu izler: duvar kalan boşlukta uzar / kısalır.
+   Kullanıcı akordiyonun kendi ucunu taşırsa commit'te o uç yeniden bağlanır (başka duvar ucu yoksa serbest kalır). */
+const ACC_TOL = 1;
+function isAccWall(w) { return !!(w && w.acc); }
+function accCandidate(f, w, p) {
+  let best = null;
+  for (const o of f.walls) {
+    if (o === w) continue;
+    for (const e of ['a', 'b']) {
+      const d = dist(o[e], p); if (d > ACC_TOL) continue;
+      const rank = (isAccWall(o) ? 10 : 0) + d; // önce normal duvarlar, sonra en yakın
+      if (!best || rank < best.rank) best = { o, e, rank };
+    }
+  }
+  return best ? { w: best.o.id, e: best.e, x: best.o[best.e].x, y: best.o[best.e].y } : null;
+}
+function accLink(f, w) { w.acc = { a: accCandidate(f, w, w.a), b: accCandidate(f, w, w.b) }; return w.acc; }
+function setAccWall(f, w, on) { if (on) accLink(f, w); else delete w.acc; }
+function accFitOps(f, w) {
+  const L = wLen(w);
+  for (const op of f.ops) if (op.wall === w.id) op.d = clamp(op.d, Math.min(op.w / 2, L / 2), Math.max(L - op.w / 2, L / 2));
+}
+// relink = false: yalnızca bağlı uçları izle (çizim sırasında); true (commit): kullanıcının taşıdığı uç yeniden bağlanır
+function syncAccWalls(f, relink = false) {
+  if (!f || !f.walls.some(isAccWall)) return false;
+  const same = (p, q) => Math.abs(p.x - q.x) < 0.01 && Math.abs(p.y - q.y) < 0.01;
+  let moved = false;
+  for (let pass = 0; pass < 4; pass++) { // akordiyon akordiyona bağlıysa zincir birkaç turda oturur
+    let ch = false;
+    for (const w of f.walls) {
+      if (!isAccWall(w)) continue;
+      if (typeof w.acc !== 'object') w.acc = { a: null, b: null };
+      let wch = false;
+      for (const e of ['a', 'b']) {
+        const l = w.acc[e], o = l && f.walls.find(x => x.id === l.w && x !== w);
+        if (!o) { if (relink) w.acc[e] = accCandidate(f, w, w[e]); continue; }
+        const q = o[l.e];
+        if (!same(q, l)) { w[e] = { x: q.x, y: q.y }; l.x = q.x; l.y = q.y; wch = true; } // bağlı uç hareket etti: izle
+        else if (relink && !same(w[e], q)) w.acc[e] = accCandidate(f, w, w[e]); // akordiyonun kendi ucu taşındı
+      }
+      if (wch) { accFitOps(f, w); ch = true; }
+    }
+    if (!ch) break; moved = true;
+  }
+  return moved;
+}
+function cleanAcc(w) {
+  if (w.acc == null) return;
+  if (typeof w.acc !== 'object') { w.acc = { a: null, b: null }; return; }
+  const ok = l => l && typeof l.w === 'string' && (l.e === 'a' || l.e === 'b') && Number.isFinite(+l.x) && Number.isFinite(+l.y) ? { w: l.w, e: l.e, x: +l.x, y: +l.y } : null;
+  w.acc = { a: ok(w.acc.a), b: ok(w.acc.b) };
 }
 
 /* ---------- Oluşturma ---------- */
@@ -6052,6 +6113,9 @@ function renderProps() {
     if (os.some(x => wallTopOn(x.o))) h += `<div class="row"><span class="muted">⌂ ${L('Üstü eğimli yüzeyi izliyor', 'Top follows a sloped surface')} (${Math.round(Math.min(...wallTopPts(o, 0, wLen(o)).map(q => q[1])))}–${Math.round(o.h)} cm)</span><button class="btn sm" data-act="walldetach" title="${L('Duvarın üstünü yeniden düz yap (en yüksek noktada)', 'Make the wall top flat again (at its highest point)')}">${L('⌂✕ Düz yap', '⌂✕ Make flat')}</button></div>`;
     if (F().walls.length > 1 && os.every(x => x.o.h === o.h)) h += `<div class="row"><button class="btn sm" data-act="wallhfloor" title="${L('Bu yüksekliği kattaki tüm duvarlara ve katın varsayılanına uygula', 'Apply this height to every wall on the floor and make it the floor default')}">⬆ ${L('Kattaki tüm duvarlara uygula', 'Apply to all walls on floor')}</button></div>`;
     h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall'), railing: L('🛡 Korkuluk', '🛡 Railing / Balustrade'), fence: L('🌿 Bahçe çiti', '🌿 Garden Fence') } });
+    { const on = os.every(x => isAccWall(x.o)), lk = n === 1 && on ? (o.acc.a ? 1 : 0) + (o.acc.b ? 1 : 0) : -1;
+      h += `<label class="f"><span>${L('⇔ Akordiyon duvar', '⇔ Accordion wall')}</span><input type="checkbox" data-k="wall" data-p="acc" ${on ? 'checked' : ''} title="${L('Uçları değdiği duvarlara bağlanır; oda döndürülünce / taşınınca kalan boşlukta kendiliğinden uzar veya kısalır', 'Its ends stick to the walls they touch; when a room is rotated or moved it stretches or shrinks to fill the gap')}"></label>`;
+      if (lk >= 0) h += `<p class="muted" style="margin:0 0 6px">${lk === 2 ? L('İki ucu da bağlı – boşluğu izler', 'Both ends attached – follows the gap') : L(`${lk}/2 uç bağlı: ucu başka bir duvarın ucuna getirin`, `${lk}/2 ends attached: put an end on another wall's end`)}</p>`; }
     if (os.every(x => x.o.wt === 'railing')) h += fld(L('Korkuluk stili', 'Railing style'), 'wall', 'rs', railStyle(o), { sel: Object.fromEntries(Object.entries(RAIL_STYLES).map(([k, v]) => [k, L(...v)])) });
     if (os.every(x => x.o.wt === 'curtain')) {
       // dikme modülü + ara dikme adedi (#71): adet girilirse eşit bölmeler, modül girilirse adet yeniden hesaplanır
@@ -6430,6 +6494,7 @@ function applyProp(t, final) {
     else if (k === 'wall' && p === 'mul') { if (!final) continue; const m = clamp(Math.round(v), 20, 1000); delete o.mulN; if (m === MUL_DEF) delete o.mul; else o.mul = m; }
     else if (k === 'wall' && p === 'mulN') { if (!final) continue; o.mulN = clamp(Math.round(v), 0, 200); }
     else if (k === 'wall' && p === 'wt') { setWallType(o, v); }
+    else if (k === 'wall' && p === 'acc') { if (final) setAccWall(F(), o, !!v); }
     else if (k === 'wall' && p === 'rs') { if (v === 'bars' || !RAIL_STYLES[v]) delete o.rs; else o.rs = v; ui.railRs = v; }
     else if (k === 'furn' && isParamRoof(o) && (p === 'ridge' || p === 'hip')) { o[p] = clamp((+v || 0) / 100, p === 'hip' ? 0.05 : -0.45, p === 'hip' ? 1 : 0.45); }
     else if (k === 'furn' && isParamRoof(o) && p === 'rmat') { const was = ROOF_MAT_COL[roofP(o).mat]; o.rmat = v; if (ROOF_MAT_COL[v] && (!o.color || o.color === was)) o.color = ROOF_MAT_COL[v]; }

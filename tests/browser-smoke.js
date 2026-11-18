@@ -387,6 +387,48 @@ check('adjustable group: edit members adds a new wall and places it per layout w
   if (info.after) throw new Error('Esc did not leave group editing: ' + JSON.stringify(info));
 });
 
+check('accordion wall: stretches into the gap when a grouped room moves or rotates, collapses, undo', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F(), fx = mkWall({ x: 0, y: 0 }, { x: 0, y: 300 });
+    const r1 = mkWall({ x: 100, y: 0 }, { x: 400, y: 0 }), r2 = mkWall({ x: 100, y: 0 }, { x: 100, y: 300 });
+    const acc = mkWall({ x: 0, y: 0 }, { x: 100, y: 0 });
+    f.walls.push(fx, r1, r2, acc); commit(); setTool('select');
+    sel = [acc.id]; refresh();
+    const cb = document.querySelector('#props [data-p="acc"]'); const out = { box: !!cb };
+    if (cb) { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); }
+    out.links = acc.acc && [acc.acc.a && acc.acc.a.w === fx.id, acc.acc.b && (acc.acc.b.w === r1.id || acc.acc.b.w === r2.id)];
+    out.note = /2/.test(document.querySelector('#props').textContent) && document.querySelector('#props').textContent.includes('⇔');
+    // group the room, layout 2 = room slid 150 cm away
+    sel = [r1.id, r2.id]; groupSel(); varAction('varInit'); varAction('varNew');
+    const rec = f.groups[0];
+    [r1, r2].forEach(w => { w.a.x += 150; w.b.x += 150; }); commit();
+    out.open = [acc.a.x, acc.b.x];
+    switchGroupVarTo(rec, 0); out.closed = [acc.a.x, acc.b.x];
+    switchGroupVarTo(rec, 1); out.reopen = acc.b.x;
+    // live rotation about the far corner: the accordion follows on the next render, before any commit
+    const piv = { x: r1.b.x, y: r1.b.y }, c = Math.cos(Math.PI / 9), sn = Math.sin(Math.PI / 9);
+    const rot = q => { const dx = q.x - piv.x, dy = q.y - piv.y; q.x = piv.x + dx * c - dy * sn; q.y = piv.y + dx * sn + dy * c; };
+    [r1, r2].forEach(w => { rot(w.a); if (w !== r1) rot(w.b); });
+    render(); out.rot = [Math.round(acc.b.x), Math.round(acc.b.y), Math.round(r1.a.x), Math.round(r1.a.y)];
+    commit(); undo(); { const A = find(acc.id).o; out.undo = [A.b.x, A.b.y]; }
+    const [R1, R2, ACC] = [r1, r2, acc].map(w => find(w.id).o); // undo rebuilt P
+    // close the gap completely: the zero-length accordion is not drawn and nothing crashes
+    [R1, R2].forEach(w => { w.a.x -= 250; w.b.x -= 250; }); render();
+    out.collapsed = Math.round(wLen(ACC)); out.drawn = !!document.querySelector('#gWalls [data-id="' + ACC.id + '"]');
+    out.svg = exportSvg().svg.length > 100;
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.box) throw new Error('wall panel has no accordion checkbox');
+  if (!info.links || !info.links[0] || !info.links[1]) throw new Error('accordion did not attach both ends: ' + JSON.stringify(info));
+  if (info.open[0] !== 0 || info.open[1] !== 250) throw new Error('accordion did not stretch when the group moved: ' + JSON.stringify(info));
+  if (info.closed[1] !== 100 || info.reopen !== 250) throw new Error('accordion did not follow the layouts: ' + JSON.stringify(info));
+  if (info.rot[0] !== info.rot[2] || info.rot[1] !== info.rot[3]) throw new Error('accordion did not follow a live rotation: ' + JSON.stringify(info));
+  if (info.undo[0] !== 250 || info.undo[1] !== 0) throw new Error('undo did not bring the accordion back: ' + JSON.stringify(info));
+  if (info.collapsed !== 0 || info.drawn || !info.svg) throw new Error('a closed accordion should vanish from the drawing: ' + JSON.stringify(info));
+});
+
 check('overlapping objects: Ctrl+click cycles, right-click lists, layers reorder, 3D lifts', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
