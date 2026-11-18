@@ -152,6 +152,30 @@ function cleanLight(o) {
 // tavana sabit eşya (mount: 'ceil'): kotu = kat yüksekliği − eşya yüksekliği; f = eşyanın katı, H = o katın duvar yüksekliği
 function ceilElev(o, H) { return Math.max(0, Math.round((+H || 0) - (+o.h || 0))); }
 /* LIGHT-PARAM:END */
+/* Işık veren parçalar (mobilya stüdyosu): parçanın light alanı (point = ampul, spot = aşağı koni, strip = şerit LED) eşyayı
+   da bir ışık kaynağı yapar. Açık / kapalı eşyanın lon alanıdır (katalog armatürleriyle aynı); parça başına lm / lk / lcol / beam. */
+function partLightP(p, o) {
+  if (!p || !PART_LIGHTS.includes(p.light)) return null;
+  const d = PART_LIGHT_DEF[p.light], cl = (v, a, b) => Math.max(a, Math.min(b, Math.round(+v)));
+  const lm = +p.lm > 0 ? cl(p.lm, LIGHT_LM_MIN, LIGHT_LM_MAX) : d.lm, k = +p.lk > 0 ? cl(p.lk, LIGHT_K_MIN, LIGHT_K_MAX) : LIGHT_K_DEF;
+  const custom = typeof p.lcol === 'string' && /^#[0-9a-f]{6}$/i.test(p.lcol);
+  return { kind: p.light === 'spot' ? 'spot' : 'point', strip: p.light === 'strip', on: !o || o.lon !== 0, lm, k, col: custom ? p.lcol.toLowerCase() : kelvinHex(k), custom,
+    beam: p.light === 'spot' ? (+p.beam > 0 ? cl(p.beam, LIGHT_BEAM_MIN, LIGHT_BEAM_MAX) : d.beam) : null };
+}
+const partLit = o => !!(o && Array.isArray(o.parts) && o.parts.some(p => p && PART_LIGHTS.includes(p.light)));
+const isLit = o => isLightFix(o) || partLit(o); // katalog armatürü ya da ışıklı parçası olan eşya
+const litOn = o => isLightFix(o) ? lightP(o).on : o.lon !== 0;
+// eşyanın ışıklı parçaları plan koordinatında: { q, x, y, z (eşya tabanından cm), len (şerit boyu), ang (şeridin plan açısı, °) }
+function partLightSpots(o) {
+  const s = partsScale(o), r = (+o.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r), out = [];
+  for (const p of o.parts || []) {
+    const q = partLightP(p, o); if (!q) continue;
+    const lx = p.x * s.sx, ly = p.y * s.sy, pw = p.w * s.sx, pd = p.d * s.sy;
+    out.push({ q, x: o.x + lx * c - ly * sn, y: o.y + lx * sn + ly * c, z: (q.kind === 'spot' ? p.z : p.z + p.h / 2) * s.sz,
+      len: q.strip ? Math.max(pw, pd) : 0, ang: (+p.rot || 0) + (+o.rot || 0) + (pw >= pd ? 0 : 90) });
+  }
+  return out;
+}
 const FURN_ELEV_MAX = 500, furnElev = o => (o && +o.elev ? Math.max(-FURN_ELEV_MAX, Math.min(FURN_ELEV_MAX, +o.elev)) : 0); // eksi: döşemenin altında (IFC'de birleşen alt seviye)
 // duvar taban kotu: kata göre cm (eksi olabilir, yoksa 0). Tek okuyucu; IFC'de birleşen yardımcı seviyelerin kotunu korur
 const WALL_ELEV_MAX = 500, wallElev = w => (w && +w.elev ? Math.max(-WALL_ELEV_MAX, Math.min(WALL_ELEV_MAX, +w.elev)) : 0);
@@ -1893,6 +1917,9 @@ function lightAreaSvg(f) {
   let s = '';
   for (const o of f.furn) { const q = lightP(o); if (!q || !q.on) continue; const r = lmToThree(q.lm).d * (q.kind === 'spot' ? 0.32 : 0.5);
     s += `<circle cx="${o.x}" cy="${o.y}" r="${r}" fill="${q.col}" fill-opacity="0.1" stroke="${q.col}" stroke-opacity="0.45" stroke-dasharray="6 6" vector-effect="non-scaling-stroke" pointer-events="none"/>`; }
+  for (const o of f.furn) if (partLit(o) && o.lon !== 0) for (const e of partLightSpots(o)) { // ışıklı parçalar (mobilya stüdyosu)
+    const r = lmToThree(e.q.lm).d * (e.q.kind === 'spot' ? 0.32 : 0.5);
+    s += `<circle cx="${partR(e.x)}" cy="${partR(e.y)}" r="${r}" fill="${e.q.col}" fill-opacity="0.1" stroke="${e.q.col}" stroke-opacity="0.45" stroke-dasharray="6 6" vector-effect="non-scaling-stroke" pointer-events="none"/>`; }
   return s;
 }
 function lightSvg(f) {
@@ -2015,6 +2042,7 @@ function stairRails(o, st = stairSteps(o)) {
      or a project texture tex:<id> (P.textures). The finish only changes how the part is drawn in 3D.
    - rx / ry = optional tilt in degrees about the part's own x / y axis (all-axis rotation). The part turns about its
      centre (x, y, z + h/2) as R = Rz(rot) · Ry(ry) · Rx(rx): first rx, then ry, then rot. Absent = 0 (upright).
+   - light = optional point | spot | strip (+ lm, lk, lcol, beam): the part glows and lights the 3D scene (see PART_LIGHTS).
    - gid = optional group id (1–16 letters / digits / _ / -). Parts with the same gid form a group in the furniture
      studio (select / move / rotate together); rendering ignores it, so grouping never changes the model.
    - When the item is resized (w / d / h ≠ pbase) the parts scale with it; old items without parts are untouched. */
@@ -2024,6 +2052,10 @@ const PART_ALIAS = Object.assign(Object.create(null), { box: 'box', cube: 'box',
 const PART_MATS = ['matte', 'gloss', 'metal', 'glass', 'wood', 'fabric', 'leather', 'stone', 'marble', 'ceramic', 'chrome', 'plastic', 'rubber', 'foliage'];
 const partMatOk = v => PART_MATS.includes(v) || (typeof v === 'string' && /^tex:[\w-]{1,32}$/.test(v)); // tex:<id> = project texture
 const PARTS_MAX = 64, PARTS_SOFT = 40;
+/* light parts: light = point (bulb) | spot (downward cone) | strip (LED strip). Optional lm (lumens 100–10000), lk (Kelvin
+   2200–6500, default 2700), lcol (#rrggbb, wins over lk), beam (spot angle 10–120°). The item's lon: 0 switches them all off. */
+const PART_LIGHTS = ['point', 'spot', 'strip'];
+const PART_LIGHT_DEF = { point: { lm: 800 }, spot: { lm: 500, beam: 40 }, strip: { lm: 600 } };
 // small helpers kept inside the block on purpose (instead of the app's rnd / clamp) so it can be pasted verbatim into mcp/server.js
 const partFin = v => v !== null && v !== undefined && v !== '' && typeof v !== 'boolean' && Number.isFinite(+v);
 const partHex = c => typeof c === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c);
@@ -2054,6 +2086,14 @@ function cleanPart(p) {
   if (partHex(p.color)) q.color = p.color;
   if (partMatOk(p.mat) && p.mat !== 'matte') q.mat = p.mat;
   if (type === 'cyl' && (p.axis === 'x' || p.axis === 'y')) q.axis = p.axis;
+  if (PART_LIGHTS.includes(p.light)) { // light-emitting part: defaults are dropped so the saved part stays small
+    const L0 = PART_LIGHT_DEF[p.light], cl = (v, a, b) => Math.max(a, Math.min(b, Math.round(+v)));
+    q.light = p.light;
+    if (partFin(p.lm) && +p.lm > 0 && cl(p.lm, 100, 10000) !== L0.lm) q.lm = cl(p.lm, 100, 10000);
+    if (partFin(p.lk) && +p.lk > 0 && cl(p.lk, 2200, 6500) !== 2700) q.lk = cl(p.lk, 2200, 6500);
+    if (typeof p.lcol === 'string' && /^#[0-9a-f]{6}$/i.test(p.lcol)) q.lcol = p.lcol.toLowerCase();
+    if (p.light === 'spot' && partFin(p.beam) && +p.beam > 0 && cl(p.beam, 10, 120) !== L0.beam) q.beam = cl(p.beam, 10, 120);
+  }
   return q;
 }
 // all-axis rotation: 3 × 3 matrix (rows) of R = Rz(rz) · Ry(ry) · Rx(rx) in the plan frame (x right, y down, z up), degrees
@@ -2123,6 +2163,9 @@ function partIssues(p, base) {
   if (p.mat !== undefined && p.mat !== null && !partMatOk(p.mat)) e.push('mat must be one of ' + PART_MATS.join(', ') + ' or tex:<id>');
   if (p.axis !== undefined && p.axis !== null && !['x', 'y', 'z'].includes(p.axis)) e.push('axis must be x, y or z');
   if (p.gid !== undefined && p.gid !== null && !(typeof p.gid === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(p.gid))) e.push('gid must be 1-16 letters, digits, _ or -');
+  if (p.light !== undefined && p.light !== null && !PART_LIGHTS.includes(p.light)) e.push('light must be one of ' + PART_LIGHTS.join(', '));
+  for (const [k, a, b] of [['lm', 100, 10000], ['lk', 2200, 6500], ['beam', 10, 120]]) if (p[k] !== undefined && p[k] !== null && !(partFin(p[k]) && +p[k] >= a && +p[k] <= b)) e.push(k + ' must be a number ' + a + '–' + b);
+  if (p.lcol !== undefined && p.lcol !== null && !(typeof p.lcol === 'string' && /^#[0-9a-f]{6}$/i.test(p.lcol))) e.push('lcol must be #rrggbb');
   if (!e.length && base) {
     const b = partBounds(cleanPart(p)), tol = 1;
     if (b.x0 < -base.w / 2 - tol || b.x1 > base.w / 2 + tol || b.y0 < -base.d / 2 - tol || b.y1 > base.d / 2 + tol)
@@ -2592,7 +2635,24 @@ const FURN_TEMPLATES = {
       return out;
     }
   },
-  billiards: { tr: "Bilardo Masası", en: "Billiards Table", icon: "🎱", w: 280, d: 155, h: 85, color: "#5b3a24", parts: billiardParts }
+  billiards: { tr: "Bilardo Masası", en: "Billiards Table", icon: "🎱", w: 280, d: 155, h: 85, color: "#5b3a24", parts: billiardParts },
+  // light parts (bulb, LED strip): the item lights the 3D scene like a catalogue fixture
+  lamp: { tr: "Masa Lambası", en: "Table Lamp", icon: "💡", w: 36, d: 36, h: 58, color: "#e7dcc8",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100, R = Math.min(w, d), shH = h * 0.38, stH = h - shH - 3;
+      return [
+        { name: "base", type: "cyl", x: 0, y: 0, z: 0, w: r(R * 0.45), d: r(R * 0.45), h: 3, color: "#57534e", mat: "metal" },
+        { name: "stem", type: "cyl", x: 0, y: 0, z: 3, w: 2, d: 2, h: r(stH), color: "#57534e", mat: "metal" },
+        { name: "bulb", type: "sphere", x: 0, y: 0, z: r(3 + stH - 2), w: 7, d: 7, h: 7, color: "#fff7e0", light: "point", lm: 450 },
+        { name: "shade", type: "cyl", x: 0, y: 0, z: r(h - shH), w: r(R), d: r(R), h: r(shH), color: "#e7dcc8", mat: "fabric" }];
+    } },
+  shelfLed: { tr: "LED Işıklı Duvar Rafı", en: "LED-lit Wall Shelf", icon: "📏", w: 120, d: 25, h: 4, color: "#c9a87c",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      return [
+        { name: "LED strip", type: "box", x: 0, y: r(d / 2 - 3), z: 0, w: r(w - 6), d: 1.5, h: 0.8, color: "#fff7e0", light: "strip", lm: r(Math.max(100, Math.min(10000, w * 8))) },
+        { name: "shelf", type: "box", x: 0, y: 0, z: 0.8, w: r(w), d: r(d), h: r(h - 0.8), color: "#c9a87c", mat: "wood" }];
+    } }
 };
 // textured finishes for the templates (#93): parts without a mat get the template's main finish, parts in a listed colour the soft one
 const TPL_FINISH = {
@@ -3801,7 +3861,7 @@ function partsSvg(f) {
   const top = p => partTilted(p) ? partBounds(p).z1 : p.z + p.h;
   const list = f.parts.map((p, i) => ({ p, i, t: top(p) })).sort((a, b) => a.t - b.t || a.i - b.i);
   let out = `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="transparent"/><g opacity="${C.outline ? 1 : C.furnOp}" transform="scale(${s.sx} ${s.sy})">`;
-  for (const { p } of list) out += partShapeSvg(p, C.outline ? 'none' : (p.color || f.color || '#cbd5e1'), ns);
+  for (const { p } of list) { const lq = partLightP(p, f); out += partShapeSvg(p, C.outline ? 'none' : lq && lq.on ? lq.col : (p.color || f.color || '#cbd5e1'), ns); } // yanan ışık parçası ışık renginde
   return out + '</g>';
 }
 /* Parçasız katalog eşyasının 2B üstten görünüşü = 3B modelinin parçaları (furnModelParts), stüdyoda "Uygula"dan
@@ -3841,9 +3901,10 @@ function partShapeSvg(p, col, attrs) {
 function parts3D(g, o, C) {
   const s = partsScale(o), root = new THREE.Group(); root.scale.set(s.sx, s.sz, s.sy); g.add(root);
   for (const p of o.parts) {
-    const m = C.pmat(p.color || o.color || '#cbd5e1', p.mat);
+    // ışık parçası: açıkken kendi ışık renginde parlar (ember), kapalıyken mat beyaz plastik
+    const lq = partLightP(p, o), m = lq ? C.pmat(lq.on ? shade0(lq.col) : '#e5e7eb', lq.on ? 'ember' : 'plastic') : C.pmat(p.color || o.color || '#cbd5e1', p.mat);
     // dokulu yüzey (#93: ahşap, kumaş, taş … ya da tex:<id>): cm ölçekli UV'li geometri; yoksa paylaşılan birim geometri
-    const tex = C.pgeo && p.mat && p.mat !== 'metal' ? p.mat : null, tg = (type, ex, ey, ez) => tex ? C.pgeo(type, ex, ey, ez, tex) : null;
+    const tex = !lq && C.pgeo && p.mat && p.mat !== 'metal' ? p.mat : null, tg = (type, ex, ey, ez) => tex ? C.pgeo(type, ex, ey, ez, tex) : null;
     let mesh;
     if (p.type === 'extrude' && p.pts) {
       const geo = new THREE.ExtrudeGeometry(new THREE.Shape(p.pts.map(q => new THREE.Vector2(q.x, -q.y))), { depth: p.h, bevelEnabled: false });
@@ -3866,7 +3927,7 @@ function parts3D(g, o, C) {
       if (p.type === 'extrude' && p.pts) { mesh.geometry.translate(0, -p.h / 2, 0); mesh.position.y = p.z + p.h / 2; } // merkez etrafında dönsün
       mesh.rotation.set(-(p.rx || 0) * r, -(p.rot || 0) * r, -(p.ry || 0) * r, 'YZX'); mesh.quaternion.multiply(pre);
     } else { mesh.rotation.order = 'YXZ'; mesh.rotation.y = -(p.rot || 0) * Math.PI / 180; }
-    mesh.receiveShadow = true; mesh.castShadow = !m.transparent && p.w * p.d * p.h > 1500;
+    mesh.receiveShadow = !lq; mesh.castShadow = !lq && !m.transparent && p.w * p.d * p.h > 1500;
     root.add(mesh);
   }
 }
@@ -6033,6 +6094,7 @@ function renderProps() {
     if (o.k !== 'stairs' && o.k !== 'ramp') h += fld(L('Yerden yükseklik (cm)', 'Height above floor (cm)'), 'furn', 'elev', furnElev(o), { min: -FURN_ELEV_MAX, max: FURN_ELEV_MAX, step: 5 }); // duvara asılan eşya (#61)
     if (o.k !== 'stairs' && o.k !== 'ramp' && o.k !== 'roof') h += `<label class="f"><span>${L('Tavana sabit', 'On the ceiling')}</span><input type="checkbox" data-k="furn" data-p="mount" ${o.mount === 'ceil' ? 'checked' : ''} title="${L('Kat yüksekliği değişince tavanda kalır', 'Stays on the ceiling when the storey height changes')}"></label>`;
     if (isLightFix(o)) h += lightPanelHtml(o, n);
+    else if (partLit(o)) h += partLightPanelHtml(o); // mobilya stüdyosunda eklenen ışıklı parçalar
     h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button>`);
     if (!NO_TILT_K.has(o.k)) { // tüm eksenlerde döndürme: öne / arkaya (X) ve yana (Y) yatırma; 3B'de en alt nokta zemine oturur
       h += fld(L('Öne / arkaya yatır X (°)', 'Tilt forward / back X (°)'), 'furn', 'rx', +o.rx || 0, { min: 0, max: 360, step: 15 }) + fld(L('Yana yatır Y (°)', 'Tilt sideways Y (°)'), 'furn', 'ry', +o.ry || 0, { min: 0, max: 360, step: 15 });
@@ -6101,7 +6163,7 @@ function renderProps() {
       h += `<div class="stat"><span>${L('Alan', 'Area')}</span><b>${fmtArea(polyArea(o.pts))}</b></div><div class="stat"><span>${L('Çevre', 'Perimeter')}</span><b>${fmtLen(polyPerim(o.pts))}</b></div><div class="stat"><span>${L('Köşe sayısı', 'Vertices')}</span><b>${o.pts.length}</b></div>`;
     }
     h += acts(`<button class="btn sm" data-act="redetect">${L('↻ Yeniden algıla', '↻ Redetect')}</button>`);
-    if (n === 1) { const ls = roomLights(o); if (ls.length) { const on = ls.filter(x => lightP(x).on).length; h += `<div class="stat"><span>💡 ${L('Işıklar', 'Lights')}</span><b>${on} / ${ls.length} ${L('açık', 'on')}</b></div><div class="row"><button class="btn sm" data-act="roomlights" data-on="1">${L('Hepsini aç', 'All on')}</button><button class="btn sm" data-act="roomlights" data-on="0">${L('Hepsini kapat', 'All off')}</button></div>`; } }
+    if (n === 1) { const ls = roomLights(o); if (ls.length) { const on = ls.filter(litOn).length; h += `<div class="stat"><span>💡 ${L('Işıklar', 'Lights')}</span><b>${on} / ${ls.length} ${L('açık', 'on')}</b></div><div class="row"><button class="btn sm" data-act="roomlights" data-on="1">${L('Hepsini aç', 'All on')}</button><button class="btn sm" data-act="roomlights" data-on="0">${L('Hepsini kapat', 'All off')}</button></div>`; } }
   } else if (k === 'slab' || k === 'void') {
     // serbest döşeme (#22) / döşeme boşluğu (#23): ad, tür/malzeme, konum-boyut, alan
     h += fld(L('Ad', 'Name'), k, 'name', o.name || '', { type: 'text' });
@@ -6236,15 +6298,22 @@ function lightPanelHtml(o, n) {
   if (q.kind === 'spot') h += fld(L('Işık açısı (°)', 'Beam angle (°)'), 'furn', 'beam', q.beam, { min: LIGHT_BEAM_MIN, max: LIGHT_BEAM_MAX, step: 5 });
   return h;
 }
+// ışıklı parçası olan eşya: aç / kapa + özet; parça ayarları (tür, lümen, renk) mobilya stüdyosunda
+function partLightPanelHtml(o) {
+  const ls = partLightSpots(o), lm = ls.reduce((a, e) => a + e.q.lm, 0), kinds = [...new Set(ls.map(e => L(...PB_LIGHTS[e.q.strip ? 'strip' : e.q.kind])))].join(', ');
+  return `<h4>💡 ${L('Işık', 'Light')}</h4><label class="f"><span>${L('Açık', 'On')}</span><input type="checkbox" data-k="furn" data-p="lon" ${o.lon !== 0 ? 'checked' : ''}></label>`
+    + `<div class="stat"><span>${esc(kinds)}</span><b>${ls.length} · ${lm} lm</b></div>`
+    + `<p class="muted">${L('Işık türü, parlaklık ve rengi 🧩 Mobilya stüdyosunda parça parça ayarlanır.', 'Light type, brightness and colour are set per part in the 🧩 furniture studio.')}</p>`;
+}
 // odadaki aydınlatma elemanları (#120): merkezi oda çokgeninin içinde olanlar
 // kattaki tüm ışıklar: biri bile açıksa hepsi kapanır, yoksa hepsi açılır (tek geri alma adımı)
 function toggleFloorLights() {
-  const ls = F().furn.filter(isLightFix); if (!ls.length) return toast(L('Bu katta ışık yok', 'No lights on this floor'));
-  const on = !ls.some(o => lightP(o).on); for (const o of ls) { if (on) delete o.lon; else o.lon = 0; }
+  const ls = F().furn.filter(isLit); if (!ls.length) return toast(L('Bu katta ışık yok', 'No lights on this floor'));
+  const on = !ls.some(litOn); for (const o of ls) { if (on) delete o.lon; else o.lon = 0; }
   commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
   toast(on ? L('💡 Işıklar açık', '💡 Lights on') : L('Işıklar kapalı', 'Lights off'));
 }
-function roomLights(r, f = F()) { return f.furn.filter(o => isLightFix(o) && pointInPoly({ x: o.x, y: o.y }, r.pts)); }
+function roomLights(r, f = F()) { return f.furn.filter(o => isLit(o) && pointInPoly({ x: o.x, y: o.y }, r.pts)); }
 function affects3D(k, p) {
   // yalnızca 3B sahneyi gerçekten etkileyen özellikler yeniden insin
   if (k === 'wall' || k === 'op') return true;
@@ -9987,9 +10056,9 @@ function glowTex() {
 // açık abajur kumaşı: ışık rengi ile beyaz arası (tam doygun turuncu görünmesin)
 function shade0(col) { const c = new THREE.Color(col).lerp(new THREE.Color(0xffffff), 0.45); return '#' + c.getHexString(); }
 function toggleLight3D(o) {
-  if (lightP(o).on) o.lon = 0; else delete o.lon;
+  if (litOn(o)) o.lon = 0; else delete o.lon;
   commit(); refresh(); build3D(true);
-  toast(lightP(o).on ? L('💡 Işık açıldı', '💡 Light on') : L('Işık kapandı', 'Light off'));
+  toast(litOn(o) ? L('💡 Işık açıldı', '💡 Light on') : L('Işık kapandı', 'Light off'));
 }
 function shadowLights(scene) {
   const out = [];
@@ -10620,6 +10689,7 @@ $('#modal').addEventListener('click', async e => {
    Taslak öğenin tasarım kutusu (pbase) ölçeğindedir; öğe yeniden boyutlandırılmışsa Uygula o ölçeği korur. */
 const PB_TYPES = { box: ['Kutu', 'Box'], cyl: ['Silindir', 'Cylinder'], sphere: ['Küre', 'Sphere'], extrude: ['Profil', 'Outline'] };
 // parça yüzeyleri: mat / parlak / metal / cam + dokulu yüzeyler (#93, parça rengiyle boyanır); pbMatOpts projedeki özel dokuları (tex:<id>, #40 / #92) ekler
+const PB_LIGHTS = { point: ['Ampul', 'Bulb'], spot: ['Spot', 'Spot'], strip: ['Şerit LED', 'LED strip'] }; // ışık parçası türleri
 const PB_MATS = { matte: ['Mat', 'Matte'], gloss: ['Parlak', 'Gloss'], metal: ['Metal', 'Metal'], glass: ['Cam', 'Glass'], wood: ['Ahşap', 'Wood'], fabric: ['Kumaş', 'Fabric'], leather: ['Deri', 'Leather'], stone: ['Taş / granit', 'Stone / granite'], marble: ['Mermer', 'Marble'], ceramic: ['Porselen / seramik', 'Porcelain / ceramic'], chrome: ['Krom', 'Chrome'], plastic: ['Plastik', 'Plastic'], rubber: ['Kauçuk', 'Rubber'], foliage: ['Yaprak', 'Foliage'] }, pbMatOpts = () => Object.assign({}, PB_MATS, ...((P && P.textures) || []).map(t => ({ ['tex:' + t.id]: ['🖼 ' + esc(t.name), '🖼 ' + esc(t.name)] })));
 const PB_AXES = { z: ['Dik', 'Upright'], x: ['Yatık (X)', 'Lying (X)'], y: ['Yatık (Y)', 'Lying (Y)'] };
 const hex6 = c => { const s = String(c || '').replace('#', ''); return /^[0-9a-f]{6}$/i.test(s) ? '#' + s : /^[0-9a-f]{3}$/i.test(s) ? '#' + s.split('').map(x => x + x).join('') : '#b08968'; };
@@ -10674,6 +10744,10 @@ const FS_BLOCKS = [
   ['handle', '╍', 'Kulp', 'Handle', D => ({ type: 'cyl', axis: 'x', w: Math.min(12, D.w), d: 1.5, h: 1.5, mat: 'metal', color: '#9aa4b0' })],
   ['cushion', '🛋', 'Minder', 'Cushion', D => ({ type: 'box', w: Math.max(5, D.w * 0.9), d: Math.max(5, D.d * 0.8), h: Math.min(12, D.h), color: '#94a3b8' })],
   ['glass', '◇', 'Cam', 'Glass pane', D => ({ type: 'box', w: Math.max(5, D.w - 4), d: 1, h: Math.max(5, D.h * 0.6), mat: 'glass', color: '#a5d8f3' })],
+  // ışık parçaları: eşya 3B'de ışık verir (ampul = her yöne, spot = aşağı koni, şerit LED = boyunca)
+  ['bulb', '💡', 'Ampul', 'Bulb', D => { const s = Math.max(2, Math.min(8, D.w, D.d, D.h)); return { type: 'sphere', w: s, d: s, h: s, color: '#fff7e0', light: 'point' }; }],
+  ['spot', '🔦', 'Spot ışık', 'Spotlight', D => { const h = Math.min(4, D.h); return { type: 'cyl', w: Math.min(8, D.w), d: Math.min(8, D.d), h, z: Math.max(0, D.h - h), color: '#fff7e0', light: 'spot' }; }],
+  ['ledstrip', '📏', 'Şerit LED', 'LED strip', D => ({ type: 'box', w: Math.max(5, D.w - 4), d: Math.min(1.5, D.d), h: Math.min(0.8, D.h), color: '#fff7e0', light: 'strip', lm: Math.max(100, Math.min(10000, Math.round((D.w - 4) * 8))) })],
 ];
 const fsBlock = key => FS_BLOCKS.find(b => b[0] === key);
 const fsDirty = () => ui.pb && (JSON.stringify(ui.pb.d) !== ui.pb.orig || (ui.pb.name || '') !== (ui.pb.name0 || ''));
@@ -10873,6 +10947,19 @@ function pbList() {
   });
   return out.join('');
 }
+// seçili parçanın ışık ayarları: tür (yok / ampul / spot / şerit LED), parlaklık, renk sıcaklığı ya da özel renk, spot açısı
+function pbLightFields(p) {
+  const q = partLightP(p), opts = Object.assign({ '': ['Yok', 'None'] }, PB_LIGHTS);
+  let h = `<h4>💡 ${L('Işık', 'Light')}</h4><label class="f"><span>${L('Işık verir', 'Gives light')}</span><select data-pf="light">${Object.entries(opts).map(([k, x]) => `<option value="${k}"${k === (p.light || '') ? ' selected' : ''}>${L(...x)}</option>`).join('')}</select></label>`;
+  if (!q) return h;
+  const tones = Object.fromEntries(Object.entries(LIGHT_TONES).map(([k, v]) => [k, L(...v) + ' · ' + k + ' K'])); if (!tones[q.k]) tones[q.k] = q.k + ' K';
+  h += `<label class="f"><span>${L('Parlaklık (lm)', 'Brightness (lm)')}</span><input type="number" data-pf="lm" value="${q.lm}" min="${LIGHT_LM_MIN}" max="${LIGHT_LM_MAX}" step="50"></label>`
+    + `<label class="f"><span>${L('Işık rengi', 'Light colour')}</span><select data-pf="lk">${Object.entries(tones).map(([k, x]) => `<option value="${k}"${+k === q.k && !q.custom ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select></label>`
+    + `<label class="f"><span>${L('Özel renk', 'Custom colour')}</span><input type="color" data-pf="lcol" value="${q.col}"></label>`
+    + (q.kind === 'spot' ? `<label class="f"><span>${L('Işık açısı (°)', 'Beam angle (°)')}</span><input type="number" data-pf="beam" value="${q.beam}" min="${LIGHT_BEAM_MIN}" max="${LIGHT_BEAM_MAX}" step="5"></label>` : '')
+    + `<p class="muted fs-tip">${q.strip ? L('Şerit boyunca ışık verir; rafın altına, dolabın içine ya da TV arkasına koyun.', 'Lights along its length: put it under a shelf, inside a cabinet or behind a TV.') : q.kind === 'spot' ? L('Aşağı doğru ışık verir (parçanın alt yüzünden).', 'Shines downward (from the bottom of the part).') : L('Her yöne ışık verir.', 'Shines in every direction.')} ${L('3B\'de eşyaya tıklayınca açılır / kapanır.', 'Click the item in 3D to switch it on / off.')}</p>`;
+  return h;
+}
 function pbFields() {
   const D = ui.pb.d, ids = pbSelIds(), p = D.parts[ui.pb.sel];
   if (ids.length > 1) {
@@ -10898,6 +10985,7 @@ function pbFields() {
     + `<label class="f"><span>${L('Renk', 'Colour')}</span><input type="color" data-pf="color" value="${hex6(p.color || D.color)}"></label>`
     + pick(L('Yüzey', 'Finish'), 'mat', p.mat || 'matte', pbMatOpts())
     + pbLookBtns()
+    + pbLightFields(p)
     + `<h4>${L('Konum (cm)', 'Position (cm)')}</h4>` + num(L('Sağa / sola (X)', 'Left / right (X)'), 'x', p.x) + num(L('İleri / geri (Y)', 'Back / front (Y)'), 'y', p.y)
     + num(L('Yerden yükseklik', 'Height above floor'), 'z', p.z, { min: 0 })
     + `<div class="row"><button type="button" class="btn sm" data-pbact="ontop" title="${L('Altındaki en yüksek parçanın üstüne koyar', 'Puts it on the highest part under it')}">⬆ ${L('Üstüne oturt', 'Sit on top')}</button><button type="button" class="btn sm" data-pbact="floor">⤓ ${L('Yere indir', 'Put on floor')}</button></div>`
@@ -11355,6 +11443,7 @@ function fsWire(root) {
     const k = t.dataset.pf, p = D.parts[ui.pb.sel]; if (!k || !p || t.tagName === 'SELECT') return;
     if (k === 'name') { if (t.value.trim()) p.name = t.value.slice(0, 40); else delete p.name; }
     else if (k === 'color') p.color = t.value;
+    else if (k === 'lcol') p.lcol = t.value; // ışık parçasının özel rengi
     else {
       const v = +t.value; if (t.value === '' || !Number.isFinite(v)) return;
       if ((k === 'w' || k === 'd' || k === 'h') && !(v > 0)) return;
@@ -11384,6 +11473,8 @@ function fsWire(root) {
       if (k === 'type') { p.type = v; if (v !== 'cyl') delete p.axis; if (v !== 'extrude') delete p.pts; }
       else if (k === 'axis') { if (v === 'z') delete p.axis; else p.axis = v; }
       else if (k === 'mat') { if (v === 'matte') delete p.mat; else p.mat = v; }
+      else if (k === 'light') { if (!PART_LIGHTS.includes(v)) for (const x of ['light', 'lm', 'lk', 'lcol', 'beam']) delete p[x]; else { p.light = v; if (v !== 'spot') delete p.beam; } }
+      else if (k === 'lk') { delete p.lcol; if (+v === LIGHT_K_DEF) delete p.lk; else p.lk = +v; }
       fsPush(); pbRedraw(); return;
     }
     if (t.dataset.pf || t.dataset.pbox) { fsPush(); pbRedraw(); } // sayı / renk / ad alanı bitti → tek geçmiş adımı
@@ -11724,7 +11815,7 @@ function init3D() {
       }
       commit(); refresh();
       schedBuild3D(); // tutkal/rotasyon/pin değişimi olabilir -> sahne tazelensin
-    } else { if (!alt && isLightFix(fd.o) && sel.length === 1) { toggleLight3D(fd.o); return; } if (fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // ışık: tık = aç / kapa (#121), Alt = yalnızca seç // düz tık: pointerdown'daki seçim (grup/tek) korunur
+    } else { if (!alt && isLit(fd.o) && sel.length === 1) { toggleLight3D(fd.o); return; } if (fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // ışık: tık = aç / kapa (#121), Alt = yalnızca seç // düz tık: pointerdown'daki seçim (grup/tek) korunur
   });
   // Tekerlek (perspektif): imlecin altındaki yüzeye doğru yaklaş. OrbitControls hedefe uzaklığı oranla küçültür; yakında
   // adım sıfıra yaklaşır ve "sonsuz yakınlaştırma"da takılır. Burada adım imleçteki yüzeye uzaklıktan gelir, dönüş merkezi
@@ -12177,7 +12268,7 @@ function walkClick(obj, alt) {
   if (!fd || !pickable(id)) { if (sel.length) { sel = []; render(); refreshSel3D(); renderProps(); } return; }
   followSelFloor(fd); sel = [id];
   if (fd.kind === 'op' && !alt && isDoorOp(fd.o)) toggleDoor3D(fd.o);
-  else if (fd.kind === 'furn' && !alt && isLightFix(fd.o)) toggleLight3D(fd.o); // yürürken lambaya tık: aç / kapa (#121)
+  else if (fd.kind === 'furn' && !alt && isLit(fd.o)) toggleLight3D(fd.o); // yürürken lambaya tık: aç / kapa (#121)
   else { refresh(); refreshSel3D(); }
 }
 // 👁 düğmesi etkin görünür; kısa iki dilli ipucu (#walkHint, ilk kullanımda oluşturulur)
@@ -13754,18 +13845,25 @@ function build3D(keepCam = false) {
     glowMats.set(key, m); extraMats.push(m); return m;
   };
   let patchGeo = null;
-  const fixGlow3D = (o, fidx, fy, floorY) => {
-    const q = lightP(o), ay = fy + fixAnchor(o);
-    const ent = { o, fidx, on: q.on, kind: q.kind, lm: q.lm, col: q.col, beam: q.beam, x: o.x, y: ay, z: o.y }; T3.fixList.push(ent);
+  // bir ışık noktası: havuz listesine girer + hale + zemin lekesi. x / z plan, ay dünya kotu; strip = şerit LED (len cm, ang plan açısı °)
+  const glowAt = (o, fidx, q, x, z, ay, floorY, strip) => {
+    const ent = { o, fidx, on: q.on, kind: q.kind, lm: q.lm, col: q.col, beam: q.beam, x, y: ay, z }; T3.fixList.push(ent);
     if (!q.on) return;
-    const t = lmToThree(q.lm), k = fixDayFactor();
-    const sp = new THREE.Sprite(glowMat(q.col, Math.round((0.35 + 0.4 * k) * 20) / 20)); const sz = 16 + Math.sqrt(q.lm) * 0.9;
-    sp.scale.set(sz, sz, 1); sp.position.set(o.x, ay - (q.kind === 'spot' ? 2 : 0), o.y); sp.userData.fpDecal = true; sp.raycast = () => {}; S.add(sp);
+    const t = lmToThree(q.lm), k = fixDayFactor(), len = strip ? strip.len : 0, a = strip ? strip.ang * Math.PI / 180 : 0;
+    // şerit: boyunca birkaç küçük hale (en çok 6); diğerleri tek hale
+    const n = len > 60 ? Math.min(6, Math.ceil(len / 50)) : 1, sz = (16 + Math.sqrt(q.lm) * 0.9) / Math.sqrt(n), spm = glowMat(q.col, Math.round((0.35 + 0.4 * k) * 20) / 20);
+    for (let i = 0; i < n; i++) {
+      const u = n > 1 ? (i / (n - 1) - 0.5) * len * 0.9 : 0, sp = new THREE.Sprite(spm);
+      sp.scale.set(sz, sz, 1); sp.position.set(x + u * Math.cos(a), ay - (q.kind === 'spot' ? 2 : 0), z + u * Math.sin(a)); sp.userData.fpDecal = true; sp.raycast = () => {}; S.add(sp);
+    }
     if (ay - floorY < 20 || ay - floorY > 900) return;
     if (!patchGeo) { patchGeo = new THREE.PlaneGeometry(1, 1); patchGeo.rotateX(-Math.PI / 2); }
     const pr = t.d * (q.kind === 'spot' ? 0.32 : 0.5), pm = new THREE.Mesh(patchGeo, glowMat(q.col, Math.round(0.22 * k * 20) / 20, true));
-    pm.scale.set(pr * 2, 1, pr * 2); pm.position.set(o.x, floorY + 1.3, o.y); pm.renderOrder = 2; pm.userData.fpDecal = true; pm.raycast = () => {}; S.add(pm); ent.patch = pm; // gerçek ışık atanınca gizlenir (duvar arkasına taşmasın, #128)
+    pm.scale.set(pr * 2 + len, 1, pr * 2); pm.rotation.y = -a; pm.position.set(x, floorY + 1.3, z); pm.renderOrder = 2; pm.userData.fpDecal = true; pm.raycast = () => {}; S.add(pm); ent.patch = pm; // gerçek ışık atanınca gizlenir (duvar arkasına taşmasın, #128)
   };
+  const fixGlow3D = (o, fidx, fy, floorY) => glowAt(o, fidx, lightP(o), o.x, o.y, fy + fixAnchor(o), floorY);
+  // mobilya stüdyosunda yapılmış eşyanın ışıklı parçaları (ampul / spot / şerit LED): her biri ayrı bir ışık noktası
+  const partGlow3D = (o, fidx, fy, floorY) => { for (const e of partLightSpots(o)) glowAt(o, fidx, e.q, e.x, e.y, fy + e.z, floorY, e.q.strip ? e : null); };
   let elev = 0;
   P.floors.forEach((f, fidx) => {
     if (!v3dShown(f)) return;
@@ -13848,7 +13946,7 @@ function build3D(keepCam = false) {
     const furnOff = o => { for (let i = slabs.length - 1; i >= 0; i--) if (pointInPoly(o, slabs[i].pts)) return +slabs[i].off || 0; return 0; };
     const roomLv = stackLevels(f.rooms, 'room'), furnLv = stackLevels(f.furn, 'furn');
     // gece otomatik oda ışığı adayları (#122): içinde aydınlatma elemanı olmayan oda (≥ 2 m²), tavanın 30 cm altında, 700 lm
-    for (const r of f.rooms) if (r.pts && r.pts.length > 2 && polyArea(r.pts) > 20000 && !f.furn.some(o => isLightFix(o) && lightP(o).on && pointInPoly(o, r.pts))) {
+    for (const r of f.rooms) if (r.pts && r.pts.length > 2 && polyArea(r.pts) > 20000 && !f.furn.some(o => isLit(o) && litOn(o) && pointInPoly(o, r.pts))) {
       const c = polyCentroid(r.pts); if (pointInPoly(c, r.pts)) T3.autoLights.push({ auto: true, fidx, on: true, kind: 'point', lm: 700, col: kelvinHex(3000), beam: null, x: c.x, y: elev + floorH(f) - 30, z: c.y });
     }
     f.rooms.forEach((r, ri) => {
@@ -14022,6 +14120,7 @@ function build3D(keepCam = false) {
       if (furnTilted(o)) ig = furnTiltGroup(ig, o); // tüm eksenlerde döndürülmüş eşya: en alt noktası zemine oturur
       furn3D(ig, o, furnCtx);
       if (isLightFix(o)) { ig.traverse(m => { m.castShadow = false; }); fixGlow3D(o, fidx, fy, elev + furnOff(o)); } // armatür güneş gölgesi düşürmez (ışık kaynağıdır)
+      else if (partLit(o)) { ig.traverse(m => { m.castShadow = false; }); partGlow3D(o, fidx, fy, elev + furnOff(o)); } // ışıklı parçalı eşya (abajur kendi lambasını kapatmasın)
     });
     (f.sketches || []).forEach(sk => {
       if (!sk.pts || sk.pts.length < 2) return;
