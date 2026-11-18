@@ -351,8 +351,8 @@ test('(6e) 3D lighting wiring in app.js', () => {
   const build3DSrc = fnSrcOf(src, 'build3D');
   assert.match(
     build3DSrc,
-    /if\s*\(\s*T3\.fixList\.length\s*\)\s*\{[\s\S]*?fixPool\s*\(\s*\)[\s\S]*?assignFixLights\s*\(\s*\)/,
-    'build3D adds the pool only when T3.fixList has entries and calls assignFixLights'
+    /if\s*\(\s*T3\.fixList\.length\s*\|\|\s*isNight3D\(\)\s*\|\|\s*ui\.flash\s*\)\s*\{[\s\S]*?fixPool\s*\(\s*\)[\s\S]*?assignFixLights\s*\(\s*\)/,
+    'build3D adds the pool when there are fixtures (or at night / with the flashlight) and calls assignFixLights'
   );
   assert.match(
     build3DSrc,
@@ -365,5 +365,124 @@ test('(6e) 3D lighting wiring in app.js', () => {
 
   const walkClickSrc = fnSrcOf(src, 'walkClick');
   assert.match(walkClickSrc, /isLightFix\s*\([^)]*\)\s*\)\s*toggleLight3D\s*\(/, 'walkClick toggles lights via toggleLight3D');
+});
+
+function loadNightSandbox() {
+  const html = read('index.html');
+  const sunAltMinLine = /^const SUN_ALT_MIN\s*=\s*[^;]+;/m.exec(src);
+  assert.ok(sunAltMinLine, 'SUN_ALT_MIN const must exist in app.js');
+  const lerpHexLine = /^const lerpHex\s*=\s*[^;]+;/m.exec(src);
+  assert.ok(lerpHexLine, 'lerpHex const must exist in app.js');
+
+  class C {
+    constructor(h) {
+      this.r = (h >> 16 & 255) / 255;
+      this.g = (h >> 8 & 255) / 255;
+      this.b = (h & 255) / 255;
+    }
+    lerp(o, t) {
+      this.r += (o.r - this.r) * t;
+      this.g += (o.g - this.g) * t;
+      this.b += (o.b - this.b) * t;
+      return this;
+    }
+    multiplyScalar(k) {
+      this.r *= k;
+      this.g *= k;
+      this.b *= k;
+      return this;
+    }
+    copy(o) {
+      this.r = o.r;
+      this.g = o.g;
+      this.b = o.b;
+      return this;
+    }
+  }
+
+  const fns = new Function('THREE', 'clamp', `
+    ${sunAltMinLine[0]}
+    ${lerpHexLine[0]}
+    ${fnSrcOf(src, 'nightOf')}
+    ${fnSrcOf(src, 'sunVector')}
+    ${fnSrcOf(src, 'litVector')}
+    ${fnSrcOf(src, 'skyColors')}
+    return { SUN_ALT_MIN, nightOf, sunVector, litVector, skyColors };
+  `)({ Color: C }, (v, a, b) => Math.max(a, Math.min(b, v)));
+
+  return { ...fns, html };
+}
+
+test('(7a) nightOf: day/night thresholds, twilight midpoint, and monotonic decrease', () => {
+  const { nightOf } = loadNightSandbox();
+  for (const alt of [6, 20, 90]) {
+    assert.strictEqual(nightOf(alt), 0, `nightOf(${alt}) should be 0`);
+  }
+  for (const alt of [-6, -18]) {
+    assert.strictEqual(nightOf(alt), 1, `nightOf(${alt}) should be 1`);
+  }
+  assert.strictEqual(nightOf(0), 0.5, 'nightOf(0) should be 0.5');
+
+  let prev = nightOf(-10);
+  for (let alt = -9; alt <= 10; alt++) {
+    const cur = nightOf(alt);
+    assert.ok(cur <= prev, `nightOf(${alt})=${cur} should be <= nightOf(${alt - 1})=${prev}`);
+    prev = cur;
+  }
+});
+
+test('(7b) sunVector below the horizon: negative y and -18 deg clamp', () => {
+  const { SUN_ALT_MIN, sunVector } = loadNightSandbox();
+  assert.strictEqual(SUN_ALT_MIN, -18);
+  assert.ok(sunVector(215, -10).y < 0, 'sunVector at alt -10 should have y < 0');
+  assert.deepStrictEqual(sunVector(215, -40), sunVector(215, -18), 'alt -40 should clamp to -18');
+});
+
+test('(7c) litVector: follows sun for alt >= 1 and flips to moon above horizon for alt < 1', () => {
+  const { sunVector, litVector } = loadNightSandbox();
+  for (const alt of [1, 15, 45]) {
+    assert.deepStrictEqual(litVector(215, alt), sunVector(215, alt), `alt ${alt} should match sunVector`);
+  }
+  const dayHoriz = sunVector(215, 30);
+  for (const alt of [0, -12, -18]) {
+    const lv = litVector(215, alt);
+    assert.ok(lv.y > 0.5, `litVector at alt ${alt} should point above horizon (y=${lv.y})`);
+    const dotHoriz = lv.x * dayHoriz.x + lv.z * dayHoriz.z;
+    assert.ok(dotHoriz < 0, `litVector at alt ${alt} should be opposite in azimuth (dot=${dotHoriz})`);
+  }
+});
+
+test('(7d) skyColors at night (-12) vs golden hour (12) and deterministic day (30)', () => {
+  const { nightOf, skyColors } = loadNightSandbox();
+  const sumRgb = c => c.r + c.g + c.b;
+
+  const night = skyColors(-12);
+  const golden = skyColors(12);
+  assert.ok(sumRgb(night.zen) < sumRgb(golden.zen), 'night zenith should be darker than golden hour zenith');
+  assert.strictEqual(sumRgb(night.glow), 0, 'night glow should be zero');
+  assert.ok(sumRgb(golden.glow) > 0, 'golden-hour glow should be non-zero');
+
+  assert.strictEqual(nightOf(30), 0);
+  assert.deepStrictEqual(skyColors(30), skyColors(30), 'skyColors(30) should be deterministic');
+});
+
+test('(7e) night mode (#122) wiring in app.js and index.html', () => {
+  const { html } = loadNightSandbox();
+  assert.match(src, /\bconst\s+RENDER_MOODS\s*=\s*\{[^}]*\bnight\s*:/, 'RENDER_MOODS has night key');
+  assert.match(src, /<input[^>]*type="range"[^>]*min="\$\{SUN_ALT_MIN\}"[^>]*data-rs="alt"/, 'studio altitude range uses min="${SUN_ALT_MIN}"');
+
+  const makeSkySrc = fnSrcOf(src, 'makeSky');
+  assert.match(makeSkySrc, /\bnight\s*:\s*\{/, 'makeSky passes night uniform');
+  assert.match(makeSkySrc, /fragmentShader\s*:[\s\S]*\bmoon\b/, 'makeSky fragment shader contains moon');
+
+  const rlStart = src.indexOf('function realLook(');
+  const rlEnd = src.indexOf('function applyLive3D(', rlStart);
+  assert.ok(rlStart >= 0 && rlEnd > rlStart, 'realLook() body must exist before applyLive3D()');
+  const realLookSrc = src.slice(rlStart, rlEnd);
+  assert.match(realLookSrc, /restore\s*\(\s*\)\s*\{[\s\S]*\btoneMappingExposure\s*=\s*oldExp\b/, 'realLook restore() restores toneMappingExposure');
+
+  assert.match(html, /id="b3dNight"/, 'index.html contains id="b3dNight"');
+  assert.ok(fnSrcOf(src, 'setNight3D').length > 0, 'setNight3D exists in app.js');
+  assert.match(src, /if\s*\(\s*k\s*===\s*'f'\s*&&\s*T3\s*&&\s*T3\.walk\s*\)\s*\{[^}]*toggleFlashlight\s*\(\s*\)/, 'keydown handler toggles flashlight with k === "f" while walking');
 });
 

@@ -20,6 +20,7 @@ const constSrc = name => {
 test('(1) sunVector(az, alt) returns a unit vector with correct orientation and alt clamping', () => {
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const sunVector = new Function('clamp', `
+    const SUN_ALT_MIN = -18;
     ${sliceFn('sunVector')}
     return sunVector;
   `)(clamp);
@@ -51,11 +52,12 @@ test('(1) sunVector(az, alt) returns a unit vector with correct orientation and 
   assert.ok(vUp.y > 0.999, 'alt 89 must point almost straight up (y close to 1)');
   assert.ok(Math.abs(vUp.x) < 0.05 && Math.abs(vUp.z) < 0.05, 'horizontal components must be near 0');
 
-  // alt is clamped to 1..89
-  const vBelow = sunVector(0, -10);
-  const vOne = sunVector(0, 1);
-  assert.strictEqual(vBelow.y, vOne.y, 'alt < 1 must be clamped to 1');
-  assert.strictEqual(vBelow.z, vOne.z, 'alt < 1 z component matches alt 1');
+  // alt is clamped to -18..89: the sky follows the sun below the horizon at night (#122)
+  const vBelow = sunVector(0, -40);
+  const vMin = sunVector(0, -18);
+  assert.ok(sunVector(0, -10).y < 0, 'a sun below the horizon points down');
+  assert.strictEqual(vBelow.y, vMin.y, 'alt < -18 must be clamped to -18');
+  assert.strictEqual(vBelow.z, vMin.z, 'alt < -18 z component matches alt -18');
 
   const vAbove = sunVector(0, 120);
   assert.strictEqual(vAbove.y, vUp.y, 'alt > 89 must be clamped to 89');
