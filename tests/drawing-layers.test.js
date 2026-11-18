@@ -55,6 +55,7 @@ function makeEnv(initialP) {
     ${fnSrc('visFloor')}
     ${fnSrc('pickable')}
     ${fnSrc('stampLayers')}
+    ${fnSrc('cleanAcc')}
     ${fnSrc('normalizeProject')}
     return {
       get P() { return P; },
