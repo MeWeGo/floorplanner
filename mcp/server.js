@@ -327,6 +327,7 @@ function parsePts(v, min, name) {
      or a project texture tex:<id> (P.textures). The finish only changes how the part is drawn in 3D.
    - rx / ry = optional tilt in degrees about the part's own x / y axis (all-axis rotation). The part turns about its
      centre (x, y, z + h/2) as R = Rz(rot) · Ry(ry) · Rx(rx): first rx, then ry, then rot. Absent = 0 (upright).
+   - light = optional point | spot | strip (+ lm, lk, lcol, beam): the part glows and lights the 3D scene (see PART_LIGHTS).
    - gid = optional group id (1–16 letters / digits / _ / -). Parts with the same gid form a group in the furniture
      studio (select / move / rotate together); rendering ignores it, so grouping never changes the model.
    - When the item is resized (w / d / h ≠ pbase) the parts scale with it; old items without parts are untouched. */
@@ -336,6 +337,10 @@ const PART_ALIAS = Object.assign(Object.create(null), { box: 'box', cube: 'box',
 const PART_MATS = ['matte', 'gloss', 'metal', 'glass', 'wood', 'fabric', 'leather', 'stone', 'marble', 'ceramic', 'chrome', 'plastic', 'rubber', 'foliage'];
 const partMatOk = v => PART_MATS.includes(v) || (typeof v === 'string' && /^tex:[\w-]{1,32}$/.test(v)); // tex:<id> = project texture
 const PARTS_MAX = 64, PARTS_SOFT = 40;
+/* light parts: light = point (bulb) | spot (downward cone) | strip (LED strip). Optional lm (lumens 100–10000), lk (Kelvin
+   2200–6500, default 2700), lcol (#rrggbb, wins over lk), beam (spot angle 10–120°). The item's lon: 0 switches them all off. */
+const PART_LIGHTS = ['point', 'spot', 'strip'];
+const PART_LIGHT_DEF = { point: { lm: 800 }, spot: { lm: 500, beam: 40 }, strip: { lm: 600 } };
 // small helpers kept inside the block on purpose (instead of the app's rnd / clamp) so it can be pasted verbatim into mcp/server.js
 const partFin = v => v !== null && v !== undefined && v !== '' && typeof v !== 'boolean' && Number.isFinite(+v);
 const partHex = c => typeof c === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c);
@@ -366,6 +371,14 @@ function cleanPart(p) {
   if (partHex(p.color)) q.color = p.color;
   if (partMatOk(p.mat) && p.mat !== 'matte') q.mat = p.mat;
   if (type === 'cyl' && (p.axis === 'x' || p.axis === 'y')) q.axis = p.axis;
+  if (PART_LIGHTS.includes(p.light)) { // light-emitting part: defaults are dropped so the saved part stays small
+    const L0 = PART_LIGHT_DEF[p.light], cl = (v, a, b) => Math.max(a, Math.min(b, Math.round(+v)));
+    q.light = p.light;
+    if (partFin(p.lm) && +p.lm > 0 && cl(p.lm, 100, 10000) !== L0.lm) q.lm = cl(p.lm, 100, 10000);
+    if (partFin(p.lk) && +p.lk > 0 && cl(p.lk, 2200, 6500) !== 2700) q.lk = cl(p.lk, 2200, 6500);
+    if (typeof p.lcol === 'string' && /^#[0-9a-f]{6}$/i.test(p.lcol)) q.lcol = p.lcol.toLowerCase();
+    if (p.light === 'spot' && partFin(p.beam) && +p.beam > 0 && cl(p.beam, 10, 120) !== L0.beam) q.beam = cl(p.beam, 10, 120);
+  }
   return q;
 }
 // all-axis rotation: 3 × 3 matrix (rows) of R = Rz(rz) · Ry(ry) · Rx(rx) in the plan frame (x right, y down, z up), degrees
@@ -435,6 +448,9 @@ function partIssues(p, base) {
   if (p.mat !== undefined && p.mat !== null && !partMatOk(p.mat)) e.push('mat must be one of ' + PART_MATS.join(', ') + ' or tex:<id>');
   if (p.axis !== undefined && p.axis !== null && !['x', 'y', 'z'].includes(p.axis)) e.push('axis must be x, y or z');
   if (p.gid !== undefined && p.gid !== null && !(typeof p.gid === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(p.gid))) e.push('gid must be 1-16 letters, digits, _ or -');
+  if (p.light !== undefined && p.light !== null && !PART_LIGHTS.includes(p.light)) e.push('light must be one of ' + PART_LIGHTS.join(', '));
+  for (const [k, a, b] of [['lm', 100, 10000], ['lk', 2200, 6500], ['beam', 10, 120]]) if (p[k] !== undefined && p[k] !== null && !(partFin(p[k]) && +p[k] >= a && +p[k] <= b)) e.push(k + ' must be a number ' + a + '–' + b);
+  if (p.lcol !== undefined && p.lcol !== null && !(typeof p.lcol === 'string' && /^#[0-9a-f]{6}$/i.test(p.lcol))) e.push('lcol must be #rrggbb');
   if (!e.length && base) {
     const b = partBounds(cleanPart(p)), tol = 1;
     if (b.x0 < -base.w / 2 - tol || b.x1 > base.w / 2 + tol || b.y0 < -base.d / 2 - tol || b.y1 > base.d / 2 + tol)
@@ -904,7 +920,24 @@ const FURN_TEMPLATES = {
       return out;
     }
   },
-  billiards: { tr: "Bilardo Masası", en: "Billiards Table", icon: "🎱", w: 280, d: 155, h: 85, color: "#5b3a24", parts: billiardParts }
+  billiards: { tr: "Bilardo Masası", en: "Billiards Table", icon: "🎱", w: 280, d: 155, h: 85, color: "#5b3a24", parts: billiardParts },
+  // light parts (bulb, LED strip): the item lights the 3D scene like a catalogue fixture
+  lamp: { tr: "Masa Lambası", en: "Table Lamp", icon: "💡", w: 36, d: 36, h: 58, color: "#e7dcc8",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100, R = Math.min(w, d), shH = h * 0.38, stH = h - shH - 3;
+      return [
+        { name: "base", type: "cyl", x: 0, y: 0, z: 0, w: r(R * 0.45), d: r(R * 0.45), h: 3, color: "#57534e", mat: "metal" },
+        { name: "stem", type: "cyl", x: 0, y: 0, z: 3, w: 2, d: 2, h: r(stH), color: "#57534e", mat: "metal" },
+        { name: "bulb", type: "sphere", x: 0, y: 0, z: r(3 + stH - 2), w: 7, d: 7, h: 7, color: "#fff7e0", light: "point", lm: 450 },
+        { name: "shade", type: "cyl", x: 0, y: 0, z: r(h - shH), w: r(R), d: r(R), h: r(shH), color: "#e7dcc8", mat: "fabric" }];
+    } },
+  shelfLed: { tr: "LED Işıklı Duvar Rafı", en: "LED-lit Wall Shelf", icon: "📏", w: 120, d: 25, h: 4, color: "#c9a87c",
+    parts: (w, d, h) => {
+      const r = v => Math.round(v * 100) / 100;
+      return [
+        { name: "LED strip", type: "box", x: 0, y: r(d / 2 - 3), z: 0, w: r(w - 6), d: 1.5, h: 0.8, color: "#fff7e0", light: "strip", lm: r(Math.max(100, Math.min(10000, w * 8))) },
+        { name: "shelf", type: "box", x: 0, y: 0, z: 0.8, w: r(w), d: r(d), h: r(h - 0.8), color: "#c9a87c", mat: "wood" }];
+    } }
 };
 // textured finishes for the templates (#93): parts without a mat get the template's main finish, parts in a listed colour the soft one
 const TPL_FINISH = {
@@ -2673,7 +2706,7 @@ tool('set_lights',
   },
   ['on'],
   a => {
-    const f = floorOf(a); let ls = f.furn.filter(isLightFix);
+    const f = floorOf(a); let ls = f.furn.filter(o => isLightFix(o) || (Array.isArray(o.parts) && o.parts.some(p => PART_LIGHTS.includes(p.light)))); // custom furniture with light parts too
     const inPoly = (p, ps) => { let c = false; for (let i = 0, j = ps.length - 1; i < ps.length; j = i++) { const q = ps[i], r = ps[j]; if ((q.y > p.y) !== (r.y > p.y) && p.x < (r.x - q.x) * (p.y - q.y) / (r.y - q.y) + q.x) c = !c; } return c; };
     if (a.roomId) { const r = f.rooms.find(x => x.id === a.roomId); if (!r) throw new Error('No room "' + a.roomId + '" on this floor'); ls = ls.filter(o => inPoly({ x: o.x, y: o.y }, r.pts)); }
     if (Array.isArray(a.ids)) { const set = new Set(a.ids); ls = ls.filter(o => set.has(o.id)); }
@@ -3065,6 +3098,9 @@ const FURN_SCHEMA = {
     color: '#rgb / #rrggbb (default: the item colour)', mat: PART_MATS.join(' | ') + ' | tex:<id> (default matte; textured finishes tint with the colour)',
     axis: 'cyl only: z (upright, default) | x | y (lying along that axis; w × d × h is still the bounding box)',
     pts: 'extrude only: 3+ {x, y} points relative to the part centre; extruded h up from z',
+    light: 'optional: point (bulb) | spot (downward cone) | strip (LED strip); the part glows and lights the 3D scene, the item lon: 0 switches all of them off',
+    lm: 'light parts: lumens 100–10000 (default point 800, spot 500, strip 600)', lk: 'light parts: colour temperature 2200–6500 K (default 2700)',
+    lcol: 'light parts: custom #rrggbb light colour (wins over lk)', beam: 'spot light parts: beam angle 10–120° (default 40)',
   },
   rules: ['every part must fit inside the item box: |x| ≤ w/2, |y| ≤ d/2, 0 ≤ z, z + h ≤ item h (1 cm tolerance)',
     'stack parts: a table top sits at z = leg height; something lying on it starts at the top\'s z + h',
@@ -3080,7 +3116,7 @@ function findFurnObj(f, id, needParts) {
   if (needParts && !Array.isArray(o.parts)) throw new Error('Furniture ' + id + ' has no parts. Use add_component first, or create_furniture for a new multi-part item.');
   return o;
 }
-const PART_KEYS = ['type', 'name', 'x', 'y', 'z', 'w', 'd', 'h', 'rot', 'rx', 'ry', 'color', 'axis', 'pts', 'mat', 'gid'];
+const PART_KEYS = ['type', 'name', 'x', 'y', 'z', 'w', 'd', 'h', 'rot', 'rx', 'ry', 'color', 'axis', 'pts', 'mat', 'gid', 'light', 'lm', 'lk', 'lcol', 'beam'];
 function partArg(a) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return a;
   const p = {};
@@ -3111,7 +3147,7 @@ function describeFurn(o) {
   const v = validateParts(o), s = partsScale(o);
   const out = ['furniture ' + o.id + ' "' + o.name + '" ' + o.w + '×' + o.d + '×' + o.h + ' cm at (' + o.x + ',' + o.y + ') rot=' + o.rot + '°' + (o.rx || o.ry ? ' tilt x ' + (o.rx || 0) + '° y ' + (o.ry || 0) + '°' : '') + ', ' + v.count + ' parts (schema v' + (o.partsV || PARTS_V) + ')'];
   if (s.sx !== 1 || s.sy !== 1 || s.sz !== 1) out.push('  parts are drawn in ' + o.pbase.w + '×' + o.pbase.d + '×' + o.pbase.h + ' cm and scaled to the item size');
-  (o.parts || []).forEach((p, i) => out.push('  ' + i + ': ' + (p.name ? '"' + p.name + '" ' : '') + p.type + (p.axis ? '(' + p.axis + ')' : '') + ' at (' + p.x + ',' + p.y + ') z ' + p.z + '…' + partR(p.z + p.h) + ', ' + p.w + '×' + p.d + '×' + p.h + (p.rot ? ' rot ' + p.rot + '°' : '') + (p.rx ? ' rx ' + p.rx + '°' : '') + (p.ry ? ' ry ' + p.ry + '°' : '') + (p.gid ? ' group ' + p.gid : '') + (p.color ? ' ' + p.color : '') + (p.mat ? ' ' + p.mat : '')));
+  (o.parts || []).forEach((p, i) => out.push('  ' + i + ': ' + (p.name ? '"' + p.name + '" ' : '') + p.type + (p.axis ? '(' + p.axis + ')' : '') + ' at (' + p.x + ',' + p.y + ') z ' + p.z + '…' + partR(p.z + p.h) + ', ' + p.w + '×' + p.d + '×' + p.h + (p.rot ? ' rot ' + p.rot + '°' : '') + (p.rx ? ' rx ' + p.rx + '°' : '') + (p.ry ? ' ry ' + p.ry + '°' : '') + (p.gid ? ' group ' + p.gid : '') + (p.color ? ' ' + p.color : '') + (p.mat ? ' ' + p.mat : '') + (p.light ? ' light ' + p.light + (p.lm ? ' ' + p.lm + ' lm' : '') : '')));
   out.push(v.ok ? '✓ valid' : '✗ ' + v.errors.length + ' error(s):');
   for (const e of v.errors) out.push('  error: ' + e);
   for (const w of v.warnings) out.push('  warning: ' + w);
@@ -3133,6 +3169,11 @@ const partProps = {
   color: { type: 'string', description: '#hex. Default: the item colour.' },
   material: { type: 'string', description: 'matte (default) | gloss | metal | glass, or a textured finish: wood | fabric | leather | stone | marble | ceramic | chrome | plastic | rubber | foliage, or tex:<id> for a project texture (see summarize / P.textures).' },
   axis: { type: 'string', enum: ['z', 'x', 'y'], description: 'cyl only: z upright (default), x / y lying along that axis.' },
+  light: { type: 'string', enum: PART_LIGHTS, description: 'Makes the part a light: point (bulb) | spot (downward cone) | strip (LED strip).' },
+  lm: { type: 'number', description: 'Light parts: lumens 100-10000.' },
+  lk: { type: 'number', description: 'Light parts: colour temperature 2200-6500 K (default 2700).' },
+  lcol: { type: 'string', description: 'Light parts: custom #rrggbb light colour.' },
+  beam: { type: 'number', description: 'Spot light parts: beam angle 10-120 degrees.' },
   pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: 'extrude only: 3+ outline points relative to the part centre.' },
 };
 const furnIdArg = { type: 'string', description: 'Furniture id (from create_furniture / summarize).' };

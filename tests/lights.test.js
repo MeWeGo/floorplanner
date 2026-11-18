@@ -365,7 +365,7 @@ test('(6e) 3D lighting wiring in app.js', () => {
   assert.match(draw3DSrc, /\bfixTick\s*\(/, 'draw3D calls fixTick');
 
   const walkClickSrc = fnSrcOf(src, 'walkClick');
-  assert.match(walkClickSrc, /isLightFix\s*\([^)]*\)\s*\)\s*toggleLight3D\s*\(/, 'walkClick toggles lights via toggleLight3D');
+  assert.match(walkClickSrc, /isLit\s*\([^)]*\)\s*\)\s*toggleLight3D\s*\(/, 'walkClick toggles lights (catalogue fixtures and light parts) via toggleLight3D');
 });
 
 function loadNightSandbox() {

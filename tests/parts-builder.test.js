@@ -93,6 +93,8 @@ const api = new Function(`
   ${fnSrc('pbIssues')}
   ${fnSrc('pbMsgs')}
   ${fnSrc('pbList')}
+  const PB_LIGHTS = { point: ['Ampul', 'Bulb'], spot: ['Spot', 'Spot'], strip: ['LED', 'LED strip'] }, partLightP = () => null; // light parts: lights.test.js
+  ${fnSrc('pbLightFields')}
   ${fnSrc('pbFields')}
   ${fnSrc('fsProj')}
   ${fnSrc('fsViewBox')}

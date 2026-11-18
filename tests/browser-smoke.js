@@ -1857,6 +1857,58 @@ check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light p
   return 'floor ' + r.off.toFixed(0) + ' → ' + r.on.toFixed(0) + ' when on, ' + r.lightsOn + ' lights always, rebuild with 30 lamps ' + r.buildMs.toFixed(0) + ' ms';
 });
 
+check('light parts: studio bulb / spot / LED strip blocks, a custom lamp lights the floor in 3D, panel + click switch it, LED shelf strip', async page => {
+  // studio: light blocks and the per-part light fields
+  const st = await page.evaluate(`(() => {
+    show3D(false); closeModal(); loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); refresh();
+    fsNew(); const out = {};
+    for (const k of ['bulb', 'spot', 'ledstrip']) fsAddBlock(k);
+    out.kinds = ui.pb.d.parts.map(p => p.light);
+    out.field = !!document.querySelector('#fstudio select[data-pf="light"]') && !!document.querySelector('#fstudio input[data-pf="lm"]');
+    closeModal();
+    return out;
+  })()`);
+  if (st.kinds.join() !== 'point,spot,strip') throw new Error('studio light blocks: ' + JSON.stringify(st));
+  if (!st.field) throw new Error('the studio panel has no light fields for a light part');
+  await page.evaluate(`(() => {
+    const mk = (tpl, x, y) => { const t = FURN_TEMPLATES[tpl]; const o = { id: uid(), type: 'custom', name: tpl, icon: '🧩', k: 'rect', w: t.w, d: t.d, h: t.h, color: t.color, x, y, rot: 0, label: '', parts: t.parts(t.w, t.d, t.h).map(cleanPart), pbase: { w: t.w, d: t.d, h: t.h }, partsV: PARTS_V }; F().furn.push(o); return o; };
+    mk('lamp', 300, 200); const sh = mk('shelfLed', 150, 100); sh.elev = 150; sh.rot = 90;
+    commit(); refresh(); sel = [F().furn[0].id]; renderProps();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  const panel = await page.evaluate(`!!document.querySelector('#props input[data-p="lon"]')`);
+  if (!panel) throw new Error('a furniture item with light parts shows no On switch in the panel');
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped 3D: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(() => {
+    const o = F().furn[0], sh = F().furn[1], out = {};
+    setNight3D(true); set3DCam('top');
+    const lum = () => {
+      draw3D(performance.now());
+      const cv = T3.r.domElement, v = new THREE.Vector3(300 + 60, 1, 200).project(T3.cam);
+      const x = Math.round((v.x + 1) / 2 * cv.width), y = Math.round((1 - v.y) / 2 * cv.height);
+      const c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0);
+      const d = g.getImageData(x - 2, y - 2, 5, 5).data; let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2]; return s / (d.length / 4) / 3;
+    };
+    out.ents = T3.fixList.map(e => e.o === o ? 'lamp' : e.o === sh ? 'shelf' : '?');
+    const se = T3.fixList.find(e => e.o === sh); out.shelfY = se && se.y; // strip under a shelf hung 150 cm up
+    out.on = lum();
+    o.lon = 0; commit(); build3D(true); set3DCam('top'); out.off = lum();
+    out.offEnt = T3.fixList.filter(e => e.o === o).every(e => !e.on);
+    toggleLight3D(o); out.toggled = o.lon === undefined;
+    setNight3D(false); setLive3D(false); show3D(false);
+    out.svg = partsSvg(F().furn[1]).includes(lightP({ type: 'lampCeil' }).col); // lit strip drawn in the light colour (2700 K)
+    return out;
+  })()`);
+  if (r.ents.sort().join() !== 'lamp,shelf') throw new Error('light parts did not reach the light pool: ' + JSON.stringify(r.ents));
+  if (!(r.shelfY > 140 && r.shelfY < 160)) throw new Error('LED strip light height ' + r.shelfY + ' (expected about 150 cm)');
+  if (!(r.on > r.off + 6)) throw new Error('the custom lamp does not brighten the floor: on ' + r.on.toFixed(1) + ' vs off ' + r.off.toFixed(1));
+  if (!r.offEnt || !r.toggled) throw new Error('switching light parts off / on failed: ' + JSON.stringify(r));
+  if (!r.svg) throw new Error('2D plan does not draw the lit LED strip in its light colour');
+  return 'floor ' + r.off.toFixed(0) + ' → ' + r.on.toFixed(0) + ' with the custom lamp, LED strip at ' + r.shelfY.toFixed(0) + ' cm';
+});
+
 check('night mode: 🌙 turns on the live view, night sky, moon, auto room light, flashlight, and day restores everything (#122)', async page => {
   await page.evaluate(`(() => {
     show3D(false); closeModal(); setLive3D(false);
