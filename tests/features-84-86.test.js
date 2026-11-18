@@ -23,7 +23,7 @@ function makeFurnEnv() {
     const furnElev = () => 0;
     const furnTilted = () => false;
     const furnBody = () => '<rect x="-30" y="-30" width="60" height="60"/>';
-    const furnPlanSvg = () => ''; // catalogue model top view: tested in browser-smoke.js
+    const furnPlanSvg = () => '', isLightFix = () => false; // catalogue model top view: tested in browser-smoke.js; lights: lights.test.js
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const esc = s => String(s);
     ${fnSrcOf(src, 'furnSvg')}
