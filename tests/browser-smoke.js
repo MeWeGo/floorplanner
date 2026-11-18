@@ -1892,6 +1892,42 @@ check('night mode: 🌙 turns on the live view, night sky, moon, auto room light
   return 'night sky ' + r.sky.toFixed(2) + ', exposure +' + r.exp.toFixed(2) + ', moon ' + r.moonI.toFixed(2) + ', auto room light, flashlight, day restored';
 });
 
+check('night render: more lights and spot shadows during the render, glow on the image, everything restored (#123)', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal(); setLive3D(false);
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400);
+    for (let i = 0; i < 14; i++) F().furn.push(mkFurn(BYID[i % 2 ? 'downlight' : 'lampCeil'], 60 + (i % 7) * 80, i < 7 ? 120 : 280, 0));
+    commit(); refresh(); document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(async () => {
+    const nL = () => { let n = 0; T3.scene.traverse(x => { if (x.isLight) n++; }); return n; };
+    const out = { before: nL(), exp0: T3.r.toneMappingExposure };
+    // count the lights inside the render by peeking from the shadow pass
+    const orig = renderFixBoost; let seen = 0, shadows = 0;
+    renderFixBoost = (sc, alt) => { const b = orig(sc, alt); seen = b ? b.lights : 0; T3.scene.traverse(x => { if (x.isSpotLight && x.castShadow) shadows++; }); return b; };
+    const url = await render3DHQ({ style: 'realistic', sun: { az: 215, alt: -12 }, longSide: 640, frames: 1, mood: 'night' });
+    renderFixBoost = orig;
+    out.seen = seen; out.shadows = shadows; out.after = nL(); out.exp1 = T3.r.toneMappingExposure;
+    out.spotShadowAfter = T3.fix.spots.some(l => l.castShadow);
+    const img = new Image(); await new Promise(res => { img.onload = res; img.onerror = res; img.src = url; });
+    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data; let mx = 0, sum = 0;
+    for (let i = 0; i < d.length; i += 4) { const l = (d[i] + d[i + 1] + d[i + 2]) / 3; sum += l; if (l > mx) mx = l; }
+    out.w = img.width; out.mean = sum / (d.length / 4); out.max = mx;
+    show3D(false);
+    return out;
+  })()`);
+  if (!(r.w > 0)) throw new Error('night render returned no image');
+  if (r.seen !== 24) throw new Error('render light pool should be 24 lights (16 point + 8 spot): ' + r.seen);
+  if (r.shadows !== 2) throw new Error('expected 2 shadow-casting spots during the render, got ' + r.shadows);
+  if (r.after !== r.before || r.spotShadowAfter || Math.abs(r.exp1 - r.exp0) > 1e-9) throw new Error('render did not restore the scene: ' + JSON.stringify(r));
+  if (!(r.max > 200) || !(r.mean < 140)) throw new Error('night render is not a dark image with bright lamps: mean ' + r.mean.toFixed(0) + ', max ' + r.max);
+  return r.w + ' px, ' + r.seen + ' lights + 2 spot shadows while rendering, mean ' + r.mean.toFixed(0) + ' / max ' + r.max + ', scene restored';
+});
+
 check('stairs line up between walls, open a stairwell above that follows them, resize with 3D arrows and continue upward', async page => {
   const r = await page.evaluate(`(() => {
     show3D(false); closeModal();
