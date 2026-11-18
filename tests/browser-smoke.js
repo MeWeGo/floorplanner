@@ -126,7 +126,8 @@ async function connect(port, pageUrl) {
 
 /* ---------- the checks ---------- */
 const results = [];
-function check(name, fn) { results.push({ name, fn }); }
+// SMOKE_ONLY=<text>: run only the checks whose name contains <text> (the first check always runs: it boots the app)
+function check(name, fn) { if (process.env.SMOKE_ONLY && results.length && !name.includes(process.env.SMOKE_ONLY)) return; results.push({ name, fn }); }
 
 check('the page boots with no uncaught errors', async (page, state) => {
   const info = await page.evaluate(`JSON.stringify({
@@ -1812,7 +1813,7 @@ check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light p
   if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
   const r = await page.evaluate(`(() => {
     const o = F().furn[0], out = {};
-    set3DCam('top');
+    setNight3D(true); set3DCam('top'); // lamp light is measured at night (by day it is deliberately dim)
     // floor brightness next to the lamp: render, copy the canvas in the same tick, read a pixel
     const lum = () => {
       draw3D(performance.now());
@@ -1821,11 +1822,11 @@ check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light p
       const c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0);
       const d = g.getImageData(x - 2, y - 2, 5, 5).data; let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2]; return s / (d.length / 4) / 3;
     };
-    out.pool = T3.fix && T3.fix.pts.length === 8 && T3.fix.spots.length === 4;
+    out.pool = T3.fix && T3.fix.pts.length === 8 && T3.fix.spots.length === 6;
     const nLights = () => { let n = 0; T3.scene.traverse(x => { if (x.isLight) n++; }); return n; };
     out.lightsOn = nLights(); out.on = lum();
-    o.lon = 0; commit(); build3D(true); out.off = lum(); out.lightsOff = nLights();
-    delete o.lon; commit(); build3D(true); lum();
+    o.lon = 0; commit(); build3D(true); set3DCam('top'); out.off = lum(); out.lightsOff = nLights();
+    delete o.lon; commit(); build3D(true); set3DCam('top'); lum();
     const prog0 = T3.r.info.programs.length;
     // click the lamp (pointer down + up on the canvas at its shade)
     T3.cam.updateMatrixWorld(); T3.scene.updateMatrixWorld();
@@ -1844,10 +1845,10 @@ check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light p
     for (let i = 0; i < 30; i++) F().furn.push(mkFurn(BYID[i % 3 ? 'downlight' : 'lampCeil'], 40 + (i % 6) * 100, 40 + Math.floor(i / 6) * 70, 0));
     commit(); build3D(true); const t0 = performance.now(); build3D(true); out.buildMs = performance.now() - t0;
     out.lights30 = nLights();
-    show3D(false);
+    setNight3D(false); setLive3D(false); show3D(false);
     return out;
   })()`);
-  if (!r.pool) throw new Error('no fixed light pool of 8 point + 4 spot lights');
+  if (!r.pool) throw new Error('no fixed light pool of 8 point + 6 spot lights');
   if (!(r.on > r.off + 6)) throw new Error('the lamp does not brighten the floor next to it: on ' + r.on.toFixed(1) + ' vs off ' + r.off.toFixed(1));
   if (r.lightsOn !== r.lightsOff || r.lightsOn !== r.lights30) throw new Error('scene light count changed: ' + [r.lightsOn, r.lightsOff, r.lights30]);
   if (!r.clickOff || !r.clickOn) throw new Error('clicking the lamp in 3D did not toggle it: ' + JSON.stringify(r));
@@ -1875,7 +1876,7 @@ check('night mode: 🌙 turns on the live view, night sky, moon, auto room light
     const sun = shadowLights(T3.scene)[0]; out.moonUp = sun.position.y > sun.target.position.y; out.moonI = sun.intensity;
     out.auto = !!T3.fix && T3.fix.pts.some(l => l.intensity > 0.3);
     set3DCam('eye'); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }));
-    out.flash = !!ui.flash && T3.fix.spots[0].intensity > 1;
+    out.flash = !!ui.flash && T3.fix.spots[FIX_SPOTS - 1].intensity > 1;
     exitWalk(true); out.flashOff = !ui.flash;
     document.getElementById('b3dNight').click();
     out.dayAlt = ui.studio.alt === alt0; out.dayExp = Math.abs(T3.r.toneMappingExposure - exp0) < 1e-9;
@@ -1890,6 +1891,47 @@ check('night mode: 🌙 turns on the live view, night sky, moon, auto room light
   if (!r.flash || !r.flashOff) throw new Error('F did not switch the walk flashlight: ' + JSON.stringify(r));
   if (!r.dayAlt || !r.dayExp || !r.daySky || !r.dayBtn) throw new Error('day did not restore sun / exposure / sky: ' + JSON.stringify(r));
   return 'night sky ' + r.sky.toFixed(2) + ', exposure +' + r.exp.toFixed(2) + ', moon ' + r.moonI.toFixed(2) + ', auto room light, flashlight, day restored';
+});
+
+check('lamp shadows: a wall blocks the lamp light, shadow maps are drawn only when something changes (#128)', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 800, 400);
+    F().walls.push(mkWall({ x: 400, y: 0 }, { x: 400, y: 400 }));            // two rooms; the lamp is in the left one, close to the wall
+    F().furn.push(mkFurn(BYID.floorLamp, 330, 200, 0)); commit(); refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(() => {
+    const out = {}, o = F().furn[0];
+    setNight3D(true); set3DCam('top');
+    const lum = (x, z) => {
+      draw3D(performance.now());
+      const cv = T3.r.domElement, v = new THREE.Vector3(x, 1, z).project(T3.cam);
+      const px = Math.round((v.x + 1) / 2 * cv.width), py = Math.round((1 - v.y) / 2 * cv.height);
+      const c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0);
+      const d = g.getImageData(px - 2, py - 2, 5, 5).data; let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2]; return s / (d.length / 4) / 3;
+    };
+    out.slots = T3.fix.pts.filter(l => l.castShadow).length + ',' + T3.fix.spots.filter(l => l.castShadow).length;
+    out.auto = T3.r.shadowMap.autoUpdate;
+    // shadow passes: counted by wrapping the renderer's shadow pass
+    const sm = T3.r.shadowMap, orig = sm.render; let passes = 0; sm.render = function () { if (this.needsUpdate || this.autoUpdate) passes++; return orig.apply(this, arguments); };
+    lum(450, 200);
+    passes = 0; for (let i = 0; i < 8; i++) { T3.ctl.target.x += 5; T3.ctl.update(); lum(450, 200); } out.orbitPasses = passes;
+    const nearOn = lum(370, 200), behindOn = lum(440, 200);
+    passes = 0; o.lon = 0; commit(); build3D(true); set3DCam('top'); const nearOff = lum(370, 200), behindOff = lum(440, 200); out.togglePasses = passes;
+    sm.render = orig; delete o.lon; commit(); setNight3D(false); setLive3D(false); show3D(false);
+    Object.assign(out, { nearOn, nearOff, behindOn, behindOff });
+    return out;
+  })()`);
+  if (r.slots !== '0,4' || r.auto !== false) throw new Error('expected 4 shadow-casting spot slots (no point shadows) and static shadow maps: ' + JSON.stringify(r));
+  if (r.orbitPasses !== 0) throw new Error('shadow maps were redrawn ' + r.orbitPasses + ' times while only the camera moved');
+  if (!(r.togglePasses >= 1)) throw new Error('switching a lamp did not redraw the shadow maps');
+  if (!(r.nearOn > r.nearOff + 6)) throw new Error('the lamp does not light its own room: ' + JSON.stringify(r));
+  if (Math.abs(r.behindOn - r.behindOff) > 4) throw new Error('lamp light leaks through the wall: behind ' + r.behindOff.toFixed(1) + ' → ' + r.behindOn.toFixed(1));
+  return 'own room ' + r.nearOff.toFixed(0) + ' → ' + r.nearOn.toFixed(0) + ', behind the wall ' + r.behindOff.toFixed(0) + ' → ' + r.behindOn.toFixed(0) + ', 0 shadow passes while orbiting';
 });
 
 check('night render: more lights and spot shadows during the render, glow on the image, everything restored (#123)', async page => {
@@ -1911,7 +1953,7 @@ check('night render: more lights and spot shadows during the render, glow on the
     const url = await render3DHQ({ style: 'realistic', sun: { az: 215, alt: -12 }, longSide: 640, frames: 1, mood: 'night' });
     renderFixBoost = orig;
     out.seen = seen; out.shadows = shadows; out.after = nL(); out.exp1 = T3.r.toneMappingExposure;
-    out.spotShadowAfter = T3.fix.spots.some(l => l.castShadow);
+    out.shadowSlots = T3.fix.pts.filter(l => l.castShadow).length + ',' + T3.fix.spots.filter(l => l.castShadow).length; out.auto = T3.r.shadowMap.autoUpdate;
     const img = new Image(); await new Promise(res => { img.onload = res; img.onerror = res; img.src = url; });
     const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
     const d = g.getImageData(0, 0, c.width, c.height).data; let mx = 0, sum = 0;
@@ -1921,11 +1963,11 @@ check('night render: more lights and spot shadows during the render, glow on the
     return out;
   })()`);
   if (!(r.w > 0)) throw new Error('night render returned no image');
-  if (r.seen !== 24) throw new Error('render light pool should be 24 lights (16 point + 8 spot): ' + r.seen);
-  if (r.shadows !== 2) throw new Error('expected 2 shadow-casting spots during the render, got ' + r.shadows);
-  if (r.after !== r.before || r.spotShadowAfter || Math.abs(r.exp1 - r.exp0) > 1e-9) throw new Error('render did not restore the scene: ' + JSON.stringify(r));
+  if (r.seen !== 26) throw new Error('render light pool should be 26 lights (8 + 6 live, 8 + 4 extra): ' + r.seen);
+  if (r.shadows !== 4) throw new Error('expected the 4 shadow-casting spots during the render, got ' + r.shadows);
+  if (r.after !== r.before || r.shadowSlots !== '0,4' || r.auto !== false || Math.abs(r.exp1 - r.exp0) > 1e-9) throw new Error('render did not restore the scene: ' + JSON.stringify(r));
   if (!(r.max > 200) || !(r.mean < 140)) throw new Error('night render is not a dark image with bright lamps: mean ' + r.mean.toFixed(0) + ', max ' + r.max);
-  return r.w + ' px, ' + r.seen + ' lights + 2 spot shadows while rendering, mean ' + r.mean.toFixed(0) + ' / max ' + r.max + ', scene restored';
+  return r.w + ' px, ' + r.seen + ' lights + 4 spot shadows while rendering, mean ' + r.mean.toFixed(0) + ' / max ' + r.max + ', scene restored';
 });
 
 check('stairs line up between walls, open a stairwell above that follows them, resize with 3D arrows and continue upward', async page => {
