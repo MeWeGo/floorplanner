@@ -429,6 +429,43 @@ check('accordion wall: stretches into the gap when a grouped room moves or rotat
   if (info.collapsed !== 0 || info.drawn || !info.svg) throw new Error('a closed accordion should vanish from the drawing: ' + JSON.stringify(info));
 });
 
+check('bellows corridor: fills between the first and current wall position (layouts, fan), 2D + 3D + walk, undo', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    const f = F(), w = mkWall({ x: 0, y: 0 }, { x: 300, y: 0 });
+    f.walls.push(w); commit(); setTool('select');
+    sel = [w.id]; groupSel(); varAction('varInit'); varAction('varNew');
+    const rec = f.groups[0];
+    w.a.y += 250; w.b.y += 250; commit();          // layout 2: wall slid 250 cm down (A-B → C-D)
+    sel = [w.id]; refresh();
+    const cb = document.querySelector('#props [data-p="bel"]'), out = { box: !!cb };
+    if (cb) { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); }
+    out.home = w.bel && [w.bel.a.y, w.bel.b.y];      // first layout's pose becomes the first position
+    out.sides = belSides(w).length; out.roof = (belRoofPts(w) || []).length;
+    out.zig = document.querySelectorAll('#gWalls path[data-id="' + w.id + '"]').length;
+    out.walk = walkSegs(F()).length;
+    show3D(true); await new Promise(r => setTimeout(r, 500));
+    out.m3 = 0; T3.scene.traverse(o => { if (o.isMesh && o.userData && o.userData.wallId === w.id && !o.parent.userData.wallId) out.m3++; });
+    show3D(false);
+    switchGroupVarTo(rec, 0); out.closed = belSides(find(w.id).o).length;
+    switchGroupVarTo(rec, 1);
+    const W = find(w.id).o; W.a = { x: 0, y: 0 }; commit(); // only end A moved back: a fan from B
+    out.fan = [belSides(W).length, (belRoofPts(W) || []).length];
+    undo(); out.undo = belSides(find(w.id).o).length;
+    out.svg = exportSvg().svg.length > 100;
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.box) throw new Error('wall panel has no bellows checkbox');
+  if (!info.home || info.home[0] !== 0 || info.home[1] !== 0) throw new Error('bellows did not take the other layout as its first position: ' + JSON.stringify(info));
+  if (info.sides !== 2 || info.roof !== 4 || info.zig !== 2) throw new Error('bellows corridor not drawn in 2D: ' + JSON.stringify(info));
+  if (info.walk < 3) throw new Error('bellows sides do not block walking: ' + JSON.stringify(info));
+  if (info.m3 < 3) throw new Error('bellows not built in 3D: ' + JSON.stringify(info));
+  if (info.closed !== 0) throw new Error('bellows should close in the first layout: ' + JSON.stringify(info));
+  if (info.fan[0] !== 1 || info.fan[1] !== 3) throw new Error('moving one end should give a fan: ' + JSON.stringify(info));
+  if (info.undo !== 2 || !info.svg) throw new Error('undo / export failed: ' + JSON.stringify(info));
+});
+
 check('overlapping objects: Ctrl+click cycles, right-click lists, layers reorder, 3D lifts', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
