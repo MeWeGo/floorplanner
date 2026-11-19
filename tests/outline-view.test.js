@@ -90,6 +90,7 @@ const env = new Function(`
   ${src.match(/const WALL_ELEV_MAX\s*=[^;\n]+;/)[0]}
   ${wallTopSrc(src)}
   ${fnSrc('isAccWall')}
+  const belSides = () => [], bellowsSvg = () => ''; // bellows corridor: not under test here
   ${fnSrc('wallTag')}
   ${fnSrc('wallDimSvg')}
   ${fnSrc('opSvg')}

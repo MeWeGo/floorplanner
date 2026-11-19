@@ -21,6 +21,7 @@ const { walkPassable, walkSegs, walkMove } = new Function(
   walkConstSrc + '\n' +
   wallElevSrc + '\n' +
   fnSrc('walkPassable') + '\n' +
+  'const belSides = () => [], BEL_DEPTH = 8, BEL_T = 2;\n' + // bellows corridor: not under test here
   fnSrc('walkSegs') + '\n' +
   fnSrc('walkMove') + '\n' +
   'return { walkPassable, walkSegs, walkMove };'

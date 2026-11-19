@@ -56,6 +56,7 @@ function makeEnv(initialP) {
     ${fnSrc('pickable')}
     ${fnSrc('stampLayers')}
     ${fnSrc('cleanAcc')}
+    ${fnSrc('cleanBel')}
     ${fnSrc('normalizeProject')}
     return {
       get P() { return P; },
