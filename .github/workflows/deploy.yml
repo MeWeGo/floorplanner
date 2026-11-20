@@ -22,13 +22,14 @@ jobs:
     name: Test before deploy
     uses: ./.github/workflows/ci.yml
 
-  deploy:
-    name: Publish
+  # Upload and deploy run in separate jobs (GitHub's own Pages template does the same).
+  # In one job, deploy-pages asked for the artifact a fraction of a second after the upload
+  # and the artifact listing did not show it yet ("No artifacts named github-pages"); a
+  # re-run then found two uploads and refused. The job boundary gives the upload time to land.
+  build:
+    name: Build site
     needs: test
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -53,5 +54,13 @@ jobs:
         with:
           path: _site
 
+  deploy:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4
