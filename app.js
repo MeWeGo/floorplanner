@@ -1216,6 +1216,7 @@ function normalizeProject(P) {
   P.layers.forEach(l => { l.vis = l.vis !== false; l.lock = !!l.lock; l.print = l.print !== false; l.name = l.name || l.id; });
   if (!P.layers.some(l => l.id === P.activeLayer)) P.activeLayer = '0';
   if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
+  cleanLw(P); // çizgi kalınlıkları
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); cleanWallFaces(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; cleanSurfHp(s); }
     for (const r of f.rooms) cleanSurfHp(r);
@@ -1689,7 +1690,7 @@ function jointsSvg(f) {
 function wallHollowSvg(f) {
   const C = pal();
   if (!C.outline) return '';
-  const sw = 1.8;
+  const sw = 1.8 * lwK('wall'); // duvar kenar çizgisi kalınlığı (P.lw.wall)
   const solids = (f.walls || []).filter(w => (!w.wt || w.wt === 'solid') && w.t > sw * 2 + 0.5);
   if (!solids.length) return '';
   let s = '';
@@ -4269,9 +4270,11 @@ function draftClick(p) {
   else if (m === 'arc' && d.pts.length === 3) { ui.dr = null; addDraft({ shape: 'arc', pts: d.pts }); }
   render();
 }
+const DRAFT_WEIGHTS = [0.5, 1, 2, 4, 8]; // çizim aracı çubuğundaki hazır kalınlıklar (cm)
 function buildDraftBar() {
   const u = draftUi();
-  $('#shapeBar').innerHTML = DRAFT_MODES.map(([k, ic, tr, en]) => `<button class="sbtn ${u.mode === k ? 'on' : ''}" data-dm="${k}" title="${L(tr, en)}"><span>${ic}</span><small>${L(tr, en)}</small></button>`).join('');
+  $('#shapeBar').innerHTML = DRAFT_MODES.map(([k, ic, tr, en]) => `<button class="sbtn ${u.mode === k ? 'on' : ''}" data-dm="${k}" title="${L(tr, en)}"><span>${ic}</span><small>${L(tr, en)}</small></button>`).join('')
+    + DRAFT_WEIGHTS.map(w => `<button class="sbtn ${(+u.w || 2) === w ? 'on' : ''}" data-dw="${w}" title="${L(`Çizgi kalınlığı ${w} cm (seçili çizgilere de uygulanır)`, `Line weight ${w} cm (also applied to the selected lines)`)}"><span><svg width="26" height="14" viewBox="0 0 26 14"><line x1="2" y1="7" x2="24" y2="7" stroke="currentColor" stroke-width="${Math.min(10, 0.6 + w * 1.1)}" stroke-linecap="round"/></svg></span><small>${w} cm</small></button>`).join('');
 }
 function sketchSvg(sk, live) {
   const C = pal(); if (!sk.pts || sk.pts.length < 2) return '';
@@ -4334,16 +4337,44 @@ function groupVarsSvg(f, live) {
   }
   return s;
 }
+/* ---------- Çizgi kalınlıkları ----------
+   P.lw = { wall?, op?, furn?, room?, anno? }: kategori başına çarpan (LW_STEPS; yoksa / 1 = normal → eski çizim bayt bayt aynı).
+   wall: CAD (çizgisel) görünümdeki duvar kenar çizgisi (wallHollowSvg); op / furn / room / anno: o katmanın bütün çizgi kalınlıkları
+   lwScale ile tek geçişte çarpılır (kapı-pencere, mobilya, oda-döşeme-boşluk kenarları, ölçü + kesit). Yazı haleleri (paint-order)
+   ve görünmez tıklama alanları (transparent) dokunulmaz. 2B ve CAD görünümünde, PNG / SVG / PDF çıktısında aynı. */
+const LW_CATS = [['wall', 'Duvarlar (CAD görünümü)', 'Walls (CAD view)'], ['op', 'Kapı & pencere', 'Doors & windows'], ['furn', 'Mobilya', 'Furniture'], ['room', 'Oda, döşeme, boşluk kenarı', 'Room, slab & void edges'], ['anno', 'Ölçü, kesit & aks çizgileri', 'Dimension, section & axis lines']];
+const LW_STEPS = [0.5, 0.75, 1, 1.5, 2, 3];
+const lwK = cat => { const v = P && P.lw && +P.lw[cat]; return LW_STEPS.includes(v) ? v : 1; };
+function lwScale(str, k) {
+  if (!str || k === 1) return str;
+  return str.replace(/<[^<>]*\bstroke-width=\x22[^\x22]*\x22[^<>]*>/g, tag => { // \x22 = tırnak (kaynak tarayıcıları tek sayıda tırnakta şaşmasın)
+    if (/paint-order="stroke"|stroke="transparent"|data-h=/.test(tag)) return tag; // hale / tıklama alanı / tutamak
+    return tag.replace(/stroke-width="([-\d.eE+]+)"/, (m, v) => `stroke-width="${Math.round(+v * k * 1000) / 1000}"`);
+  });
+}
+function cleanLw(P) {
+  if (P.lw == null) return;
+  const out = {}; if (P.lw && typeof P.lw === 'object') for (const [c] of LW_CATS) { const v = +P.lw[c]; if (LW_STEPS.includes(v) && v !== 1) out[c] = v; }
+  if (Object.keys(out).length) P.lw = out; else delete P.lw;
+}
+function lwPanelHtml() {
+  const lbl = { 0.5: L('Çok ince', 'Very thin'), 0.75: L('İnce', 'Thin'), 1: L('Normal', 'Normal'), 1.5: L('Kalın', 'Thick'), 2: L('Çok kalın', 'Very thick'), 3: L('En kalın', 'Heaviest') };
+  const sel = Object.fromEntries(LW_STEPS.map(v => [String(v), `${lbl[v]} ×${v}`]));
+  let h = `<h4>✒ ${L('Çizgi kalınlıkları', 'Line weights')}</h4>`;
+  for (const [c, tr, en] of LW_CATS) h += fld(L(tr, en), 'lw', c, String(lwK(c)), { sel });
+  h += `<p class="muted" style="margin:0 0 6px">${L('Plan, CAD görünümü ve çıktılar (PNG / SVG / PDF) bu kalınlıkları kullanır. 2B çizim çizgilerinin kalınlığı çizim aracı çubuğundan ya da çizginin panelinden seçilir.', 'The plan, the CAD view and the exports (PNG / SVG / PDF) use these weights. 2D drafting lines take their own weight from the drafting toolbar or the line’s panel.')}</p>`;
+  return h;
+}
 function layerStrings(f, live) {
   f = visFloor(f, !live && ui.exporting); // gizli / baskıda çıkmayan katmanlar (#32)
   return {
     // döşemeler odaların altında, boşluklar oda dolgusunun üstünde (delik oda zeminini de keser)
-    rooms: (f.slabs || []).map(s => slabSvg(s, live)).join('') + f.rooms.map(r => roomSvg(r, live)[0]).join('') + (f.voids || []).map(v => voidSvg(v, live)).join(''),
+    rooms: lwScale((f.slabs || []).map(s => slabSvg(s, live)).join('') + f.rooms.map(r => roomSvg(r, live)[0]).join('') + (f.voids || []).map(v => voidSvg(v, live)).join(''), lwK('room')),
     roomLabels: f.rooms.map(r => roomSvg(r, live)[1]).join('') + [...(f.slabs || []), ...f.rooms].map(slopeSvg).join('') + groupVarsSvg(f, live),
     walls: bellowsSvg(f, live) + jointsSvg(f) + f.walls.map(w => wallSvg(w, live, f)).join('') + wallHollowSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
-    ops: f.ops.map(o => opSvg(o, live)).join(''),
-    furn: (live && !ui.exporting && layersVis.lightArea ? lightAreaSvg(f) : '') + f.furn.map(x => furnSvg(x, live)).join(''),
-    dims: f.dims.map(d => dimSvg(d, live)).join('') + (f.sections || []).map(x => sectionSvg(x, live)).join('') + (f.axes || []).map(x => axisSvg(x, live)).join(''),
+    ops: lwScale(f.ops.map(o => opSvg(o, live)).join(''), lwK('op')),
+    furn: (live && !ui.exporting && layersVis.lightArea ? lightAreaSvg(f) : '') + lwScale(f.furn.map(x => furnSvg(x, live)).join(''), lwK('furn')),
+    dims: lwScale(f.dims.map(d => dimSvg(d, live)).join('') + (f.sections || []).map(x => sectionSvg(x, live)).join('') + (f.axes || []).map(x => axisSvg(x, live)).join(''), lwK('anno')),
     texts: f.texts.map(t => textSvg(t, live)).join(''),
     sketches: (f.drafts || []).map(d => draftSvg(d, live)).join('') + (f.sketches || []).map(s => sketchSvg(s, live)).join(''),
   };
@@ -5384,6 +5415,10 @@ function buildShapeBar() {
 }
 $('#shapeBar').addEventListener('click', e => {
   const sk = e.target.closest('[data-sh]'); if (sk) { ui.shape.kind = sk.dataset.sh; buildShapeBar(); return; }
+  const dw = e.target.closest('[data-dw]'); if (dw) { // çizgi kalınlığı: sonraki çizgiler + seçili 2B çizim çizgileri
+    const w = +dw.dataset.dw; draftUi().w = w; const ds = selObjs().filter(x => x.kind === 'draft');
+    if (ds.length) { ds.forEach(x => { x.o.w = w; }); commit(); refresh(); } buildDraftBar(); return;
+  }
   const dm = e.target.closest('[data-dm]'); if (dm) { draftUi().mode = dm.dataset.dm; ui.dr = null; ui.typed = ''; buildDraftBar(); render(); return; }
   const sm = e.target.closest('[data-shmode]'); if (sm) { ui.shape.mode = sm.dataset.shmode; buildShapeBar(); }
 });
@@ -6759,6 +6794,7 @@ function projectPanel() {
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
   h += `<div class="row"><button class="btn sm" data-act="wallhall" title="${L('Tüm katlardaki mevcut duvarları bu yüksekliğe getirir; kat bazlı yükseklikler sıfırlanır', 'Sets every existing wall on every floor to this height; per-floor heights are cleared')}">⬆ ${L('Mevcut tüm duvarlara uygula', 'Apply to all existing walls')}</button></div>`;
   h += layersPanelHtml();
+  h += lwPanelHtml();
   h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['furnLabel', L('　↳ Mobilya yazıları', '　↳ Furniture labels')], ['furnIcon', L('　↳ Mobilya simgeleri (emoji)', '　↳ Furniture icons (emoji)')], ['lightArea', L('　↳ Işık alanları', '　↳ Light areas')], ['dims', L('Ölçüler', 'Dimensions')], ['sketch', L('Çizimler (kalem & 2B çizim)', 'Sketches & 2D drafting')]].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
   if (P.floors.length > 1) {
     // Kat izdüşümü (issue #26): aç/kapa, referans kat, opaklık
@@ -6857,6 +6893,10 @@ function applyProp(t, final) {
     const o = selObjs()[0]?.o, q = o && o.hp && o.hp[+t.dataset.i]; if (!q) return;
     q.z = Math.round(clamp(+v || 0, -SURF_Z_MAX, SURF_Z_MAX) * 10) / 10;
     render(); if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
+  }
+  if (k === 'lw') { // çizgi kalınlığı (proje)
+    const n = +v; P.lw = P.lw || {}; if (LW_STEPS.includes(n) && n !== 1) P.lw[p] = n; else delete P.lw[p]; cleanLw(P);
+    render(); if (final) commit(); return;
   }
   if (k === 'tex') {
     const tm = texMeta(t.dataset.tid); if (!tm) return;

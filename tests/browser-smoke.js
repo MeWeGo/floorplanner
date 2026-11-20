@@ -697,6 +697,37 @@ check('axes: the Z tool draws named axes, a wall snaps to their crossing, grid +
   if (info.copied !== 120 || info.undo !== 100 || !info.export) throw new Error('copy to floors / export / undo: ' + JSON.stringify(info));
 });
 
+check('line weights: project panel weights scale furniture / CAD walls on screen and in the export, drafting toolbar weights, undo', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); addRectWalls(0, 0, 500, 400); F().furn.push(mkFurn(BYID.table || BYID.coffee, 250, 200)); commit();
+    sel = []; refresh(); const out = {};
+    const widths = sel0 => [...document.querySelectorAll(sel0)].map(e => +e.getAttribute('stroke-width')).filter(v => v > 0);
+    const f0 = widths('#gFurn [stroke-width]:not([stroke="transparent"])'); out.f0 = f0.length;
+    const set = (c, v) => { const el = document.querySelector('#props [data-k="lw"][data-p="' + c + '"]'); el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); };
+    out.panel = !!document.querySelector('#props [data-k="lw"][data-p="furn"]');
+    set('furn', '2');
+    const f1 = widths('#gFurn [stroke-width]:not([stroke="transparent"])');
+    out.ratio = f0.length && f1.length === f0.length ? Math.round(f1[0] / f0[0] * 100) / 100 : null;
+    out.lw = JSON.stringify(P.lw);
+    out.exp = exportSvg().svg.includes('stroke-width="' + (f0[0] * 2) + '"');
+    // CAD walls: the hollow carve gets narrower when the edge gets heavier
+    setOutline(true); const c0 = widths('#gWalls line[stroke="' + pal().bg + '"]')[0];
+    set('wall', '3'); const c1 = widths('#gWalls line[stroke="' + pal().bg + '"]')[0]; setOutline(false);
+    out.carve = [c0, c1];
+    undo(); out.undo = JSON.stringify(P.lw || {});
+    // drafting toolbar: weight buttons set the next weight and restyle the selected line
+    setTool('draft'); out.btns = document.querySelectorAll('#shapeBar [data-dw]').length;
+    const d = { id: uid(), shape: 'pline', pts: [{ x: 0, y: 500 }, { x: 300, y: 500 }], w: 2 }; F().drafts.push(d); commit(); sel = [d.id];
+    document.querySelector('#shapeBar [data-dw="8"]').click(); out.dw = [draftUi().w, find(d.id).o.w];
+    setTool('select'); sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.panel || info.ratio !== 2 || info.lw !== '{"furn":2}' || !info.exp) throw new Error('furniture weight not applied: ' + JSON.stringify(info));
+  if (!(info.carve[0] > info.carve[1])) throw new Error('CAD wall edge did not get heavier: ' + JSON.stringify(info));
+  if (info.undo !== '{"furn":2}') throw new Error('undo should step back one weight change: ' + JSON.stringify(info));
+  if (info.btns !== 5 || info.dw[0] !== 8 || info.dw[1] !== 8) throw new Error('drafting toolbar weights: ' + JSON.stringify(info));
+});
+
 check('slab tool draws a wall-less balcony, void tool cuts the slab in 3D (issues #22, #23)', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
