@@ -54,6 +54,7 @@ const env = new Function(`
   const groupVarsSvg = () => '';
   const roofTopFaces = () => [];
   const wallPaintSvg = w => '<line data-paint="1" stroke="' + w.color + '"/>';
+  const wallFaced = () => false;
   const sectionSvg = () => '';
   const dimSvg = () => '';
   const textSvg = () => '';

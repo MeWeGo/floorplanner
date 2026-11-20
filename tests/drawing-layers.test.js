@@ -57,6 +57,7 @@ function makeEnv(initialP) {
     ${fnSrc('stampLayers')}
     ${fnSrc('cleanAcc')}
     ${fnSrc('cleanBel')}
+    const cleanWallFaces = () => {}; // wall faces: wall-faces.test.js
     ${fnSrc('normalizeProject')}
     return {
       get P() { return P; },
