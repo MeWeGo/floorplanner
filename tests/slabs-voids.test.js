@@ -18,6 +18,7 @@ const { voidHoles, pointInPoly } = new Function(`
   ${fnSrc('segProj')}
   ${fnSrc('polyCentroid')}
   ${pip}
+  ${fnSrc('polyInPoly')}
   ${fnSrc('voidHoles')}
   return { voidHoles, pointInPoly };`)();
 
@@ -44,6 +45,13 @@ test('voids outside or straddling the polygon are left alone', () => {
   assert.strictEqual(voidHoles([{ pts: rect(500, 300, 700, 500) }], room).length, 0);
   assert.strictEqual(voidHoles([{ pts: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }, { pts: null }], room).length, 0);
   assert.deepStrictEqual(voidHoles(undefined, room), []);
+});
+
+test('a slab or room drawn inside a void fills it and is not cut by it', () => {
+  const v = [{ pts: rect(100, 100, 250, 300) }];
+  assert.strictEqual(voidHoles(v, rect(100, 100, 250, 300)).length, 0, 'same outline');
+  assert.strictEqual(voidHoles(v, rect(120, 120, 200, 250)).length, 0, 'smaller, inside');
+  assert.strictEqual(voidHoles(v, room).length, 1, 'the surrounding slab is still cut');
 });
 
 test('the data model carries slabs and voids, with defaults for old saves', () => {
