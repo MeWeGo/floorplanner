@@ -49,7 +49,7 @@ test('(b) TEXGEN block: patterns, determinism, clamping, hex height, and data UR
 
 test('(c) app.js source wiring: texadd, cmdList texture, dataUrlBlob non-base64, absorbTextures svg+xml', () => {
   assert.match(appJs, /data-act="texadd"/);
-  assert.match(appJs, /if\s*\(\s*a\s*===\s*'texadd'\s*\)\s*return\s+openTexDialog\(\)/);
+  assert.match(appJs, /if\s*\(\s*a\s*===\s*'texadd'\s*\)\s*\{\s*ui\.txWall = 0;\s*return\s+openTexDialog\(\)/);
 
   const cmdList = fnSrcOf(appJs, 'cmdList');
   assert.match(cmdList, /act\(\s*'texture'[^;]*openTexDialog\(\)/);

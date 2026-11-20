@@ -482,6 +482,7 @@ function mirrorObjs(os, o, u, opsOf = w => F().ops.filter(op => op.wall === w.id
       else {
         if (Array.isArray(m.angles) && m.angles.length) m.angles = m.angles.map(a => normDeg(2 * ax - a));
         for (const op of opsOf(m)) op.side = -(op.side || 1);
+        if (wallFaced(m)) wallFaceSwap(m); // yansıma yüzleri yer değiştirir: boya / kaplama aynı tarafta kalsın
       }
     } else if (PTS_KINDS.has(kind)) m.pts = kind === 'draft' && m.shape === 'circle' ? m.pts.map(R) : m.pts.map(R).reverse(); // daire: [merkez, çember noktası] sırası korunur
     else if (kind === 'furn') {
@@ -870,6 +871,7 @@ function addTexture(name, w, h, data) {
   P.textures = P.textures || []; P.textures.push({ id, name: String(name).slice(0, 60), w, h });
   // mobilya stüdyosundan açıldıysa seçili parçalara, yoksa seçili oda / döşemeye uygulanır
   if (ui.txStudio && ui.pb) { if (pbSetLook(ui.txStudio, { mat: 'tex:' + id })) fsPush(); }
+  else if (ui.txWall) for (const { kind, o } of selObjs()) { if (kind === 'wall') o['f' + ui.txWall] = 'tex:' + id; }
   else for (const { o } of txTargets()) o.floor = 'tex:' + id;
   commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
   toast(L(`“${name}” dokusu eklendi`, `Texture “${name}” added`));
@@ -880,6 +882,7 @@ function deleteTexture(id) {
   const k = 'tex:' + id; let n = 0;
   for (const f of P.floors) {
     for (const o of [...f.rooms, ...f.slabs]) if (o.floor === k) { o.floor = 'none'; n++; }
+    for (const w of f.walls) for (const fk of ['f1', 'f2']) if (w[fk] === k) { delete w[fk]; n++; }
     if (f.slabFloor === k) { f.slabFloor = 'none'; n++; }
   }
   P.textures = P.textures.filter(x => x.id !== id);
@@ -1102,7 +1105,7 @@ function normalizeProject(P) {
   P.layers.forEach(l => { l.vis = l.vis !== false; l.lock = !!l.lock; l.print = l.print !== false; l.name = l.name || l.id; });
   if (!P.layers.some(l => l.id === P.activeLayer)) P.activeLayer = '0';
   if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
-  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
+  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); cleanWallFaces(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; }
     if (f.lvl != null) { const n = typeof f.lvl === 'number' || (typeof f.lvl === 'string' && f.lvl.trim()) ? +f.lvl : NaN; if (Number.isFinite(n)) f.lvl = clamp(Math.round(n), -FLOOR_LVL_MAX, FLOOR_LVL_MAX); else delete f.lvl; } // kat kotu
     for (const v of f.voids) { if (!VOID_TYPES[v.type]) v.type = 'stair'; if (v.dep != null) { const d = clamp(Math.round(+v.dep || 0), 0, VOID_DEP_MAX); if (d) v.dep = d; else delete v.dep; } } // çukur derinliği
@@ -1464,7 +1467,7 @@ function wallSvg(w, live, f) {
     s += lowWallSvg(w, C, f);
   } else {
     s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.wall}" stroke-width="${w.t}" stroke-linecap="butt" pointer-events="none"/>`;
-    if (w.color && !C.outline) s += wallPaintSvg(w);
+    if ((w.color || wallFaced(w)) && !C.outline) s += wallPaintSvg(w);
   }
   if (hasPos) {
     const pv = w[wallPivot(w)], curIdx = clamp(w.posIdx ?? 0, 0, w.angles.length - 1);
@@ -1506,12 +1509,35 @@ function lowWallSvg(w, C, f) {
   return s;
 }
 // Duvar boyası 2B: koyu duvar dolgusu korunur, iki yüzeyde ince boya şeridi (dışa aktarımda da okunur)
+/* Duvar yüzleri: her yüz ayrı boyanır / kaplanır. Yüz 1 = duvar normali (-uy, ux) tarafı, yüz 2 = karşı taraf.
+   c1 / c2 = yüz boyası (yoksa w.color), f1 / f2 = kaplama (yerleşik desen ya da 'tex:<id>' — duvar kağıdı, fayans…).
+   Alanların hepsi isteğe bağlı: eski projeler aynen açılır. wallFace() tek okuyucudur. */
+const WALL_FINS = ['none', 'wood', 'tile', 'marble', 'concrete', 'stone', 'deck'];
+const WALL_FACE_KEYS = ['c1', 'c2', 'f1', 'f2'];
+function wallFace(w, i) { const c = w['c' + i] || w.color || null, f = w['f' + i]; return { col: c, fin: f && f !== 'none' ? f : null }; }
+const wallFaced = w => WALL_FACE_KEYS.some(k => w[k]);
+function wallFinOpts() { const a = getFloors(), o = {}; for (const k of WALL_FINS) o[k] = a[k]; for (const t of (P.textures || [])) o['tex:' + t.id] = '🖼 ' + esc(t.name); return o; }
+// yüzün baktığı oda ("Mutfak tarafı"), yoksa pusula yönü ("Kuzey yüzü"); kuzey = −y
+function wallFaceName(w, i, f = F()) {
+  const len = wLen(w) || 1, ux = (w.b.x - w.a.x) / len, uy = (w.b.y - w.a.y) / len, sg = i === 1 ? 1 : -1, nx = -uy * sg, ny = ux * sg;
+  const q = { x: (w.a.x + w.b.x) / 2 + nx * (w.t / 2 + 15), y: (w.a.y + w.b.y) / 2 + ny * (w.t / 2 + 15) };
+  const r = (f.rooms || []).find(r => r.pts && r.pts.length > 2 && pointInPoly(q, r.pts));
+  if (r && r.name) return L(`${r.name} tarafı`, `${r.name} side`);
+  const k = Math.round(((Math.atan2(nx, -ny) * 180 / Math.PI + 360) % 360) / 45) % 8;
+  return L(['Kuzey', 'Kuzeydoğu', 'Doğu', 'Güneydoğu', 'Güney', 'Güneybatı', 'Batı', 'Kuzeybatı'][k] + ' yüzü', ['North', 'North-east', 'East', 'South-east', 'South', 'South-west', 'West', 'North-west'][k] + ' face');
+}
+function wallFaceSwap(w) { for (const [a, b] of [['c1', 'c2'], ['f1', 'f2']]) { const x = w[a], y = w[b]; if (y != null) w[a] = y; else delete w[a]; if (x != null) w[b] = x; else delete w[b]; } }
+function cleanWallFaces(w) { for (const k of ['c1', 'c2']) if (w[k] != null && !/^#[0-9a-f]{6}$/i.test(w[k])) delete w[k]; for (const k of ['f1', 'f2']) if (w[k] != null && (typeof w[k] !== 'string' || w[k] === 'none' || !(FLOORS[w[k]] || texIdOf(w[k])))) delete w[k]; }
 function wallPaintSvg(w) {
   const L = wLen(w); if (L < 1) return '';
   const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, nx = -uy, ny = ux;
   const sw = clamp(w.t * 0.22, 1.5, 5), o = w.t / 2 - sw / 2;
   let s = '';
-  for (const sg of [-1, 1]) s += `<line x1="${w.a.x + nx * o * sg}" y1="${w.a.y + ny * o * sg}" x2="${w.b.x + nx * o * sg}" y2="${w.b.y + ny * o * sg}" stroke="${w.color}" stroke-width="${sw}" pointer-events="none"/>`;
+  for (const sg of [-1, 1]) {
+    const fc = wallFace(w, sg > 0 ? 1 : 2), fk = finishKind(fc.fin); if (!fc.col && !fk) continue;
+    const ln = st => `<line x1="${w.a.x + nx * o * sg}" y1="${w.a.y + ny * o * sg}" x2="${w.b.x + nx * o * sg}" y2="${w.b.y + ny * o * sg}" stroke="${st}" stroke-width="${sw}" pointer-events="none"/>`;
+    s += ln(fc.col || pal().sub); if (fk) s += ln(`url(#${finishPat(fk)})`);
+  }
   return s;
 }
 // Köşe birleşim dolguları (issue #14): duvar gövdeleriyle aynı renk, boşluk/çentik kalmaz
@@ -4855,7 +4881,7 @@ const wallPt = (w, s) => { const L = wLen(w) || 1; return { x: w.a.x + (w.b.x - 
 // Duvarı a ucundan s cm'de ikiye böler; s'nin ötesindeki açıklıklar yeni parçaya geçer
 function splitWallAt(w, s, f = F()) {
   const m = wallPt(w, s), nw = mkWall(m, w.b), L0 = wLen(w), tA = wallTopSub(w, 0, s), tB = wallTopSub(w, s, L0);
-  for (const k of ['t', 'h', 'wt', 'color', 'mul', 'mulN', 'rs', 'elev']) if (w[k] != null) nw[k] = w[k];
+  for (const k of ['t', 'h', 'wt', 'color', 'c1', 'c2', 'f1', 'f2', 'mul', 'mulN', 'rs', 'elev']) if (w[k] != null) nw[k] = w[k];
   w.b = m; f.walls.push(nw); setWallTop(w, tA); setWallTop(nw, tB);
   f.ops.forEach(op => { if (op.wall === w.id && op.d > s) { op.wall = nw.id; op.d -= s; } });
   return nw;
@@ -6239,6 +6265,7 @@ function renderProps() {
     }
     h += fld(L('🎨 Duvar boyası', '🎨 Wall paint'), 'wall', 'color', o.color || '#f5f1e8', { type: 'color' });
     h += `<div class="row swatches">${PAINTS.map(([c, tr, en]) => `<button class="btn sm swatch${o.color === c ? ' on' : ''}" data-act="paint" data-c="${c}" title="${L(tr, en)}" style="background:${c}"></button>`).join('')}<button class="btn sm" data-act="paint" data-c="" title="${L('Varsayılan renk', 'Default colour')}">${L('↺ Varsayılan', '↺ Default')}</button></div>`;
+    if (os.every(x => isSolidWall(x.o))) h += wallFacesHtml(o, n, os);
     if (n === 1) {
       h += fld(L('Açı (°)', 'Angle (°)'), 'wall', 'deg', wallDeg(o), { step: 5, min: 0, max: 360 });
       h += fld(L('Sabit Nokta (Menteşe)', 'Fixed Point (Pivot)'), 'wall', 'pivot', wallPivot(o), {
@@ -6448,6 +6475,21 @@ function glassFld(k, o) {
   if (k !== 'floor' && o.floor !== 'glass') return '';
   return fld(L('Cam', 'Glass'), k, 'glass', o.glass === 'frosted' ? 'frosted' : 'clear', { sel: biOpts(GLASS_KINDS) });
 }
+// duvar yüzleri paneli: iki yüz ayrı boya + kaplama (duvar kağıdı, fayans); hiçbiri ayarlı değilse kapalı başlar
+function wallFacesHtml(o, n, os) {
+  const on = os.some(x => wallFaced(x.o));
+  let h = `<details class="wfaces" ${on ? 'open' : ''}><summary>🧻 ${L('Yüzleri ayrı boya / kapla', 'Paint / cover each face')}</summary>`;
+  for (const i of [1, 2]) {
+    const fc = wallFace(o, i), nm = n === 1 ? wallFaceName(o, i) : L(`Yüz ${i}`, `Face ${i}`);
+    h += `<h4 style="margin:8px 0 4px">${esc(nm)}</h4>`
+      + fld(L('Boya', 'Paint'), 'wall', 'c' + i, fc.col || '#f5f1e8', { type: 'color' })
+      + fld(L('Kaplama', 'Finish'), 'wall', 'f' + i, o['f' + i] || 'none', { sel: wallFinOpts() })
+      + `<div class="row"><button class="btn sm" data-act="walltex" data-face="${i}" title="${L('Duvar kağıdı, fayans… deseni oluşturur ya da görsel yükler ve bu yüze uygular', 'Creates a wallpaper / tile pattern or uploads an image and applies it to this face')}">${L('🎨 Doku oluştur / yükle…', '🎨 Create / upload texture…')}</button></div>`;
+  }
+  h += `<div class="row"><button class="btn sm" data-act="wallfaceswap" title="${L('İki yüzün boya ve kaplamasını değiştirir', 'Swaps the paint and finish of the two faces')}">⇄ ${L('Yüzleri değiştir', 'Swap faces')}</button>`
+    + (on ? `<button class="btn sm" data-act="wallfacereset" title="${L('Yüz boyaları ve kaplamaları silinir; duvar boyası iki yüze uygulanır', 'Clears face paints and finishes; the wall paint covers both faces')}">↺ ${L('İki yüz aynı', 'Same on both faces')}</button>` : '') + '</div>';
+  return h + '</details>';
+}
 function projectPanel() {
   const f = F(); let h = `<h3>⚙️ ${L('Proje', 'Project')}</h3>`;
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
@@ -6612,6 +6654,9 @@ function applyProp(t, final) {
     else if (k === 'wall' && p === 'acc') { if (final) setAccWall(F(), o, !!v); }
     else if (k === 'wall' && p === 'bel') { if (final) setBelWall(F(), o, !!v); }
     else if (k === 'wall' && p === 'belRoof') { if (final && o.bel) { if (v) delete o.bel.roof; else o.bel.roof = 0; } }
+    else if (k === 'wall' && (p === 'c1' || p === 'c2')) { o[p] = v; }
+    else if (k === 'wall' && (p === 'f1' || p === 'f2')) { if (!v || v === 'none') delete o[p]; else o[p] = v; }
+    else if (k === 'wall' && p === 'color') { o.color = v; delete o.c1; delete o.c2; } // duvar boyası iki yüzü birden boyar
     else if (k === 'wall' && p === 'rs') { if (v === 'bars' || !RAIL_STYLES[v]) delete o.rs; else o.rs = v; ui.railRs = v; }
     else if (k === 'furn' && isParamRoof(o) && (p === 'ridge' || p === 'hip')) { o[p] = clamp((+v || 0) / 100, p === 'hip' ? 0.05 : -0.45, p === 'hip' ? 1 : 0.45); }
     else if (k === 'furn' && isParamRoof(o) && p === 'rmat') { const was = ROOF_MAT_COL[roofP(o).mat]; o.rmat = v; if (ROOF_MAT_COL[v] && (!o.color || o.color === was)) o.color = ROOF_MAT_COL[v]; }
@@ -6648,7 +6693,7 @@ $('#props').addEventListener('click', e => {
   if (a === 'savepreset') return savePresetSel();
   if (a === 'parts') { if (os.length === 1 && os[0].kind === 'furn') pbStart(os[0].o); return; }
   if (a === 'opcolreset') { os.forEach(x => { if (x.kind === 'op') { delete x.o.color; delete x.o.frameCol; } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
-  if (a === 'texadd') return openTexDialog();
+  if (a === 'texadd') { ui.txWall = 0; return openTexDialog(); }
   if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
@@ -6730,9 +6775,15 @@ $('#props').addEventListener('click', e => {
     commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
   }
   if (a === 'slabreset') { f.slabColor = null; commit(); if (ui.view3d && T3) schedBuild3D(); return refresh(); }
+  if (a === 'wallfaceswap' || a === 'wallfacereset') {
+    const ws = os.filter(x => x.kind === 'wall'); if (!ws.length) return;
+    for (const { o } of ws) { if (a === 'wallfaceswap') wallFaceSwap(o); else for (const k of WALL_FACE_KEYS) delete o[k]; }
+    commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
+  }
+  if (a === 'walltex') { ui.txWall = +b.dataset.face === 2 ? 2 : 1; return openTexDialog(); }
   if (a === 'paint') {
     const ws = os.filter(x => x.kind === 'wall'); if (!ws.length) return;
-    for (const { o } of ws) { if (b.dataset.c) o.color = b.dataset.c; else delete o.color; }
+    for (const { o } of ws) { if (b.dataset.c) o.color = b.dataset.c; else delete o.color; delete o.c1; delete o.c2; }
     commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
   }
   if (a === 'grpUnlink') { const c = varContainer(); if (c && c.type === 'group') unlinkGroup(c.rec); return; }
@@ -7830,7 +7881,7 @@ $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8)
 function openModal(html, kind = null) { ui.modal = kind; $('#modal').innerHTML = html; $('#modalbg').style.display = 'flex'; }
 function closeModal() {
   if (ui.modal === 'tex' && ui.txStudio) { ui.txStudio = null; ui.modal = 'parts'; $('#modalbg').style.display = 'none'; pbRedraw(); return; }
-  if (ui.modal === 'parts') fsClose(); ui.modal = null; $('#modalbg').style.display = 'none';
+  ui.txWall = 0; if (ui.modal === 'parts') fsClose(); ui.modal = null; $('#modalbg').style.display = 'none';
 }
 $('#modalbg').addEventListener('mousedown', e => { if (e.target.id === 'modalbg') closeModal(); });
 $('#modal').addEventListener('click', e => { if (e.target.closest('[data-close]')) closeModal(); });
@@ -10896,7 +10947,8 @@ function texDialogHtml() {
   let h = `<h2>${L('Doku ekle', 'Add texture')} <button class="btn sm" data-close>✕</button></h2>
     <div class="row" style="gap:6px;margin:0 0 10px;flex-wrap:wrap">${tabs.map(([k, v]) => `<button class="btn sm${k === t.mode ? ' primary' : ''}" data-tx-mode="${k}">${v}</button>`).join('')}</div>`;
   const nP = ui.txStudio ? ui.txStudio.length : 0;
-  const target = nP ? `<p class="muted" style="margin:8px 0 0">${L(`Stüdyoda seçili ${nP} parçaya uygulanır.`, `Will be applied to the ${nP} selected part(s) in the studio.`)}</p>`
+  const nW = ui.txWall ? selObjs().filter(x => x.kind === 'wall').length : 0;
+  const target = nW ? `<p class="muted" style="margin:8px 0 0">${L(`Seçili ${nW} duvarın ${ui.txWall}. yüzüne uygulanır.`, `Will be applied to face ${ui.txWall} of the ${nW} selected wall(s).`)}</p>` : nP ? `<p class="muted" style="margin:8px 0 0">${L(`Stüdyoda seçili ${nP} parçaya uygulanır.`, `Will be applied to the ${nP} selected part(s) in the studio.`)}</p>`
     : n ? `<p class="muted" style="margin:8px 0 0">${L(`Seçili ${n} oda / döşemeye uygulanır.`, `Will be applied to the ${n} selected room(s) / slab(s).`)}</p>` : '';
   if (t.mode === 'gen') {
     const s = t.spec, g = texGen(s), joint = !['checker', 'terrazzo', 'stripe'].includes(s.pattern);
@@ -14399,17 +14451,29 @@ function build3D(keepCam = false) {
       if (isLowWall(w)) { lowWall3D(g, w, L, H, f.ops.filter(o => o.wall === w.id), box, det, lt); pin3(); return; } // korkuluk / çit (#73)
       if (curt) { box(g, L, rail, w.t, frameCol, 0, rail / 2, 0); box(g, L, rail, w.t, frameCol, 0, H - rail / 2, 0); } // alt & üst kuşak
       const sloped = wallTopOn(w); // eğimli üst (#96): en üst parça profili izleyen prizma
+      // ayrı boyanan / kaplanan yüzler: her duvar parçasının iki yanına ince bir "kaplama" yüzeyi (UV = cm, doku gerçek boyda)
+      const skins = curt ? [] : [1, 2].map(i => {
+        const fc = wallFace(w, i), fk = det ? finishKind(fc.fin) : null; if (!w['c' + i] && !fk) return null;
+        const col = fc.col || (lt ? '#faf8f5' : '#e2e8f0'); let m;
+        if (fk) { m = floorMat(fk, col, lt, { floorTex, texs }); extraMats.push(m); } else m = mat(col);
+        return { m, z: (i === 1 ? 1 : -1) * (w.t / 2 + 0.15), flipV: !!texIdOf(fk) };
+      }).filter(Boolean);
+      const skin = shp => { for (const k of skins) {
+        const geo = new THREE.ShapeGeometry(shp); if (k.flipV) { const uv = geo.attributes.uv; for (let j = 0; j < uv.count; j++) uv.setY(j, -uv.getY(j)); }
+        const m = new THREE.Mesh(geo, k.m); m.position.z = k.z; m.receiveShadow = true; g.add(m);
+      } };
+      const V2 = (x, y) => new THREE.Vector2(x, y);
       const seg = (s, e, y0, y1) => {
         if (sloped && y1 >= H - 0.01) {
           const tp = wallTopPts(w, s, e); if (e - s < 0.5 || tp.every(p => p[1] - y0 < 0.5)) return;
           const shp = new THREE.Shape([new THREE.Vector2(s - L / 2, y0), new THREE.Vector2(e - L / 2, y0), ...tp.reverse().map(([d, hh]) => new THREE.Vector2(d - L / 2, Math.max(hh, y0)))]);
           const geo = new THREE.ExtrudeGeometry(shp, { depth: w.t, bevelEnabled: false }); geo.translate(0, 0, -w.t / 2);
-          const m = new THREE.Mesh(geo, mat(wCol)); m.castShadow = m.receiveShadow = true; g.add(m);
+          const m = new THREE.Mesh(geo, mat(wCol)); m.castShadow = m.receiveShadow = true; g.add(m); skin(shp);
           if (det) g.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), lineMat));
           return;
         }
         if (curt) { y0 = Math.max(y0, rail); y1 = Math.min(y1, H - rail); if (e - s < 1 || y1 - y0 < 1) return; box(g, e - s, y1 - y0, w.t * 0.3, 0x9fd3ee, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0, 0, lt ? 0.38 : 0.30, false); }
-        else { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, wCol, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); }
+        else { if (e - s < 0.5 || y1 - y0 < 0.5) return; box(g, e - s, y1 - y0, w.t, wCol, (s + e) / 2 - L / 2, (y0 + y1) / 2, 0); if (skins.length) skin(new THREE.Shape([V2(s - L / 2, y0), V2(e - L / 2, y0), V2(e - L / 2, y1), V2(s - L / 2, y1)])); }
       };
       const ops = f.ops.filter(o => o.wall === w.id).sort((a, c) => a.d - c.d); let pos = 0;
       ops.forEach(o => {

@@ -437,6 +437,36 @@ check('adjustable group: edit members adds a new wall and places it per layout w
   if (info.after) throw new Error('Esc did not leave group editing: ' + JSON.stringify(info));
 });
 
+check('wall faces: each face painted / covered on its own in 2D and 3D, named after its room, undo', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    const f = F(), w = mkWall({ x: 0, y: 0 }, { x: 400, y: 0 });
+    f.walls.push(w); f.rooms.push(mkRoom([{ x: 0, y: 0 }, { x: 400, y: 0 }, { x: 400, y: 300 }, { x: 0, y: 300 }], 'Mutfak'));
+    commit(); setTool('select'); sel = [w.id]; refresh();
+    const P0 = document.querySelector('#props'), out = { panel: !!P0.querySelector('[data-p="c1"]') && !!P0.querySelector('[data-p="f2"]') };
+    out.names = [...P0.querySelectorAll('.wfaces h4')].map(h => h.textContent);
+    const set = (p, v) => { const el = P0.querySelector('[data-p="' + p + '"]'); el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); };
+    set('c1', '#ff0000');
+    { const el = document.querySelector('#props [data-p="f2"]'); el.value = 'tile'; el.dispatchEvent(new Event('change', { bubbles: true })); }
+    out.data = [w.c1, w.c2, w.f1, w.f2];
+    out.strips = [...document.querySelectorAll('#gWalls line')].map(l => l.getAttribute('stroke')).filter(c => c === '#ff0000' || (c || '').includes('url(#p-tile')).length;
+    show3D(true); await new Promise(r => setTimeout(r, 500));
+    const cols = [], maps = [];
+    T3.scene.traverse(o => { if (o.isMesh && o.geometry && o.geometry.type === 'ShapeGeometry' && o.parent && o.parent.userData.wallId === w.id) { cols.push(Math.sign(o.position.z) + ':' + o.material.color.getHexString()); maps.push(!!o.material.map); } });
+    out.skins = cols; out.maps = maps;
+    show3D(false);
+    undo(); out.undo = [find(w.id).o.c1, find(w.id).o.f2];
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.panel) throw new Error('wall panel has no face fields: ' + JSON.stringify(info));
+  if (!info.names.some(n => /Mutfak|Kitchen/.test(n))) throw new Error('the face toward the room is not named after it: ' + JSON.stringify(info.names));
+  if (info.data[0] !== '#ff0000' || info.data[1] || info.data[2] || info.data[3] !== 'tile') throw new Error('face fields not stored: ' + JSON.stringify(info.data));
+  if (info.strips < 2) throw new Error('2D does not draw the face paint / finish: ' + JSON.stringify(info));
+  if (!info.skins.includes('1:ff0000') || !info.skins.some(c => c.startsWith('-1:')) || !info.maps.includes(true)) throw new Error('3D faces wrong: ' + JSON.stringify(info));
+  if (info.undo[0] !== '#ff0000' || info.undo[1]) throw new Error('undo did not step back one face change: ' + JSON.stringify(info.undo));
+});
+
 check('accordion wall: stretches into the gap when a grouped room moves or rotates, collapses, undo', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
