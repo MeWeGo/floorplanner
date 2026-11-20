@@ -79,7 +79,10 @@ test('wiring: panel choice, 2D / 3D drawing, no corner fillers or openings on a 
   assert.match(src, /fld\(L\('Boşluğu doldur', 'Fill the gap'\), 'wall', 'accFill'/);
   assert.match(src, /p === 'accFill'\) \{ if \(o\.acc\) \{ if \(v === 'fan'\) o\.acc\.fill = 'fan'; else delete o\.acc\.fill; \} \}/);
   assert.match(fnSrcOf(src, 'wallSvg'), /const fan = f && accFan\(f, w\); if \(fan\) return accFanSvg\(w, fan, live\);/);
-  assert.match(fnSrcOf(src, 'build3D'), /const fan = accFan\(f, w\); if \(fan\) \{ accFan3D\(/);
+  const b3 = fnSrcOf(src, 'build3D');
+  assert.match(b3, /const fan = accFan\(f, w\); if \(fan\) \{ accFan3D\(/);
+  assert.doesNotMatch(b3, /\/\/[^\n]*g\.userData = \{ wallId: w\.id \}/, 'the wall group setup must not end up inside a line comment');
+  assert.match(b3, /g\.rotation\.y = -wAng\(w\); S\.add\(g\);/, 'every ordinary wall group is still added to the scene');
   assert.match(fnSrcOf(src, 'wallJoints'), /isAccFan\(w\)\) continue/);
   assert.match(fnSrcOf(src, 'visFloor'), /filter\(w => !isAccFan\(w\)\)/);
 });

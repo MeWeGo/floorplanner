@@ -14732,7 +14732,7 @@ function build3D(keepCam = false) {
     });
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, we = elev + wallElev(w), g = new THREE.Group(); bellows3D(S, w, we, H, mat, box, det, lineMat, lt);
-      { const fan = accFan(f, w); if (fan) { accFan3D(S, w, fan, we, H, mat, det, lineMat, lt); return; } } // akordiyon yelpaze dolgusu g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, we, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
+      { const fan = accFan(f, w); if (fan) { accFan3D(S, w, fan, we, H, mat, det, lineMat, lt); return; } } /* akordiyon yelpaze dolgusu */ g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, we, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
       const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
       const wCol = w.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
       const curt = w.wt === 'curtain', rail = 5, frameCol = lt ? 0x8fa3b8 : 0x7c8a9c;
