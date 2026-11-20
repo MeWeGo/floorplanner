@@ -19,6 +19,9 @@ const { STAIR_TYPES, stairN, blondel, stairSteps, stepCorners, stairRails } = ne
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   ${constSrc('STAIR_TYPES')}
   ${constSrc('stairN')}
+  ${fnSrc('stairWedge')}
+  ${constSrc('stairPolyC')}
+  ${fnSrc('stairSector')}
   ${fnSrc('stairSteps')}
   ${constSrc('blondel')}
   ${fnSrc('stepCorners')}
@@ -42,7 +45,7 @@ test('(1) legacy stairs without stepN default to straight with 15 risers; stepN 
 });
 
 test('(2) step counts, elevations and landings for all stair types (straight, l, u, spiral)', () => {
-  const types = ['straight', 'l', 'u', 'spiral'];
+  const types = ['straight', 'l', 'lw', 'u', 'uw', 'spiral', 'curve'];
   for (const type of types) {
     const w = type === 'spiral' ? 200 : 220;
     const d = type === 'spiral' ? 200 : 260;
@@ -80,7 +83,7 @@ test('(3) straight stairs: treads tile the depth exactly and climb toward -y', (
 
 test('(4) step corners stay inside the footprint (straight/l/u in w x d, spiral within radius)', () => {
   const tol = 0.5;
-  const types = ['straight', 'l', 'u', 'spiral'];
+  const types = ['straight', 'l', 'lw', 'u', 'uw', 'spiral', 'curve'];
   for (const type of types) {
     const w = type === 'spiral' ? 200 : 220;
     const d = type === 'spiral' ? 200 : 260;
@@ -103,6 +106,22 @@ test('(4) step corners stay inside the footprint (straight/l/u in w x d, spiral 
       }
     }
   }
+});
+
+test('(4b) winders and curved / spiral treads are real polygons that fan around the turn', () => {
+  const lw = stairSteps({ w: 220, d: 300, h: 290, stairType: 'lw', stepN: 17 }), uw = stairSteps({ w: 240, d: 300, h: 290, stairType: 'uw', stepN: 17 });
+  assert.strictEqual(lw.steps.filter(s => s.poly).length, 3, 'three winders on an L');
+  assert.strictEqual(uw.steps.filter(s => s.poly).length, 6, 'six winders on a U');
+  for (const st of [lw, uw]) assert.ok(st.steps.every(s => !s.landing), 'winders replace the landing');
+  const cv = stairSteps({ w: 360, d: 200, h: 290, stairType: 'curve', stepN: 17 }), sp = stairSteps({ w: 200, d: 200, h: 290, stairType: 'spiral', stepN: 17 });
+  for (const st of [cv, sp]) { assert.ok(st.steps.every(s => s.poly && s.poly.length === 10), st.type + ': annular sector treads'); assert.strictEqual(stepCorners(st.steps[0]), st.steps[0].poly); }
+  // the curved stair keeps an open well: no tread reaches the centre
+  const C = { x: 0, y: -100 + 180 }; for (const s of cv.steps) for (const p of s.poly) assert.ok(Math.hypot(p.x - C.x, p.y - C.y) > 70);
+});
+
+test('(4c) IFC: new types export as winding / curved stairs and import back', () => {
+  assert.match(src, /lw: '\.QUARTER_WINDING_STAIR\.'[^\n]*uw: '\.HALF_WINDING_STAIR\.'[^\n]*curve: '\.CURVED_RUN_STAIR\.'/);
+  assert.match(src, /\/CURVED\/\.test\(shape\) \? 'curve' : \/HALF_WINDING\|TWO_QUARTER_WINDING\/\.test\(shape\) \? 'uw' : \/QUARTER_WINDING\/\.test\(shape\) \? 'lw'/);
 });
 
 test('(5) blondel comfort formula', () => {

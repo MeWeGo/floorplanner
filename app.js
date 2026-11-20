@@ -2064,7 +2064,8 @@ function furnBody(f) {
   else if (f.k === 'stairs') {
     // parametrik merdiven (#33): 3B ile aynı basamak listesi; ok çıkış yönünü gösterir
     const st = stairSteps(f), R = Math.min(f.w, f.d) / 2;
-    s += st.type === 'spiral' ? `<circle r="${R}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/><circle r="${R * 0.14}" fill="none" stroke="${sk}" stroke-width="1.5"/>`
+    s += st.type === 'curve' ? st.steps.map(q => `<polygon points="${stepCorners(q).map(p => p.x + ',' + p.y).join(' ')}" fill="${col}" ${fop} stroke="none"/>`).join('')
+      : st.type === 'spiral' ? `<circle r="${R}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/><circle r="${R * 0.14}" fill="none" stroke="${sk}" stroke-width="1.5"/>`
       : `<rect x="${-hw}" y="${-hd}" width="${f.w}" height="${f.d}" fill="${col}" ${fop} stroke="${sk}" stroke-width="2"/>`;
     s += st.steps.map(q => `<polygon points="${stepCorners(q).map(p => p.x + ',' + p.y).join(' ')}" fill="${q.landing && !C.outline ? sk : 'none'}" fill-opacity="${q.landing && !C.outline ? 0.08 : 0}" stroke="${sk}" stroke-width="1.1"/>`).join('');
     const e = st.steps[st.steps.length - 1], b0 = st.steps[0], ux = e.dx, uy = e.dy;
@@ -2145,7 +2146,31 @@ function lightSvg(f) {
    Alanlar (hepsi isteğe bağlı, eski merdivenler varsayılanla açılır): stepN (rıht sayısı), stairType
    ('straight' | 'l' | 'u' | 'spiral'), railing ('none' | 'left' | 'right' | 'both', varsayılan 'right').
    Yerel düzlem koordinatları (merkez 0,0; y aşağı); çıkış yönü düz merdivende −y (2B ok ile aynı). */
-const STAIR_TYPES = { straight: ['Düz', 'Straight'], l: ['L (sahanlıklı)', 'L-shaped (landing)'], u: ['U (sahanlıklı)', 'U-shaped (landing)'], spiral: ['Döner', 'Spiral'] };
+const STAIR_TYPES = { straight: ['Düz', 'Straight'], l: ['L (sahanlıklı)', 'L-shaped (landing)'], lw: ['L (dönel basamaklı)', 'L-shaped (winders)'], u: ['U (sahanlıklı)', 'U-shaped (landing)'], uw: ['U (dönel basamaklı)', 'U-shaped (winders)'], spiral: ['Döner (orta direkli)', 'Spiral (centre pole)'], curve: ['Eğrisel (yarım daire)', 'Curved (half turn)'] };
+// açık basamaklı türler (3B'de ince basamak, altı boş)
+const STAIR_OPEN = new Set(['spiral', 'curve']);
+/* Dönel basamak / kama basamak çokgeni: dışbükey çokgen p ∩ P merkezli, a0 → a1 (a1 > a0, < 180°) açılı kama (Sutherland–Hodgman) */
+function stairWedge(poly, P, a0, a1) {
+  const half = (pts, ax, keepLeft) => {
+    const ux = Math.cos(ax), uy = Math.sin(ax), side = q => (ux * (q.y - P.y) - uy * (q.x - P.x)) * (keepLeft ? 1 : -1), out = [];
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length], sa = side(a), sb = side(b);
+      if (sa >= -1e-9) out.push(a);
+      if ((sa >= -1e-9) !== (sb >= -1e-9)) { const t = sa / (sa - sb); out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }); }
+    }
+    return out;
+  };
+  const r = half(half(poly, a0, true), a1, false);
+  return r.filter((q, i) => Math.hypot(q.x - r[(i + 1) % r.length].x, q.y - r[(i + 1) % r.length].y) > 1e-6).map(q => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 }));
+}
+const stairPolyC = pts => ({ x: pts.reduce((s, q) => s + q.x, 0) / pts.length, y: pts.reduce((s, q) => s + q.y, 0) / pts.length });
+// halka dilimi (döner / eğrisel basamak): C merkez, r0 iç, R dış yarıçap, a0'dan a0 + da'ya (yay 4 parçalı)
+function stairSector(C, r0, R, a0, da) {
+  const out = [], k = 4;
+  for (let j = 0; j <= k; j++) { const a = a0 + da * j / k; out.push({ x: C.x + Math.cos(a) * R, y: C.y + Math.sin(a) * R }); }
+  for (let j = k; j >= 0; j--) { const a = a0 + da * j / k; out.push({ x: C.x + Math.cos(a) * r0, y: C.y + Math.sin(a) * r0 }); }
+  return out.map(q => ({ x: Math.round(q.x * 100) / 100, y: Math.round(q.y * 100) / 100 }));
+}
 const STAIR_RAILS = { none: ['Yok', 'None'], left: ['Sol', 'Left'], right: ['Sağ', 'Right'], both: ['İki yan', 'Both sides'] };
 const stairN = o => clamp(Math.round(+o.stepN || o.h / 17.5) || 2, 2, 60);
 // → { n, riser, tread, steps: [{ x, y, w, d, a, z, dx, dy, across, run, flight, landing }] }
@@ -2161,6 +2186,32 @@ function stairSteps(o) {
     for (let i = 0; i < n1; i++) push(-W / 2 + fw / 2, D / 2 - (i + 0.5) * t1, fw, t1, 0, i, 0, -1, fw, t1, 0);
     push(-W / 2 + fw / 2, -D / 2 + fw / 2, fw, fw, 0, n1, 0, -1, fw, fw, 0, true);
     for (let j = 0; j < n2; j++) push(-W / 2 + fw + (j + 0.5) * t2, -D / 2 + fw / 2, t2, fw, 0, n1 + 1 + j, 1, 0, fw, t2, 1);
+  } else if (type === 'lw') { // L, köşede 3 dönel basamak (iç köşeden 30°'lik kamalar)
+    const fw = Math.min(W, D) / 2, L1 = D - fw, L2 = W - fw, kw = n >= 5 ? 3 : 1;
+    const n1 = clamp(Math.round((n - kw) * L1 / (L1 + L2)), 1, n - kw - 1), n2 = n - kw - n1, t1 = L1 / n1, t2 = L2 / n2;
+    for (let i = 0; i < n1; i++) push(-W / 2 + fw / 2, D / 2 - (i + 0.5) * t1, fw, t1, 0, i, 0, -1, fw, t1, 0);
+    const P = { x: -W / 2 + fw, y: -D / 2 + fw }, sq = [{ x: -W / 2, y: -D / 2 }, { x: P.x, y: -D / 2 }, { x: P.x, y: P.y }, { x: -W / 2, y: P.y }];
+    for (let k = 0; k < kw; k++) {
+      const a0 = Math.PI + k * (Math.PI / 2) / kw, a1 = a0 + (Math.PI / 2) / kw, m = (a0 + a1) / 2, poly = stairWedge(sq, P, a0, a1), c = stairPolyC(poly);
+      push(c.x, c.y, fw, fw / kw, 0, n1 + k, -Math.sin(m), Math.cos(m), fw, t1, 0); steps[steps.length - 1].poly = poly;
+    }
+    for (let j = 0; j < n2; j++) push(-W / 2 + fw + (j + 0.5) * t2, -D / 2 + fw / 2, t2, fw, 0, n1 + kw + j, 1, 0, fw, t2, 0);
+  } else if (type === 'uw') { // U, sahanlık yerine dönel basamaklar (iki kolun arasındaki noktadan kamalar)
+    const fw = W / 2, ld = Math.min(fw, D / 3), Lf = D - ld, kw = n >= 8 ? 6 : n >= 6 ? 4 : 2;
+    const n1 = Math.max(1, Math.floor((n - kw) / 2)), n2 = Math.max(1, n - kw - n1), t1 = Lf / n1, t2 = Lf / n2;
+    for (let i = 0; i < n1; i++) push(-fw / 2, D / 2 - (i + 0.5) * t1, fw, t1, 0, i, 0, -1, fw, t1, 0);
+    const P = { x: 0, y: -D / 2 + ld }, rc = [{ x: -W / 2, y: -D / 2 }, { x: W / 2, y: -D / 2 }, { x: W / 2, y: P.y }, { x: -W / 2, y: P.y }];
+    for (let k = 0; k < kw; k++) {
+      const a0 = Math.PI + k * Math.PI / kw, a1 = a0 + Math.PI / kw, m = (a0 + a1) / 2, poly = stairWedge(rc, P, a0, a1), c = stairPolyC(poly);
+      push(c.x, c.y, fw, ld, 0, n1 + k, -Math.sin(m), Math.cos(m), fw, t1, 0); steps[steps.length - 1].poly = poly;
+    }
+    for (let j = 0; j < n2; j++) push(fw / 2, -D / 2 + ld + (j + 0.5) * t2, fw, t2, 0, n1 + kw + j, 0, 1, fw, t2, 0);
+  } else if (type === 'curve') { // eğrisel: 180° yay, ortası boş (orta direk yok); soldan başlar, üstten dolanıp sağda biter
+    const R = Math.max(30, Math.min(W / 2, D)), r0 = R * 0.42, C = { x: 0, y: -D / 2 + R }, rm = (R + r0) / 2, da = Math.PI / n;
+    for (let i = 0; i < n; i++) {
+      const a0 = Math.PI + i * da, m = a0 + da / 2, poly = stairSector(C, r0, R, a0, da);
+      push(C.x + Math.cos(m) * rm, C.y + Math.sin(m) * rm, R - r0, rm * da, m, i, -Math.sin(m), Math.cos(m), R - r0, rm * da, 0); steps[steps.length - 1].poly = poly;
+    }
   } else if (type === 'u') {
     const fw = W / 2, ld = Math.min(fw, D / 3), Lf = D - ld;
     const n1 = Math.max(1, Math.floor((n - 1) / 2)), n2 = Math.max(1, n - 1 - n1), t1 = Lf / n1, t2 = Lf / n2;
@@ -2173,6 +2224,7 @@ function stairSteps(o) {
     for (let i = 0; i < n; i++) {
       const t = Math.PI / 2 - (i + 0.5) * da, cx = Math.cos(t) * rm, cy = Math.sin(t) * rm;
       push(cx, cy, R - r0, 2 * rm * Math.sin(da / 2) * 1.08, t, i, Math.sin(t), -Math.cos(t), R - r0, 2 * (R * 0.66) * Math.sin(da / 2), 0);
+      steps[steps.length - 1].poly = stairSector({ x: 0, y: 0 }, r0, R, t - da / 2, da); // gerçek kama basamak
     }
   }
   const s0 = steps.find(s => !s.landing) || steps[0];
@@ -2204,6 +2256,7 @@ const fmtPct = v => (Math.round(v * 10) / 10).toFixed(1);
 const pctTxt = v => L('%' + fmtPct(v), fmtPct(v) + '%'); // Türkçe %7,0 sırası; İngilizce 7.0%
 // Bir basamağın yerel köşeleri (döndürülmüş dikdörtgen)
 function stepCorners(s) {
+  if (s.poly) return s.poly; // dönel / kama basamak: hazır çokgen
   const c = Math.cos(s.a), sn = Math.sin(s.a), hw = s.w / 2, hd = s.d / 2;
   return [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([x, y]) => ({ x: s.x + x * c - y * sn, y: s.y + x * sn + y * c }));
 }
@@ -3773,7 +3826,7 @@ function ifcToProject(text, opts = {}) {
     const dirs = flights.map(c => ({ c, z: zr(geom(c).body.length ? geom(c).body : [[0, 0, Infinity]])[0], u: geom(c).body.length >= 3 ? climb(geom(c).body) : null })).filter(f => f.u).sort((p, q) => p.z - q.z);
     const u = (dirs[0] && dirs[0].u) || climb(body) || { x: 0, y: -1 };
     const shape = String(((A(id)[8] || {}).e) || '');
-    let type = /SPIRAL|CURVED/.test(shape) ? 'spiral' : /HALF_TURN|U_SHAPED|TWO_QUARTER/.test(shape) ? 'u' : /QUARTER|L_SHAPED/.test(shape) ? 'l' : /STRAIGHT/.test(shape) ? 'straight' : '';
+    let type = /SPIRAL/.test(shape) ? 'spiral' : /CURVED/.test(shape) ? 'curve' : /HALF_WINDING|TWO_QUARTER_WINDING/.test(shape) ? 'uw' : /QUARTER_WINDING/.test(shape) ? 'lw' : /HALF_TURN|U_SHAPED|TWO_QUARTER/.test(shape) ? 'u' : /QUARTER|L_SHAPED/.test(shape) ? 'l' : /STRAIGHT/.test(shape) ? 'straight' : '';
     if (!type && dirs.length >= 2) { const v = dirs[dirs.length - 1].u, dt = u.x * v.x + u.y * v.y; type = dt < -0.7 ? 'u' : dt < 0.7 ? 'l' : 'straight'; }
     if (!type) type = 'straight';
     const fr = frameOf(body, u); // −y = ilk kolun çıkış yönü
@@ -9120,7 +9173,7 @@ const IFC_EXP_ENT = { furniture: 'IFCFURNITURE', casework: 'IFCFURNITURE', plumb
   ramp: 'IFCRAMP', roof: 'IFCROOF', appliance: 'IFCELECTRICAPPLIANCE', planting: 'IFCFURNISHINGELEMENT', entourage: 'IFCFURNISHINGELEMENT', lighting: 'IFCLIGHTFIXTURE' };
 const IFC_EXP_PT = { IFCFURNITURE: '.NOTDEFINED.', IFCSANITARYTERMINAL: '.NOTDEFINED.', IFCCOLUMN: '.COLUMN.', IFCRAMP: '.STRAIGHT_RUN_RAMP.', IFCROOF: '.NOTDEFINED.',
   IFCELECTRICAPPLIANCE: '.NOTDEFINED.', IFCLIGHTFIXTURE: '.NOTDEFINED.' };
-const IFC_EXP_STAIR = { straight: '.STRAIGHT_RUN_STAIR.', l: '.QUARTER_TURN_STAIR.', u: '.HALF_TURN_STAIR.', spiral: '.SPIRAL_STAIR.' };
+const IFC_EXP_STAIR = { straight: '.STRAIGHT_RUN_STAIR.', l: '.QUARTER_TURN_STAIR.', lw: '.QUARTER_WINDING_STAIR.', u: '.HALF_TURN_STAIR.', uw: '.HALF_WINDING_STAIR.', spiral: '.SPIRAL_STAIR.', curve: '.CURVED_RUN_STAIR.' };
 function ifcFromExchange(x, opts = {}) {
   const FT = 0.3048, rnd = opts.random || Math.random, out = [];
   let n = 0;
@@ -14486,9 +14539,15 @@ function furn3D(g, o, C) {
     }
     case 'stairs': {
       // parametrik merdiven (#33): stairSteps() 2B ile ortak; döner merdivende açık basamak + orta direk
-      const st = stairSteps(o), spiral = st.type === 'spiral';
+      const st = stairSteps(o), spiral = st.type === 'spiral', open = STAIR_OPEN.has(st.type);
+      // dönel / kama basamak: çokgen prizma (plan y → three z; üstü s.z, açık türde 5 cm kalınlık)
+      const prism = (pts, top, hh, c) => {
+        const geo = new THREE.ExtrudeGeometry(new THREE.Shape(pts.map(q => new THREE.Vector2(q.x, q.y))), { depth: hh, bevelEnabled: false }); geo.rotateX(Math.PI / 2);
+        const m = new THREE.Mesh(geo, C.mat(c)); m.position.y = top; m.castShadow = m.receiveShadow = true; g.add(m); return m;
+      };
       st.steps.forEach((s, i) => {
-        if (spiral) bb(s.w, 5, s.d, col, s.x, s.z - 5, s.y, -s.a, ed && i === 0);
+        if (s.poly) prism(s.poly, s.z, open ? 5 : s.z, s.landing ? sh(-0.06) : col);
+        else if (open) bb(s.w, 5, s.d, col, s.x, s.z - 5, s.y, -s.a, ed && i === 0);
         else bb(s.w, s.z, s.d, s.landing ? sh(-0.06) : col, s.x, 0, s.y, -s.a, ed && i === 0);
       });
       if (spiral) cyl(g, Math.max(3, Math.min(w, d) * 0.07), h + 90, metal, 0, (h + 90) / 2, 0, 16);

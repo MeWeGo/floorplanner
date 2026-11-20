@@ -1867,7 +1867,7 @@ function ifcToProject(text, opts = {}) {
     const dirs = flights.map(c => ({ c, z: zr(geom(c).body.length ? geom(c).body : [[0, 0, Infinity]])[0], u: geom(c).body.length >= 3 ? climb(geom(c).body) : null })).filter(f => f.u).sort((p, q) => p.z - q.z);
     const u = (dirs[0] && dirs[0].u) || climb(body) || { x: 0, y: -1 };
     const shape = String(((A(id)[8] || {}).e) || '');
-    let type = /SPIRAL|CURVED/.test(shape) ? 'spiral' : /HALF_TURN|U_SHAPED|TWO_QUARTER/.test(shape) ? 'u' : /QUARTER|L_SHAPED/.test(shape) ? 'l' : /STRAIGHT/.test(shape) ? 'straight' : '';
+    let type = /SPIRAL/.test(shape) ? 'spiral' : /CURVED/.test(shape) ? 'curve' : /HALF_WINDING|TWO_QUARTER_WINDING/.test(shape) ? 'uw' : /QUARTER_WINDING/.test(shape) ? 'lw' : /HALF_TURN|U_SHAPED|TWO_QUARTER/.test(shape) ? 'u' : /QUARTER|L_SHAPED/.test(shape) ? 'l' : /STRAIGHT/.test(shape) ? 'straight' : '';
     if (!type && dirs.length >= 2) { const v = dirs[dirs.length - 1].u, dt = u.x * v.x + u.y * v.y; type = dt < -0.7 ? 'u' : dt < 0.7 ? 'l' : 'straight'; }
     if (!type) type = 'straight';
     const fr = frameOf(body, u); // −y = ilk kolun çıkış yönü
