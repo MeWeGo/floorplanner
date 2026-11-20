@@ -85,7 +85,8 @@ Floor = {
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone|grass|water|gravel|deck|asphalt|glass|tex:<id>", glass?:"clear|frosted", slabT?:20, pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
   "slabs":  [ { id, name, floor:"concrete|…", glass?:"clear|frosted", color:null|"#hex", t:20, off:0, pts:[{x,y},…] } ],   // free slabs: balconies / terraces (issue #22)
   "voids":  [ { id, name, type:"stair|shaft|atrium", pts:[{x,y},…] } ],                     // holes in this floor's slab (issue #23)
-  "sections": [ { id, name:"A", a:{x,y}, b:{x,y}, dir:1|-1 } ],                            // section lines (issue #30); view direction = normal of a→b × dir
+  "sections": [ { id, name:"A", a:{x,y}, b:{x,y}, dir:1|-1 } ],
+  "axes":     [ { id, name:"1"|"A", a:{x,y}, b:{x,y}, bub?:"a"|"b"|"none" } ],                // structural axes (aks), 2D only                            // section lines (issue #30); view direction = normal of a→b × dir
   "dims":   [ { id, a:{x,y}, b:{x,y}, off } ],
   "texts":  [ { id, x, y, text, size, color, rot } ],
   "sketches": [ { id, pts:[{x,y},…], w, color } ],  // pen tool: freehand strokes (already simplified)
@@ -397,6 +398,13 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - **3D cutaway:** `ui.secCut` = section id; `applySecClip()` sets `T3.r.clippingPlanes` to the plane (keeps `d > 0`) and runs at the end of every `build3D`; `lookAtSection()` / `camAlong()` face the cut. **Facade cameras:** `set3DCam('north'|'east'|'south'|'west')` (`#b3dN/E/S/W`, labels K/D/G/B in Turkish).
 - `archModal(key)` (`ui.modal === 'arch'`, keys `sec:<id>` / `elev:<dir>`) tabs through all sections and the four elevations and downloads SVG / PNG (`svgToPng`). Guard: `tests/section-elevation.test.js` + a smoke check.
 
+### Structural axes (aks)
+- Kind `axis` in `Floor.axes` (`KINDS`, `AB_KINDS`, `XFORM_KINDS`; mirrored in `mcp/server.js` `KINDS` / `newFloor`). Like a section line it has `a` / `b` ends (`da` / `db` handles, move / rotate / mirror / paste / delete come from the AB paths) and is **2D only** (`build3D` and sections never read it); drawn by `axisSvg` in the dims layer, so it prints and exports. `bub` (absent = bubbles at both ends) picks `'a'` / `'b'` / `'none'` (`AXIS_BUBS`).
+- Tool `axis` (`Z`, `TOOLS` entry ⊹): two clicks (start point kept in `ui.secStart`, shared with the section tool), the tool stays on for the next axis. Names: `nextAxisName(a, b, f)` — nearer-vertical axes get the next free number (1, 2, 3 …), nearer-horizontal ones the next free letter (`axisLetter`: A … Z, AA …), per floor; the panel renames.
+- `axisSnapPts(f)` (next to `snapPt`) adds every axis end and every crossing of two axis segments to the end-snap candidates, so walls start exactly on grid points.
+- **⊞ Axis grid** (`axgrid` panel button and command → `axisGridPrompt`): two prompts of spacings (`parseAxisSpacing`: `500, 500, 400`, `3x500`), `axisGrid(f, origin, xs, ys)` from the top-left of the drawing (or 0, 0), lines overhang 150 cm. **⧉ Copy to all floors** (`axcopy` → `axisCopyAll`: an axis with the same name on another floor is moved to match, else added). **＋ Floor** gives the new floor a copy of the current floor's axes.
+- Not built: axis dimensions, axes in sections / elevations / 3D, IFC `IfcGrid`, MCP tools to add axes. Guard: `tests/axes.test.js` + the smoke check "axes: …".
+
 ### Command line (issue #43)
 - `:` (any layout that produces `e.key === ":"`, no Ctrl/Alt, no open modal) opens `openCmdPalette()` — checked in the window `keydown` handler **before** the 3D branch, after the `typing` early return, so text / number fields never trigger it and wall-length digits are untouched. The overlay (`#cmdPal` / `#cmdIn`, created on demand like `#ctxMenu`, not in `index.html`) stops propagation of its own keys, so walk keys and single-key tools never fire while typing.
 - `cmdList()` is built only from existing actions: every `TOOLS` entry (`setTool`, which already leaves 3D) plus undo / redo, 2D / 3D, fit, save, print, PNG / SVG / JSON, open, new, flip H / V, scale, select all, delete, duplicate, group, elevations, layers, render studio, snap, theme, language, help — each with its existing shortcut label. `in3d: true` runs in place in 3D; anything else calls `show3D(false)` first (`runCmd`). **Add new actions here** when you add a toolbar button or shortcut.
@@ -674,6 +682,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/wall-faces.test.js` | per-face wall paint / finish on the real helpers: fallback to the wall paint, swap, room / compass face names, cleanup, and the panel / 2D / 3D / mirror / split / texture wiring |
 | `tests/surface-slope.test.js` | sloped surfaces on the real SURF-SLOPE block: drain point, corner tilt as one plane, edge points, concave room area kept, winding independence, cleanup, and the transform / 3D / furniture / walk / 2D / panel wiring |
 | `tests/accordion-fan.test.js` | accordion fan fill on the real functions: straight by default, the fan sweeps the wedge around the hinge corner on the arc, more pleats when wider, closed thin leaf, straight-pleat fallback, `cleanAcc`, and the panel / 2D / 3D / joints / openings wiring |
+| `tests/axes.test.js` | structural axes on the real helpers: number / letter naming and the next free name, spacing lists, grid layout and continued names, crossing + end snap points, and the kind / tool / snap / panel / command / floor / MCP wiring |
 | `tests/floor-slab-off.test.js` | the per-floor floor slab switch: `noSlab` empties `slabPolys` (3D, sections), panel checkbox + undo, MCP `add_floor` mirror |
 | `tests/studio-catalog-model.test.js` | furniture studio opening a catalogue item: the real `furn3D` model becomes valid parts (lying cylinders kept), the draft box holds the model, the recentre offset keeps the footprint, stairs / ramps / roofs / poly fall back |
 | `tests/bookcase.test.js` | bookcase / shelf 3D models (#54): open front carcass, visible shelves, bookcase book rows gated by detail flag, dresser/nightstand drawer fronts kept |
