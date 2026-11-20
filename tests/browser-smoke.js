@@ -2180,6 +2180,73 @@ check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light p
   return 'floor ' + r.off.toFixed(0) + ' → ' + r.on.toFixed(0) + ' when on, ' + r.lightsOn + ' lights always, rebuild with 30 lamps ' + r.buildMs.toFixed(0) + ' ms';
 });
 
+check('daytime lights off by default, #b3dLights toggle, Night->Day revert, and sticky shadow slots', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    setNight3D(false); setDayLights(false); setLive3D(false);
+    loadProject(newProject()); addRectWalls(0, 0, 1200, 400);
+    F().furn.push(mkFurn(BYID.lampCeil, 120, 200, 0));
+    commit(); refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(() => {
+    const out = {}, btn = document.getElementById('b3dLights');
+    const state = () => {
+      let embers = 0;
+      T3.scene.traverse(m => { if (m.isMesh && m.material && !Array.isArray(m.material) && m.material.userData && m.material.userData.fk === 'ember') embers++; });
+      const halos = (T3.fixList || []).flatMap(e => e.halos || []).filter(h => h.visible).length;
+      const poolIn = !!(T3.fix && T3.fix.pts[0].parent === T3.scene);
+      return { active: lightsActive3D(), poolIn, embers, halos, lon: F().furn[0].lon, btnOn: !!(btn && btn.classList.contains('on')) };
+    };
+    out.cad = state();
+    setLive3D(true);
+    out.live = state();
+    btn.click();
+    out.dayOn = state();
+    btn.click();
+    out.dayOff = state();
+    document.getElementById('b3dNight').click();
+    out.night = state();
+    document.getElementById('b3dNight').click();
+    out.backDay = state();
+
+    F().furn = [100, 180, 260, 340, 940, 1020].map(x => mkFurn(BYID.lampCeil, x, 200, 0));
+    commit();
+    setNight3D(true); build3D(true);
+    T3.ctl.target.set(180, 100, 200); T3.ctl.update(); T3.fixAt = null;
+    draw3D(performance.now());
+    const sm = T3.r.shadowMap, orig = sm.render;
+    let passes = 0; sm.render = function () { if (this.needsUpdate || this.autoUpdate) passes++; return orig.apply(this, arguments); };
+    try {
+      T3.ctl.target.x = 260; T3.ctl.update(); T3.fixAt = null; draw3D(performance.now());
+      out.smallMovePasses = passes;
+      passes = 0;
+      T3.ctl.target.x = 980; T3.ctl.update(); T3.fixAt = null; draw3D(performance.now());
+      out.farMovePasses = passes;
+      passes = 0;
+      T3.ctl.target.x = 940; T3.ctl.update(); T3.fixAt = null; draw3D(performance.now());
+      out.settledPasses = passes;
+    } finally {
+      sm.render = orig;
+      setNight3D(false); setDayLights(false); setLive3D(false); show3D(false);
+    }
+    return out;
+  })()`);
+  const offOk = s => !s.active && !s.poolIn && s.embers === 0 && s.halos === 0 && s.lon === undefined && !s.btnOn;
+  const onOk = s => s.active && s.poolIn && s.embers > 0 && s.halos > 0 && s.lon === undefined && s.btnOn;
+  if (!offOk(r.cad) || !offOk(r.live)) throw new Error('daytime lights were active by default: ' + JSON.stringify({ cad: r.cad, live: r.live }));
+  if (!onOk(r.dayOn)) throw new Error('#b3dLights click did not activate daytime lights cleanly: ' + JSON.stringify(r.dayOn));
+  if (!offOk(r.dayOff)) throw new Error('#b3dLights second click did not deactivate daytime lights cleanly: ' + JSON.stringify(r.dayOff));
+  if (!onOk(r.night)) throw new Error('#b3dNight did not turn lights on automatically: ' + JSON.stringify(r.night));
+  if (!offOk(r.backDay)) throw new Error('#b3dNight back to day did not revert lights off: ' + JSON.stringify(r.backDay));
+  if (r.smallMovePasses !== 0) throw new Error('sticky shadow slots re-rendered on small move: ' + r.smallMovePasses);
+  if (!(r.farMovePasses >= 1) || r.settledPasses !== 0) throw new Error('far move shadow update / settle failed: ' + JSON.stringify({ far: r.farMovePasses, settled: r.settledPasses }));
+  return 'day default off (CAD + Live), #b3dLights toggle, Night->Day revert, sticky shadows 0/' + r.farMovePasses + '/0';
+});
+
 check('light parts: studio bulb / spot / LED strip blocks, a custom lamp lights the floor in 3D, panel + click switch it, LED shelf strip', async page => {
   // studio: light blocks and the per-part light fields
   const st = await page.evaluate(`(() => {
@@ -2297,7 +2364,7 @@ check('night mode: 🌙 turns on the live view, night sky, moon, auto room light
     out.sky = T3.live && T3.live.sky.material.uniforms.night.value;
     out.exp = T3.r.toneMappingExposure - exp0;
     const sun = shadowLights(T3.scene)[0]; out.moonUp = sun.position.y > sun.target.position.y; out.moonI = sun.intensity;
-    out.auto = !!T3.fix && T3.fix.pts.some(l => l.intensity > 0.3);
+    out.auto = !!T3.fix && T3.fix.pts.concat(T3.fix.spots).some(l => l.intensity > 0.3);
     set3DCam('eye'); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }));
     out.flash = !!ui.flash && T3.fix.spots[FIX_SPOTS - 1].intensity > 1;
     exitWalk(true); out.flashOff = !ui.flash;

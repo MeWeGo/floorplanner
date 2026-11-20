@@ -4174,6 +4174,7 @@ function parts3D(g, o, C) {
       mesh.rotation.set(-(p.rx || 0) * r, -(p.rot || 0) * r, -(p.ry || 0) * r, 'YZX'); mesh.quaternion.multiply(pre);
     } else { mesh.rotation.order = 'YXZ'; mesh.rotation.y = -(p.rot || 0) * Math.PI / 180; }
     mesh.receiveShadow = !lq; mesh.castShadow = !lq && !m.transparent && p.w * p.d * p.h > 1500;
+    if (lq && lq.on && C.pmat) mesh.userData.litSwap = { on: m, off: C.pmat('#e5e7eb', 'plastic') };
     root.add(mesh);
   }
 }
@@ -6898,14 +6899,17 @@ function lightPanelHtml(o, n) {
     + fld(L('Özel renk', 'Custom colour'), 'furn', 'lcol', q.col, { type: 'color' })
     + (q.custom ? `<div class="row"><button class="btn sm" data-act="lightcolreset">${L('↺ Renk sıcaklığına dön', '↺ Back to colour temperature')}</button></div>` : '');
   if (q.kind === 'spot') h += fld(L('Işık açısı (°)', 'Beam angle (°)'), 'furn', 'beam', q.beam, { min: LIGHT_BEAM_MIN, max: LIGHT_BEAM_MAX, step: 5 });
+  if (ui.view3d && !lightsActive3D() && q.on) h += `<p class="muted">${L('Gündüz 3B’de ışıklar varsayılan kapalıdır (💡 ile açabilirsiniz).', 'Lights are off by default in daytime 3D (toggle 💡 to turn them on).')}</p>`;
   return h;
 }
 // ışıklı parçası olan eşya: aç / kapa + özet; parça ayarları (tür, lümen, renk) mobilya stüdyosunda
 function partLightPanelHtml(o) {
   const ls = partLightSpots(o), lm = ls.reduce((a, e) => a + e.q.lm, 0), kinds = [...new Set(ls.map(e => L(...PB_LIGHTS[e.q.strip ? 'strip' : e.q.kind])))].join(', ');
-  return `<h4>💡 ${L('Işık', 'Light')}</h4><label class="f"><span>${L('Açık', 'On')}</span><input type="checkbox" data-k="furn" data-p="lon" ${o.lon !== 0 ? 'checked' : ''}></label>`
+  let h = `<h4>💡 ${L('Işık', 'Light')}</h4><label class="f"><span>${L('Açık', 'On')}</span><input type="checkbox" data-k="furn" data-p="lon" ${o.lon !== 0 ? 'checked' : ''}></label>`
     + `<div class="stat"><span>${esc(kinds)}</span><b>${ls.length} · ${lm} lm</b></div>`
     + `<p class="muted">${L('Işık türü, parlaklık ve rengi 🧩 Mobilya stüdyosunda parça parça ayarlanır.', 'Light type, brightness and colour are set per part in the 🧩 furniture studio.')}</p>`;
+  if (ui.view3d && !lightsActive3D() && o.lon !== 0) h += `<p class="muted">${L('Gündüz 3B’de ışıklar varsayılan kapalıdır (💡 ile açabilirsiniz).', 'Lights are off by default in daytime 3D (toggle 💡 to turn them on).')}</p>`;
+  return h;
 }
 // odadaki aydınlatma elemanları (#120): merkezi oda çokgeninin içinde olanlar
 // kattaki tüm ışıklar: biri bile açıksa hepsi kapanır, yoksa hepsi açılır (tek geri alma adımı)
@@ -8042,6 +8046,7 @@ function cmdList() {
     act('roof', '🏠', 'Çatı ekle', 'Add a roof', '', () => startPlace('furn', BYID.roof), true, 'roof çatı gable hip shed flat beşik kırma tek eğim düz'),
     act('light', '💡', 'Tavan lambası ekle', 'Add a ceiling light', '', () => startPlace('furn', BYID.lampCeil), true, 'light lamp lighting ışık lamba aydınlatma armatür avize spot'),
     act('night', '🌙', 'Gece / gündüz (3B)', 'Night / day (3D)', '', () => { if (!ui.view3d) show3D(true); setNight3D(!isNight3D()); }, true, 'night day gece gündüz ay moon dark karanlık'),
+    act('daylights', '💡', 'Gündüz ışıkları aç / kapat (3B)', 'Daytime lights on / off (3D)', '', () => { if (!ui.view3d) show3D(true); setDayLights(!ui.dayLights); }, true, 'day lights daytime gunduz isik lamba'),
     act('autoroom', '💡', 'Gece otomatik oda ışıkları aç / kapat', 'Automatic room lights at night on / off', '', () => { ui.autoRoomLight = ui.autoRoomLight === false; try { localStorage.setItem('fp_autoroom', ui.autoRoomLight ? '1' : '0'); } catch (_) { } assignFixLights && T3 && T3.fix && assignFixLights(); req3D(); toast(ui.autoRoomLight ? L('Otomatik oda ışıkları açık', 'Automatic room lights on') : L('Otomatik oda ışıkları kapalı', 'Automatic room lights off')); }, true, 'auto room light night otomatik oda ışık gece'),
     act('lightsall', '💡', 'Bu kattaki ışıkları aç / kapat', 'Turn the lights on this floor on / off', '', () => toggleFloorLights(), true, 'lights on off ışıklar aç kapat'),
     act('fit', '⤢', 'Sığdır', 'Zoom to fit', '0', () => ui.view3d ? set3DCam('fit') : fit(), true, 'zoom extents yakınlaştır'),
@@ -10558,10 +10563,17 @@ $('#modal').addEventListener('click', e => {
 // 3B kesit (issue #30): seçili kesitin önünü kırp (renderer genel kırpma düzlemi)
 function applySecClip() {
   if (!T3 || !T3.r) return;
+  const had = !!(T3.r.clippingPlanes && T3.r.clippingPlanes.length);
   const fd = ui.secCut && findAnyFloor(ui.secCut);
-  if (!fd || fd.kind !== 'section') { ui.secCut = null; T3.r.clippingPlanes = []; return; }
+  if (!fd || fd.kind !== 'section') {
+    ui.secCut = null; T3.r.clippingPlanes = [];
+    if (had && ui.live3d && T3.live && T3.live.sky.parent === T3.scene) applyLive3D();
+    req3D(); return;
+  }
   const { O, n } = sectionFrame(fd.o);
   T3.r.clippingPlanes = [new THREE.Plane(new THREE.Vector3(n.x, 0, n.y), -(n.x * O.x + n.y * O.y))];
+  if (!had && ui.live3d && T3.live && T3.live.sky.parent === T3.scene) applyLive3D();
+  req3D();
 }
 // kesite / cepheye dik bak (izleyici n'nin tersinde, n yönüne bakar)
 function camAlong(n, c, span, hgt) {
@@ -10766,6 +10778,7 @@ function shot3DScale(w, h, maxSide = 3840, maxPixels = 12e6) {
 /** PNG data URL of the current camera, oversampled. '' when 3D is not running. */
 function render3DDataUrl(scale) {
   if (!ui.view3d || !T3 || !T3.r) return '';
+  resetNavDpr3D();
   const { r, scene, cam, ctl } = T3, el = $('#v3d');
   const w = Math.max(1, el.clientWidth), h = Math.max(1, el.clientHeight);
   const k = scale || shot3DScale(w, h);
@@ -10773,6 +10786,7 @@ function render3DDataUrl(scale) {
   let url = '';
   try {
     ctl.update();
+    scene.updateMatrixWorld(true);
     r.setPixelRatio(1);                                  // the ratio would multiply the target size
     r.setSize(Math.round(w * k), Math.round(h * k), false); // false: the canvas stays visually the same
     setCamAspect(cam, w / h);
@@ -10781,6 +10795,7 @@ function render3DDataUrl(scale) {
   } finally {
     r.setPixelRatio(oldRatio);
     resize3D();                                           // back to the on-screen size + aspect
+    markScene3D();
     if (ui.view3d && T3.run) r.render(scene, cam);
   }
   return url;
@@ -10824,12 +10839,32 @@ const FIX_PTS = 8, FIX_SPOTS = 6;
 const FIX_SHADOWS = 4, FIX_WIDE = 80;
 function markShadows() { if (T3 && T3.r && T3.r.shadowMap) { T3.r.shadowMap.needsUpdate = true; req3D(); } }
 // gölgeli yuvalar: det açıkken açılır; değişince bir kez derleme (yalnızca detay seviyesi değişince)
-function fixShadowSlots(on) {
+function fixShadowSlots(on, res = 512) {
   const pool = T3.fix; if (!pool) return;
-  pool.spots.forEach((l, i) => { const c = on && i < FIX_SHADOWS; if (l.castShadow !== c) l.castShadow = c; if (c) { l.shadow.mapSize.set(1024, 1024); l.shadow.bias = -0.0015; l.shadow.normalBias = 2; l.shadow.camera.near = 5; } });
+  pool.spots.forEach((l, i) => {
+    const c = on && i < FIX_SHADOWS;
+    if (l.castShadow !== c) l.castShadow = c;
+    if (c) {
+      if (l.shadow.mapSize.x !== res || l.shadow.mapSize.y !== res) { l.shadow.mapSize.set(res, res); if (l.shadow.map) { l.shadow.map.dispose(); l.shadow.map = null; } }
+      l.shadow.bias = -0.0015; l.shadow.normalBias = 2; l.shadow.camera.near = 5;
+    }
+  });
 }
 // gölgeli yuvalara gidecek armatürler: türüne bakmadan en etkili n (sıralama fixRank ile aynı skor)
 function fixShadowPick(list, focus, n) { return list.filter(e => e.on).map(e => [fixScore(e, focus), e]).sort((a, b) => b[0] - a[0]).slice(0, n).map(x => x[1]); }
+// yapışkan gölge yuvaları: önceki yuvadaki lamba hâlâ en iyi n içindeyse (1.35× histerezis) AYNI yuvada kalır → gereksiz gölge çizimi olmaz
+function fixShadowAssign(list, focus, n, prev = []) {
+  const prevSet = new Set(prev.filter(Boolean));
+  const win = list.filter(e => e.on).map(e => [fixScore(e, focus) * (prevSet.has(e) ? 1.35 : 1), e]).sort((a, b) => b[0] - a[0]).slice(0, n).map(x => x[1]);
+  const winSet = new Set(win), slots = Array(n).fill(null), placed = new Set();
+  for (let i = 0; i < n; i++) if (prev[i] && winSet.has(prev[i])) { slots[i] = prev[i]; placed.add(prev[i]); }
+  let wi = 0;
+  for (let i = 0; i < n; i++) if (!slots[i]) {
+    while (wi < win.length && placed.has(win[wi])) wi++;
+    if (wi < win.length) { slots[i] = win[wi]; placed.add(win[wi]); wi++; }
+  }
+  return slots;
+}
 
 // parlaklık → Three ışık şiddeti + menzil (eski ışık modu: şiddet kaynakta, menzilde sıfıra iner); tek eşleme
 function lmToThree(lm) { const v = Math.max(100, Math.min(10000, +lm || 800)); return { i: Math.sqrt(v / 800), d: Math.round(300 + 9 * Math.sqrt(v)) }; } // 800 lm = 1: gerçek ışık zemini belirgin aydınlatır (#128)
@@ -10838,10 +10873,18 @@ function fixAnchor(o) {
   const h = +o.h || 0;
   switch (o.type) { case 'pendant': return h * 0.12; case 'chandelier': return h * 0.3 + 7; case 'sconce': case 'wallOut': return h * 0.5; case 'floorLamp': return h - 15; case 'tableLamp': return h * 0.8; case 'bollard': return h - 8; case 'streetLamp': return h - 30; default: return 0; }
 }
-// açık ışığın gündüz katkısı: canlı görünümde güneş yükseldikçe azalır, CAD görünümünde sabit
-function fixDayFactor() {
-  if (!ui.live3d) return 0.45;
-  return clamp(1.15 - (ui.studio && Number.isFinite(ui.studio.alt) ? ui.studio.alt : 42) / 45, 0.25, 1);
+// gündüz ışıklar varsayılan kapalıdır: gece / alacakaranlıkta (alt < 6) ya da kullanıcı gündüz ışıklarını açtıysa (ui.dayLights) yanar
+function lightsActive3D(alt) {
+  if (ui.dayLights) return true;
+  if (alt !== undefined) return +alt < 6;
+  return !!(ui.live3d && ui.studio && Number.isFinite(ui.studio.alt) && ui.studio.alt < 6);
+}
+// açık ışığın gündüz katkısı: gündüz varsayılan kapalı (0); canlı görünümde güneş yükseldikçe azalır, CAD görünümünde sabit
+function fixDayFactor(alt) {
+  if (!lightsActive3D(alt)) return 0;
+  if (alt === undefined && !ui.live3d) return 0.45;
+  const a = alt !== undefined ? +alt : (ui.studio && Number.isFinite(ui.studio.alt) ? ui.studio.alt : 42);
+  return clamp(1.15 - a / 45, 0.25, 1);
 }
 // en etkili n armatür (yalnızca açık olanlar, kind filtresiyle): skor = lm / uzaklık², odak katındakiler ×3
 function fixScore(e, focus) { return e.lm / ((e.x - focus.x) ** 2 + 0.5 * (e.y - focus.y) ** 2 + (e.z - focus.z) ** 2 + 40000) * (e.fidx === focus.fi ? 3 : 1); }
@@ -10862,47 +10905,62 @@ function fixPool() {
   }
   return T3.fix;
 }
-function assignFixLights() {
-  const pool = T3.fix; if (!pool) return;
-  const fc = fixFocus(), k = fixDayFactor(), night = isNight3D();
+let _flashDir = null;
+function assignFixLights(alt) {
+  const pool = T3.fix;
+  const fc = fixFocus(), k = fixDayFactor(alt), night = alt !== undefined ? +alt < 1 : isNight3D();
+  if (!pool || (T3.scene && pool.pts[0].parent !== T3.scene)) {
+    for (const e of T3.fixList || []) if (e.patch) e.patch.visible = false;
+    T3.fixReal = new Set(); T3.fixShadowEnts = [];
+    return;
+  }
   // gece, içinde yanan armatür olmayan odalara yumuşak otomatik tavan ışığı (ui.autoRoomLight, varsayılan açık) (#122)
   const list = night && ui.autoRoomLight !== false ? (T3.fixList || []).concat(T3.autoLights || []) : (T3.fixList || []);
   let moved = false; // gölgeli bir yuvanın ışığı yer / menzil / açı değiştirdiyse gölge haritaları bir kez yenilenir
   const set = (l, e) => {
-    if (!e) { if (l.castShadow && l.intensity) moved = true; l.intensity = 0; return; }
+    if (!e || k <= 0) { if (l.castShadow && l.intensity) moved = true; l.intensity = 0; return; }
     const t = lmToThree(e.lm);
     if (l.castShadow && (l.position.x !== e.x || l.position.y !== e.y || l.position.z !== e.z || l.distance !== t.d || !l.intensity)) moved = true;
     l.color.set(e.col); l.intensity = t.i * k; l.distance = t.d; l.position.set(e.x, e.y, e.z);
   };
   const aim = (l, e, wide) => {
     const a = (wide ? FIX_WIDE : clamp((e.beam || 40) / 2, 5, 60)) * Math.PI / 180;
-    if (l.castShadow && l.angle !== a) moved = true;
+    if (l.castShadow && Math.abs(l.angle - a) > 1e-6) moved = true;
     l.angle = a; l.penumbra = wide ? 0.7 : 0.5; l.target.position.set(e.x, e.y - 100, e.z); l.target.updateMatrixWorld();
-    if (l.castShadow) { l.shadow.camera.far = lmToThree(e.lm).d; l.shadow.camera.updateProjectionMatrix(); }
+    if (l.castShadow) {
+      const far = lmToThree(e.lm).d;
+      if (l.shadow.camera.far !== far) { l.shadow.camera.far = far; l.shadow.camera.updateProjectionMatrix(); moved = true; }
+    }
   };
   const real = new Set(), shadowOn = pool.spots[0].castShadow;
-  // 1) gölgeli spot yuvaları: türüne bakmadan en etkili armatürler (nokta armatür = geniş aşağı koni)
-  const sh = shadowOn ? fixShadowPick(list, fc, FIX_SHADOWS) : [];
-  for (let i = 0; i < FIX_SHADOWS; i++) { const e = sh[i], l = pool.spots[i]; set(l, e); if (e) { aim(l, e, e.kind !== 'spot'); real.add(e); } }
+  // 1) gölgeli spot yuvaları: yapışkan yuvalar + histerezis ile yer değiştirmedikçe gölge yeniden çizilmez
+  const sh = shadowOn && k > 0 ? fixShadowAssign(list, fc, FIX_SHADOWS, T3.fixShadowEnts || []) : [];
+  T3.fixShadowEnts = sh;
+  for (let i = 0; i < FIX_SHADOWS; i++) { const e = sh[i], l = pool.spots[i]; set(l, e); if (e && k > 0) { aim(l, e, e.kind !== 'spot'); real.add(e); } }
   // 2) kalanlar gölgesiz: nokta ışıklar ve kalan spot yuvaları (el feneri son yuvayı alır)
-  const rest = list.filter(e => !real.has(e));
+  const rest = k > 0 ? list.filter(e => !real.has(e)) : [];
   fixRank(rest, fc, FIX_PTS, false).concat(Array(FIX_PTS)).slice(0, FIX_PTS).forEach((e, i) => { set(pool.pts[i], e); if (e) real.add(e); });
   const flash = ui.flash && T3.walk ? 1 : 0, fl = FIX_SPOTS - 1, s0 = shadowOn ? FIX_SHADOWS : 0, ns = FIX_SPOTS - s0 - flash;
-  if (flash) { const l = pool.spots[fl], c = T3.cam.position, d = new THREE.Vector3(); T3.cam.getWorldDirection(d);
+  if (flash) { const l = pool.spots[fl], c = T3.cam.position, d = _flashDir || (_flashDir = new THREE.Vector3()); T3.cam.getWorldDirection(d);
     l.color.setHex(0xfff1dc); l.intensity = 1.6; l.distance = 1400; l.angle = 0.42; l.penumbra = 0.6; l.position.copy(c).addScaledVector(d, -10); l.target.position.copy(c).addScaledVector(d, 300); l.target.updateMatrixWorld(); }
   fixRank(rest, fc, ns, true).concat(Array(ns)).slice(0, ns).forEach((e, j) => { const l = pool.spots[s0 + j]; set(l, e); if (e) { aim(l, e, false); real.add(e); } });
-  // zemin ışık lekesi yalnızca gerçek ışığı olmayan armatürlerde: gerçek ışık zemini zaten aydınlatır ve duvarda durur (#128)
-  for (const e of T3.fixList || []) if (e.patch) e.patch.visible = !real.has(e);
+  // zemin ışık lekesi yalnızca gerçek ışığı olmayan ve ışıklar açıkkenki armatürlerde (#128)
+  for (const e of T3.fixList || []) if (e.patch) e.patch.visible = !!(k > 0 && e.on && !real.has(e));
   T3.fixReal = real;
   if (moved) markShadows();
+  markScene3D();
   T3.fixAt = { x: fc.x, y: fc.y, z: fc.z, t: performance.now() };
 }
-// her çizimde: odak 1 m'den fazla kaydıysa en çok 250 ms'de bir yeniden sırala (kare başına ayırma yok)
+// her çizimde: odak 2 m'den fazla kaydıysa en çok 400 ms'de bir yeniden sırala (kare başına ayırma yok)
 function fixTick(now) {
-  if (ui.flash && T3.walk && T3.fix) { const l = T3.fix.spots[FIX_SPOTS - 1], c = T3.cam.position, d = _flashDir || (_flashDir = new THREE.Vector3()); T3.cam.getWorldDirection(d); l.position.copy(c).addScaledVector(d, -10); l.target.position.copy(c).addScaledVector(d, 300); l.target.updateMatrixWorld(); }
-  if (!T3.fix || !((T3.fixList && T3.fixList.length) || (isNight3D() && T3.autoLights && T3.autoLights.length))) return;
-  const a = T3.fixAt; if (a && now - a.t < 250) return;
-  const fc = fixFocus(); if (a && (fc.x - a.x) ** 2 + (fc.y - a.y) ** 2 + (fc.z - a.z) ** 2 < 10000) return;
+  if (!T3.fix || (T3.scene && T3.fix.pts[0].parent !== T3.scene)) return;
+  if (ui.flash && T3.walk) { const l = T3.fix.spots[FIX_SPOTS - 1], c = T3.cam.position, d = _flashDir || (_flashDir = new THREE.Vector3()); T3.cam.getWorldDirection(d); l.position.copy(c).addScaledVector(d, -10); l.target.position.copy(c).addScaledVector(d, 300); l.updateMatrixWorld(); l.target.updateMatrixWorld(); }
+  const night = isNight3D();
+  if (!((T3.fixList && T3.fixList.length) || (night && T3.autoLights && T3.autoLights.length))) return;
+  const a = T3.fixAt; if (a && now - a.t < 400) return;
+  const nOn = (T3.fixList || []).reduce((s, e) => s + (e.on ? 1 : 0), 0) + (night && ui.autoRoomLight !== false ? (T3.autoLights || []).length : 0);
+  if (a && T3.fixShadowEnts && nOn <= FIX_SHADOWS) return;
+  const fc = fixFocus(); if (a && (fc.x - a.x) ** 2 + (fc.y - a.y) ** 2 + (fc.z - a.z) ** 2 < 40000) return;
   assignFixLights();
 }
 // yumuşak radyal doku (hale + zemin lekesi); tek, kalıcı
@@ -10916,6 +10974,11 @@ function glowTex() {
 // açık abajur kumaşı: ışık rengi ile beyaz arası (tam doygun turuncu görünmesin)
 function shade0(col) { const c = new THREE.Color(col).lerp(new THREE.Color(0xffffff), 0.45); return '#' + c.getHexString(); }
 function toggleLight3D(o) {
+  if (!lightsActive3D()) {
+    if (!litOn(o)) { delete o.lon; commit(); refresh(); build3D(true); }
+    setDayLights(true);
+    return;
+  }
   if (litOn(o)) o.lon = 0; else delete o.lon;
   commit(); refresh(); build3D(true);
   toast(litOn(o) ? L('💡 Işık açıldı', '💡 Light on') : L('Işık kapandı', 'Light off'));
@@ -10933,6 +10996,7 @@ function shadowLights(scene) {
 async function render3DHQ(opts) {
   opts = opts || {};
   if (!ui.view3d || !T3 || !T3.r) return '';
+  resetNavDpr3D();
   const { r, scene, cam, ctl } = T3, el = $('#v3d');
   const gl = r.getContext && r.getContext();
   if (!gl || typeof gl.readPixels !== 'function') return '';      // caller falls back to a capture
@@ -11036,6 +11100,13 @@ async function render3DHQ(opts) {
   }
   // gerçekçi katman (#87): fiziksel malzemeler, yansıma, güneşe bağlı ışık, temas gölgesi. Maket: yalnızca ışık + temas gölgesi.
   // Canlı gerçekçi görünüm açıksa malzemeler ve temas gölgeleri zaten sahnededir.
+  const renAlt = opts.sun ? opts.sun.alt : (ui.studio ? ui.studio.alt : 42), renLit = lightsActive3D(renAlt);
+  const litSaved = { mats: [], halos: [] };
+  if (style === 'realistic') scene.traverse(o => { const sw = o.userData && o.userData.litSwap; if (sw) { litSaved.mats.push([o, o.material]); o.material = renLit ? sw.on : sw.off; } });
+  if (style === 'realistic' || style === 'maquette') for (const e of T3.fixList || []) {
+    if (e.halos) for (const sp of e.halos) { litSaved.halos.push([sp, sp.visible]); sp.visible = !!(renLit && e.on); }
+    if (e.patch) { litSaved.halos.push([e.patch, e.patch.visible]); if (!renLit) e.patch.visible = false; }
+  }
   const liveReal = !!(T3.live && T3.live.real);
   const real = style === 'realistic' || style === 'maquette'
     ? realLook(scene, opts.sun ? sunVector(opts.sun.az, opts.sun.alt) : lightSunVector(lights), { mats: style === 'realistic', mood: opts.mood, contact: !liveReal })
@@ -11048,8 +11119,10 @@ async function render3DHQ(opts) {
     r.setPixelRatio(1);                               // a device ratio would multiply the target size
     r.setSize(W, H, false);                           // false: the element keeps its CSS size
     setCamAspect(cam, w / h);
-    if (style === 'realistic' || style === 'maquette') boost = renderFixBoost(scene, opts.sun ? opts.sun.alt : ui.studio.alt); // gece / ışıklı render (#123)
+    if ((style === 'realistic' || style === 'maquette') && renLit) boost = renderFixBoost(scene, renAlt); // gece / ışıklı render (#123)
+    else if (T3.fix && T3.fix.pts[0].parent === scene) assignFixLights(renAlt);
     if (sky) sky.mesh.position.copy(cam.position);    // gökyüzü küresi kamerayı ortalar (sonsuz uzaklık gibi)
+    scene.updateMatrixWorld(true);
 
     for (const s of saved) {                          // crisper shadows for this render only
       s.l.shadow.mapSize.set(4096, 4096);
@@ -11114,6 +11187,10 @@ async function render3DHQ(opts) {
     if (r.shadowMap) { r.shadowMap.autoUpdate = false; r.shadowMap.needsUpdate = true; } // canlı görünüm de durağan gölge kullanır (#128)
     for (const e of edges) e.visible = true;
     if (real) { real.restore(); real.dispose(); }
+    for (const [o, m] of litSaved.mats) o.material = m;
+    for (const [o, v] of litSaved.halos) o.visible = v;
+    syncFixPool();
+    if (T3.fix && T3.fix.pts[0].parent === scene) assignFixLights();
     if (oldBg !== null) scene.background = oldBg;
     scene.fog = oldFog;
     if (liveSky) liveSky.visible = true;
@@ -11134,6 +11211,7 @@ async function render3DHQ(opts) {
     }
     r.setPixelRatio(oldRatio);
     resize3D();
+    scene.updateMatrixWorld(true); markScene3D();
     T3.run = oldRun;
     if (ui.view3d && T3.run) { r.render(scene, cam); T3.lastT = 0; loop3D(); }
     updateTools();                                    // restores the HUD hint text
@@ -11149,8 +11227,9 @@ function renderFixBoost(scene, alt) {
   const night = alt < 1, list = (T3.fixList || []).concat(night && ui.autoRoomLight !== false ? (T3.autoLights || []) : []);
   if (!list.some(e => e.on)) return null;
   const pool = fixPool(), added = pool.pts[0].parent !== scene, extra = [], exSpots = [], k = night ? 1 : clamp(1.15 - alt / 45, 0.25, 1);
-  if (added) { fixShadowSlots(T3.det !== false); for (const l of pool.pts) scene.add(l); for (const l of pool.spots) { scene.add(l); scene.add(l.target); } }
-  assignFixLights(); // canlı havuz (4 gölgeli spot dahil) önce; ek ışıklar havuzda olmayanlara
+  fixShadowSlots(T3.det !== false, 1024);
+  if (added) { for (const l of pool.pts) scene.add(l); for (const l of pool.spots) { scene.add(l); scene.add(l.target); } }
+  assignFixLights(alt); // canlı havuz (4 gölgeli spot dahil) önce; ek ışıklar havuzda olmayanlara
   for (let i = 0; i < RFIX_PTS; i++) { const l = new THREE.PointLight(0xffffff, 0, 500, 2); scene.add(l); extra.push(l); }
   for (let i = 0; i < RFIX_SPOTS; i++) { const l = new THREE.SpotLight(0xffffff, 0, 600, 0.4, 0.5, 2); scene.add(l); scene.add(l.target); exSpots.push(l); }
   const fc = fixFocus(), rest = list.filter(e => !(T3.fixReal && T3.fixReal.has(e)));
@@ -11160,13 +11239,15 @@ function renderFixBoost(scene, alt) {
     const l = exSpots[i]; put(l, e); if (!e) return;
     l.angle = clamp((e.beam || 40) / 2, 5, 60) * Math.PI / 180; l.target.position.set(e.x, e.y - 100, e.z); l.target.updateMatrixWorld();
   });
+  markScene3D();
   return {
     lights: pool.pts.length + pool.spots.length + extra.length + exSpots.length,
     restore() {
       for (const l of extra) scene.remove(l);
       for (const l of exSpots) { scene.remove(l); scene.remove(l.target); }
-      if (added) { for (const l of pool.pts) scene.remove(l); for (const l of pool.spots) { scene.remove(l); scene.remove(l.target); } }
-      assignFixLights(); markShadows();
+      if (added) { for (const l of pool.pts) { l.intensity = 0; scene.remove(l); } for (const l of pool.spots) { l.intensity = 0; scene.remove(l); scene.remove(l.target); } }
+      fixShadowSlots(T3.det !== false, 512);
+      assignFixLights(); markShadows(); markScene3D();
     },
   };
 }
@@ -11272,7 +11353,7 @@ function makeSky(sv, cam, fit) {
   const mat = new THREE.ShaderMaterial({
     uniforms: { zen: { value: c.zen }, hor: { value: c.hor }, gnd: { value: c.gnd }, glow: { value: c.glow }, sun: { value: new THREE.Vector3(sv.x, sv.y, sv.z).normalize() },
       night: { value: Math.pow(nightOf(alt), 1.5) }, moon: { value: new THREE.Vector3(-sv.x, 0.57, -sv.z).normalize() } },
-    vertexShader: 'varying vec3 vDir;\nvoid main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    vertexShader: 'varying vec3 vDir;\nvoid main() { vDir = position; vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = vec4(p.xy, p.w * 0.999995, p.w); }',
     fragmentShader: [
       'uniform vec3 zen; uniform vec3 hor; uniform vec3 gnd; uniform vec3 glow; uniform vec3 sun; uniform float night; uniform vec3 moon; varying vec3 vDir;',
       'float rnd(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }',
@@ -11290,10 +11371,10 @@ function makeSky(sv, cam, fit) {
       '  gl_FragColor.rgb += (rnd(gl_FragCoord.xy) - 0.5) / 255.0;   // titreşim: geçişlerde bantlanma olmasın',
       '}',
     ].join('\n'),
-    side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false, toneMapped: false,
+    side: THREE.BackSide, depthWrite: false, depthTest: true, depthFunc: THREE.LessEqualDepth, fog: false, toneMapped: false,
   });
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(20000, 48, 24), mat);
-  mesh.renderOrder = -1000; mesh.frustumCulled = false; mesh.position.copy(cam.position);
+  mesh.renderOrder = 1; mesh.frustumCulled = false; mesh.position.copy(cam.position);
   // sis: binanın ötesinde başlar, 40 m'lik zeminin kenarından çok önce ufuk rengine ulaşır
   const sz = (fit && fit.sz) || 1000, d = cam.position.distanceTo(T3.ctl.target);
   const near = d + sz * 0.8, far = Math.min(17000, near + Math.max(5000, sz * 6));
@@ -11315,7 +11396,19 @@ const SUN_ALT_MIN = -18, NIGHT_ALT = -12;
 function nightOf(alt) { return clamp((6 - (Number.isFinite(+alt) ? +alt : 42)) / 12, 0, 1); }
 function litVector(az, alt) { return alt >= 1 ? sunVector(az, alt) : sunVector(az + 180, 35); }
 const isNight3D = () => !!(ui.live3d && ui.studio && ui.studio.alt < 1);
-function syncNightUI() { const b = $('#b3dNight'); if (b) b.classList.toggle('on', isNight3D()); }
+function syncLightsUI() { const b = $('#b3dLights'); if (b) b.classList.toggle('on', lightsActive3D()); }
+function syncNightUI() { const b = $('#b3dNight'); if (b) b.classList.toggle('on', isNight3D()); syncLightsUI(); }
+// 💡 Gündüz ışıkları (varsayılan kapalı): gündüz lambaları ve havuzu açıp kapatır, plan verisini (o.lon) korur
+function setDayLights(on) {
+  ui.dayLights = !!on;
+  try { localStorage.setItem('fp_daylights', ui.dayLights ? '1' : '0'); } catch (_) { }
+  syncLightsUI();
+  if (T3 && ui.view3d) {
+    if (ui.live3d) applyLive3D();
+    else { syncFixVisuals(lightsActive3D()); syncFixPool(); if (T3.fix && T3.fix.pts[0].parent === T3.scene) assignFixLights(); markShadows(); markScene3D(); req3D(); }
+  }
+  toast(ui.dayLights ? L('💡 Gündüz ışıkları açık', '💡 Daytime lights on') : L('Gündüz ışıkları kapalı', 'Daytime lights off'));
+}
 // 🌙 (#122): gece ↔ gündüz. Gece canlı gerçekçi görünümde olur (CAD 3B nötr kalır); açık değilse açılır. Gündüze dönünce önceki güneş geri gelir.
 function setNight3D(on) {
   const st = ui.studio;
@@ -11328,12 +11421,43 @@ function setNight3D(on) {
   syncNightUI();
   toast(on ? L('🌙 Gece · ışıklar yanıyor (🌙 tekrar: gündüz)', '🌙 Night · the lights are on (🌙 again: day)') : L('☀ Gündüz', '☀ Day'));
 }
+// 3B lamba görünümü: gündüz varsayılan kapalıyken ampuller sönük mat plastiğe döner, haleler gizlenir; gece / 💡 açıkken parlar
+function syncFixVisuals(on, S = T3 && T3.scene) {
+  if (!S) return;
+  S.traverse(o => {
+    const sw = o.userData && o.userData.litSwap;
+    if (sw) o.material = on ? sw.on : sw.off;
+  });
+  for (const e of (T3 && T3.fixList) || []) {
+    if (e.halos) for (const sp of e.halos) sp.visible = !!(on && e.on);
+    if (!on && e.patch) e.patch.visible = false;
+  }
+}
+// Sahnedeki sabit ışık havuzu yalnızca ışıklar etkinken (gece / 💡 gündüz ışığı / el feneri) ekli kalır → gündüz gereksiz shader maliyeti yok
+function syncFixPool(forceOn) {
+  if (!T3 || !T3.scene) return;
+  const S = T3.scene, need = !!(forceOn || ui.flash || isNight3D() || (lightsActive3D() && T3.fixList && T3.fixList.length));
+  const pool = T3.fix, inScene = !!(pool && pool.pts[0].parent === S);
+  if (need) {
+    const p = fixPool();
+    if (!inScene) {
+      fixShadowSlots(T3.det !== false);
+      for (const l of p.pts) S.add(l);
+      for (const l of p.spots) { S.add(l); S.add(l.target); }
+      markShadows(); markScene3D();
+    }
+  } else if (inScene) {
+    for (const l of pool.pts) { l.intensity = 0; S.remove(l); }
+    for (const l of pool.spots) { l.intensity = 0; S.remove(l); S.remove(l.target); }
+    T3.fixShadowEnts = []; T3.fixReal = new Set(); T3.fixAt = null;
+    for (const e of T3.fixList || []) if (e.patch) e.patch.visible = false;
+    markShadows(); markScene3D();
+  }
+}
 // ışık havuzu sahnede değilse (projede armatür yokken gece / el feneri için) ekle: tek seferlik derleme
 function ensureFixPool() {
   if (!T3 || !T3.scene) return;
-  const pool = fixPool(), S = T3.scene;
-  if (pool.pts[0].parent !== S) { fixShadowSlots(T3.det !== false); for (const l of pool.pts) S.add(l); for (const l of pool.spots) { S.add(l); S.add(l.target); } }
-  markShadows();
+  syncFixPool(true);
   T3.fixList = T3.fixList || []; assignFixLights(); req3D();
 }
 // el feneri (#122): yürürken F; havuzun ilk spotu kameraya bağlanır (ışık sayısı değişmez)
@@ -11362,6 +11486,7 @@ function studioHtml(preview) {
     </div>
     <div class="row" style="gap:6px;margin-bottom:8px">${Object.entries(SUN_PRESETS).map(([k, v]) => `<button class="btn sm" data-rs-sun="${k}">${L(...v[0])}</button>`).join('')}</div>
     <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 8px;align-items:center" title="${L('Gerçekçi ve Maket stillerinde ışık dengesi', 'Light balance for the Realistic and Maquette styles')}"><span>${L('Atmosfer', 'Atmosphere')}</span>${Object.entries(RENDER_MOODS).map(([k, v]) => `<button class="btn sm${k === (st.mood || 'day') ? ' primary' : ''}" data-rs-mood="${k}">${L(...v)}</button>`).join('')}</div>
+    ${st.alt >= 6 ? `<div class="row" style="gap:8px;margin:0 0 8px"><label class="chk-pill"><input type="checkbox" data-rs="dayLights" ${ui.dayLights ? 'checked' : ''}> 💡 ${L('Gündüz ışıkları açık', 'Daytime lights on')}</label></div>` : ''}
     <div class="row" style="gap:10px;margin-bottom:10px;flex-wrap:wrap"><label>${L('Çözünürlük', 'Resolution')} <select data-rs="res">${opt(RENDER_RES, st.res)}</select></label><label>${L('Biçim', 'Format')} <select data-rs="format"><option value="png" ${st.format === 'png' ? 'selected' : ''}>PNG</option><option value="jpeg" ${st.format === 'jpeg' ? 'selected' : ''}>JPEG</option></select></label></div>
     <div class="rs-prev" style="background:${studioBackdrop() === 'sky' ? '#d6e8f5' : '#fff'};border-radius:8px;min-height:120px;display:flex;align-items:center;justify-content:center;overflow:hidden">${preview ? `<img src="${preview}" style="max-width:100%;max-height:40vh;display:block">` : `<span class="muted" style="color:#64748b">${L('Önizleme için 👁 Önizle', 'Press 👁 Preview to see it')}</span>`}</div>
     <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm" data-rs-go="preview">👁 ${L('Önizle', 'Preview')}</button><button class="btn sm primary" data-rs-go="render">🎬 ${L('Render al ve indir', 'Render & download')}</button></div>`;
@@ -11519,10 +11644,15 @@ function openRenderStudio(preview) {
 }
 $('#modal').addEventListener('input', e => {
   if (ui.modal !== 'studio') return;
-  const t = e.target.closest('[data-rs]'); if (!t) return;
+  const t = e.target.closest('[data-rs]'); if (!t || t.type === 'checkbox') return;
   const k = t.dataset.rs; ui.studio[k] = k === 'az' || k === 'alt' ? +t.value : t.value;
   if (t.nextElementSibling && (k === 'az' || k === 'alt')) t.nextElementSibling.textContent = t.value + '°';
-  if (k === 'az' || k === 'alt') applyLive3D(); // canlı gerçekçi görünüm aynı güneşi kullanır (#81)
+  if (k === 'az' || k === 'alt') { syncLightsUI(); applyLive3D(); } // canlı gerçekçi görünüm aynı güneşi kullanır (#81)
+});
+$('#modal').addEventListener('change', e => {
+  if (ui.modal !== 'studio') return;
+  const t = e.target.closest('[data-rs="dayLights"]'); if (!t) return;
+  setDayLights(t.checked);
 });
 $('#modal').addEventListener('click', async e => {
   if (ui.modal !== 'studio') return;
@@ -12541,6 +12671,7 @@ function show3D(on) {
     T3.center2d = c;
     T3.lastT = 0; T3.run = true; loop3D();
   } else if (T3) {
+    resetNavDpr3D();
     exitWalk(true); // yürüme modundan çıkılır: saklanan kamera yörünge kamerasıdır
     // 2B'ye dönerken bırakılan kamera: bir sonraki girişte aynen geri gelir
     T3.lastCam = { pos: T3.cam.position.clone(), target: T3.ctl.target.clone() };
@@ -12550,23 +12681,24 @@ function show3D(on) {
 }
 function init3D() {
   if (T3) { resize3D(); return; }
-  const el = $('#v3d'), r = new THREE.WebGLRenderer({ antialias: true });
-  r.setPixelRatio(Math.min(2, devicePixelRatio)); el.appendChild(r.domElement);
-  // sahneyi değiştirebilecek her girdi bir sonraki kareyi çizdirir (yakalama aşaması: işleyicilerden önce)
-  for (const ev of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'touchstart', 'touchmove', 'touchend', 'wheel', 'keydown', 'keyup', 'input', 'change']) window.addEventListener(ev, req3D, { capture: true, passive: true });
+  const el = $('#v3d'), r = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  r.setPixelRatio(baseDpr3D()); el.appendChild(r.domElement);
+  // sahneyi değiştirebilecek her girdi bir sonraki kareyi çizdirir (boşta fare gezdirme gereksiz çizim yapmaz)
+  for (const ev of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchmove', 'touchend', 'wheel', 'keydown', 'keyup', 'input', 'change']) window.addEventListener(ev, req3D, { capture: true, passive: true });
+  window.addEventListener('pointermove', e => { if (e.buttons || (T3 && T3.walk && T3.walk.drag) || place3DOn() || fp3DOn() || ui.walkPick) req3D(); }, { capture: true, passive: true });
   // yumuşak gölgeler + sinematik ton eşleme (r128 API'si)
   if (THREE.PCFSoftShadowMap) { r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap; }
   r.shadowMap.autoUpdate = false; r.shadowMap.needsUpdate = true; // durağan gölgeler (#128): plan bakarken değişmez; yalnızca değişince markShadows()
   if (THREE.sRGBEncoding) r.outputEncoding = THREE.sRGBEncoding;
   if (THREE.ACESFilmicToneMapping) { r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.05; }
-  const scene = new THREE.Scene(); scene.background = new THREE.Color(0xdbe5f1);
+  const scene = new THREE.Scene(); scene.background = new THREE.Color(0xdbe5f1); scene.autoUpdate = false; // durağan sahne matrisleri yalnızca değişince güncellenir
   const cam = new THREE.PerspectiveCamera(CAM_FOV, 1, 10, 50000);
   // paralel izdüşüm (#74): görünüş / kesit / izometri; çerçeve fitOrtho() ile perspektifin hedefteki boyutuna eşlenir
   const ocam = new THREE.OrthographicCamera(-500, 500, 500, -500, -40000, 60000);
   // 3B mobilya etkileşimi: OrbitControls'ten ÖNCE kaydedilir ki sürüklerken yörünge devre dışı kalabilsin
   let d3 = null;
   const ray3 = e => {
-    T3.cam.updateMatrixWorld(); scene.updateMatrixWorld(); // rAF durmuşsa da matrisler taze olsun (arka plan sekmesi/etkileşim)
+    T3.cam.updateMatrixWorld(); if (T3.sceneDirty) { scene.updateMatrixWorld(true); T3.sceneDirty = false; } // rAF durmuşsa da matrisler taze olsun (arka plan sekmesi/etkileşim)
     const rect = r.domElement.getBoundingClientRect();
     return camRay(new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1));
   };
@@ -12650,10 +12782,10 @@ function init3D() {
       if (!fo || !o0 || !ray3(e).ray.intersectPlane(floorPlane(d3.elev), p)) return;
       furnResizeSide(fo, o0, d3.rs, furnLocalAlong(o0, d3.rs, p.x, p.z) - d3.grab, ui.snap && !e.shiftKey ? 5 : 1);
       const g = T3.scene.children.find(c => c.userData && c.userData.furnId === fo.id);
-      if (g) { g.position.x = fo.x; g.position.z = fo.y; g.scale.set(fo.w / o0.w, 1, fo.d / o0.d); }
+      if (g) { g.position.x = fo.x; g.position.z = fo.y; g.scale.set(fo.w / o0.w, 1, fo.d / o0.d); g.updateMatrixWorld(true); }
       if (T3.arr) { const sp = furnArrowSpots(fo, T3.arr.meshes[0].geometry.parameters.height * 0.8); T3.arr.meshes.forEach((m, i) => { m.position.x = sp[i].x; m.position.z = sp[i].y; }); }
       for (const h of h3) h.update();
-      showSizeTip(e, fo, d3.rs); markShadows(); return;
+      showSizeTip(e, fo, d3.rs); markScene3D(); markShadows(); return;
     }
     const o = findAnyFloor(d3.id)?.o; if (!o) { d3 = null; return; }
     const p = new THREE.Vector3();
@@ -12676,11 +12808,12 @@ function init3D() {
       const fo = fd.o;
       if (fd.kind === 'furn') g.position.set(fo.x, d3.elev, fo.y);
       else if (fd.kind === 'wall') g.position.set((fo.a.x + fo.b.x) / 2, d3.elev, (fo.a.y + fo.b.y) / 2);
+      g.updateMatrixWorld(true);
     }
-    for (const c of d3.conn) { const g2 = T3.scene.children.find(ch => ch.userData && ch.userData.wallId === c.w.id); if (g2 && !g2.isMesh) g2.position.set((c.w.a.x + c.w.b.x) / 2, g2.position.y, (c.w.a.y + c.w.b.y) / 2); }
+    for (const c of d3.conn) { const g2 = T3.scene.children.find(ch => ch.userData && ch.userData.wallId === c.w.id); if (g2 && !g2.isMesh) { g2.position.set((c.w.a.x + c.w.b.x) / 2, g2.position.y, (c.w.a.y + c.w.b.y) / 2); g2.updateMatrixWorld(true); } }
     for (const pn of d3.pins) { pn.m.position.x = pn.x + dx; pn.m.position.z = pn.z + dy; }
     for (const h of h3) h.update();
-    markShadows(); // sürüklenen eşyanın gölgesi onu izlesin (#128)
+    markScene3D(); markShadows(); // sürüklenen eşyanın gölgesi onu izlesin (#128)
   });
   window.addEventListener('pointerup', e => {
     if (T3 && T3.walk) T3.walk.drag = null;
@@ -12733,9 +12866,11 @@ function init3D() {
     if (mv > 0 && dh !== null) nd = Math.max(30, Math.min(nd, (dh - mv) * cos)); // …ya da imleçteki yüzeyin derinliği
     t.copy(cam.position).addScaledVector(fwd, nd);
     zHit = dh === null ? null : { t: now, x: e.clientX, y: e.clientY, d: Math.max(0, dh - mv) };
-    T3.ctl.update(); req3D();
+    noteNav3D(); T3.ctl.update(); req3D();
   }, { passive: false });
   const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = ORBIT_MAX_POLAR;
+  ctl.addEventListener('start', () => { if (ui.view3d && ui.live3d && !ui.shot) { T3.ctlUser = true; noteNav3D(); } });
+  ctl.addEventListener('change', () => { if (ui.view3d && ui.live3d && !ui.shot && T3.ctlUser) noteNav3D(); });
   let downPt = null;
   // 3B dokunmatik iki parmak (#80): ikinci parmak indiğinde tek parmakla başlamış mobilya/açıklık sürüklemesini iptal et ki OrbitControls yakınlaştırabilsin
   r.domElement.addEventListener('touchstart', e => {
@@ -12771,7 +12906,7 @@ function init3D() {
     if (!dp || e.button !== 0 || Math.hypot(e.clientX - dp.x, e.clientY - dp.y) > 5) return;
     if (ui.walkPick) { walkPickClick(e); return; } // 👁: tıklanan noktada yürümeye başla
     if (place3DOn()) { place3DMove(e); place3DClick(); return; } // 3B yerleştirme (yürüme modunda da)
-    T3.cam.updateMatrixWorld(); scene.updateMatrixWorld();
+    T3.cam.updateMatrixWorld(); if (T3.sceneDirty) { scene.updateMatrixWorld(true); T3.sceneDirty = false; }
     const rect = r.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     const rc = camRay(mouse);
@@ -13072,7 +13207,7 @@ function stopWalkPick() {
 function walkPickMove(e) {
   if (!ui.walkPick || !T3 || !T3.scene) return;
   const rect = T3.r.domElement.getBoundingClientRect();
-  T3.cam.updateMatrixWorld(); T3.scene.updateMatrixWorld();
+  T3.cam.updateMatrixWorld(); if (T3.sceneDirty) { T3.scene.updateMatrixWorld(true); T3.sceneDirty = false; }
   const rc = camRay(new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1));
   const h = rc.intersectObjects(T3.scene.children, true).find(x => x.object.isMesh && x.object.visible && !x.object.userData.ghost && !x.object.userData.fpDecal && !(x.object.material && x.object.material.isShaderMaterial));
   let spot = null;
@@ -13087,7 +13222,7 @@ function walkPickMove(e) {
     g.scale.set(WALK.r * 2, WALK.eye, WALK.r * 2); g.rotation.set(0, 0, 0);
     g.position.set(p.x, walkElev(spot.i) + WALK.eye / 2, p.y); g.visible = true;
   }
-  req3D();
+  markScene3D(); req3D();
 }
 function walkPickClick(e) {
   if (e) walkPickMove(e);
@@ -13105,7 +13240,7 @@ function exitWalk(restore) {
   if (T3.orthoAfterWalk) { T3.orthoAfterWalk = false; setProjection(true); fitOrtho(); }
 }
 function walkToFloor(i) {
-  const w = T3.walk; w.fi = i; w.z = w.gz = 0;
+  const w = T3.walk; w.fi = i; w.z = w.gz = 0; w._gOk = false; T3.walkCache = null;
   const p = walkMove(w, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); w.x = p.x; w.y = p.y;
 }
 // kamera + hedef (render ve 2B dönüşü hedefi okur): hedef 1 m ileride
@@ -13118,17 +13253,22 @@ function applyWalkCam() {
 function walkLook(dx, dy) {
   const w = T3.walk;
   w.yaw += dx * WALK.look; w.pitch = clamp(w.pitch - dy * WALK.look, -WALK.pitch, WALK.pitch);
-  applyWalkCam();
+  noteNav3D(); applyWalkCam();
 }
 function walkStep(dt) {
   const w = T3.walk, k = keys3D;
   const f = (k.has('w') || k.has('arrowup') ? 1 : 0) - (k.has('s') || k.has('arrowdown') ? 1 : 0);
   const s = (k.has('d') || k.has('arrowright') ? 1 : 0) - (k.has('a') || k.has('arrowleft') ? 1 : 0);
   if (!Number.isFinite(w.gz)) w.gz = w.z = 0;
-  const lv = walkLevels(w.fi);
-  if (f || s) { // Q / E (uçma) yürürken yok sayılır
+  if (!f && !s && w._gOk && Math.abs(w.gz - w.z) < 0.5) return;
+  if (f || s) noteNav3D();
+  const zb = Math.round(w.gz / 5), wc = T3.walkCache;
+  let lv, segs;
+  if (wc && wc.fi === w.fi && wc.zb === zb) { lv = wc.lv; segs = wc.segs; }
+  else { lv = walkLevels(w.fi); segs = walkSegsAt(w.fi, w.gz); T3.walkCache = { fi: w.fi, zb, lv, segs }; }
+  if (f || s) {
     const sp = (k.has('shift') ? WALK.run : WALK.speed) * dt / Math.hypot(f, s), cy = Math.cos(w.yaw), sy = Math.sin(w.yaw);
-    const mv = { x: (cy * f - sy * s) * sp, y: (sy * f + cy * s) * sp }, segs = walkSegsAt(w.fi, w.gz);
+    const mv = { x: (cy * f - sy * s) * sp, y: (sy * f + cy * s) * sp };
     let p = walkMove(w, mv, segs, WALK.r);
     if (walkGround(lv, p, w.gz).block) { // merdivenin yanı / yüksek platform: boyunca kay, yoksa dur
       const px = walkMove(w, { x: mv.x, y: 0 }, segs, WALK.r), py = walkMove(w, { x: 0, y: mv.y }, segs, WALK.r);
@@ -13136,7 +13276,7 @@ function walkStep(dt) {
     }
     w.x = p.x; w.y = p.y;
   }
-  w.gz = walkGround(lv, w, w.gz).g; // ayak: basılan yüzey; kamera yumuşak izler (basamaklarda sarsılmasın)
+  w.gz = walkGround(lv, w, w.gz).g; w._gOk = true; // ayak: basılan yüzey; kamera yumuşak izler (basamaklarda sarsılmasın)
   w.z = Math.abs(w.gz - w.z) < 0.5 ? w.gz : w.z + (w.gz - w.z) * Math.min(1, dt * 12);
   // kat geçişi: üst kat kotuna çıkınca / alt kata inince yürüyen o kata geçer (aynı dünya kotu)
   const cur = P.floors[w.fi], up = P.floors[w.fi + 1], dn = P.floors[w.fi - 1], pitch = floorPitch(w.fi);
@@ -13144,7 +13284,7 @@ function walkStep(dt) {
   if (up && v3dShown(up) && w.gz >= pitch - 0.5) { nf = w.fi + 1; dz = -pitch; }
   else if (dn && v3dShown(dn) && w.gz <= -0.5) { nf = w.fi - 1; dz = floorPitch(w.fi - 1); }
   if (nf >= 0) {
-    w.fi = nf; w.gz += dz; w.z += dz;
+    w.fi = nf; w.gz += dz; w.z += dz; w._gOk = false; T3.walkCache = null;
     if (fi !== nf) { fi = nf; sel = []; refresh(); refreshSel3D(); } // 2B'deki etkin kat yürüyeni izler
     toast('🚶 ' + (P.floors[nf].name || L('Kat', 'Floor') + ' ' + nf));
   }
@@ -13181,6 +13321,33 @@ function syncWalkUI() {
     '🚶 Walk mode · WASD / arrows: walk · Shift: run · stairs / ramps: walk onto them to change floors · drag: look around · click a door: open / close · Esc: exit');
   h.style.display = '';
 }
+// Durağan sahne matrisi ve canlı gezinme çözünürlük ölçeği (#perf)
+function markScene3D() { if (T3) T3.sceneDirty = true; }
+const baseDpr3D = () => Math.min(2, window.devicePixelRatio || 1);
+function applyDpr3D(ratio) {
+  if (!T3 || !T3.r) return;
+  if (Math.abs(T3.r.getPixelRatio() - ratio) > 0.01) {
+    T3.r.setPixelRatio(ratio);
+    const el = $('#v3d');
+    if (el && el.clientWidth > 0 && el.clientHeight > 0) T3.r.setSize(el.clientWidth, el.clientHeight, false);
+  }
+}
+function noteNav3D() {
+  if (!T3 || !ui.live3d || ui.shot) return;
+  T3.navActive = true;
+  clearTimeout(T3.navEndT);
+  T3.navEndT = setTimeout(() => {
+    if (!T3) return;
+    T3.navActive = false; T3.ctlUser = false;
+    if (!ui.shot) { applyDpr3D(baseDpr3D()); req3D(); }
+  }, 180);
+}
+function resetNavDpr3D() {
+  if (!T3) return;
+  clearTimeout(T3.navEndT); T3.navEndT = null; T3.navActive = false; T3.ctlUser = false;
+  applyDpr3D(baseDpr3D());
+}
+let _v3Fwd = null, _v3Right = null, _v3Mv = null;
 function loop3D() {
   if (!T3 || !T3.run) return;
   cancelAnimationFrame(T3.raf); T3.raf = requestAnimationFrame(loop3D); // tek döngü: yeniden başlatmalar çoğaltmaz
@@ -13190,11 +13357,12 @@ function loop3D() {
   const due = T3.dirty || keys3D.size > 0 || now - (T3.drawT || 0) > 1000;
   if (T3.walk) { walkStep(dt); if (due) draw3D(now); return; } // OrbitControls.update() bakışı ezmesin
   if (keys3D.size) {
+    noteNav3D();
     const spd = (keys3D.has('shift') ? 1320 : 540) * dt; // eskiden 60 fps'de kare başına 22 / 9 cm
-    const fwd = new THREE.Vector3(); T3.cam.getWorldDirection(fwd); fwd.y = 0;
+    const fwd = _v3Fwd || (_v3Fwd = new THREE.Vector3()), right = _v3Right || (_v3Right = new THREE.Vector3()), mv = _v3Mv || (_v3Mv = new THREE.Vector3());
+    T3.cam.getWorldDirection(fwd); fwd.y = 0;
     if (fwd.lengthSq() > 1e-6) fwd.normalize(); else fwd.set(0, 0, -1);
-    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
-    const mv = new THREE.Vector3();
+    right.set(-fwd.z, 0, fwd.x); mv.set(0, 0, 0);
     if (keys3D.has('w') || keys3D.has('arrowup')) mv.addScaledVector(fwd, spd);
     if (keys3D.has('s') || keys3D.has('arrowdown')) mv.addScaledVector(fwd, -spd);
     if (keys3D.has('d') || keys3D.has('arrowright')) mv.addScaledVector(right, spd);
@@ -13205,7 +13373,23 @@ function loop3D() {
   }
   if (T3.ctl.update() || due) draw3D(now);
 }
-function draw3D(now) { T3.dirty = false; T3.drawT = now; fixTick(now); if (T3.live) liveSkyFollow(); T3.r.render(T3.scene, T3.cam); flush3DLater(); }
+function draw3D(now) {
+  T3.dirty = false; T3.drawT = now;
+  fixTick(now);
+  if (T3.sceneDirty) { T3.scene.updateMatrixWorld(true); T3.sceneDirty = false; }
+  if (T3.live) { liveSkyFollow(); T3.live.sky.updateMatrixWorld(); }
+  if (ui.live3d && !ui.shot && T3.navActive) {
+    const target = T3.r.getPixelRatio() < 0.9 ? 0.75 : (T3.emaMs || 0) > 24 ? 0.75 : Math.min(1, baseDpr3D());
+    applyDpr3D(target);
+  }
+  const shUp = !!(T3.r.shadowMap && T3.r.shadowMap.needsUpdate), t0 = performance.now();
+  T3.r.render(T3.scene, T3.cam);
+  if (ui.live3d && !ui.shot && T3.navActive && !shUp) {
+    const dtMs = performance.now() - t0;
+    T3.emaMs = T3.emaMs ? T3.emaMs * 0.8 + dtMs * 0.2 : dtMs;
+  }
+  flush3DLater();
+}
 /* ---------- Canlı gerçekçi 3B görünüm (#81) ----------
    Render stüdyosunun "gerçekçi" görünümü canlı pencerede: CAD kenar çizgileri gizlenir, gökyüzü + ufuk sisi,
    açık zemin / döşeme ve stüdyodaki güneş (ui.studio.az / alt) uygulanır. Tek geçiş: çizim döngüsü ve boşta
@@ -13282,9 +13466,12 @@ function realLook(S, sv, opts = {}) {
     if (!m || !m.color || m.isMeshStandardMaterial || m.isShaderMaterial) return m;
     const fk = m.userData && m.userData.fk; // alt parça yüzeyi (#93): sf() ile etiketli malzeme
     if (fk === 'ember') return m;            // köz ışıktan bağımsız parlamaya devam eder
-    const key = m.uuid + '|' + (Array.isArray(cls) ? cls[1] + ',' + cls[2] : cls);
+    let tr = m.transparent;
+    const clipOn = !!(T3.r && T3.r.clippingPlanes && T3.r.clippingPlanes.length);
+    const closed = !tr && !clipOn && !!(mesh && mesh.geometry && mesh.geometry.userData && mesh.geometry.userData.closed);
+    const key = m.uuid + '|' + (Array.isArray(cls) ? cls[1] + ',' + cls[2] : cls) + (closed ? '|F' : '|D');
     if (cache.has(key)) return cache.get(key);
-    let r = 0.78, mt = 0, map = m.map, bump = null, bs = 0, rough = null, color = m.color, tr = m.transparent, op = m.opacity, env = 0.3;
+    let r = 0.78, mt = 0, map = m.map, bump = null, bs = 0, rough = null, color = m.color, op = m.opacity, env = 0.3;
     if (map && map.fpKind) {
       if (map.fpKind === 'water') { r = 0.06; env = 1.1; }
       else {
@@ -13308,7 +13495,7 @@ function realLook(S, sv, opts = {}) {
     else if (cls === 'op') r = 0.5;                                                         // doğrama: saten
     else if (cls === 'slab') r = 0.88;
     else if (cls === 'furn') r = 0.55;                                                      // ahşap mobilya: saten
-    const n = new THREE.MeshStandardMaterial({ color, map, roughness: r, metalness: mt, transparent: tr, opacity: op, side: m.side, depthWrite: m.depthWrite, bumpMap: bump, bumpScale: bs, roughnessMap: rough, envMapIntensity: env });
+    const n = new THREE.MeshStandardMaterial({ color, map, roughness: r, metalness: mt, transparent: tr, opacity: op, side: closed ? THREE.FrontSide : m.side, depthWrite: m.depthWrite, bumpMap: bump, bumpScale: bs, roughnessMap: rough, envMapIntensity: env });
     made.push(n); cache.set(key, n);
     return n;
   };
@@ -13330,47 +13517,59 @@ function realLook(S, sv, opts = {}) {
   // gece (#122): pozlama hafif artar; pencere camları içeriden sıcak parlar (dışarıdan bakınca ev yaşıyor görünür)
   const oldExp = T3.r ? T3.r.toneMappingExposure : null; if (T3.r && nt) T3.r.toneMappingExposure = oldExp + 0.35 * nt;
   if (nt > 0.2 && opts.mats !== false) for (const sw of swaps) { const m = sw.o.material; if (m && m.isMeshStandardMaterial && m.transparent && realClass(sw.o, furnCls) === 'op' && m.emissive) { m.emissive.setHex(0xffb86b); m.emissiveIntensity = 0.45 * nt; } }
-  // temas gölgesi: duvar dibi şeritleri ve mobilya altı lekeleri (yalnızca döşeme üstünde)
+  // temas gölgesi: duvar dibi şeritleri ve mobilya altı lekeleri (InstancedMesh ile 2 çizim çağrısında toplanır)
   const kids = S.children.filter(c => c.userData && (c.userData.furnId || (c.userData.wallId && !c.isMesh)));
   if (opts.contact !== false && kids.length && kids.length < 1200) {
     const geo = new THREE.PlaneGeometry(1, 1); geo.rotateX(-Math.PI / 2);
     const mk = radial => { const t = contactTex(radial); texs.push(t); const m = new THREE.MeshBasicMaterial({ map: t, transparent: true, opacity: radial ? 0.4 : 0.36, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }); made.push(m); return m; };
-    const blob = mk(true), strip = mk(false), polys = new Map();
+    const blob = mk(true), strip = mk(false), polys = new Map(), blobMats = [], stripMats = [];
     const onSlab = (fl, i, pt) => { if (!polys.has(i)) polys.set(i, [...slabPolys(fl), ...(fl.slabs || []).map(x => x.pts)]); return polys.get(i).some(pg => pointInPoly(pt, pg)); };
-    const add = (parent, m, x, y, z, sx, sz, ry) => { const d = new THREE.Mesh(geo, m); d.position.set(x, y, z); d.scale.set(sx, 1, sz); d.rotation.y = ry; d.userData.fpDecal = true; d.renderOrder = 1; parent.add(d); return d; };
+    const m4 = new THREE.Matrix4(), v3 = new THREE.Vector3(), q4 = new THREE.Quaternion(), s3 = new THREE.Vector3(), eu = new THREE.Euler();
+    const pushM = (arr, x, y, z, sx, sz, ry) => { v3.set(x, y, z); eu.set(0, ry, 0); q4.setFromEuler(eu); s3.set(sx, 1, sz); arr.push(m4.clone().compose(v3, q4, s3)); };
     for (const c of kids) {
       const fd = findAnyFloor(c.userData.furnId || c.userData.wallId); if (!fd) continue;
       if (fd.kind === 'furn') {
         const o = fd.o; if (furnElev(o) !== 0 || o.k === 'roof' || o.type === 'rug' || o.type === 'pool') continue;
-        decals.push(add(S, blob, c.position.x, c.position.y + 1.6, c.position.z, o.w + 26, o.d + 26, c.rotation.y));
+        pushM(blobMats, c.position.x, c.position.y + 1.6, c.position.z, o.w + 26, o.d + 26, c.rotation.y);
       } else if (fd.kind === 'wall' && !isLowWall(fd.o) && !wallElev(fd.o)) {
         const w = fd.o, Ln = wLen(w); if (Ln < 1) continue;
         const nx = -(w.b.y - w.a.y) / Ln, ny = (w.b.x - w.a.x) / Ln, mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2, off = w.t / 2 + 9;
-        const hold = new THREE.Group(); hold.position.copy(c.position); hold.rotation.y = c.rotation.y; hold.userData.fpDecal = true;
-        for (const sgn of [1, -1]) if (onSlab(fd.floor, fd.floorIdx, { x: mx + nx * off * sgn, y: my + ny * off * sgn })) add(hold, strip, 0, 1.6, off * sgn, Ln, 18, sgn > 0 ? 0 : Math.PI);
-        if (hold.children.length) { S.add(hold); decals.push(hold); }
+        for (const sgn of [1, -1]) if (onSlab(fd.floor, fd.floorIdx, { x: mx + nx * off * sgn, y: my + ny * off * sgn })) pushM(stripMats, c.position.x + nx * off * sgn, c.position.y + 1.6, c.position.z + ny * off * sgn, Ln, 18, c.rotation.y + (sgn > 0 ? 0 : Math.PI));
       }
     }
+    const buildInst = (mat2, list) => {
+      if (!list.length) return;
+      const im = new THREE.InstancedMesh(geo, mat2, list.length);
+      list.forEach((m, i) => im.setMatrixAt(i, m));
+      im.instanceMatrix.needsUpdate = true;
+      im.userData.fpDecal = true; im.renderOrder = 1; im.frustumCulled = false; im.raycast = () => {};
+      S.add(im); decals.push(im);
+    };
+    buildInst(blob, blobMats); buildInst(strip, stripMats);
     made.push(geo);
   }
   return {
-    count: made.length, decals: decals.length,
+    count: made.length, decals: decals.reduce((a, d) => a + (d.count || 1), 0),
     restore() {
       for (let i = swaps.length - 1; i >= 0; i--) swaps[i].o.material = swaps[i].mat;
       for (const s of lit) { s.l.intensity = s.i; s.l.color.copy(s.c); if (s.g) s.l.groundColor.copy(s.g); }
       S.environment = oldEnv; if (T3.r && oldExp != null) T3.r.toneMappingExposure = oldExp;
       for (const d of decals) S.remove(d);
     },
-    dispose() { for (const m of made) m.dispose(); for (const t of texs) t.dispose(); },
+    dispose() { for (const d of decals) if (d.dispose) d.dispose(); for (const m of made) m.dispose(); for (const t of texs) t.dispose(); },
   };
 }
 function applyLive3D() {
   if (!T3 || !T3.scene) return;
-  const S = T3.scene, old = T3.live; T3.live = null;
+  const S = T3.scene, old = T3.live; T3.live = null; T3.emaMs = 0;
   // bırakılan gerçekçi malzemeler bir kare sonra dispose edilir (#106): yeniden kurulan sahne aynı shader'ları devralır
   if (old && old.real) { old.real.restore(); const r = old.real; dispose3DLater([{ dispose: () => r.dispose() }]); }
   if (old) { S.remove(old.sky); old.sky.geometry.dispose(); dispose3DLater([old.sky.material, ...old.mats]); S.fog = null; }
-  if (!ui.live3d) return;
+  if (!ui.live3d) {
+    syncFixVisuals(lightsActive3D()); syncFixPool();
+    if (T3.fix && T3.fix.pts[0].parent === S) assignFixLights();
+    markScene3D(); return;
+  }
   const st = ui.studio, sv = sunVector(st.az, st.alt), sky = makeSky(sv, T3.cam, T3.fit);
   const ground = grassGroundMat(), slab = new THREE.MeshLambertMaterial({ color: 0xded8cc, side: THREE.DoubleSide });
   const nt0 = nightOf(st.alt); if (nt0) { ground.color.setScalar(1 - 0.7 * nt0); slab.color.multiplyScalar(1 - 0.5 * nt0); } // gece (#122): çim karanlıkta; iç mekân ışığının duvardan sızması belirgin olmasın
@@ -13385,20 +13584,24 @@ function applyLive3D() {
     l.position.set(tg.x + lv.x * d0, tg.y + lv.y * d0, tg.z + lv.z * d0);
     l.color.setHex(st.alt < 20 && st.alt >= 1 ? 0xffc58a : 0xfff6e8);
   }
+  syncFixVisuals(lightsActive3D()); syncFixPool();
   const real = realLook(S, sv, { mood: st.mood }); // fiziksel malzemeler + yansıma + güneşe bağlı ışık + temas gölgesi (#87)
+  if (T3.fix && T3.fix.pts[0].parent === S) assignFixLights();
   S.add(sky.mesh); S.fog = sky.fog; S.background = sky.horizon;
   T3.live = { sky: sky.mesh, fog: sky.fog, mats: [ground, slab], real };
-  req3D();
+  markScene3D(); req3D();
 }
 function syncLiveUI() { const b = $('#b3dLive'); if (b) b.classList.toggle('on', !!ui.live3d); syncNightUI(); }
 function setLive3D(on) {
   ui.live3d = !!on; syncLiveUI();
+  if (!ui.live3d) resetNavDpr3D();
   try { localStorage.setItem('fp_live3d', on ? '1' : '0'); } catch (_) {}
   if (!T3 || !ui.view3d) return;
   if (on) applyLive3D(); else build3D(true); // kapatırken sahne baştan kurulur: kenarlar, malzemeler, ışık ve arka plan eksiksiz geri gelir
   toast(on ? L('🌤 Canlı gerçekçi görünüm açık', '🌤 Live realistic view on') : L('CAD görünümü', 'CAD view'));
 }
 try { ui.live3d = localStorage.getItem('fp_live3d') === '1'; } catch (_) { ui.live3d = false; }
+try { ui.dayLights = localStorage.getItem('fp_daylights') === '1'; } catch (_) { ui.dayLights = false; }
 try { if (localStorage.getItem('fp_night') === '1' && ui.live3d) { ui.studio.dayAlt = ui.studio.alt; ui.studio.alt = NIGHT_ALT; ui.studio.mood = 'night'; } ui.autoRoomLight = localStorage.getItem('fp_autoroom') !== '0'; } catch (_) { ui.autoRoomLight = true; }
 function req3D() { if (T3) T3.dirty = true; }
 /* ---------- 3B malzeme & mobilya detayı ---------- */
@@ -13811,6 +14014,7 @@ function surfGeo(type, ex, ey, ez, c, C) {
     geo = new THREE.SphereGeometry(1, 16, 12); const uv = geo.attributes.uv;
     for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * S[0], uv.getY(i) * S[1]);
   }
+  (geo.userData || (geo.userData = {})).closed = true;
   C.geo[key] = geo; return geo;
 }
 // parça malzemesi (p.mat): eski türler (mat / parlak / metal / cam) eskisi gibi; #93 yüzey türleri ve proje dokuları (tex:<id>) surfMat'tan
@@ -14573,33 +14777,35 @@ function furn3D(g, o, C) {
     }
     case 'lampCeil': case 'pendant': case 'chandelier': case 'downlight': case 'trackSpot': case 'sconce':
     case 'floorLamp': case 'tableLamp': case 'ledStrip': case 'bollard': case 'streetLamp': case 'wallOut': {
-      // aydınlatma (#121): ampul / difüzör açıkken ışık renginde kendinden parlar (ember), kapalıyken mat beyaz
-      const q = lightP(o), R = Math.min(w, d) / 2, bulb = q.on ? sf('ember', q.col) : PL('#e5e7eb'), shade = q.on ? sf('ember', shade0(q.col)) : FB(col), dk2 = PL('#1f2937');
-      if (o.type === 'lampCeil') { cy(R, h * 0.35, PL(white), 0, h * 0.65, 0, 28); cy(R * 0.92, h * 0.65, bulb, 0, 0, 0, 28); }
-      else if (o.type === 'pendant') { cy(5, 2, dk2, 0, h - 2, 0, 16); cy(0.4, h * 0.62, dk2, 0, h * 0.36, 0, 6); cy(R * 0.9, h * 0.3, MT(col), 0, h * 0.08, 0, 24); sph(g, Math.max(3, R * 0.28), bulb, 0, h * 0.1, 0); }
+      // aydınlatma (#121): ampul / difüzör açıkken ışık renginde kendinden parlar (ember), kapalıyken mat beyaz; gündüz sönük/açık anlık değiştirilebilir
+      const q = lightP(o), R = Math.min(w, d) / 2, offB = PL('#e5e7eb'), offS = FB(col);
+      const bulb = q.on ? sf('ember', q.col) : offB, shade = q.on ? sf('ember', shade0(q.col)) : offS, dk2 = PL('#1f2937');
+      const litM = (mesh, offSpec) => { if (q.on && C.mat && mesh && mesh.material) mesh.userData.litSwap = { on: mesh.material, off: C.mat(offSpec) }; return mesh; };
+      if (o.type === 'lampCeil') { cy(R, h * 0.35, PL(white), 0, h * 0.65, 0, 28); litM(cy(R * 0.92, h * 0.65, bulb, 0, 0, 0, 28), offB); }
+      else if (o.type === 'pendant') { cy(5, 2, dk2, 0, h - 2, 0, 16); cy(0.4, h * 0.62, dk2, 0, h * 0.36, 0, 6); cy(R * 0.9, h * 0.3, MT(col), 0, h * 0.08, 0, 24); litM(sph(g, Math.max(3, R * 0.28), bulb, 0, h * 0.1, 0), offB); }
       else if (o.type === 'chandelier') {
         const gold = MT(col), n = ed ? 6 : 4; cy(6, 2, gold, 0, h - 2, 0, 16); cy(1, h * 0.55, gold, 0, h * 0.43, 0, 8); cy(R * 0.85, 2, gold, 0, h * 0.3, 0, 32);
-        for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, x = Math.cos(a) * R * 0.8, z = Math.sin(a) * R * 0.8; cy(2.5, 4, gold, x, h * 0.3, z, 10); sph(g, 3.2, bulb, x, h * 0.3 + 7, z); }
+        for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, x = Math.cos(a) * R * 0.8, z = Math.sin(a) * R * 0.8; cy(2.5, 4, gold, x, h * 0.3, z, 10); litM(sph(g, 3.2, bulb, x, h * 0.3 + 7, z), offB); }
       }
-      else if (o.type === 'downlight') { cy(R, h, PL(white), 0, 0.6, 0, 20); cy(R * 0.7, 0.8, bulb, 0, 0, 0, 20); }
+      else if (o.type === 'downlight') { cy(R, h, PL(white), 0, 0.6, 0, 20); litM(cy(R * 0.7, 0.8, bulb, 0, 0, 0, 20), offB); }
       else if (o.type === 'trackSpot') {
         bb(w, 3, Math.min(d, 4), dk2, 0, h - 3, 0); const n = clamp(Math.round(w / 40), 2, 6);
-        for (let i = 0; i < n; i++) { const x = -w / 2 + (i + 0.5) * w / n; cy(0.8, h * 0.3, dk2, x, h - 3 - h * 0.3, 0, 6); cy(4, h * 0.42, PL(col), x, 0.6, 0, 14); cy(3.2, 0.7, bulb, x, 0, 0, 14); }
+        for (let i = 0; i < n; i++) { const x = -w / 2 + (i + 0.5) * w / n; cy(0.8, h * 0.3, dk2, x, h - 3 - h * 0.3, 0, 6); cy(4, h * 0.42, PL(col), x, 0.6, 0, 14); litM(cy(3.2, 0.7, bulb, x, 0, 0, 14), offB); }
       }
       else if (o.type === 'sconce' || o.type === 'wallOut') {
         const out = o.type === 'wallOut'; bb(w * 0.55, h * 0.7, 2, out ? dk2 : MT('#a9b4c0'), 0, h * 0.15, -d / 2 + 1);
-        if (out) { bb(w * 0.7, h * 0.65, d * 0.6, bulb, 0, h * 0.18, d * 0.1); bb(w * 0.8, 3, d * 0.75, dk2, 0, h * 0.83, d * 0.1); }
-        else cy(Math.min(w / 2, d) * 0.8, h * 0.6, shade, 0, h * 0.25, d * 0.05, 20);
+        if (out) { litM(bb(w * 0.7, h * 0.65, d * 0.6, bulb, 0, h * 0.18, d * 0.1), offB); bb(w * 0.8, 3, d * 0.75, dk2, 0, h * 0.83, d * 0.1); }
+        else litM(cy(Math.min(w / 2, d) * 0.8, h * 0.6, shade, 0, h * 0.25, d * 0.05, 20), offS);
       }
       else if (o.type === 'floorLamp' || o.type === 'tableLamp') {
         const tbl = o.type === 'tableLamp', sh0 = tbl ? h * 0.42 : 30;
         if (tbl) sph(g, R * 0.42, PC(col), 0, R * 0.42, 0, 1, 1.1, 1); else cy(R * 0.6, 3, dk2, 0, 0, 0, 20);
         cy(tbl ? 1 : 1.2, h - sh0 - (tbl ? R * 0.6 : 3), MT('#a9b4c0'), 0, tbl ? R * 0.6 : 3, 0, 8);
-        cy(R, sh0, shade, 0, h - sh0, 0, 24);
+        litM(cy(R, sh0, shade, 0, h - sh0, 0, 24), offS);
       }
-      else if (o.type === 'ledStrip') bb(w, h, d, bulb, 0, 0, 0);
-      else if (o.type === 'bollard') { cy(R, h - 12, dk2, 0, 0, 0, 16); cy(R * 0.85, 8, bulb, 0, h - 12, 0, 16); cy(R * 1.05, 4, dk2, 0, h - 4, 0, 16); }
-      else { /* sokak lambası */ cy(R * 0.6, 20, dk2, 0, 0, 0, 16); cy(4, h - 46, dk2, 0, 20, 0, 10); cy(R * 0.95, 20, dk2, 0, h - 26, 0, 6); cy(R * 0.8, 6, bulb, 0, h - 32, 0, 6); cy(R, 6, dk2, 0, h - 6, 0, 6); }
+      else if (o.type === 'ledStrip') litM(bb(w, h, d, bulb, 0, 0, 0), offB);
+      else if (o.type === 'bollard') { cy(R, h - 12, dk2, 0, 0, 0, 16); litM(cy(R * 0.85, 8, bulb, 0, h - 12, 0, 16), offB); cy(R * 1.05, 4, dk2, 0, h - 4, 0, 16); }
+      else { /* sokak lambası */ cy(R * 0.6, 20, dk2, 0, 0, 0, 16); cy(4, h - 46, dk2, 0, 20, 0, 10); cy(R * 0.95, 20, dk2, 0, h - 26, 0, 6); litM(cy(R * 0.8, 6, bulb, 0, h - 32, 0, 6), offB); cy(R, 6, dk2, 0, h - 6, 0, 6); }
       break;
     }
     default: {
@@ -14618,17 +14824,18 @@ function furn3D(g, o, C) {
   }
 }
 // Korkuluk / bahçe çiti 3B (#73): açık dikme + ray geometrisi, süpürgelik / üst kapak yok. g = duvar grubu (orta noktada, duvar yönünde)
-function lowWall3D(g, w, L, H, ops, box, det, lt) {
+function lowWall3D(g, w, L, H, ops, box, det, lt, mat, unitBox) {
   const fence = w.wt === 'fence', spec = LOW_WALL[w.wt], X = x => x - L / 2;
   const col = w.color || (fence ? (lt ? '#a47148' : '#8b5e3c') : railStyle(w) === 'solid' ? (lt ? '#faf8f5' : '#e2e8f0') : (lt ? '#6b7280' : '#9ca3af'));
   const t = Math.max(2, +w.t || spec.t), ps = fence ? Math.max(8, t) : Math.max(4, Math.min(t, 6));
   if (railStyle(w) !== 'solid') for (const x of lowWallPosts(w, L, ops)) box(g, ps, H, ps, col, X(x), H / 2, 0, 0, undefined, det, true);
+  const bars = [];
   for (const [s0, e0] of lowWallSolid(L, ops)) {
     const len = e0 - s0, xm = X((s0 + e0) / 2);
     if (fence) {
       for (const y of [H * 0.25, H * 0.75]) box(g, len, 8, t * 0.5, col, xm, y, -t * 0.15, 0, undefined, det, true);
       const step = Math.max(spec.bar, len / 150);
-      for (let x = s0 + step / 2; x < e0 - 1; x += step) box(g, step * 0.6, H - 8, 2, shade(col, 0.06), X(x), (H - 8) / 2 + 4, t * 0.2, 0, undefined, false, false);
+      for (let x = s0 + step / 2; x < e0 - 1; x += step) bars.push([step * 0.6, H - 8, 2, X(x), (H - 8) / 2 + 4, t * 0.2]);
     } else if (railStyle(w) === 'solid') { // dolu parapet: duvar gibi gövde + kapak, dikme yok
       box(g, len, H - 4, t, col, xm, (H - 4) / 2, 0, 0, undefined, det, true);
       box(g, len, 4, t * 1.15, shade(col, -0.12), xm, H - 2, 0, 0, undefined, det, false);
@@ -14643,8 +14850,16 @@ function lowWall3D(g, w, L, H, ops, box, det, lt) {
       box(g, len, 5, Math.max(t, 6), shade(col, -0.1), xm, H - 2.5, 0, 0, undefined, det, true);   // küpeşte
       box(g, len, 3, t * 0.6, col, xm, 10, 0, 0, undefined, det, false);                             // alt ray
       const step = Math.max(spec.bar, len / 120);
-      for (let x = s0 + step; x < e0 - 2; x += step) box(g, 2, H - 15, 2, col, X(x), 11.5 + (H - 15) / 2 - 1.5, 0, 0, undefined, false, false);
+      for (let x = s0 + step; x < e0 - 2; x += step) bars.push([2, H - 15, 2, X(x), 11.5 + (H - 15) / 2 - 1.5, 0]);
     }
+  }
+  if (bars.length) {
+    const bCol = fence ? shade(col, 0.06) : col;
+    if (bars.length > 1 && mat && unitBox) {
+      const im = new THREE.InstancedMesh(unitBox, mat(bCol), bars.length), m4 = new THREE.Matrix4(), v = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+      bars.forEach(([bw, bh, bd, bx, by, bz], i) => { v.set(bx, by, bz); s.set(bw, bh, bd); m4.compose(v, q, s); im.setMatrixAt(i, m4); });
+      im.instanceMatrix.needsUpdate = true; im.receiveShadow = true; im.castShadow = false; g.add(im);
+    } else for (const [bw, bh, bd, bx, by, bz] of bars) box(g, bw, bh, bd, bCol, bx, by, bz, 0, undefined, false, false);
   }
 }
 /* ---------- 3B GPU önbelleği (#106) ----------
@@ -14658,16 +14873,21 @@ function cache3D(lt, det) {
   let K = T3.cache;
   if (K && K.key === key) return K;
   if (K) dispose3DLater([...Object.values(K.matCache), K.lineMat, ...K.texs, ...Object.values(K.unit), ...Object.values(K.geo)]);
-  const box = new THREE.BoxGeometry(1, 1, 1);
+  const box = new THREE.BoxGeometry(1, 1, 1), cyl = new THREE.CylinderGeometry(1, 1, 1, 24), sph = new THREE.SphereGeometry(1, 16, 12);
+  box.userData.closed = cyl.userData.closed = sph.userData.closed = true;
   K = T3.cache = { key, matCache: {}, floorTex: {}, stex: {}, geo: {}, texs: [],
-    unit: { box, edges: new THREE.EdgesGeometry(box), cyl: new THREE.CylinderGeometry(1, 1, 1, 24), sph: new THREE.SphereGeometry(1, 16, 12) },
+    unit: { box, edges: new THREE.EdgesGeometry(box), cyl, sph },
     lineMat: new THREE.LineBasicMaterial({ color: lt ? 0x334155 : 0x64748b, transparent: true, opacity: .35 }) };
   return K;
 }
 function cache3DGeos(K) { return new Set(K ? [...Object.values(K.unit), ...Object.values(K.geo)] : []); }
 function prune3DCache(K, S) {
   const mats = new Set(), geos = new Set(), tx = new Set(), drop = [];
-  S.traverse(o => { if (o.material) for (const m of [].concat(o.material)) mats.add(m); if (o.geometry) geos.add(o.geometry); });
+  S.traverse(o => {
+    if (o.material) for (const m of [].concat(o.material)) mats.add(m);
+    if (o.userData && o.userData.litSwap) { mats.add(o.userData.litSwap.on); mats.add(o.userData.litSwap.off); }
+    if (o.geometry) geos.add(o.geometry);
+  });
   for (const m of mats) for (const p of ['map', 'bumpMap', 'roughnessMap', 'alphaMap']) { const t = m[p]; if (t) { tx.add(t); if (t.fpBump) tx.add(t.fpBump); if (t.fpRough) tx.add(t.fpRough); } }
   for (const k in K.matCache) if (!mats.has(K.matCache[k])) { drop.push(K.matCache[k]); delete K.matCache[k]; }
   for (const k in K.geo) if (!geos.has(K.geo[k])) { drop.push(K.geo[k]); delete K.geo[k]; }
@@ -14717,7 +14937,7 @@ function build3D(keepCam = false) {
   // geometriler hemen, malzemeler bir sonraki kare çizildikten sonra (shader programları yeni malzemelere geçsin).
   const K = cache3D(lt, det), keepGeo = cache3DGeos(K);
   {
-    const geos = new Set(); S.traverse(o => { if (o.geometry && !keepGeo.has(o.geometry)) geos.add(o.geometry); });
+    const geos = new Set(); S.traverse(o => { if (o.geometry && !keepGeo.has(o.geometry)) geos.add(o.geometry); if (o.isInstancedMesh && o.dispose) o.dispose(); });
     for (const gg of geos) gg.dispose();
     if (T3.mats) dispose3DLater(T3.mats);
     T3.mats = null;
@@ -14778,19 +14998,19 @@ function build3D(keepCam = false) {
   let patchGeo = null;
   // bir ışık noktası: havuz listesine girer + hale + zemin lekesi. x / z plan, ay dünya kotu; strip = şerit LED (len cm, ang plan açısı °)
   const glowAt = (o, fidx, q, x, z, ay, floorY, strip) => {
-    const ent = { o, fidx, on: q.on, kind: q.kind, lm: q.lm, col: q.col, beam: q.beam, x, y: ay, z }; T3.fixList.push(ent);
+    const ent = { o, fidx, on: q.on, kind: q.kind, lm: q.lm, col: q.col, beam: q.beam, x, y: ay, z, halos: [] }; T3.fixList.push(ent);
     if (!q.on) return;
-    const t = lmToThree(q.lm), k = fixDayFactor(), len = strip ? strip.len : 0, a = strip ? strip.ang * Math.PI / 180 : 0;
-    // şerit: boyunca birkaç küçük hale (en çok 6); diğerleri tek hale
-    const n = len > 60 ? Math.min(6, Math.ceil(len / 50)) : 1, sz = (16 + Math.sqrt(q.lm) * 0.9) / Math.sqrt(n), spm = glowMat(q.col, Math.round((0.35 + 0.4 * k) * 20) / 20);
+    const t = lmToThree(q.lm), len = strip ? strip.len : 0, a = strip ? strip.ang * Math.PI / 180 : 0;
+    // şerit: boyunca birkaç küçük hale (en çok 6); diğerleri tek hale (görünürlüğü syncFixVisuals yönetir)
+    const n = len > 60 ? Math.min(6, Math.ceil(len / 50)) : 1, sz = (16 + Math.sqrt(q.lm) * 0.9) / Math.sqrt(n), spm = glowMat(q.col, 0.72);
     for (let i = 0; i < n; i++) {
       const u = n > 1 ? (i / (n - 1) - 0.5) * len * 0.9 : 0, sp = new THREE.Sprite(spm);
-      sp.scale.set(sz, sz, 1); sp.position.set(x + u * Math.cos(a), ay - (q.kind === 'spot' ? 2 : 0), z + u * Math.sin(a)); sp.userData.fpDecal = true; sp.raycast = () => {}; S.add(sp);
+      sp.scale.set(sz, sz, 1); sp.position.set(x + u * Math.cos(a), ay - (q.kind === 'spot' ? 2 : 0), z + u * Math.sin(a)); sp.userData.fpDecal = true; sp.visible = false; sp.raycast = () => {}; S.add(sp); ent.halos.push(sp);
     }
     if (ay - floorY < 20 || ay - floorY > 900) return;
     if (!patchGeo) { patchGeo = new THREE.PlaneGeometry(1, 1); patchGeo.rotateX(-Math.PI / 2); }
-    const pr = t.d * (q.kind === 'spot' ? 0.32 : 0.5), pm = new THREE.Mesh(patchGeo, glowMat(q.col, Math.round(0.22 * k * 20) / 20, true));
-    pm.scale.set(pr * 2 + len, 1, pr * 2); pm.rotation.y = -a; pm.position.set(x, floorY + 1.3, z); pm.renderOrder = 2; pm.userData.fpDecal = true; pm.raycast = () => {}; S.add(pm); ent.patch = pm; // gerçek ışık atanınca gizlenir (duvar arkasına taşmasın, #128)
+    const pr = t.d * (q.kind === 'spot' ? 0.32 : 0.5), pm = new THREE.Mesh(patchGeo, glowMat(q.col, 0.22, true));
+    pm.scale.set(pr * 2 + len, 1, pr * 2); pm.rotation.y = -a; pm.position.set(x, floorY + 1.3, z); pm.renderOrder = 2; pm.userData.fpDecal = true; pm.visible = false; pm.raycast = () => {}; S.add(pm); ent.patch = pm; // gerçek ışık atanınca gizlenir (duvar arkasına taşmasın, #128)
   };
   const fixGlow3D = (o, fidx, fy, floorY) => glowAt(o, fidx, lightP(o), o.x, o.y, fy + fixAnchor(o), floorY);
   // mobilya stüdyosunda yapılmış eşyanın ışıklı parçaları (ampul / spot / şerit LED): her biri ayrı bir ışık noktası
@@ -14933,7 +15153,7 @@ function build3D(keepCam = false) {
       const wCol = w.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
       const curt = w.wt === 'curtain', rail = 5, frameCol = lt ? 0x8fa3b8 : 0x7c8a9c;
       const pin3 = () => { if (!hasPos) return; const pv = w[wallPivot(w)], pin = new THREE.Mesh(new THREE.CylinderGeometry(w.t * 0.55, w.t * 0.55, H + 4, 20), mat(lt ? 0x1d4ed8 : 0xd99b26)); pin.position.set(pv.x, we + H / 2, pv.y); pin.userData = { wallId: w.id }; S.add(pin); };
-      if (isLowWall(w)) { lowWall3D(g, w, L, H, f.ops.filter(o => o.wall === w.id), box, det, lt); pin3(); return; } // korkuluk / çit (#73)
+      if (isLowWall(w)) { lowWall3D(g, w, L, H, f.ops.filter(o => o.wall === w.id), box, det, lt, mat, unitBox); pin3(); return; } // korkuluk / çit (#73)
       if (curt) { box(g, L, rail, w.t, frameCol, 0, rail / 2, 0); box(g, L, rail, w.t, frameCol, 0, H - rail / 2, 0); } // alt & üst kuşak
       const sloped = wallTopOn(w); // eğimli üst (#96): en üst parça profili izleyen prizma
       // ayrı boyanan / kaplanan yüzler: her duvar parçasının iki yanına ince bir "kaplama" yüzeyi (UV = cm, doku gerçek boyda)
@@ -15099,12 +15319,17 @@ function build3D(keepCam = false) {
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); fitOrtho(); }
   T3.mats = extraMats; // önbellekte olmayan malzemeler: sonraki build3D'de (bir kare sonra) dispose edilir
   T3.texs = texs;
+  T3.fixShadowEnts = []; T3.fixReal = new Set(); T3.walkCache = null; if (T3.walk) T3.walk._gOk = false;
   prune3DCache(T3.cache, S); // bu sahnede kullanılmayan önbellek girdileri bırakılır (canlı görünüm malzemeleri değiştirmeden ÖNCE)
+  markScene3D();
   T3.ctl.update();
   if (T3.walk) applyWalkCam();
-  if (T3.fixList.length || isNight3D() || ui.flash) { const pool = fixPool(); fixShadowSlots(det); for (const l of pool.pts) S.add(l); for (const l of pool.spots) { S.add(l); S.add(l.target); } assignFixLights(); } // sabit havuz: sayı değişmez (#121); ilk 2 + 2 yuva gölgeli (#128)
+  syncFixVisuals(lightsActive3D());
+  syncFixPool();
+  if (T3.fix && T3.fix.pts[0].parent === S) assignFixLights();
   markShadows(); // sahne yeniden kuruldu: durağan gölgeler bir kez çizilir (#128)
   refreshSel3D(); applySecClip(); applyLive3D(); place3DSync(); fp3DPreview();
+  markScene3D();
 }
 
 /* ---------- 3B seçim vurgusu & canlı güncelleme ---------- */
@@ -15121,7 +15346,8 @@ function refreshSel3D() {
   if (!T3 || !T3.scene) return;
   for (const h of h3) { T3.scene.remove(h); h.geometry.dispose(); h.material.dispose(); }
   h3 = [];
-  if (!ui.view3d || !sel.length) return;
+  if (!ui.view3d || !sel.length) { markScene3D(); return; }
+  if (T3.sceneDirty) { T3.scene.updateMatrixWorld(true); T3.sceneDirty = false; }
   // tekil veya gruplu seçimde mobilya, duvar ve kapı/pencere üyeleri turuncu kutuyla vurgulanır (#29)
   const ids = new Set(sel), col = isLight() ? 0xd97706 : 0xfbbf24;
   for (const c of T3.scene.children) {
@@ -15131,6 +15357,7 @@ function refreshSel3D() {
   }
   for (const h of h3) T3.scene.add(h);
   arrows3D();
+  markScene3D();
 }
 /* ---------- 3B boyut okları: tek seçili eşyanın dört yanında genişlik / uzunluk okları ----------
    Ok sürüklenince o kenar taşınır, karşı kenar yerinde kalır (furnResizeSide). Oklar her zaman görünür (derinlik testi yok),
@@ -15182,7 +15409,7 @@ function arrows3D() {
     m.renderOrder = 999; m.userData = { arrow: s.key, furnArrow: o.id };
     T3.scene.add(m); meshes.push(m);
   }
-  T3.arr = { meshes, geo, mat }; req3D();
+  T3.arr = { meshes, geo, mat }; markScene3D(); req3D();
 }
 // eşya eğimi: merkez (yarı yükseklik) etrafında Ry(ry)·Rx(rx), sonra en alt köşe zemine (eşyanın kotuna) indirilir
 function furnTiltGroup(parent, o) {
@@ -15195,9 +15422,9 @@ function furnTiltGroup(parent, o) {
 function moveFurn3D(o) {
   if (!T3 || !ui.view3d) return;
   const g = T3.scene.children.find(c => c.userData && c.userData.furnId === o.id);
-  if (g) { g.position.set(o.x, g.userData.elev || 0, o.y); g.rotation.y = -(o.rot || 0) * Math.PI / 180; }
+  if (g) { g.position.set(o.x, g.userData.elev || 0, o.y); g.rotation.y = -(o.rot || 0) * Math.PI / 180; g.updateMatrixWorld(true); }
   for (const h of h3) h.update();
-  markShadows();
+  markScene3D(); markShadows();
 }
 function schedBuild3D() {
   if (!T3 || !ui.view3d) return;
@@ -15250,18 +15477,18 @@ function place3DSync() {
   if (!T3 || !T3.scene) return;
   const o = place3DOn() ? ui.ghost : null;
   T3.r.domElement.style.cursor = place3DOn() ? 'crosshair' : '';
-  if (!o) { if (T3.ghost && !ui.walkPick) T3.ghost.visible = false; req3D(); return; }
+  if (!o) { if (T3.ghost && !ui.walkPick) { T3.ghost.visible = false; markScene3D(); } req3D(); return; }
   const g = ghost3D(), elev = T3.ghostElev || 0;
   if (placing.type === 'furn') {
     g.scale.set(Math.max(1, o.w), Math.max(1, o.h || 1), Math.max(1, o.d));
     g.position.set(o.x, elev + furnElev(o) + (o.h || 1) / 2, o.y); g.rotation.set(0, -(o.rot || 0) * Math.PI / 180, 0);
   } else {
-    const w = F().walls.find(x => x.id === o.wall); if (!w) { g.visible = false; req3D(); return; }
+    const w = F().walls.find(x => x.id === o.wall); if (!w) { g.visible = false; markScene3D(); req3D(); return; }
     const L = wLen(w), ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L;
     g.scale.set(o.w, o.h, (w.t || 20) + 4);
     g.position.set(w.a.x + ux * o.d, elev + (o.sill || 0) + o.h / 2, w.a.y + uy * o.d); g.rotation.set(0, -Math.atan2(uy, ux), 0);
   }
-  g.visible = true; req3D();
+  g.visible = true; markScene3D(); req3D();
 }
 
 /* ---------- 3B'de sol çubuk araçları (duvar, oda, döşeme, ölçü, metin, kalem, silgi, kırp, ayna, kesit, yüzeye bağla…) ----------
@@ -15355,7 +15582,7 @@ function fp3DPreview() {
     ln = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xf59e0b, depthTest: false, transparent: true }));
     ln.renderOrder = 999; ln.frustumCulled = false; ln.raycast = () => {}; ln.userData.fpPrev = true; T3.fpPrev = ln;
   }
-  if (ln.parent !== T3.scene) T3.scene.add(ln);
+  if (ln.parent !== T3.scene) { T3.scene.add(ln); markScene3D(); }
   const a = ln.geometry.attributes.position, arr = a.array, y = v3dElev(fi) + 2; let n = 0;
   const put = q => { arr[n * 3] = q.x; arr[n * 3 + 1] = y; arr[n * 3 + 2] = q.y; n++; };
   const seg = (p, q) => { if (p && q && n + 2 <= FP3D_MAXV) { put(p); put(q); } };
@@ -15463,6 +15690,7 @@ function applyLangUI() {
   if ($('#lblLayer')) $('#lblLayer').textContent = L('Katman', 'Layer');
   if ($('#b3dFloors')) $('#b3dFloors').title = L('Katları ayrı ayrı göster / gizle', 'Show / hide individual floors');
   if ($('#b3dNight')) $('#b3dNight').title = L('🌙 Gece / gündüz: gece gökyüzü, ay ışığı ve yanan lambalar (canlı gerçekçi görünüm)', '🌙 Night / day: night sky, moonlight and the lamps on (live realistic view)');
+  if ($('#b3dLights')) $('#b3dLights').title = L('💡 Gündüz ışıkları: gündüz lambaları aç / kapat (varsayılan kapalı)', '💡 Daytime lights: turn lamps on / off by day (off by default)');
   if ($('#b3dLive')) $('#b3dLive').title = L('🌤 Canlı gerçekçi görünüm: gökyüzü, güneş ve gölgeyle gez / yürü (güneş: 🎨 Render stüdyosu)', '🌤 Live realistic view: orbit / walk with sky, sun and shadows (sun: 🎨 Render studio)');
   if ($('#b3dStudio')) $('#b3dStudio').title = L('🎨 Render stüdyosu: stil, güneş, çözünürlük', '🎨 Render studio: style, sun, resolution');
   for (const [id, k, tr, en] of [['b3dN', 'north', 'K', 'N'], ['b3dE', 'east', 'D', 'E'], ['b3dS', 'south', 'G', 'S'], ['b3dW', 'west', 'B', 'W']]) if ($('#' + id)) { $('#' + id).textContent = L(tr, en); $('#' + id).title = L(...ELEV_NAMES[k]); }
@@ -15513,6 +15741,10 @@ $('#b3dShot').onclick = e => export3DRender(e && e.shiftKey);
 $('#b3dStudio').onclick = () => openRenderStudio();
 if ($('#b3dLive')) $('#b3dLive').onclick = () => setLive3D(!ui.live3d);
 if ($('#b3dNight')) $('#b3dNight').onclick = () => setNight3D(!isNight3D());
+if ($('#b3dLights')) $('#b3dLights').onclick = () => {
+  if (ui.live3d && ui.studio && ui.studio.alt < 6) toast(L('Gece ışıklar otomatik açık · tek tek kapatmak için lambaya tıklayın', 'Lights are automatically on at night · click a lamp to switch it individually'));
+  else setDayLights(!ui.dayLights);
+};
 syncLiveUI();
 $('#bLang').onclick = () => setLang(isEN() ? 'tr' : 'en');
 $('#bTheme').onclick = () => {

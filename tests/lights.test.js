@@ -251,13 +251,14 @@ test('(5) MCP stdio: add_furniture lights, clamping, add_room, set_lights, summa
 function loadLight3DSandbox() {
   return new Function(`
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-    const ui = { live3d: false, studio: { alt: 42 } };
+    const ui = { live3d: false, studio: { alt: 42 }, dayLights: false };
     ${fnSrcOf(src, 'lmToThree')}
     ${fnSrcOf(src, 'fixAnchor')}
+    ${fnSrcOf(src, 'lightsActive3D')}
     ${fnSrcOf(src, 'fixDayFactor')}
     ${fnSrcOf(src, 'fixScore')}
     ${fnSrcOf(src, 'fixRank')}
-    return { ui, lmToThree, fixAnchor, fixDayFactor, fixRank };
+    return { ui, lmToThree, fixAnchor, lightsActive3D, fixDayFactor, fixRank };
   `)();
 }
 
@@ -326,9 +327,39 @@ test('(6c) fixAnchor: mounting offsets by fixture type', () => {
   assert.strictEqual(fixAnchor({ type: 'unknownType', h: 100 }), 0);
 });
 
-test('(6d) fixDayFactor: CAD mode, live3d sun altitude, and 0.25..1 clamping', () => {
-  const { ui, fixDayFactor } = loadLight3DSandbox();
+test('(6d) lightsActive3D & fixDayFactor: off by default by day, on at night or with dayLights, 0.25..1 clamping', () => {
+  const { ui, lightsActive3D, fixDayFactor } = loadLight3DSandbox();
+  // By default (dayLights: false), CAD and daytime Live3D keep lights off (factor 0)
+  ui.dayLights = false;
   ui.live3d = false;
+  assert.strictEqual(lightsActive3D(), false);
+  assert.strictEqual(fixDayFactor(), 0);
+
+  ui.live3d = true;
+  for (const alt of [6, 42, 60]) {
+    ui.studio = { alt };
+    assert.strictEqual(lightsActive3D(), false, `alt ${alt} should keep lights off by default`);
+    assert.strictEqual(fixDayFactor(), 0, `alt ${alt} should give factor 0 by default`);
+  }
+
+  // Twilight / night turns lights on automatically
+  ui.studio = { alt: 5 };
+  assert.strictEqual(lightsActive3D(), true);
+  assert.ok(fixDayFactor() > 0.9);
+  ui.studio = { alt: -12 };
+  assert.strictEqual(lightsActive3D(), true);
+  assert.strictEqual(fixDayFactor(), 1);
+
+  // Explicit altitude (e.g. render3DHQ) respects the same daytime rule
+  assert.strictEqual(lightsActive3D(42), false);
+  assert.strictEqual(fixDayFactor(42), 0);
+  assert.strictEqual(lightsActive3D(-12), true);
+  assert.strictEqual(fixDayFactor(-12), 1);
+
+  // When daytime lights are toggled on (ui.dayLights = true), CAD = 0.45 and Live3D scales 0.25..1
+  ui.dayLights = true;
+  ui.live3d = false;
+  assert.strictEqual(lightsActive3D(), true);
   assert.strictEqual(fixDayFactor(), 0.45);
 
   ui.live3d = true;
@@ -352,9 +383,10 @@ test('(6e) 3D lighting wiring in app.js', () => {
   const build3DSrc = fnSrcOf(src, 'build3D');
   assert.match(
     build3DSrc,
-    /if\s*\(\s*T3\.fixList\.length\s*\|\|\s*isNight3D\(\)\s*\|\|\s*ui\.flash\s*\)\s*\{[\s\S]*?fixPool\s*\(\s*\)[\s\S]*?assignFixLights\s*\(\s*\)/,
-    'build3D adds the pool when there are fixtures (or at night / with the flashlight) and calls assignFixLights'
+    /syncFixVisuals\s*\(\s*lightsActive3D\s*\(\s*\)\s*\)[\s\S]*?syncFixPool\s*\(\s*\)[\s\S]*?assignFixLights\s*\(\s*\)/,
+    'build3D syncs fixture visuals/pool for daytime default and assigns pool lights when active'
   );
+  assert.match(read('index.html'), /id="b3dLights"/, 'index.html contains daytime lights toggle #b3dLights');
   assert.match(
     build3DSrc,
     /if\s*\(\s*isLightFix\s*\(\s*o\s*\)\s*\)\s*\{[^}]*castShadow\s*=\s*false/,
@@ -488,11 +520,12 @@ test('(7e) night mode (#122) wiring in app.js and index.html', () => {
 });
 
 
-test('(8) fixShadowPick: the most relevant fixtures of any kind get the shadow slots (#128)', () => {
-  const { fixShadowPick } = new Function(`
+test('(8) fixShadowPick & fixShadowAssign: sticky slots with hysteresis prevent redundant shadow redraws (#128)', () => {
+  const { fixShadowPick, fixShadowAssign } = new Function(`
     ${fnSrcOf(src, 'fixScore')}
     ${fnSrcOf(src, 'fixShadowPick')}
-    return { fixShadowPick };`)();
+    ${fnSrcOf(src, 'fixShadowAssign')}
+    return { fixShadowPick, fixShadowAssign };`)();
   const focus = { x: 0, y: 150, z: 0, fi: 0 };
   const e = (id, kind, x, on = true, fidx = 0) => ({ id, kind, on, lm: 800, fidx, x, y: 150, z: 0 });
   const list = [e('farPoint', 'point', 900), e('nearSpot', 'spot', 50), e('nearPoint', 'point', 100), e('off', 'point', 10, false), e('otherFloor', 'point', 120, true, 1), e('mid', 'strip', 300)];
@@ -501,4 +534,17 @@ test('(8) fixShadowPick: the most relevant fixtures of any kind get the shadow s
   assert.strictEqual(fixShadowPick(list, focus, 2).length, 2);
   assert.match(fnSrcOf(src, 'fixShadowSlots'), /i < FIX_SHADOWS/, 'only the first FIX_SHADOWS spots cast shadows');
   assert.doesNotMatch(fnSrcOf(src, 'fixShadowSlots'), /pts\.forEach/, 'point lights never cast shadows (they black out the sun in r128)');
+
+  // Sticky slots: moving focus slightly so top-4 scores re-order keeps each fixture in its exact previous slot
+  const a = e('a', 'point', 0), b = e('b', 'point', 300), c = e('c', 'point', 600), d = e('d', 'point', 900), ch = e('challenger', 'point', 1050);
+  const s0 = fixShadowAssign([a, b, c, d, ch], { x: 0, y: 150, z: 0, fi: 0 }, 4, []);
+  assert.deepStrictEqual(s0.map(x => x.id), ['a', 'b', 'c', 'd']);
+
+  // Focus moves toward d (at x=800): d now outscores a/b/c, and ch (1050) is within 1.35x hysteresis of a (0) -> slots keep exact order!
+  const s1 = fixShadowAssign([a, b, c, d, ch], { x: 450, y: 150, z: 0, fi: 0 }, 4, s0);
+  assert.deepStrictEqual(s1.map(x => x && x.id), ['a', 'b', 'c', 'd'], 'sticky slots preserve exact indices while top-4 / hysteresis hold');
+
+  // Focus moves right next to challenger (x=1040): challenger overwhelmingly beats 'a' (>1.35x) and replaces ONLY 'a' in slot 0
+  const s2 = fixShadowAssign([a, b, c, d, ch], { x: 1040, y: 150, z: 0, fi: 0 }, 4, s1);
+  assert.deepStrictEqual(s2.map(x => x && x.id), ['challenger', 'b', 'c', 'd'], 'challenger replaces only the evicted slot');
 });
