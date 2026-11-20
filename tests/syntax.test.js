@@ -7,7 +7,7 @@ const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 const { ROOT, read, exists, parseJsonc } = require('./helpers/repo');
 
-const FILES = ['app.js', 'mcp/server.js', 'mcp/bridge.js'];
+const FILES = ['app.js', 'mcp/server.js', 'mcp/bridge.js', 'presence/worker.mjs'];
 
 for (const rel of FILES) {
   test(`node --check ${rel}`, () => {

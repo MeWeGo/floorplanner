@@ -9522,6 +9522,126 @@ function sanitizePlan(o, depth = 0) {
   return typeof o === 'boolean' || o === null ? o : null;
 }
 
+/* ---------- Canlı kullanıcı sayacı (isteğe bağlı Cloudflare Worker) ---------- */
+// presence/worker.mjs dağıtıldıktan sonra alınan adres (ör. 'wss://floorplanner-presence.<alt-alan>.workers.dev/ws' veya 'https://...')
+// ?presence=off sekmeyi kapatır; ?presence=ws://... yerel test için uç noktayı geçersiz kılar
+const PRESENCE_URL = 'wss://floorplanner-presence.alieferdinc.workers.dev/ws';
+const pres = { ws: null, count: null, delay: 2000, retry: null, ping: null, closed: false };
+function presenceEndpoint(base = PRESENCE_URL, loc = location) {
+  let q = '';
+  try { q = new URLSearchParams(loc.search || '').get('presence') || ''; } catch (e) { }
+  q = q.trim();
+  if (/^(off|0|false)$/i.test(q)) return '';
+  const ql = q.toLowerCase();
+  let raw = '';
+  if (ql.startsWith('ws://') || ql.startsWith('wss://') || ql.startsWith('http://') || ql.startsWith('https://')) {
+    raw = q;
+  } else {
+    const proto = String(loc.protocol || '').toLowerCase();
+    const host = String(loc.hostname || '').toLowerCase();
+    if ((proto !== 'http:' && proto !== 'https:') || !host || host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return '';
+    raw = String(base || '').trim();
+  }
+  if (!raw) return '';
+  const rl = raw.toLowerCase();
+  if (rl.startsWith('https://')) raw = 'wss://' + raw.slice(8);
+  else if (rl.startsWith('http://')) raw = 'ws://' + raw.slice(7);
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return '';
+    if (!u.pathname || u.pathname === '/') u.pathname = '/ws';
+    return u.toString();
+  } catch (e) { return ''; }
+}
+function presenceParseCount(raw) {
+  if (typeof raw !== 'string' || raw === 'pong') return null;
+  try {
+    const d = JSON.parse(raw);
+    return d && typeof d.online === 'number' && Number.isFinite(d.online) && d.online >= 0 ? Math.floor(d.online) : null;
+  } catch (e) { return null; }
+}
+function presenceLabel(n) {
+  return L(`${n} kişi şu an çevrimiçi`, n === 1 ? '1 person online now' : `${n} people online now`);
+}
+function presenceRender() {
+  const wrap = $('#onlineWrap'), cnt = $('#onlineCnt');
+  if (!wrap || !cnt) return;
+  if (typeof pres.count !== 'number' || !Number.isFinite(pres.count) || pres.count < 1) {
+    wrap.hidden = true;
+    cnt.textContent = '';
+    wrap.title = '';
+    wrap.removeAttribute('aria-label');
+    return;
+  }
+  const label = presenceLabel(pres.count);
+  cnt.textContent = String(pres.count);
+  wrap.title = label;
+  wrap.setAttribute('aria-label', label);
+  wrap.hidden = false;
+}
+function presenceDrop(keepCount) {
+  clearTimeout(pres.retry); pres.retry = null;
+  clearInterval(pres.ping); pres.ping = null;
+  const ws = pres.ws; pres.ws = null;
+  if (ws) { try { ws.close(1000); } catch (e) { } }
+  if (!keepCount) { pres.count = null; presenceRender(); }
+}
+function presenceSchedule(url) {
+  if (pres.closed) return;
+  clearTimeout(pres.retry);
+  const wait = Math.round(pres.delay * (1 + Math.random() * 0.25));
+  pres.delay = Math.min(60000, pres.delay * 2);
+  pres.retry = setTimeout(() => presenceConnect(url), wait);
+}
+function presenceConnect(url) {
+  if (pres.closed || pres.ws || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+  clearTimeout(pres.retry); pres.retry = null;
+  let ws;
+  try { ws = new WebSocket(url); } catch (e) { presenceSchedule(url); return; }
+  pres.ws = ws;
+  ws.onopen = () => {
+    if (pres.ws !== ws) return;
+    pres.delay = 2000;
+    clearInterval(pres.ping);
+    pres.ping = setInterval(() => {
+      if (ws.readyState === 1) { try { ws.send('ping'); } catch (e) { } }
+    }, 45000);
+  };
+  ws.onmessage = e => {
+    const n = presenceParseCount(e && e.data);
+    if (n !== null) { pres.count = n; presenceRender(); }
+  };
+  ws.onerror = () => {
+    try { ws.close(); } catch (e) { }
+  };
+  ws.onclose = () => {
+    if (pres.ws !== ws) return;
+    pres.ws = null;
+    clearInterval(pres.ping); pres.ping = null;
+    pres.count = null; presenceRender();
+    if (!pres.closed) presenceSchedule(url);
+  };
+}
+function presenceBoot() {
+  const url = presenceEndpoint();
+  if (!url || typeof WebSocket !== 'function') { presenceRender(); return; }
+  window.addEventListener('online', () => {
+    if (!pres.closed && !pres.ws) { pres.delay = 2000; presenceConnect(url); }
+  });
+  window.addEventListener('offline', () => presenceDrop(false));
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && !pres.closed && !pres.ws && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+      pres.delay = 2000;
+      presenceConnect(url);
+    }
+  });
+  window.addEventListener('pagehide', () => {
+    pres.closed = true;
+    presenceDrop(true);
+  });
+  presenceConnect(url);
+}
+
 /* ---------- Şablonlar ---------- */
 function tplCtx() {
   const f = F();
@@ -14609,6 +14729,7 @@ function applyLangUI() {
   if ($('#s3dFloor')) $('#s3dFloor').dataset.opts = ''; // dil değişince seçenekleri yeniden yaz
   $('#lblAngle').textContent = (P && P.gridType === 'triangle') ? L('Açı 30°', 'Angle 30°') : L('Açı 15°', 'Angle 15°');
   if (!P && ($('#pname').value === 'Yeni Proje' || $('#pname').value === 'New Project')) $('#pname').value = L('Yeni Proje', 'New Project');
+  presenceRender();
   translateDefaultNames();
   buildTools(); buildLib();
   if (P) { syncGridUI(); refresh(); sync3DFloors(); }
@@ -14772,5 +14893,6 @@ applyLangUI();
   syncBoot();              // pencereler arası kanal, Google Drive oturumu, #fp / #fpd paylaşım linki
   setTimeout(fit, 50);
   aiBridgeBoot();          // connect to a running local bridge, if any
+  presenceBoot();          // canlı kullanıcı sayısı göstergesi (ayarlıysa)
   prewarm3D();             // 3B'yi boşta hazırla: ilk 3B düğmesi bekletmesin (#106)
 })();

@@ -1156,6 +1156,31 @@ footer input#iGridCustom {
   display: none;
 }
 
+.online-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 8px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.online-pill[hidden] {
+  display: none;
+}
+
+.online-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 22%, transparent);
+  flex: 0 0 auto;
+}
+
 /* ---------- Modals (Templates, Projects, Shortcuts) ---------- */
 #modalbg {
   position: fixed;
