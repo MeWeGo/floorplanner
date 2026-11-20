@@ -337,7 +337,7 @@ function lowWallPosts(w, L, ops = []) {
 function wallJoints(f, tol = 1) {
   const ends = [];
   for (const w of f.walls) {
-    const L = wLen(w); if (L < 0.5 || isLowWall(w)) continue;
+    const L = wLen(w); if (L < 0.5 || isLowWall(w) || isAccFan(w)) continue; // yelpaze yaprağı köşe dolgusu almaz
     const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L;
     ends.push({ w, p: w.a, d: { x: ux, y: uy } }, { w, p: w.b, d: { x: -ux, y: -uy } }); // d: birleşimden duvarın içine
   }
@@ -827,9 +827,9 @@ const defaultLayer = () => ({ id: '0', name: L('Varsayılan', 'Default'), color:
 const layerById = id => (P.layers || []).find(l => l.id === (id || '0'));
 // Gizli (veya baskıda çıkmayan) katmanlardaki nesneler olmadan katın sığ kopyası; hepsi görünürse kat aynen döner
 function visFloor(f, print = false) {
-  if (f.walls && f.walls.some(w => w.acc && wLen(w) < 1)) { // kapanmış akordiyon duvar (boşluk yok) çizilmez
+  if (f.walls && f.walls.some(w => w.acc && (wLen(w) < 1 || w.acc.fill === 'fan'))) { // kapanmış akordiyon duvar (boşluk yok) çizilmez; yelpazede kapı / pencere yok
     const g = Object.assign({}, f); g.walls = f.walls.filter(w => !(w.acc && wLen(w) < 1));
-    const wl = new Set(g.walls.map(w => w.id)); g.ops = f.ops.filter(o => wl.has(o.wall)); f = g;
+    const wl = new Set(g.walls.filter(w => !isAccFan(w)).map(w => w.id)); g.ops = f.ops.filter(o => wl.has(o.wall)); f = g;
   }
   if (!P.layers || P.layers.length < 2) return f;
   const hide = new Set(P.layers.filter(l => !l.vis || (print && l.print === false)).map(l => l.id));
@@ -1570,6 +1570,7 @@ function voidSvg(v, live) {
   return s;
 }
 function wallSvg(w, live, f) {
+  { const fan = f && accFan(f, w); if (fan) return accFanSvg(w, fan, live); } // akordiyon yelpaze dolgusu
   const C = pal(); let s = '';
   const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
   if (hasPos) {
@@ -4782,7 +4783,65 @@ function cleanAcc(w) {
   if (w.acc == null) return;
   if (typeof w.acc !== 'object') { w.acc = { a: null, b: null }; return; }
   const ok = l => l && typeof l.w === 'string' && (l.e === 'a' || l.e === 'b') && Number.isFinite(+l.x) && Number.isFinite(+l.y) ? { w: l.w, e: l.e, x: +l.x, y: +l.y } : null;
-  w.acc = { a: ok(w.acc.a), b: ok(w.acc.b) };
+  const fill = w.acc.fill === 'fan' ? 'fan' : null;
+  w.acc = { a: ok(w.acc.a), b: ok(w.acc.b) }; if (fill) w.acc.fill = fill;
+}
+/* Akordiyonun boşluğu dolduruşu: acc.fill yok = düz duvar (eski davranış), 'fan' = yelpaze. Yelpazenin merkezi, uçların bağlı olduğu
+   iki duvarın doğrularının kesişimi (açılan köşe); akordiyon ucundan ucuna bu merkez çevresinde yay çizen, kıvrımlı (pilili) bir yaprak
+   boşluğu kapatır. Merkez yoksa (bağlı duvar yok / paralel / uca çok yakın) yaprak düz çizgi boyunca pililenir. accFan tek okuyucudur. */
+const ACC_FAN_T = 3; // yaprak kalınlığı (cm)
+const accFanDepth = w => clamp((+w.t || 20) * 0.8, 6, 24); // pili derinliği
+const isAccFan = w => !!(w && w.acc && w.acc.fill === 'fan');
+function accFanCenter(f, w) {
+  const at = l => l && f.walls.find(x => x.id === l.w && x !== w);
+  const oa = at(w.acc.a), ob = at(w.acc.b); if (!oa || !ob) return null;
+  const d1x = oa.b.x - oa.a.x, d1y = oa.b.y - oa.a.y, d2x = ob.b.x - ob.a.x, d2y = ob.b.y - ob.a.y, den = d1x * d2y - d1y * d2x;
+  if (Math.abs(den) < 1e-6 * Math.hypot(d1x, d1y) * Math.hypot(d2x, d2y)) return null; // paralel
+  const t = ((ob.a.x - oa.a.x) * d2y - (ob.a.y - oa.a.y) * d2x) / den, c = { x: oa.a.x + d1x * t, y: oa.a.y + d1y * t };
+  const L = wLen(w), ra = dist(c, w.a), rb = dist(c, w.b);
+  return ra < 10 || rb < 10 || Math.max(ra, rb) > 50 * Math.max(L, 1) ? null : c;
+}
+// { c (merkez ya da null), pts (pilili yaprak, a → b), folds (kıvrım noktaları, kaburgalar için) }
+function accFan(f, w) {
+  if (!isAccFan(w)) return null;
+  const L = wLen(w); if (L < 1) return null;
+  const c = accFanCenter(f, w), dep = accFanDepth(w), pts = [];
+  if (!c) { for (const q of belZigzag(w.a, w.b, dep)) pts.push(q); return { c: null, pts, folds: pts.slice(1, -1) }; }
+  const ta = Math.atan2(w.a.y - c.y, w.a.x - c.x), tb = Math.atan2(w.b.y - c.y, w.b.x - c.x), ra = dist(c, w.a), rb = dist(c, w.b);
+  let d = tb - ta; while (d > Math.PI) d -= 2 * Math.PI; while (d <= -Math.PI) d += 2 * Math.PI; // kısa yay: iki duvarın arasındaki kama
+  const arc = Math.abs(d) * (ra + rb) / 2, n = Math.max(4, 2 * Math.round(arc / BEL_PITCH / 2));
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, a = ta + d * t, r = ra + (rb - ra) * t + (i === 0 || i === n ? 0 : (i % 2 ? 1 : -1) * dep / 2);
+    pts.push({ x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r });
+  }
+  return { c, pts, folds: pts.slice(1, -1) };
+}
+// yaprak çokgeni: pilili çizginin iki yanına ± kalınlık / 2 (köşe başına ortalama normal)
+function accFanOutline(pts, th = ACC_FAN_T) {
+  const n = pts.length, L = [], R = [];
+  for (let i = 0; i < n; i++) {
+    const p = pts[Math.max(0, i - 1)], q = pts[Math.min(n - 1, i + 1)], dx = q.x - p.x, dy = q.y - p.y, m = Math.hypot(dx, dy) || 1;
+    const nx = -dy / m * th / 2, ny = dx / m * th / 2; L.push({ x: pts[i].x + nx, y: pts[i].y + ny }); R.push({ x: pts[i].x - nx, y: pts[i].y - ny });
+  }
+  return [...L, ...R.reverse()];
+}
+function accFanSvg(w, fan, live) {
+  const C = pal(), sw = Math.max(2.5, ACC_FAN_T), col = C.outline ? C.wall : (w.color || C.wall); let s = '';
+  if (fan.c) { // kaburgalar: merkezden her kıvrıma, soluk kesik çizgi (açılmış yelpaze)
+    let d = ''; for (const q of fan.folds) d += `M${fan.c.x} ${fan.c.y}L${q.x} ${q.y}`;
+    s += `<path d="${d}" fill="none" stroke="${C.sub}" stroke-opacity="0.3" stroke-width="${Math.max(0.8, 1 / view.z)}" stroke-dasharray="${5 / view.z} ${4 / view.z}" pointer-events="none"/>`;
+  }
+  const pd = 'M' + fan.pts.map(q => q.x + ' ' + q.y).join('L');
+  s += `<path d="${pd}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linejoin="miter" stroke-miterlimit="8" pointer-events="none"/>`;
+  if (live) s += `<path data-id="${w.id}" d="${pd}" fill="none" stroke="transparent" stroke-width="${Math.max(accFanDepth(w) + 6, 14 / view.z)}" pointer-events="stroke" style="cursor:pointer"/>`;
+  return s;
+}
+function accFan3D(S, w, fan, y0, H, mat, det, lineMat, lt) {
+  if (!(H > 0)) return;
+  const col = w.color || (lt ? '#faf8f5' : '#e2e8f0'), shp = new THREE.Shape(accFanOutline(fan.pts).map(q => new THREE.Vector2(q.x, q.y)));
+  const geo = new THREE.ExtrudeGeometry(shp, { depth: H, bevelEnabled: false }); geo.rotateX(Math.PI / 2);
+  const m = new THREE.Mesh(geo, mat(col)); m.position.y = y0 + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w.id }; S.add(m);
+  if (det) m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25), lineMat));
 }
 
 /* ---------- Körük koridor ----------
@@ -6403,6 +6462,7 @@ function renderProps() {
     h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall'), railing: L('🛡 Korkuluk', '🛡 Railing / Balustrade'), fence: L('🌿 Bahçe çiti', '🌿 Garden Fence') } });
     { const on = os.every(x => isAccWall(x.o)), lk = n === 1 && on ? (o.acc.a ? 1 : 0) + (o.acc.b ? 1 : 0) : -1;
       h += `<label class="f"><span>${L('⇔ Akordiyon duvar', '⇔ Accordion wall')}</span><input type="checkbox" data-k="wall" data-p="acc" ${on ? 'checked' : ''} title="${L('Uçları değdiği duvarlara bağlanır; oda döndürülünce / taşınınca kalan boşlukta kendiliğinden uzar veya kısalır', 'Its ends stick to the walls they touch; when a room is rotated or moved it stretches or shrinks to fill the gap')}"></label>`;
+      if (on) h += fld(L('Boşluğu doldur', 'Fill the gap'), 'wall', 'accFill', os.every(x => isAccFan(x.o)) ? 'fan' : 'straight', { sel: { straight: L('Düz duvar', 'Straight wall'), fan: L('Yelpaze', 'Fan') } });
       if (lk >= 0) h += `<p class="muted" style="margin:0 0 6px">${lk === 2 ? L('İki ucu da bağlı – boşluğu izler', 'Both ends attached – follows the gap') : L(`${lk}/2 uç bağlı: ucu başka bir duvarın ucuna getirin`, `${lk}/2 ends attached: put an end on another wall's end`)}</p>`; }
     { const on = os.every(x => isBelWall(x.o));
       h += `<label class="f"><span>${L('🪗 Körük koridor', '🪗 Bellows corridor')}</span><input type="checkbox" data-k="wall" data-p="bel" ${on ? 'checked' : ''} title="${L('Duvarın ilk konumu saklanır; duvar başka yere taşınınca (sürükleme, düzen, menteşe konumu) ilk ve son konum arası otobüs körüğü gibi kapalı bir koridorla dolar', 'The wall remembers its first position; when it moves (drag, layout, hinge position) the space between the first and the current position is closed like a bus bellows')}"></label>`;
@@ -6833,6 +6893,7 @@ function applyProp(t, final) {
     else if (k === 'wall' && p === 'mulN') { if (!final) continue; o.mulN = clamp(Math.round(v), 0, 200); }
     else if (k === 'wall' && p === 'wt') { setWallType(o, v); }
     else if (k === 'wall' && p === 'acc') { if (final) setAccWall(F(), o, !!v); }
+    else if (k === 'wall' && p === 'accFill') { if (o.acc) { if (v === 'fan') o.acc.fill = 'fan'; else delete o.acc.fill; } }
     else if (k === 'wall' && p === 'bel') { if (final) setBelWall(F(), o, !!v); }
     else if (k === 'wall' && p === 'belRoof') { if (final && o.bel) { if (v) delete o.bel.roof; else o.bel.roof = 0; } }
     else if (k === 'wall' && (p === 'c1' || p === 'c2')) { o[p] = v; }
@@ -6862,7 +6923,7 @@ function applyProp(t, final) {
   }
   if (final && k === 'op' && ['w', 'h', 'sill'].includes(p)) os.forEach(x => rememberOpSize(x.o));
   if (final && k === 'draft' && ['w', 'dash', 'color'].includes(p)) draftUi()[p] = v; // sonraki çizim aynı stille başlar
-  if (final) { commit(); if (['type', 'mat', 'floor', 'len', 'deg', 'pivot', 'wt', 'bel', 'mul', 'mulN', 'stepN', 'stairType', 'railing', 'rampType', 'roofType', 'ridgeDir', 'pitch', 'th', 'hip'].includes(p) || (k === 'furn' && (p === 'rx' || p === 'ry')) || (k === 'furn' && os.some(x => x.o.k === 'stairs' || x.o.k === 'ramp') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color') || (k === 'draft' && ['closed', 'fill', 'r'].includes(p))) renderProps(); }
+  if (final) { commit(); if (['type', 'mat', 'floor', 'len', 'deg', 'pivot', 'wt', 'acc', 'bel', 'mul', 'mulN', 'stepN', 'stairType', 'railing', 'rampType', 'roofType', 'ridgeDir', 'pitch', 'th', 'hip'].includes(p) || (k === 'furn' && (p === 'rx' || p === 'ry')) || (k === 'furn' && os.some(x => x.o.k === 'stairs' || x.o.k === 'ramp') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color') || (k === 'draft' && ['closed', 'fill', 'r'].includes(p))) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -14670,7 +14731,8 @@ function build3D(keepCam = false) {
       }
     });
     f.walls.forEach(w => {
-      const L = wLen(w), H = w.h, we = elev + wallElev(w), g = new THREE.Group(); bellows3D(S, w, we, H, mat, box, det, lineMat, lt); g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, we, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
+      const L = wLen(w), H = w.h, we = elev + wallElev(w), g = new THREE.Group(); bellows3D(S, w, we, H, mat, box, det, lineMat, lt);
+      { const fan = accFan(f, w); if (fan) { accFan3D(S, w, fan, we, H, mat, det, lineMat, lt); return; } } /* akordiyon yelpaze dolgusu */ g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, we, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
       const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
       const wCol = w.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
       const curt = w.wt === 'curtain', rail = 5, frameCol = lt ? 0x8fa3b8 : 0x7c8a9c;

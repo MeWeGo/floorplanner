@@ -467,6 +467,38 @@ check('wall faces: each face painted / covered on its own in 2D and 3D, named af
   if (info.undo[0] !== '#ff0000' || info.undo[1]) throw new Error('undo did not step back one face change: ' + JSON.stringify(info.undo));
 });
 
+check('accordion wall fan fill: panel choice turns the gap into a pleated fan around the hinge corner, it follows a rotation, 3D, undo', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    const f = F(), w1 = mkWall({ x: 0, y: 0 }, { x: 400, y: 0 }), w2 = mkWall({ x: 0, y: 0 }, { x: 0, y: 400 }), ac = mkWall({ x: 400, y: 0 }, { x: 0, y: 400 });
+    f.walls.push(w1, w2, ac); commit(); setTool('select'); sel = [ac.id]; refresh();
+    const cb = document.querySelector('#props [data-p="acc"]'); cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true }));
+    const out = {}, sl = document.querySelector('#props [data-p="accFill"]'); out.select = !!sl;
+    if (sl) { sl.value = 'fan'; sl.dispatchEvent(new Event('change', { bubbles: true })); }
+    out.fill = find(ac.id).o.acc.fill;
+    const rad = q => Math.round(Math.hypot(q.x, q.y)), fan0 = accFan(F(), find(ac.id).o);
+    out.r0 = fan0 && fan0.c ? fan0.pts.filter((q, i) => i % 2 === 0).map(rad) : null;
+    out.path = !!document.querySelector('#gWalls path[data-id="' + ac.id + '"]');
+    // swing the second wall to 120°: the fan follows and still sweeps around the hinge
+    const W2 = find(w2.id).o; W2.b = { x: -200, y: 346.41 }; render(); commit();
+    const A = find(ac.id).o, fan1 = accFan(F(), A);
+    out.follow = [Math.round(A.b.x), Math.round(A.b.y)];
+    out.ang = fan1 && fan1.c ? fan1.pts.map(q => Math.round(Math.atan2(q.y, q.x) * 180 / Math.PI)) : null;
+    show3D(true); await new Promise(r => setTimeout(r, 500));
+    out.m3 = 0; T3.scene.traverse(o => { if (o.isMesh && o.userData && o.userData.wallId === ac.id) out.m3++; });
+    show3D(false);
+    out.svg = exportSvg().svg.length > 100;
+    undo(); undo(); out.undo = find(ac.id).o.acc && find(ac.id).o.acc.fill;
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.select || info.fill !== 'fan') throw new Error('no Fill the gap choice in the accordion panel: ' + JSON.stringify(info));
+  if (!info.r0 || info.r0.some(r => Math.abs(r - 400) > 8) || !info.path) throw new Error('the fan does not sweep around the corner: ' + JSON.stringify(info));
+  if (info.follow[0] !== -200 || info.follow[1] !== 346 || !info.ang || info.ang[0] !== 0 || info.ang[info.ang.length - 1] !== 120 || info.ang.some(a => a < 0 || a > 120)) throw new Error('the fan did not follow the rotation: ' + JSON.stringify(info));
+  if (info.m3 !== 1 || !info.svg) throw new Error('fan not built in 3D / export: ' + JSON.stringify(info));
+  if (info.undo) throw new Error('undo did not bring back the straight fill: ' + JSON.stringify(info));
+});
+
 check('accordion wall: stretches into the gap when a grouped room moves or rotates, collapses, undo', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
