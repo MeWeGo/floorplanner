@@ -379,11 +379,16 @@ function polyCentroid(pts) {
 function polyPerim(pts) { let s = 0; for (let i = 0; i < pts.length; i++) s += dist(pts[i], pts[(i + 1) % pts.length]); return s; }
 // Döşeme boşlukları (issue #23): poligonun içinde kalan boşluklar delik olur. Kenara dayanan boşluk da sayılır
 // (merdiven boşluğu çoğu zaman oda köşesine yakalanır); delik 0.5 cm içe çekilir ki dış sınıra değmesin (earcut).
+// Boşluğun içine sonradan konan yüzey (boşluğu dolduran döşeme / oda) delinmez: boşluk yalnızca onu çevreleyen yüzeyi deler.
+function polyInPoly(inner, outer, tol = 1.5) {
+  const near = q => outer.some((a, i) => segProj(q, a, outer[(i + 1) % outer.length]).d < tol);
+  return inner.length > 0 && inner.every(q => pointInPoly(q, outer) || near(q));
+}
 function voidHoles(voids, pts) {
   const near = q => pts.some((a, i) => segProj(q, a, pts[(i + 1) % pts.length]).d < 1.5);
   const out = [];
   for (const v of voids || []) {
-    if (!v.pts || v.pts.length < 3) continue;
+    if (!v.pts || v.pts.length < 3 || polyInPoly(pts, v.pts)) continue;
     const c = polyCentroid(v.pts);
     if (!pointInPoly(c, pts) || !v.pts.every(q => pointInPoly(q, pts) || near(q))) continue;
     out.push(v.pts.map(q => { const d = dist(q, c) || 1, k = Math.min(0.5, d / 2) / d; return { x: q.x + (c.x - q.x) * k, y: q.y + (c.y - q.y) * k }; }));
@@ -396,6 +401,7 @@ function voidDrop(f, i, o) {
   if (!f || !o || o.k === 'stairs' || o.k === 'ramp' || o.k === 'roof' || o.mount === 'ceil') return 0;
   for (const v of f.voids || []) {
     if (v.stair || !v.pts || v.pts.length < 3 || !pointInPoly(o, v.pts)) continue;
+    if ((f.rooms || []).some(r => r.pts && r.pts.length > 2 && r.floor !== 'water' && pointInPoly(o, r.pts) && polyInPoly(r.pts, v.pts))) continue; // boşluğu dolduran odanın zemininde durur
     if (+v.dep > 0) return -v.dep;
     return i > 0 ? -floorPitch(i - 1) : -20;
   }
@@ -1392,7 +1398,7 @@ function roomSvg(r, live) {
   return [s, lab];
 }
 // Serbest döşeme / balkon (issue #22): odaların altında, kesikli sınır + malzeme deseni.
-// data-low: yalnızca üstünde başka nesne yoksa seçilir (boşluk 1, döşeme 2 → boşluk önce)
+// data-low: yalnızca üstünde başka nesne yoksa seçilir (boşluk 1, döşeme 2; üst üste binerlerse küçük olan önce — lowArea)
 function slabSvg(s, live) {
   if (!s.pts || s.pts.length < 3) return '';
   const C = pal(), z = view.z, pts = s.pts.map(p => p.x + ',' + p.y).join(' ');
@@ -5383,6 +5389,8 @@ function cvDbl(e) {
   }
 }
 cv.addEventListener('dblclick', cvDbl);
+// data-low yüzeylerin (boşluk, serbest döşeme) alanı; eşitlikte boşluğu dolduran döşeme (2) boşluktan (1) önce gelir
+function lowArea(t) { const r = find(t.dataset.id), o = r && r.o; return (o && o.pts && o.pts.length > 2 ? Math.abs(polyArea(o.pts)) : Infinity) + (3 - (+t.dataset.low || 0)) * 1e-3; }
 function pickDataId(e) {
   // 1) "👆 Tıkla / Click me" rozeti her zaman en üst önceliklidir
   // 2) Mobilya/duvar/kapı gibi nesneler oda etiketinin altında kalmasın
@@ -5401,7 +5409,7 @@ function pickDataId(e) {
     }
     // döşeme boşluğu (1) ve serbest döşeme (2) en geniş, en alttaki yüzeylerdir: yalnızca başka nesne yoksa
     if (t.hasAttribute('data-low')) {
-      if (!lowHit || +t.dataset.low < +lowHit.dataset.low) lowHit = t;
+      if (!lowHit || lowArea(t) < lowArea(lowHit)) lowHit = t; // küçük olan önce: büyük balkondaki boşluk, boşluğu dolduran döşeme
       continue;
     }
     return t;
@@ -6460,6 +6468,7 @@ function projectPanel() {
   if (P.bg) h += bgFields(false);
   else h += `<p class="muted" style="margin:0 0 6px">${L('Kroki / mevcut plan görselini altlık olarak ekleyip üzerinden çizebilirsin.', 'Import a blueprint or floor plan image as an underlay to trace over.')}</p><div class="row"><button class="btn sm" data-act="bgadd">${L('🖼 Görsel ekle', '🖼 Add image')}</button></div>`;
   h += `<h4>${L('Kesit & görünüş', 'Sections & elevations')}</h4><div class="row"><button class="btn sm" data-act="archview">${L('📐 Görünüşler ve kesitler', '📐 Elevations & sections')}</button></div><p class="muted" style="margin:0 0 6px">${L('Dört cephe görünüşü kat kotlarıyla; kesit eklemek için 🔪 Kesit aracı (L).', 'Four facade elevations with floor levels; add a section with the 🔪 Section tool (L).')}</p>`;
+  h += `<h4>🏷 ${L('Kat adı', 'Floor name')}</h4>` + fld(L('Ad', 'Name'), 'floor', 'name', f.name, { type: 'text' });
   h += floorLevelHtml(f);
   h += `<h4>${L('Kat yüksekliği', 'Floor height')} – ${esc(f.name)}</h4>` + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'floor', 'wallH', floorH(f), { min: FLOOR_H_MIN, max: FLOOR_H_MAX })
     + `<div class="row"><button class="btn sm" data-act="wallhfloor">⬆ ${L('Bu kattaki duvarlara uygula', 'Apply to walls on this floor')}</button>${f.wallH ? `<button class="btn sm" data-act="floorhreset" title="${L('Proje varsayılanına dön', 'Back to the project default')}">↺ ${P.wallH} cm</button>` : ''}</div>`
@@ -6558,6 +6567,7 @@ function applyProp(t, final) {
     else { const hv = clamp(cm - floorElev(fi), FLOOR_H_MIN, FLOOR_H_MAX); if (hv === P.wallH) delete f.wallH; else f.wallH = hv; }
     if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); refresh(); } return;
   }
+  if (k === 'floor' && p === 'name') { const n = String(v).trim().slice(0, 60); if (!n) { if (final) renderProps(); return; } F().name = n; renderFloors(); if (ui.view3d && T3) sync3DFloors(); if (final) { commit(); renderProps(); } return; } // kat adı
   if (k === 'floor' && p === 'slabOn') { if (v) delete F().noSlab; else F().noSlab = true; if (ui.view3d && T3) schedBuild3D(); commit(); renderProps(); return; } // kat döşemesi aç / kapat
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
   if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
