@@ -728,6 +728,26 @@ check('line weights: project panel weights scale furniture / CAD walls on screen
   if (info.btns !== 5 || info.dw[0] !== 8 || info.dw[1] !== 8) throw new Error('drafting toolbar weights: ' + JSON.stringify(info));
 });
 
+check('stair types: winder L / U, curved and spiral picked in the panel draw polygon treads in 2D and 3D and can be walked on', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); const o = mkFurn(BYID.stairs, 0, 0); Object.assign(o, { w: 240, d: 300, h: 290, stepN: 17 }); F().furn.push(o); commit();
+    sel = [o.id]; refresh(); const out = { opts: [...document.querySelectorAll('#props [data-p="stairType"] option')].map(x => x.value).join() };
+    for (const t of ['lw', 'uw', 'curve', 'spiral']) {
+      const el = document.querySelector('#props [data-p="stairType"]'); el.value = t; el.dispatchEvent(new Event('change', { bubbles: true }));
+      const O = find(o.id).o, st = stairSteps(O), wd = st.steps.find(s => s.poly);
+      show3D(true); await new Promise(r => setTimeout(r, 300));
+      let m3 = 0; T3.scene.traverse(x => { if (x.isMesh && x.geometry && x.geometry.type === 'ExtrudeGeometry') { let p = x; while (p && !(p.userData && p.userData.furnId)) p = p.parent; if (p && p.userData.furnId === o.id) m3++; } });
+      show3D(false);
+      out[t] = { type: O.stairType, polys: st.steps.filter(s => s.poly).length, poly2d: document.querySelectorAll('#gFurn polygon').length >= st.n, m3, walk: wd ? walkSurfAt(O, O.x + wd.x, O.y + wd.y) === wd.z : false };
+    }
+    sel = []; refresh(); return out;
+  })()`);
+  if (info.opts !== 'straight,l,lw,u,uw,spiral,curve') throw new Error('stair type list: ' + info.opts);
+  for (const [t, n] of [['lw', 3], ['uw', 6], ['curve', 17], ['spiral', 17]]) {
+    const r = info[t]; if (!r || r.type !== t || r.polys !== n || !r.poly2d || r.m3 < n || !r.walk) throw new Error(t + ': ' + JSON.stringify(r));
+  }
+});
+
 check('slab tool draws a wall-less balcony, void tool cuts the slab in 3D (issues #22, #23)', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
