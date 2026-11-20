@@ -222,13 +222,13 @@ const FLOOR_LVL_MAX = 50000, VOID_DEP_MAX = 1000; // kat kotu ±500 m; döşeme 
 const FLOOR_H_MIN = 100, FLOOR_H_MAX = 800; // kat yüksekliği alanı ve MCP add_floor ile aynı aralık
 // { key: [tr, en] } → <select> seçenekleri (merdiven / rampa / cam alanları)
 const biOpts = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
-const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], dims: [], texts: [], sketches: [], drafts: [], groups: [], slabFloor: 'none', slabColor: null });
+const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], axes: [], dims: [], texts: [], sketches: [], drafts: [], groups: [], slabFloor: 'none', slabColor: null });
 const newProject = () => ({ v: 2, id: pid(), name: L('Yeni Proje', 'New Project'), grid: 10, gridType: 'square', wallT: 20, wallH: 270, bg: null, lib: { shapes: [] }, textures: [], floors: [newFloor(L('Zemin Kat', 'Ground Floor'))] });
 const F = () => P.floors[fi];
-const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', dims: 'dim', texts: 'text', sketches: 'sketch', drafts: 'draft' };
+const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', axes: 'axis', dims: 'dim', texts: 'text', sketches: 'sketch', drafts: 'draft' };
 // Köşe listesiyle (pts) tanımlanan türler; POLY_KINDS kapalı poligonlar (köşe/kenar tutamaçları)
 // a/b uçlu çizgi türleri: duvar, ölçü, kesit çizgisi (#30) — taşı/döndür/aynala/ölçekle bunları birlikte işler
-const AB_KINDS = new Set(['wall', 'dim', 'section']);
+const AB_KINDS = new Set(['wall', 'dim', 'section', 'axis']);
 const PTS_KINDS = new Set(['room', 'sketch', 'slab', 'void', 'draft']), POLY_KINDS = new Set(['room', 'slab', 'void']);
 // Döşeme boşluğu türleri (issue #23)
 const VOID_TYPES = { stair: ['Merdiven boşluğu', 'Stairwell'], shaft: ['Şaft', 'Shaft'], atrium: ['Galeri boşluğu', 'Atrium / void'] };
@@ -655,7 +655,7 @@ function scaleSelection(sc, scaleT = false, os = unlocked(selObjs())) {
   scaleObjs(os, id => snap.get(id), tx, ty, sc, sc, scaleT);
   return true;
 }
-const XFORM_KINDS = new Set(['wall', 'dim', 'furn', 'text', 'room', 'slab', 'void', 'sketch', 'draft']);
+const XFORM_KINDS = new Set(['wall', 'dim', 'furn', 'text', 'room', 'slab', 'void', 'sketch', 'draft', 'axis']);
 function afterXform() { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); }
 function flipSel(dir) {
   const all = selObjs().filter(x => XFORM_KINDS.has(x.kind)), os = unlocked(all), bb = selectionBounds(os);
@@ -4343,7 +4343,7 @@ function layerStrings(f, live) {
     walls: bellowsSvg(f, live) + jointsSvg(f) + f.walls.map(w => wallSvg(w, live, f)).join('') + wallHollowSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
     ops: f.ops.map(o => opSvg(o, live)).join(''),
     furn: (live && !ui.exporting && layersVis.lightArea ? lightAreaSvg(f) : '') + f.furn.map(x => furnSvg(x, live)).join(''),
-    dims: f.dims.map(d => dimSvg(d, live)).join('') + (f.sections || []).map(x => sectionSvg(x, live)).join(''),
+    dims: f.dims.map(d => dimSvg(d, live)).join('') + (f.sections || []).map(x => sectionSvg(x, live)).join('') + (f.axes || []).map(x => axisSvg(x, live)).join(''),
     texts: f.texts.map(t => textSvg(t, live)).join(''),
     sketches: (f.drafts || []).map(d => draftSvg(d, live)).join('') + (f.sketches || []).map(s => sketchSvg(s, live)).join(''),
   };
@@ -4364,7 +4364,7 @@ function handleSvg() {
     }
     if (POLY_KINDS.has(kind)) s += `<polygon points="${o.pts.map(p => p.x + ',' + p.y).join(' ')}" fill="#f59e0b" fill-opacity=".12" stroke="#f59e0b" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
     if (kind === 'op') { const p = opPos(o); if (p) s += `<g transform="translate(${p.x} ${p.y}) rotate(${p.ang})" pointer-events="none"><rect x="${-o.w / 2 - 3}" y="${-p.t / 2 - 5}" width="${o.w + 6}" height="${p.t + 10}" fill="#f59e0b" fill-opacity=".2" stroke="#f59e0b" stroke-width="${1.6 / z}"/></g>`; }
-    if (kind === 'dim' || kind === 'section') s += `<circle cx="${o.a.x}" cy="${o.a.y}" r="${hs}" fill="#f59e0b"/><circle cx="${o.b.x}" cy="${o.b.y}" r="${hs}" fill="#f59e0b"/>`;
+    if (kind === 'dim' || kind === 'section' || kind === 'axis') s += `<circle cx="${o.a.x}" cy="${o.a.y}" r="${hs}" fill="#f59e0b"/><circle cx="${o.b.x}" cy="${o.b.y}" r="${hs}" fill="#f59e0b"/>`;
     if (kind === 'text') s += `<circle cx="${o.x}" cy="${o.y}" r="${hs}" fill="#f59e0b"/>`;
     if (kind === 'sketch' && o.pts && o.pts.length > 1) s += `<polyline points="${o.pts.map(p => p.x + ',' + p.y).join(' ')}" fill="none" stroke="#f59e0b" stroke-width="${(o.w || 4) + 4 / z}" stroke-linecap="round" stroke-linejoin="round" opacity=".45" pointer-events="none"/>`;
     if (kind === 'draft') s += `<path d="${draftPathD(o)}" fill="none" stroke="#f59e0b" stroke-width="${(+o.w || 2) + 4 / z}" stroke-linecap="round" stroke-linejoin="round" opacity=".45" pointer-events="none"/>`;
@@ -4390,7 +4390,7 @@ function handleSvg() {
       (o.hp || []).forEach((q, i) => { if (!o.pts.some(p => Math.hypot(p.x - q.x, p.y - q.y) < 1)) s += hnd(q.x, q.y, 'zp' + i, 'move', 'circle'); }); // eğim noktası (köşedekiler köşeyle taşınır)
     }
     if (kind === 'draft') o.pts.forEach((p, i) => s += hnd(p.x, p.y, 'v' + i, 'move', o.shape === 'circle' && i === 0 ? 'circle' : 'rect')); // köşe / yarıçap / yay noktaları
-    if (kind === 'section') s += hnd(o.a.x, o.a.y, 'da', 'move') + hnd(o.b.x, o.b.y, 'db', 'move');
+    if (kind === 'section' || kind === 'axis') s += hnd(o.a.x, o.a.y, 'da', 'move') + hnd(o.b.x, o.b.y, 'db', 'move');
     if (kind === 'dim') {
       const L = dist(o.a, o.b) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, off = o.off ?? 40;
       s += hnd(o.a.x, o.a.y, 'da', 'move') + hnd(o.b.x, o.b.y, 'db', 'move') + hnd((o.a.x + o.b.x) / 2 + nx * off, (o.a.y + o.b.y) / 2 + ny * off, 'doff', 'move', 'circle');
@@ -4531,6 +4531,18 @@ function trackRefs(ignore, from) {
   for (const q of underlayPts()) if (!skip(q)) out.push(q);
   return out;
 }
+// aks kesişimleri + uçları (duvar ucu yakalama için)
+function axisSnapPts(f) {
+  const ax = (f.axes || []).filter(x => x.a && x.b && dist(x.a, x.b) >= 1), out = [];
+  for (const x of ax) out.push(x.a, x.b);
+  for (let i = 0; i < ax.length; i++) for (let j = i + 1; j < ax.length; j++) {
+    const p = ax[i], q = ax[j], d1x = p.b.x - p.a.x, d1y = p.b.y - p.a.y, d2x = q.b.x - q.a.x, d2y = q.b.y - q.a.y, den = d1x * d2y - d1y * d2x;
+    if (Math.abs(den) < 1e-9) continue;
+    const t = ((q.a.x - p.a.x) * d2y - (q.a.y - p.a.y) * d2x) / den, u = ((q.a.x - p.a.x) * d1y - (q.a.y - p.a.y) * d1x) / den;
+    if (t >= -1e-6 && t <= 1 + 1e-6 && u >= -1e-6 && u <= 1 + 1e-6) out.push({ x: Math.round((p.a.x + d1x * t) * 100) / 100, y: Math.round((p.a.y + d1y * t) * 100) / 100 });
+  }
+  return out;
+}
 function snapPt(p, from, e, ignore) {
   if (!ui.snap || (e && e.shiftKey)) return { x: p.x, y: p.y, hit: null };
   const r = 14 / view.z, tol = 10 / view.z, f = F(); let best = null, bd = r;
@@ -4540,6 +4552,7 @@ function snapPt(p, from, e, ignore) {
     if (ignore && ignore.has(w.id)) continue;
     for (const q of [w.a, w.b]) { const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
   }
+  for (const q of axisSnapPts(f)) { if (ignore && ignore.has(q)) continue; const d = dist(p, q); if (d < bd) { bd = d; best = q; } } // aks kesişimi / ucu
   if (!skipRooms) for (const arr of ['rooms', 'slabs', 'voids', 'drafts']) for (const rm of f[arr] || []) for (const q of rm.pts) { if (ignore && ignore.has(q)) continue; const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
   if (best) return { x: best.x, y: best.y, hit: 'end' };
   // alt kat izdüşümü (#26), orta nokta ve merkez (#25): uç noktadan sonra, aynı yarıçapta en yakını
@@ -5001,7 +5014,7 @@ function deleteIds(ids) {
   f.walls = f.walls.filter(w => !s.has(w.id));
   const wl = new Set(f.walls.map(w => w.id));
   f.ops = f.ops.filter(o => !s.has(o.id) && wl.has(o.wall));
-  for (const k of ['furn', 'rooms', 'slabs', 'voids', 'sections', 'dims', 'texts', 'sketches', 'drafts']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
+  for (const k of ['furn', 'rooms', 'slabs', 'voids', 'sections', 'axes', 'dims', 'texts', 'sketches', 'drafts']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
   dropPoseOrphans(ids, true); // silinen nesnelerin (grup + oda) düzen kayıtlarındaki eski pozları temizlensin
   pruneGroups();
   sel = sel.filter(id => !s.has(id));
@@ -5309,7 +5322,7 @@ const TOOLS = [
   ['select', '↖', 'Seç', 'V', 'Select'], ['pan', '✋', 'Kaydır', 'H', 'Pan'], null,
   ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['railing', '🛡', 'Korkuluk', 'Q', 'Railing'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['slab', '🔲', 'Döşeme', 'K', 'Slab'], ['void', '🕳️', 'Boşluk', 'Y', 'Void'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
   ['door', '🚪', 'Kapı', 'D', 'Door'], ['window', '🪟', 'Pencere', 'N', 'Window'], ['furn', '🛋️', 'Mobilya', 'F', 'Furniture'], null,
-  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['draft', '📐', 'Çizim', 'U', 'Draft'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['mirror', '🪞', 'Aynala', 'I', 'Mirror'], ['section', '🔪', 'Kesit', 'L', 'Section'], ['attach', '⌂', 'Yüzeye bağla', 'A', 'Attach to surface'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
+  ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['draft', '📐', 'Çizim', 'U', 'Draft'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['mirror', '🪞', 'Aynala', 'I', 'Mirror'], ['section', '🔪', 'Kesit', 'L', 'Section'], ['axis', '⊹', 'Aks', 'Z', 'Axis'], ['attach', '⌂', 'Yüzeye bağla', 'A', 'Attach to surface'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
 const HINTS = {
   select: 'Seç: duvar seçiliyken rakam yaz + Enter: yeni uzunluk • ölçü yazısına tıkla: uzunluğu düzenle • tıkla / kutu çiz • Shift: çoklu seçim • Ctrl+tık: alttaki nesne • sağ tık: buradaki nesneler & katman • sürükle: taşı • Del: sil',
@@ -5331,6 +5344,7 @@ const HINTS = {
   trim: 'Kırp: kesişen duvarın taşan ucuna tıkla → kesişime kadar kırpılır (iki kesişim arasındaki parça da çıkarılabilir) • kırmızı = silinecek kısım',
   plotwin: 'Çıktı penceresi: yazdırılacak alanı köşeden köşeye sürükle • Esc: iptal',
   attach: 'Yüzeye bağla: 1) çatıya ya da eğik öğeye tıkla, 2) üstü bu yüzeyin eğimini izleyecek duvarlara tıkla • panelden ⌂✕ Düz yap • Esc: bitir',
+  axis: 'Aks: aks çizgisinin iki ucuna tıkla • dikey akslar 1, 2, 3…, yatay akslar A, B, C… adını otomatik alır • duvarlar aks kesişimlerine yakalanır • panelden ⊞ aks ızgarası',
   section: 'Kesit: kesit çizgisinin iki ucuna tıkla • ok bakış yönünü gösterir • panelden yönü çevir, 3B kesit aç veya 2B kesit çizimini göster',
   mirror: 'Aynala: önce nesneleri seç, sonra ayna ekseninin iki noktasına tıkla • orijinali silmek isteyip istemediğin sorulur • Shift+H / Shift+V: yatay / dikey aynala',
   calib: 'Ölçek: arka plan görselinde bilinen iki noktaya tıkla, gerçek mesafeyi gir',
@@ -5355,6 +5369,7 @@ const HINTS_EN = {
   trim: 'Trim: click the overhanging part of a crossing wall → it is cut back to the intersection (a piece between two crossings can be removed too) • red = part to remove',
   plotwin: 'Plot window: drag the area to print corner to corner • Esc: cancel',
   attach: 'Attach to surface: 1) click a roof or tilted item, 2) click the walls whose top should follow its slope • ⌂✕ Make flat in the panel • Esc: done',
+  axis: 'Axis: click both ends of the axis line • vertical axes are named 1, 2, 3…, horizontal ones A, B, C… automatically • walls snap to axis crossings • ⊞ axis grid in the panel',
   section: 'Section: click both ends of the cut line • the arrows show the viewing direction • the panel flips it, cuts the 3D view or opens the 2D section drawing',
   mirror: 'Mirror: select objects first, then click two points of the mirror axis • you are asked whether to erase the originals • Shift+H / Shift+V: flip horizontal / vertical',
   calib: 'Calibrate: click two points with a known distance on the background image, then enter real distance',
@@ -5520,6 +5535,7 @@ function drawPreview() {
     if (pts.length > 2) s += lbl(cur.x, cur.y - 14 / z, fmtArea(polyArea(pts)));
   }
   if (tool === 'dim' && ui.dimStart && cur) s += `<line x1="${ui.dimStart.x}" y1="${ui.dimStart.y}" x2="${cur.x}" y2="${cur.y}" stroke="#0f766e" stroke-width="${2 / z}" stroke-dasharray="${5 / z}"/>` + lbl((ui.dimStart.x + cur.x) / 2, (ui.dimStart.y + cur.y) / 2 - 8 / z, fmtLen(dist(ui.dimStart, cur)));
+  if (tool === 'axis' && ui.secStart && cur && dist(ui.secStart, cur) > 1) s += axisSvg({ id: 'pv', name: nextAxisName(ui.secStart, cur), a: ui.secStart, b: cur }, false);
   if (tool === 'section' && ui.secStart && cur && dist(ui.secStart, cur) > 1) s += sectionSvg({ id: 'pv', name: nextSectionName(), a: ui.secStart, b: cur, dir: 1 }, false);
   if (tool === 'mirror' && ui.mAxis && cur && dist(ui.mAxis, cur) > 1) {
     // ayna ekseni + seçimin yansımış silüeti (#28)
@@ -5588,9 +5604,9 @@ function setCursor(e) {
   else if (POLY_TOOLS.has(tool) && ui.polyPts && ui.polyPts.length) from = ui.polyPts[ui.polyPts.length - 1];
   else if (tool === 'calib' && ui.calib) from = null;
   else if (tool === 'mirror' && ui.mAxis) from = ui.mAxis;
-  else if (tool === 'section' && ui.secStart) from = ui.secStart;
+  else if ((tool === 'section' || tool === 'axis') && ui.secStart) from = ui.secStart;
   else if (tool === 'draft' && ui.dr && ui.dr.pts.length && draftUi().mode !== 'rect' && draftUi().mode !== 'arc') from = ui.dr.pts[ui.dr.pts.length - 1]; // dikdörtgen ve yay açı kilidi kullanmaz
-  ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'dim', 'calib', 'shape', 'mirror', 'section', 'draft'].includes(tool) ? snapPt(raw, from, e) : null;
+  ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'dim', 'calib', 'shape', 'mirror', 'section', 'axis', 'draft'].includes(tool) ? snapPt(raw, from, e) : null;
   if (tool === 'draft' && ui.dr && ui.dr.pts.length && ui.typed) ui.cur = draftTypedPt(ui.dr.pts[ui.dr.pts.length - 1], ui.cur, ui.typed, draftUi().mode);
   if (tool === 'wall' && ui.draw && ui.typed) {
     const a = ui.draw.start, l = parseFloat(ui.typed) || 0, dx = ui.cur.x - a.x, dy = ui.cur.y - a.y, m = Math.hypot(dx, dy) || 1;
@@ -5663,7 +5679,7 @@ function objLabel(id) {
   const fd = find(id); if (!fd) return id;
   const o = fd.o, k = (isEN() ? KIND_EN : KIND_TR)[fd.kind] || fd.kind;
   const nm = fd.kind === 'furn' ? (o.label || (BYID[o.type] ? itemName(BYID[o.type]) : o.name))
-    : fd.kind === 'room' || fd.kind === 'slab' || fd.kind === 'void' || fd.kind === 'section' ? o.name : fd.kind === 'text' ? o.text
+    : fd.kind === 'room' || fd.kind === 'slab' || fd.kind === 'void' || fd.kind === 'section' || fd.kind === 'axis' ? o.name : fd.kind === 'text' ? o.text
     : fd.kind === 'wall' ? fmtLen(wLen(o)) : fd.kind === 'op' ? o.type : '';
   return nm ? `${k} · ${nm}` : k;
 }
@@ -6009,6 +6025,13 @@ function cvDown(e) {
         return;
       }
       toast(ref ? step2 : step1); return;
+    }
+    case 'axis': { // aks: iki tık (kesitle aynı başlangıç noktası tutucusu: ui.secStart)
+      if (!ui.secStart) { ui.secStart = { x: cur.x, y: cur.y }; drawPreview(); return; }
+      if (dist(ui.secStart, cur) < 20) return;
+      const ax = { id: uid(), name: nextAxisName(ui.secStart, cur), a: ui.secStart, b: { x: cur.x, y: cur.y } };
+      (f.axes = f.axes || []).push(ax); sel = [ax.id]; ui.secStart = null; commit(); refresh(); // araç açık kalır: sıradaki aks
+      return;
     }
     case 'section': {
       if (!ui.secStart) { ui.secStart = { x: cur.x, y: cur.y }; drawPreview(); return; }
@@ -6420,8 +6443,8 @@ const fld = (lbl, k, p, v, o = {}) => {
   const val = type === 'number' ? Math.round(v * 100) / 100 : v;
   return `<label class="f"><span>${lbl}</span><input type="${type}" data-k="${k}" data-p="${p}" value="${esc(val)}" ${o.step ? `step="${o.step}"` : ''} ${o.min != null ? `min="${o.min}"` : ''} ${o.max != null ? `max="${o.max}"` : ''}></label>`;
 };
-const KIND_TR = { wall: '🧱 Duvar', op: '🚪 Kapı / Pencere', furn: '🛋️ Mobilya', room: '🏠 Oda', slab: '🔲 Döşeme', void: '🕳️ Döşeme Boşluğu', dim: '📏 Ölçü', section: '🔪 Kesit', text: '🔤 Metin', sketch: '✏️ Serbest Çizim', draft: '📐 2B Çizim', bg: '🖼 Arka Plan Görseli' };
-const KIND_EN = { wall: '🧱 Wall', op: '🚪 Door / Window', furn: '🛋️ Furniture', room: '🏠 Room', slab: '🔲 Slab', void: '🕳️ Floor Void', dim: '📏 Dimension', section: '🔪 Section', text: '🔤 Text', sketch: '✏️ Freehand Sketch', draft: '📐 2D Drafting', bg: '🖼 Background Image' };
+const KIND_TR = { wall: '🧱 Duvar', op: '🚪 Kapı / Pencere', furn: '🛋️ Mobilya', room: '🏠 Oda', slab: '🔲 Döşeme', void: '🕳️ Döşeme Boşluğu', dim: '📏 Ölçü', section: '🔪 Kesit', axis: '⊹ Aks', text: '🔤 Metin', sketch: '✏️ Serbest Çizim', draft: '📐 2B Çizim', bg: '🖼 Arka Plan Görseli' };
+const KIND_EN = { wall: '🧱 Wall', op: '🚪 Door / Window', furn: '🛋️ Furniture', room: '🏠 Room', slab: '🔲 Slab', void: '🕳️ Floor Void', dim: '📏 Dimension', section: '🔪 Section', axis: '⊹ Axis', text: '🔤 Text', sketch: '✏️ Freehand Sketch', draft: '📐 2D Drafting', bg: '🖼 Background Image' };
 function bgFields(inProps = false) {
   if (!P.bg) return '';
   return fld(L('Konum X (cm)', 'Position X (cm)'), 'bg', 'x', P.bg.x, { step: 10 })
@@ -6639,6 +6662,11 @@ function renderProps() {
     h += acts();
   } else if (k === 'dim') {
     h += `<div class="stat"><span>${L('Ölçü', 'Length')}</span><b>${fmtLen(dist(o.a, o.b))}</b></div>` + fld(L('Ofset (cm)', 'Offset (cm)'), 'dim', 'off', o.off ?? 40) + acts();
+  } else if (k === 'axis') {
+    if (n === 1) h += fld(L('Aks adı', 'Axis name'), 'axis', 'name', o.name || '', { type: 'text' }) + `<div class="stat"><span>${L('Uzunluk', 'Length')}</span><b>${fmtLen(dist(o.a, o.b))}</b></div>`;
+    h += fld(L('Balon', 'Bubble'), 'axis', 'bub', o.bub || 'both', { sel: { both: L('İki uçta', 'Both ends'), a: L('Başta', 'Start'), b: L('Sonda', 'End'), none: L('Yok', 'None') } });
+    h += `<div class="row"><button class="btn sm" data-act="axcopy" title="${L('Seçili aksları diğer bütün katlara kopyalar (aynı adlı aks varsa yerini günceller)', 'Copies the selected axes to every other floor (an axis with the same name there is moved to match)')}">⧉ ${L('Tüm katlara kopyala', 'Copy to all floors')}</button><button class="btn sm" data-act="axgrid">⊞ ${L('Aks ızgarası…', 'Axis grid…')}</button></div>`;
+    h += `<p class="muted" style="margin:0 0 6px">${L('Duvar uçları aks kesişimlerine yakalanır. Akslar yalnızca 2B planda ve çıktılarda görünür.', 'Wall ends snap to axis crossings. Axes show in the 2D plan and its exports only.')}</p>` + acts();
   } else if (k === 'section') {
     const on = ui.secCut === o.id;
     h += fld(L('Ad', 'Name'), 'section', 'name', o.name || '', { type: 'text' }) + `<div class="stat"><span>${L('Uzunluk', 'Length')}</span><b>${fmtLen(dist(o.a, o.b))}</b></div>`;
@@ -6899,6 +6927,7 @@ function applyProp(t, final) {
     else if (k === 'wall' && (p === 'c1' || p === 'c2')) { o[p] = v; }
     else if (k === 'wall' && (p === 'f1' || p === 'f2')) { if (!v || v === 'none') delete o[p]; else o[p] = v; }
     else if (k === 'wall' && p === 'color') { o.color = v; delete o.c1; delete o.c2; } // duvar boyası iki yüzü birden boyar
+    else if (k === 'axis' && p === 'bub') { if (v === 'both' || !AXIS_BUBS.includes(v)) delete o.bub; else o.bub = v; }
     else if (k === 'wall' && p === 'rs') { if (v === 'bars' || !RAIL_STYLES[v]) delete o.rs; else o.rs = v; ui.railRs = v; }
     else if (k === 'furn' && isParamRoof(o) && (p === 'ridge' || p === 'hip')) { o[p] = clamp((+v || 0) / 100, p === 'hip' ? 0.05 : -0.45, p === 'hip' ? 1 : 0.45); }
     else if (k === 'furn' && isParamRoof(o) && p === 'rmat') { const was = ROOF_MAT_COL[roofP(o).mat]; o.rmat = v; if (ROOF_MAT_COL[v] && (!o.color || o.color === was)) o.color = ROOF_MAT_COL[v]; }
@@ -6936,6 +6965,8 @@ $('#props').addEventListener('click', e => {
   if (a === 'parts') { if (os.length === 1 && os[0].kind === 'furn') pbStart(os[0].o); return; }
   if (a === 'opcolreset') { os.forEach(x => { if (x.kind === 'op') { delete x.o.color; delete x.o.frameCol; } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'texadd') { ui.txWall = 0; return openTexDialog(); }
+  if (a === 'axgrid') return axisGridPrompt();
+  if (a === 'axcopy') { const axs = os.filter(x => x.kind === 'axis').map(x => x.o); if (!axs.length) return; if (P.floors.length < 2) return toast(L('Başka kat yok', 'There is no other floor')); axisCopyAll(axs); commit(); toast(L(`⧉ ${axs.length} aks ${P.floors.length - 1} kata kopyalandı`, `⧉ ${axs.length} axis/axes copied to ${P.floors.length - 1} floor(s)`)); return; }
   if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
@@ -7210,7 +7241,7 @@ $('#floors').addEventListener('click', e => {
   const t = e.target.closest('[data-fl]'); if (t) { fi = +t.dataset.fl; sel = []; refresh(); return; }
   const a = e.target.closest('[data-fa]'); if (!a) return;
   if (a.dataset.fa === 'ren') return renameFloor(fi); // dokunmatikte çift dokunma yerine
-  if (a.dataset.fa === 'add') { P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length)); const bi = P.floors.length - 2; for (const o of P.floors[bi].furn) if (o.k === 'stairs' && stairReachesUp(o, P.floors[bi])) linkStairVoid(o, bi); fi = P.floors.length - 1; // alttaki merdivenlerin boşluğu yeni katta açılır
+  if (a.dataset.fa === 'add') { P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length)); P.floors[P.floors.length - 1].axes = (F().axes || []).map(x => ({ ...JSON.parse(JSON.stringify(x)), id: uid() })); // yeni kat aksları devralır const bi = P.floors.length - 2; for (const o of P.floors[bi].furn) if (o.k === 'stairs' && stairReachesUp(o, P.floors[bi])) linkStairVoid(o, bi); fi = P.floors.length - 1; // alttaki merdivenlerin boşluğu yeni katta açılır
   sel = []; commit(); fit(); refresh(); if (ui.view3d && T3) { sync3DFloors(); schedBuild3D(); } }
   if (a.dataset.fa === 'addb') addBasement();
   if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); const gm = {}; for (const k in KINDS) c[k].forEach(o => { if (o.grp) o.grp = gm[o.grp] || (gm[o.grp] = uid()); }); c.groups = Object.values(gm).map(id => ({ id, vars: [], idx: 0 })); c.rooms.forEach(r => { delete r.vars; delete r.vIdx; }); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
@@ -7741,6 +7772,7 @@ function paste(fromSel, at = null) {
     if (kind === 'wall') { n.a = mv(n.a); n.b = mv(n.b); if (n.bel) { n.bel.a = mv(n.bel.a); n.bel.b = mv(n.bel.b); } f.walls.push(n); }
     else if (kind === 'dim') { n.a = mv(n.a); n.b = mv(n.b); f.dims.push(n); }
     else if (kind === 'section') { n.a = mv(n.a); n.b = mv(n.b); n.name = nextSectionName(); (f.sections = f.sections || []).push(n); }
+    else if (kind === 'axis') { n.a = mv(n.a); n.b = mv(n.b); n.name = nextAxisName(n.a, n.b, f); (f.axes = f.axes || []).push(n); }
     else if (kind === 'room') { n.pts = n.pts.map(mv); xfHp(n, n, mv); delete n.vars; delete n.vIdx; f.rooms.push(n); }
     else if (kind === 'sketch') { n.pts = n.pts.map(mv); f.sketches.push(n); }
     else if (kind === 'draft') { n.pts = n.pts.map(mv); (f.drafts = f.drafts || []).push(n); }
@@ -7944,6 +7976,7 @@ function cmdList() {
     act('dup', '⧉', 'Çoğalt', 'Duplicate', 'Ctrl+D', () => paste(true), false, 'copy kopyala'),
     act('group', '⛓', 'Grupla', 'Group', 'Ctrl+G', groupSel, false),
     act('ungroup', '⛓', 'Grubu çöz', 'Ungroup', 'Ctrl+Shift+G', ungroupSel, false),
+    act('axgrid', '⊞', 'Aks ızgarası oluştur', 'Create an axis grid', '', () => axisGridPrompt(), false, 'grid ızgara aks axis column kolon structure yapı'),
     act('elev', '📐', 'Görünüşler ve kesitler', 'Elevations & sections', '', () => archModal('elev:south'), true, 'facade cephe drawing çizim'),
     act('furnLabel', '🔤', 'Mobilya yazılarını göster / gizle', 'Show / hide furniture labels', '', () => { layersVis.furnLabel = !layersVis.furnLabel; refresh(); }, false, 'etiket label text yazı tefriş'),
     act('furnIcon', '🙂', 'Mobilya simgelerini (emoji) göster / gizle', 'Show / hide furniture icons (emoji)', '', () => { layersVis.furnIcon = !layersVis.furnIcon; refresh(); }, false, 'emoji icon simge ikon tefriş'),
@@ -8117,7 +8150,7 @@ window.addEventListener('keydown', e => {
     mv.forEach(({ kind, o }) => { if (AB_KINDS.has(kind)) { o.a.x += dx; o.a.y += dy; o.b.x += dx; o.b.y += dy; } else if (PTS_KINDS.has(kind)) { o.pts.forEach(p => { p.x += dx; p.y += dy; }); (o.hp || []).forEach(p => { p.x += dx; p.y += dy; }); } else if (kind === 'furn' || kind === 'text' || kind === 'bg') { o.x += dx; o.y += dy; } else if (kind === 'op') o.d += dx + dy; });
     commit(); render(); if (sel.includes('bg')) renderProps(); if (ui.view3d && T3) schedBuild3D(); return;
   }
-  const map = { v: 'select', h: 'pan', w: 'wall', q: 'railing', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen', u: 'draft', k: 'slab', y: 'void', i: 'mirror', l: 'section', a: 'attach' };
+  const map = { v: 'select', h: 'pan', w: 'wall', q: 'railing', r: 'rect', o: 'room', p: 'poly', s: 'shape', d: 'door', n: 'window', f: 'furn', m: 'dim', t: 'text', e: 'eraser', x: 'trim', c: 'calib', b: 'pen', u: 'draft', k: 'slab', y: 'void', i: 'mirror', l: 'section', z: 'axis', a: 'attach' };
   if (e.shiftKey && (k === 'h' || k === 'v') && sel.length) { flipSel(k); return; } // Shift+H / Shift+V: aynala (#28)
   if (map[k]) { setTool(map[k]); return; }
   if (k === 'g') { $('#cSnap').click(); return; }
@@ -8186,6 +8219,7 @@ function helpModal() {
     ['X', 'Trim (click the overhanging part of a crossing wall)'],
     ['I', 'Mirror the selection about an axis (click two points)'],
     ['L', 'Section line (click both ends) → 3D cutaway / 2D section drawing'],
+    ['Z', 'Axis (click both ends): named 1, 2, 3 / A, B, C bubbles; walls snap to crossings; ⊞ axis grid in the panel'],
     ['A', 'Attach walls to a sloped surface: click a roof or tilted item, then the walls'],
     ['Shift+H / Shift+V', 'Flip the selection horizontally / vertically'],
     ['Ctrl+click', 'Select the object underneath (repeat to go deeper)'],
@@ -8242,6 +8276,7 @@ function helpModal() {
     ['X', 'Kırp (kesişen duvarın taşan ucuna tıkla)'],
     ['I', 'Seçimi bir eksene göre aynala (iki noktaya tıkla)'],
     ['L', 'Kesit çizgisi (iki uca tıkla) → 3B kesit / 2B kesit çizimi'],
+    ['Z', 'Aks (iki uca tıkla): 1, 2, 3 / A, B, C balonları; duvarlar kesişimlere yakalanır; panelde ⊞ aks ızgarası'],
     ['A', 'Duvarları eğimli yüzeye bağla: çatıya ya da eğik öğeye, sonra duvarlara tıkla'],
     ['Shift+H / Shift+V', 'Seçimi yatay / dikey aynala'],
     ['Ctrl+tık', 'Alttaki nesneyi seç (tekrarla: daha alttaki)'],
@@ -10459,6 +10494,68 @@ function sectionSvg(sec, live) {
   });
   if (live) s += `<line x1="${sec.a.x}" y1="${sec.a.y}" x2="${sec.b.x}" y2="${sec.b.y}" stroke="transparent" stroke-width="${Math.max(12, 12 / view.z)}"/>`;
   return s + '</g>';
+}
+/* ---------- Akslar (yapı aksları) ----------
+   Floor.axes = [{ id, name, a, b, bub? }]: kat başına iki uçlu aks çizgisi (AB_KINDS: taşı / döndür / aynala / uçları sürükle).
+   Ad otomatik: dikeye yakın akslar 1, 2, 3…, yataya yakın akslar A, B, C… (axisFamily); panelden değiştirilebilir.
+   bub: balon nerede — yok = iki uçta, 'a' / 'b' = tek uçta, 'none' = balonsuz. Yalnızca 2B (3B ve kesitler okumaz); çıktıda çizilir.
+   Duvar uçları aksların kesişimlerine ve uçlarına yakalanır (axisSnapPts). */
+const AXIS_BUBS = ['both', 'a', 'b', 'none'];
+const axisFamily = (a, b) => Math.abs(b.y - a.y) > Math.abs(b.x - a.x) ? 'num' : 'let';
+const axisLetter = i => { let s = ''; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }; // A … Z, AA, AB …
+function nextAxisName(a, b, f = F(), taken = []) {
+  const used = new Set([...(f.axes || []).map(x => x.name), ...taken]), fam = axisFamily(a, b);
+  for (let i = 0; i < 2000; i++) { const n = fam === 'num' ? String(i + 1) : axisLetter(i); if (!used.has(n)) return n; }
+  return '?';
+}
+// aks ızgarası: aralık listeleri ("500, 500, 400" / "3x500") → dikey akslar 1, 2… ve yatay akslar A, B…; uzantı ızgaranın 150 cm dışına
+function parseAxisSpacing(t) {
+  const out = [];
+  for (const part of String(t || '').split(/[;,\s]+/).filter(Boolean)) {
+    const m = part.replace(/,/g, '.').match(/^(?:(\d+)\s*[x×*])?(\d+(?:\.\d+)?)$/i); if (!m) return null;
+    const n = m[1] ? Math.min(+m[1], 50) : 1, v = +m[2]; if (!(v >= 10 && v <= 100000)) return null;
+    for (let i = 0; i < n; i++) out.push(v);
+  }
+  return out.length && out.length <= 60 ? out : null;
+}
+function axisGrid(f, o, xs, ys, ext = 150) {
+  const X = [o.x], Y = [o.y]; for (const d of xs) X.push(X[X.length - 1] + d); for (const d of ys) Y.push(Y[Y.length - 1] + d);
+  const y0 = Y[0] - ext, y1 = Y[Y.length - 1] + ext, x0 = X[0] - ext, x1 = X[X.length - 1] + ext, made = [], names = [];
+  const add = (a, b) => { const ax = { id: uid(), name: nextAxisName(a, b, f, names), a, b }; names.push(ax.name); made.push(ax); };
+  for (const x of X) add({ x, y: y0 }, { x, y: y1 });
+  for (const y of Y) add({ x: x0, y }, { x: x1, y });
+  (f.axes = f.axes || []).push(...made);
+  return made;
+}
+function axisSvg(ax, live) {
+  const L = dist(ax.a, ax.b); if (L < 1) return '';
+  const C = pal(), z = live ? view.z : 0.5, ux = (ax.b.x - ax.a.x) / L, uy = (ax.b.y - ax.a.y) / L, r = 15 / z, sw = 1.3 / z, col = C.dim;
+  let s = `<g ${live ? `data-id="${ax.id}" style="cursor:pointer"` : ''}><line x1="${ax.a.x}" y1="${ax.a.y}" x2="${ax.b.x}" y2="${ax.b.y}" stroke="${col}" stroke-width="${sw}" stroke-dasharray="${22 / z} ${5 / z} ${3 / z} ${5 / z}"/>`;
+  const bub = ax.bub || 'both';
+  for (const [p, sg, e] of [[ax.a, -1, 'a'], [ax.b, 1, 'b']]) {
+    if (bub === 'none' || (bub !== 'both' && bub !== e)) continue;
+    const cx = p.x + ux * sg * r, cy = p.y + uy * sg * r, fs = r * ((ax.name || '').length > 2 ? 0.75 : 1.05);
+    s += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${C.bg}" stroke="${col}" stroke-width="${sw * 1.3}"/><text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-size="${fs}" font-weight="700" fill="${col}" font-family="Segoe UI,sans-serif">${esc(ax.name || '')}</text>`;
+  }
+  if (live) s += `<line x1="${ax.a.x}" y1="${ax.a.y}" x2="${ax.b.x}" y2="${ax.b.y}" stroke="transparent" stroke-width="${Math.max(12, 12 / view.z)}"/>`;
+  return s + '</g>';
+}
+// ⊞ Aks ızgarası: iki soru (dikey ve yatay aralıklar), ızgara mevcut çizimin sol üst köşesinden (yoksa 0, 0) başlar
+function axisGridPrompt() {
+  const xs = parseAxisSpacing(prompt(L('Dikey akslar (1, 2, 3…) arası mesafeler, cm (ör. 500, 500, 400 ya da 3x500):', 'Spacing between vertical axes (1, 2, 3…), cm (e.g. 500, 500, 400 or 3x500):'), '3x500'));
+  if (!xs) return;
+  const ys = parseAxisSpacing(prompt(L('Yatay akslar (A, B, C…) arası mesafeler, cm:', 'Spacing between horizontal axes (A, B, C…), cm:'), '2x600'));
+  if (!ys) return;
+  const f = F(), b = contentBounds && contentBounds(), o = b && isFinite(b.x0) && (f.walls.length || f.rooms.length) ? { x: rnd(b.x0, P.grid), y: rnd(b.y0, P.grid) } : { x: 0, y: 0 };
+  const made = axisGrid(f, o, xs, ys); sel = made.map(x => x.id); commit(); setTool('select'); refresh();
+  toast(L(`⊞ ${made.length} aks eklendi`, `⊞ ${made.length} axes added`));
+}
+// aksı (ya da seçili aksları) diğer bütün katlara kopyalar; aynı adlı aks olan katta o aks güncellenir
+function axisCopyAll(axes) {
+  let n = 0;
+  P.floors.forEach((f, i) => { if (i === fi) return; f.axes = f.axes || [];
+    for (const ax of axes) { const ex = f.axes.find(x => x.name === ax.name); if (ex) { ex.a = { ...ax.a }; ex.b = { ...ax.b }; if (ax.bub) ex.bub = ax.bub; else delete ex.bub; } else f.axes.push({ id: uid(), name: ax.name, a: { ...ax.a }, b: { ...ax.b }, ...(ax.bub ? { bub: ax.bub } : {}) }); n++; } });
+  return n;
 }
 function nextSectionName() {
   const used = new Set(); P.floors.forEach(f => (f.sections || []).forEach(s => used.add(s.name)));

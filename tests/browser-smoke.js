@@ -664,6 +664,39 @@ check('sloped surfaces: height points added by click / on corners tilt a slab an
   if (!info.undo[0] || info.undo[1] !== -5 || info.undo[2] !== 0 || !info.svg) throw new Error('undo / export: ' + JSON.stringify(info));
 });
 
+check('axes: the Z tool draws named axes, a wall snaps to their crossing, grid + copy to floors, export, undo', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject()); view.z = 0.5; view.x = 100; view.y = 50; render();
+    const r = cv.getBoundingClientRect(), out = {};
+    const at = (p, type) => { const s = w2s(p); cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 })); };
+    const click = p => { at(p, 'pointerdown'); at(p, 'pointerup'); };
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true })); out.tool = tool;
+    click({ x: 100, y: -100 }); click({ x: 100, y: 700 });   // vertical → 1
+    click({ x: -100, y: 200 }); click({ x: 900, y: 200 });   // horizontal → A
+    out.names = F().axes.map(x => x.name);
+    out.svg = document.querySelectorAll('#gDims circle').length;
+    // wall tool: a click 4 cm off the crossing snaps onto it
+    setTool('wall'); click({ x: 104, y: 203 }); click({ x: 600, y: 203 });
+    const w = F().walls[0]; out.wallA = w && [w.a.x, w.a.y];
+    // panel: bubble only at the start; copy to all floors after adding one
+    setTool('select'); sel = [F().axes[0].id]; refresh();
+    const b = document.querySelector('#props [data-p="bub"]'); b.value = 'a'; b.dispatchEvent(new Event('change', { bubbles: true }));
+    out.bub = F().axes[0].bub;
+    document.querySelector('#floors [data-fa="add"]').click(); out.inherit = F().axes.map(x => x.name).join(',');
+    fi = 0; sel = [F().axes[0].id]; refresh(); F().axes[0].a.x = 120; F().axes[0].b.x = 120; commit(); refresh();
+    document.querySelector('#props [data-act="axcopy"]').click(); out.copied = P.floors[1].axes.find(x => x.name === '1').a.x;
+    out.export = (exportSvg().svg.match(/<circle/g) || []).length > 0;
+    undo(); out.undo = P.floors[1].axes.find(x => x.name === '1').a.x;
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (info.tool !== 'axis') throw new Error('Z did not pick the axis tool: ' + info.tool);
+  if (info.names.join() !== '1,A' || info.svg < 4) throw new Error('axes not drawn / named: ' + JSON.stringify(info));
+  if (!info.wallA || info.wallA[0] !== 100 || info.wallA[1] !== 200) throw new Error('wall did not snap to the axis crossing: ' + JSON.stringify(info));
+  if (info.bub !== 'a' || info.inherit !== '1,A') throw new Error('bubble / new floor axes: ' + JSON.stringify(info));
+  if (info.copied !== 120 || info.undo !== 100 || !info.export) throw new Error('copy to floors / export / undo: ' + JSON.stringify(info));
+});
+
 check('slab tool draws a wall-less balcony, void tool cuts the slab in 3D (issues #22, #23)', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());

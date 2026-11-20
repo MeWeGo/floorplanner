@@ -288,7 +288,7 @@ const texGenUrl = svg => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponen
 const FINISH_DOC = FLOORPATS.join(' | ') + ' | "tex:<id>" (a custom texture from project.textures)';
 // door material / colours (#41), mirrors DOOR_MATS in app.js
 const DOOR_MATS = ['wood', 'glass', 'paneled', 'metal'];
-const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', dims: 'dim', texts: 'text', sketches: 'sketch', drafts: 'draft' };
+const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', axes: 'axis', dims: 'dim', texts: 'text', sketches: 'sketch', drafts: 'draft' };
 
 /* ---------- Small helpers (mirror app.js) ---------- */
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -2146,7 +2146,7 @@ const CAT_PARTS = { billiard: billiardParts }; // mirror of CAT_PARTS in app.js
 /* ---------- Project state ---------- */
 let P = null; // working project (same schema the app saves/loads)
 
-function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], dims: [], texts: [], sketches: [], drafts: [], groups: [], slabFloor: 'none', slabColor: null }; }
+function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], axes: [], dims: [], texts: [], sketches: [], drafts: [], groups: [], slabFloor: 'none', slabColor: null }; }
 function newProject(a) {
   a = a || {};
   return {
