@@ -70,6 +70,7 @@ P = {
   "bg": null | { "src": "<dataURL>", "x": 0, "y": 0, "w": 1200, "h": 800, "op": 0.5 },
   "layers": [ { "id": "0", "name": "Varsayılan", "color": "#64748b", "vis": true, "lock": false, "print": true }, … ],   // drawing layers (issue #32); "0" = Default, cannot be deleted
   "activeLayer": "0",            // new objects are stamped with it (any object may carry "layer": id; absent = "0")
+  "lw": { "wall"?: 3, "op"?: 2, "furn"?: 0.5, "room"?: 1.5, "anno"?: 0.75 },   // optional line-weight multipliers (LW_STEPS), absent = ×1
   "textures": [ { "id": "…", "name": "…", "w": 60, "h": 60 }, … ],   // custom texture metadata (issue #40); image data lives in IndexedDB
   "floors": [ Floor, ... ]
 }
@@ -405,6 +406,12 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - **⊞ Axis grid** (`axgrid` panel button and command → `axisGridPrompt`): two prompts of spacings (`parseAxisSpacing`: `500, 500, 400`, `3x500`), `axisGrid(f, origin, xs, ys)` from the top-left of the drawing (or 0, 0), lines overhang 150 cm. **⧉ Copy to all floors** (`axcopy` → `axisCopyAll`: an axis with the same name on another floor is moved to match, else added). **＋ Floor** gives the new floor a copy of the current floor's axes.
 - Not built: axis dimensions, axes in sections / elevations / 3D, IFC `IfcGrid`, MCP tools to add axes. Guard: `tests/axes.test.js` + the smoke check "axes: …".
 
+### Line weights
+- `P.lw` (optional, project-wide, undoable) = multipliers per category from `LW_STEPS` (0.5, 0.75, 1, 1.5, 2, 3); absent / 1 = the old drawing, byte for byte. `lwK(cat)` is the only reader, `cleanLw` (in `normalizeProject`) keeps valid non-default steps.
+- `layerStrings` passes the `ops`, `furn`, `rooms` (rooms, slabs, voids) and `dims` (dimensions, sections and axes) layer strings through `lwScale(str, k)`, which multiplies every `stroke-width` attribute in one regex pass and leaves text halos (`paint-order="stroke"`), transparent hit areas and `data-h` handles alone. Walls are special: their body stroke *is* the wall thickness, so `wall` only feeds the CAD view edge (`wallHollowSvg` `sw = 1.8 · lwK('wall')`). Because it runs in `layerStrings`, the canvas, both 2D views and PNG / SVG / PDF exports all match. New builders need nothing; keep halos marked with `paint-order="stroke"`.
+- Panel: `lwPanelHtml()` in the project panel (`data-k="lw"`). 2D drafting lines keep their own per-line `w` (cm); the drafting toolbar (`buildDraftBar`) now has weight buttons (`DRAFT_WEIGHTS`, `data-dw`) that set the next line's weight and restyle selected drafting lines (one `commit`).
+- Not built: per-object weights for non-drafting objects, per-layer (`P.layers`) weights, mm-on-paper weights. Guard: `tests/line-weights.test.js` + the smoke check "line weights: …".
+
 ### Command line (issue #43)
 - `:` (any layout that produces `e.key === ":"`, no Ctrl/Alt, no open modal) opens `openCmdPalette()` — checked in the window `keydown` handler **before** the 3D branch, after the `typing` early return, so text / number fields never trigger it and wall-length digits are untouched. The overlay (`#cmdPal` / `#cmdIn`, created on demand like `#ctxMenu`, not in `index.html`) stops propagation of its own keys, so walk keys and single-key tools never fire while typing.
 - `cmdList()` is built only from existing actions: every `TOOLS` entry (`setTool`, which already leaves 3D) plus undo / redo, 2D / 3D, fit, save, print, PNG / SVG / JSON, open, new, flip H / V, scale, select all, delete, duplicate, group, elevations, layers, render studio, snap, theme, language, help — each with its existing shortcut label. `in3d: true` runs in place in 3D; anything else calls `show3D(false)` first (`runCmd`). **Add new actions here** when you add a toolbar button or shortcut.
@@ -683,6 +690,7 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/surface-slope.test.js` | sloped surfaces on the real SURF-SLOPE block: drain point, corner tilt as one plane, edge points, concave room area kept, winding independence, cleanup, and the transform / 3D / furniture / walk / 2D / panel wiring |
 | `tests/accordion-fan.test.js` | accordion fan fill on the real functions: straight by default, the fan sweeps the wedge around the hinge corner on the arc, more pleats when wider, closed thin leaf, straight-pleat fallback, `cleanAcc`, and the panel / 2D / 3D / joints / openings wiring |
 | `tests/axes.test.js` | structural axes on the real helpers: number / letter naming and the next free name, spacing lists, grid layout and continued names, crossing + end snap points, and the kind / tool / snap / panel / command / floor / MCP wiring |
+| `tests/line-weights.test.js` | line weights on the real `lwScale` / `cleanLw` / `lwK`: untouched defaults, halos / hit areas / handles kept, valid steps only, and the layer / CAD wall / panel / normalize / drafting-toolbar wiring |
 | `tests/floor-slab-off.test.js` | the per-floor floor slab switch: `noSlab` empties `slabPolys` (3D, sections), panel checkbox + undo, MCP `add_floor` mirror |
 | `tests/studio-catalog-model.test.js` | furniture studio opening a catalogue item: the real `furn3D` model becomes valid parts (lying cylinders kept), the draft box holds the model, the recentre offset keeps the footprint, stairs / ramps / roofs / poly fall back |
 | `tests/bookcase.test.js` | bookcase / shelf 3D models (#54): open front carcass, visible shelves, bookcase book rows gated by detail flag, dresser/nightstand drawer fronts kept |
