@@ -157,6 +157,56 @@ check('the test tab stays off any running AI bridge (?bridge=off)', async page =
   if (info.hits.length) throw new Error('page contacted the bridge: ' + info.hits.join(', '));
 });
 
+check('live online-users indicator stays off under ?presence=off and toggles cleanly', async page => {
+  const info = await page.evaluate(`(() => {
+    const wrap = document.getElementById('onlineWrap');
+    const cnt = document.getElementById('onlineCnt');
+    if (!wrap || !cnt) return { missing: true };
+    const init = {
+      hidden: wrap.hidden,
+      display: getComputedStyle(wrap).display,
+      ws: pres.ws,
+    };
+    const origLang = lang;
+    pres.count = 7;
+    setLang('en');
+    const en = {
+      hidden: wrap.hidden,
+      display: getComputedStyle(wrap).display,
+      text: cnt.textContent,
+      title: wrap.title,
+      aria: wrap.getAttribute('aria-label'),
+    };
+    setLang('tr');
+    const tr = {
+      title: wrap.title,
+      aria: wrap.getAttribute('aria-label'),
+    };
+    pres.count = null;
+    presenceRender();
+    const after = {
+      hidden: wrap.hidden,
+      display: getComputedStyle(wrap).display,
+      text: cnt.textContent,
+    };
+    setLang(origLang);
+    return { init, en, tr, after };
+  })()`);
+  if (info.missing) throw new Error('#onlineWrap or #onlineCnt missing');
+  if (!info.init.hidden || info.init.display !== 'none' || info.init.ws !== null) {
+    throw new Error('presence should stay hidden and disconnected under ?presence=off: ' + JSON.stringify(info.init));
+  }
+  if (info.en.hidden || info.en.display === 'none' || info.en.text !== '7' || info.en.title !== '7 people online now' || info.en.aria !== '7 people online now') {
+    throw new Error('EN badge state wrong: ' + JSON.stringify(info.en));
+  }
+  if (info.tr.title !== '7 kişi şu an çevrimiçi' || info.tr.aria !== '7 kişi şu an çevrimiçi') {
+    throw new Error('TR badge state wrong: ' + JSON.stringify(info.tr));
+  }
+  if (!info.after.hidden || info.after.display !== 'none' || info.after.text !== '') {
+    throw new Error('badge did not hide after reset: ' + JSON.stringify(info.after));
+  }
+});
+
 check('every starter template loads and draws walls', async page => {
   const report = await page.evaluate(`(() => {
     const out = [];
@@ -2966,7 +3016,7 @@ check('IFC export: every template round-trips through the app IFC importer (wall
   const port = server.address().port;
   // ?bridge=off: never reach a real mcp/bridge.js on 127.0.0.1:8787 — the checks load
   // test plans, and a connected tab would push them over the user's live AI plan
-  const url = `http://127.0.0.1:${port}/?bridge=off`;
+  const url = `http://127.0.0.1:${port}/?bridge=off&presence=off`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-smoke-'));
   const debugPort = 9300 + Math.floor(Math.random() * 300);
 

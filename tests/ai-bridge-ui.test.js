@@ -89,5 +89,5 @@ test('?bridge=off disables every bridge entry point, and the browser smoke test 
   assert.match(app, /async function brgConnect\(\) \{\s*if \(BRIDGE_OFF\) return false;/, 'brgConnect ignores BRIDGE_OFF');
   assert.match(app, /function brgStartProbe\(\) \{\s*if \(BRIDGE_OFF/, 'brgStartProbe ignores BRIDGE_OFF');
   // the smoke test loads plans; without the switch it overwrote the user's live AI plan
-  assert.match(read('tests/browser-smoke.js'), /\?bridge=off`/, 'browser-smoke.js does not open the app with ?bridge=off');
+  assert.match(read('tests/browser-smoke.js'), /[?&]bridge=off(?:&|`)/, 'browser-smoke.js does not open the app with ?bridge=off');
 });

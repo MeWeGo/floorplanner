@@ -1,0 +1,15 @@
+name = "floorplanner-presence"
+main = "worker.mjs"
+compatibility_date = "2025-04-07"
+
+[vars]
+ALLOWED_ORIGINS = "https://mewego.github.io"
+
+[durable_objects]
+bindings = [
+  { name = "PRESENCE", class_name = "PresenceRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PresenceRoom"]

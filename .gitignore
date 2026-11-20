@@ -12,3 +12,6 @@ package-lock.json
 # Python bytecode from the pyRevit add-in tests
 __pycache__/
 *.pyc
+
+# Cloudflare Wrangler local state/cache (from optional presence/ worker)
+.wrangler/

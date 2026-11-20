@@ -29,6 +29,7 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 | `mcp/bridge.js` | Optional local HTTP bridge: SSE plan sync + user request queue (the client lives in `app.js`) — see §8 |
 | `mcp/README.md` | MCP client setup (Claude Desktop, OpenCode, Cursor) + tool reference |
 | `revit/` | **Optional** pyRevit add-in that builds native Revit elements from the app's ⬇ Revit export (`revit/README.md`); never loaded by `app.js` |
+| `presence/` | **Optional** Cloudflare Worker + Durable Object (`worker.mjs`, `wrangler.toml`, `README.md`) for the live online-users badge |
 | `opencode.jsonc` | Registers `mcp/server.js` as a project-local OpenCode MCP server |
 | `tests/` | Zero-dependency test suite (`node --test tests/*.test.js`, `node tests/browser-smoke.js`) — see §10 |
 | `.github/workflows/` | `ci.yml` (tests) and `deploy.yml` (test-gated Pages publish) — see §12 |
@@ -185,7 +186,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, ptabs, bNew, bProjects, bSync, bSave, bJson, bIfc, bRevit, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, bCad, b3d, b3dFit, b3dTop, b3dEye, b3dShot, b3dLive, b3dFloors, bInspect, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, cOutline, lblOutline, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, modalbg, modal`.
+`pname, ptabs, bNew, bProjects, bSync, bSave, bJson, bIfc, bRevit, bOpen, bUndo, bRedo, bPng, bSvg, bPrint, b2d, bCad, b3d, b3dFit, b3dTop, b3dEye, b3dShot, b3dLive, b3dFloors, bInspect, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, cOutline, lblOutline, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, onlineWrap, onlineCnt, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -678,9 +679,10 @@ node tests/browser-smoke.js     # boots the app in headless Chromium and drives 
 | `tests/ifc-levels.test.js` | IFC helper levels: storeys closer than 100 cm merge (named by the busiest level), walls / items keep their real height as `elev` (−50 stays −50), a wall over two real storeys still splits, `mergeLevels: false`, half-space clipping lowers sloped wall tops and ignores vertical planes |
 | `tests/project-sync.test.js` | project sync & share: QR encoder structure (finder patterns, versions, overflow) plus an OpenCV decode when Python + `cv2` are installed, `#fp=` link round trip and the `0.` fallback, `sanitizePlan` (attribute break-out characters, prototype keys, `bg` / `texData` URLs), `strHash`, and the real `gdSyncOnce` / `gdUpload` / `gdList` against a fake Drive (create, no-op, upload, adopt, conflict, empty project, trashed file) |
 | `tests/outline-view.test.js` | 2D Outline / CAD wireframe view mode (`ui.outline`, `J`, `#bCad`, `#cOutline`): `pal()` dark/light adaptation, `wallHollowSvg()` double-line hollow walls and L/T joints, unfilled rooms/slabs/voids/openings/furniture with `furnCadSvg` block details and UI wiring |
+| `tests/presence.test.js` | live online-users counter: Worker CORS / origin checks, Durable Object WebSocket Hibernation broadcast / close codes / dead socket cleanup / `/count` / message guard, `wrangler.toml` SQLite DO config, and client URL/parse/DOM/reconnect logic |
 | `tests/browser-smoke.js` | runtime crashes the static checks cannot see: boot, all templates, draw→undo→redo, `exportSvg`, AI + Help modals, theme switch, 3D build, a **real 3D capture** (a blank PNG fails), and **real key events in 3D** (`Ctrl+Z`/`Ctrl+Y`, walk keys not swallowed, walk mode collision: stops at closed doors, passes open ones, Q height locked, Esc restores orbit); **3D rebuild cost (#106)**: a 4-floor edit in 3D keeps the lights, shadow map and material cache, compiles no new shaders, keeps GPU memory flat across edits, 2D ⇄ 3D, theme, live view and render studio, and builds in < 400 ms |
 
-`browser-smoke.js` opens the app with `?bridge=off`, so it is safe to run while `mcp/bridge.js` is up. `SMOKE_ONLY=<text> node tests/browser-smoke.js` runs only the checks whose name contains `<text>` (plus the boot check). It skips itself (exit 0) when no Chromium is found; set `CHROME_BIN` to point at one. In CI it always runs.
+`browser-smoke.js` opens the app with `?bridge=off&presence=off`, so it is safe to run while `mcp/bridge.js` is up. `SMOKE_ONLY=<text> node tests/browser-smoke.js` runs only the checks whose name contains `<text>` (plus the boot check). It skips itself (exit 0) when no Chromium is found; set `CHROME_BIN` to point at one. In CI it always runs.
 
 **Still verify by eye** (the suite cannot judge these):
 

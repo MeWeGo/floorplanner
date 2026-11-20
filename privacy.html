@@ -27,10 +27,10 @@
 
 <article id="en" lang="en">
 <h1>Privacy Policy</h1>
-<p class="muted">Floor Planner (Kat Planı Çizici) · https://mewego.github.io/floorplanner/ · Last updated: 16 November 2026</p>
+<p class="muted">Floor Planner (Kat Planı Çizici) · https://mewego.github.io/floorplanner/ · Last updated: 20 November 2026</p>
 
 <h2>In short</h2>
-<p>Floor Planner runs entirely in your browser. There is no account, no server of ours, no advertising and no analytics. Your plans stay on your device unless you choose to send them somewhere.</p>
+<p>Floor Planner runs entirely in your browser. There is no account, no advertising and no analytics. Your plans stay on your device unless you choose to send them somewhere. When enabled on the hosted site, a lightweight anonymous counter shows how many people have the site open right now.</p>
 
 <h2>What is stored on your device</h2>
 <ul>
@@ -48,8 +48,11 @@
 <h2>Share links</h2>
 <p>A share link made with <b>Send to another device</b> contains the plan itself inside the link. Anyone who has the link can open the plan, so share it only with people you trust. The link is not stored by us.</p>
 
+<h2>Live user count</h2>
+<p>When enabled on the hosted site, the app opens an anonymous WebSocket connection to a small Cloudflare Worker solely to count how many browser tabs currently have the site open. The Worker holds only the active connection count in memory — no cookies, user IDs, floor plans or logs are stored. Like any web connection, Cloudflare can see your IP address and browser details while connected. You can disable this connection for a session by adding <code>?presence=off</code> to the address.</p>
+
 <h2>Third-party services the page loads</h2>
-<p>To work, the page loads fonts from Google Fonts, the 3D library Three.js from cdnjs (Cloudflare) and jsDelivr, and — only when you use Drive sync — Google's sign-in script. The site itself is hosted on GitHub Pages. Like any web request, these services can see your IP address and browser details; see their own privacy policies.</p>
+<p>To work, the page loads fonts from Google Fonts, the 3D library Three.js from cdnjs (Cloudflare) and jsDelivr, and — when used — Cloudflare Workers for the anonymous live user count and Google's sign-in script for Drive sync. The site itself is hosted on GitHub Pages. Like any web request, these services can see your IP address and browser details; see their own privacy policies.</p>
 
 <h2>AI editing (optional)</h2>
 <p>If you set up the optional AI bridge, the app talks to a program running on your own computer (<code>127.0.0.1</code>). What that program and your AI assistant do with your plan is governed by the assistant you choose.</p>
@@ -63,10 +66,10 @@
 
 <article id="tr" lang="tr">
 <h1>Gizlilik Politikası</h1>
-<p class="muted">Kat Planı Çizici (Floor Planner) · https://mewego.github.io/floorplanner/ · Son güncelleme: 16 Kasım 2026</p>
+<p class="muted">Kat Planı Çizici (Floor Planner) · https://mewego.github.io/floorplanner/ · Son güncelleme: 20 Kasım 2026</p>
 
 <h2>Kısaca</h2>
-<p>Kat Planı Çizici tamamen tarayıcınızda çalışır. Hesap, bize ait bir sunucu, reklam ya da analitik yoktur. Planlarınız, siz bir yere göndermedikçe cihazınızda kalır.</p>
+<p>Kat Planı Çizici tamamen tarayıcınızda çalışır. Hesap, reklam ya da analitik yoktur. Planlarınız, siz bir yere göndermedikçe cihazınızda kalır. Barındırılan sitede etkinleştirildiğinde, hafif ve anonim bir sayaç şu anda kaç kişinin siteyi açık tuttuğunu gösterir.</p>
 
 <h2>Cihazınızda saklananlar</h2>
 <ul>
@@ -84,8 +87,11 @@
 <h2>Paylaşım linkleri</h2>
 <p><b>Başka cihaza gönder</b> ile oluşturulan link, planın kendisini içinde taşır. Linke sahip olan herkes planı açabilir; yalnızca güvendiğiniz kişilerle paylaşın. Link bizim tarafımızdan saklanmaz.</p>
 
+<h2>Canlı kullanıcı sayısı</h2>
+<p>Barındırılan sitede etkinleştirildiğinde uygulama, yalnızca o anda kaç tarayıcı sekmesinin siteyi açık tuttuğunu saymak için küçük bir Cloudflare Worker’a anonim bir WebSocket bağlantısı açar. Worker yalnızca etkin bağlantı sayısını bellekte tutar; çerez, kullanıcı kimliği, kat planı verisi veya kayıt tutulmaz. Her web bağlantısında olduğu gibi Cloudflare, bağlı olduğunuz sırada IP adresinizi ve tarayıcı bilgilerinizi görebilir. Adrese <code>?presence=off</code> ekleyerek bu bağlantıyı bir oturum için kapatabilirsiniz.</p>
+
 <h2>Sayfanın yüklediği üçüncü taraf hizmetler</h2>
-<p>Sayfa çalışmak için Google Fonts’tan yazı tiplerini, cdnjs (Cloudflare) ve jsDelivr’den 3B kütüphanesi Three.js’i ve — yalnızca Drive eşitlemesini kullandığınızda — Google’ın giriş betiğini yükler. Site GitHub Pages üzerinde barındırılır. Her web isteğinde olduğu gibi bu hizmetler IP adresinizi ve tarayıcı bilgilerinizi görebilir; kendi gizlilik politikalarına bakın.</p>
+<p>Sayfa çalışmak için Google Fonts’tan yazı tiplerini, cdnjs (Cloudflare) ve jsDelivr’den 3B kütüphanesi Three.js’i ve — kullanıldığında — anonim canlı kullanıcı sayacı için Cloudflare Workers ile Drive eşitlemesi için Google’ın giriş betiğini yükler. Site GitHub Pages üzerinde barındırılır. Her web isteğinde olduğu gibi bu hizmetler IP adresinizi ve tarayıcı bilgilerinizi görebilir; kendi gizlilik politikalarına bakın.</p>
 
 <h2>AI ile düzenleme (isteğe bağlı)</h2>
 <p>İsteğe bağlı AI köprüsünü kurarsanız uygulama kendi bilgisayarınızda çalışan bir programla (<code>127.0.0.1</code>) konuşur. O programın ve AI asistanınızın planınızla ne yaptığı seçtiğiniz asistanın koşullarına tabidir.</p>
