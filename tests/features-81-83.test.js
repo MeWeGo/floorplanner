@@ -22,6 +22,7 @@ function makeDraftEnv() {
     const PTS_KINDS = new Set(['room', 'sketch', 'slab', 'void', 'draft']);
     ${fnSrcOf(src, 'reflectPoint')}
     ${constLine('normDeg')}
+    ${fnSrcOf(src, 'xfHp')}
     ${fnSrcOf(src, 'mirrorObjs')}
     ${fnSrcOf(src, 'draftArc')}
     ${constLine('draftClosed')}
