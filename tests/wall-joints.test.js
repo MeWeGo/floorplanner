@@ -14,6 +14,7 @@ assert.ok(start > 0 && end > start, 'convexHull/wallJoints must sit right before
 const { wallJoints } = new Function(`
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const wLen = w => dist(w.a, w.b);
+  const isAccFan = w => !!(w && w.acc && w.acc.fill === 'fan'); // accordion fan fill: accordion-fan.test.js
   function polyArea(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; s += p.x * q.y - q.x * p.y; } return Math.abs(s) / 2; }
   ${src.slice(start, end)}
   return { wallJoints };`)();

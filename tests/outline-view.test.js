@@ -25,6 +25,7 @@ const env = new Function(`
   const fmtArea = a => (a / 10000).toFixed(1) + ' m2';
   const isLight = () => lightMode;
   const isLowWall = w => w.wt === 'railing' || w.wt === 'fence';
+  const isAccFan = () => false, accFan = () => null; // accordion fan fill: accordion-fan.test.js
   const railStyle = w => w.rs || 'bars';
   const curtainBays = w => Math.max(2, Math.round(wLen(w) / (w.mul || 120)));
   const wallPivot = w => w.pivot || 'a';
