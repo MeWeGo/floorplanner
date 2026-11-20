@@ -26,6 +26,7 @@ function env(initialFloor = { walls: [], ops: [] }) {
     ${normDegSrc}
     const WALL_FACE_KEYS = ['c1', 'c2', 'f1', 'f2'], wallFaced = w => WALL_FACE_KEYS.some(k => w[k]);
     ${fnSrc('wallFaceSwap')}
+    ${fnSrc('xfHp')}
     ${fnSrc('mirrorObjs')}
     ${fnSrc('scaleObjs')}
     ${fnSrc('parseScale')}

@@ -72,6 +72,7 @@ test('(2) snapPose for room includes floor, color, glass, slabT and deep-copies 
 
   assert.deepStrictEqual(pose, {
     pts: [{ x: 10, y: 20 }, { x: 100, y: 20 }, { x: 100, y: 80 }, { x: 10, y: 80 }],
+    hp: null, // no slope points
     floor: 'wood',
     color: '#3b82f6',
     glass: 'clear',
@@ -108,6 +109,7 @@ test('(3) snapPose: slab keeps pts + level offset + thickness, void only pts', (
   const slabPose = snapPose('slab', slab);
   assert.deepStrictEqual(slabPose, {
     pts: [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 150 }],
+    hp: null,
     off: 10,
     t: 25,
   });

@@ -584,6 +584,54 @@ check('overlapping objects: Ctrl+click cycles, right-click lists, layers reorder
   return 'pick under, list, reorder' + (info.lift ? ', 3D lift ' + info.lift.join('/') : '');
 });
 
+check('sloped surfaces: height points added by click / on corners tilt a slab and a room in 2D and 3D, furniture sits on them, undo', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    const f = F(), sq = (x0, y0, x1, y1) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+    const sl = mkSlab(sq(0, 0, 400, 400)), rm = mkRoom(sq(600, 0, 1000, 400), 'Teras');
+    f.slabs.push(sl); f.rooms.push(rm); commit(); setTool('select'); view.z = 0.5; view.x = 100; view.y = 50; render();
+    const r = cv.getBoundingClientRect(), out = {};
+    const at = (p, type) => { const s = w2s(p); cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 })); };
+    const btn = a => document.querySelector('#props [data-act="' + a + '"]');
+    const setZ = (i, v) => { const el = document.querySelector('#props [data-k="hp"][data-i="' + i + '"]'); el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); };
+    // slab: points on corners, raise one edge 40 cm
+    sel = [sl.id]; refresh(); out.panel = !!btn('hpcorners');
+    btn('hpcorners').click(); out.corners = (sl.hp || []).length;
+    setZ(1, 40); setZ(2, 40);
+    out.z = [surfZAt(find(sl.id).o, 200, 200), surfZAt(find(sl.id).o, 400, 100)];
+    // room: ＋ Add point, then a real click in the middle → drain at −5
+    sel = [rm.id]; refresh(); btn('hpadd').click(); out.adding = ui.hpAdd === rm.id;
+    at({ x: 800, y: 200 }, 'pointerdown'); at({ x: 800, y: 200 }, 'pointerup');
+    out.roomHp = (find(rm.id).o.hp || []).map(q => [q.x, q.y]);
+    setZ(0, -5); out.roomZ = surfZAt(find(rm.id).o, 800, 200);
+    escTool(); out.addOff = !ui.hpAdd;
+    out.labels = document.querySelector('#gRoomLabels, #world').textContent.includes('+40 cm');
+    // furniture on the sloped slab
+    const t = mkFurn(BYID.tableR || BYID.table, 400 - 50, 200); F().furn.push(t); commit();
+    show3D(true); await new Promise(r => setTimeout(r, 600));
+    let slabY = null, furnY = null, roomGeo = null;
+    T3.scene.traverse(o => {
+      if (o.isMesh && o.userData.slabId === sl.id) { o.geometry.computeBoundingBox(); slabY = [Math.round(o.geometry.boundingBox.min.y), Math.round(o.geometry.boundingBox.max.y)]; }
+      if (o.isMesh && o.userData.roomId === rm.id && !roomGeo) { o.geometry.computeBoundingBox(); roomGeo = Math.round(o.geometry.boundingBox.min.y); }
+      if (o.userData && o.userData.furnId === t.id && furnY === null) furnY = Math.round(o.position.y);
+    });
+    out.slabY = slabY; out.roomMin = roomGeo; out.furnY = furnY;
+    show3D(false);
+    undo(); out.undo = [!find(t.id), surfZAt(find(rm.id).o, 800, 200)]; undo(); out.undo.push(surfZAt(find(rm.id).o, 800, 200));
+    out.svg = exportSvg().svg.includes('+40 cm');
+    sel = []; refresh();
+    return out;
+  })()`);
+  if (!info.panel || info.corners !== 4) throw new Error('slope panel / corner points missing: ' + JSON.stringify(info));
+  if (info.z[0] !== 20 || info.z[1] !== 40) throw new Error('corner heights did not tilt the slab: ' + JSON.stringify(info.z));
+  if (!info.adding || info.roomHp.length !== 1 || info.roomHp[0][0] !== 800 || info.roomZ !== -5 || !info.addOff) throw new Error('click-to-add point failed: ' + JSON.stringify(info));
+  if (!info.labels) throw new Error('2D height label missing');
+  if (!info.slabY || info.slabY[1] !== 40 || info.slabY[0] !== -20) throw new Error('3D slab does not follow the slope: ' + JSON.stringify(info.slabY));
+  if (info.roomMin !== -5) throw new Error('3D room floor does not dip to the drain: ' + JSON.stringify(info));
+  if (info.furnY === null || info.furnY < 30) throw new Error('furniture does not sit on the sloped slab: ' + JSON.stringify(info));
+  if (!info.undo[0] || info.undo[1] !== -5 || info.undo[2] !== 0 || !info.svg) throw new Error('undo / export: ' + JSON.stringify(info));
+});
+
 check('slab tool draws a wall-less balcony, void tool cuts the slab in 3D (issues #22, #23)', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
