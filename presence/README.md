@@ -1,9 +1,10 @@
-# Floor Planner Live Presence Worker
+# Floor Planner Live Presence & Collaboration Worker
 
-Optional, zero-dependency Cloudflare Worker + Durable Object that broadcasts how many browser tabs currently have **Floor Planner** open.
+Optional, zero-dependency Cloudflare Worker + Durable Objects that power:
 
-- **Privacy-first:** Counts open WebSocket connections in memory (`ctx.getWebSockets().length`) using the Durable Objects **WebSocket Hibernation API**. Stores no cookies, user IDs, IP logs, analytics, or floor plan data.
-- **Free-tier friendly:** Uses `new_sqlite_classes` (required on Cloudflare's Workers Free plan) and `setWebSocketAutoResponse('ping', 'pong')` so client keepalive pings are answered at Cloudflare's edge without waking the Durable Object.
+1. **`PresenceRoom` (`/ws`, `/count`):** broadcasts how many browser tabs currently have **Floor Planner** open (`ctx.getWebSockets().length`) using the Durable Objects **WebSocket Hibernation API**. Stores no cookies, user IDs, IP logs, analytics, or floor plan data.
+2. **`CollabRoom` (`/collab/<roomId>`):** per-room Durable Object relay for simultaneous real-time editing (object-level patches, live cursors, selection highlights, drag ghosts, view-only links via `?v=<viewToken>`, background/texture asset sync up to 400 KB, and follow mode). Ephemeral by default (room state stays in memory while connected and clears when the last participant leaves), with optional editor-toggled room persistence (`ctx.storage`).
+- **Free-tier friendly:** Uses `new_sqlite_classes` (migrations `v1` and `v2`, required on Cloudflare's Workers Free plan) and `setWebSocketAutoResponse('ping', 'pong')` so client keepalive pings are answered at Cloudflare's edge without waking the Durable Object.
 
 ## Deploy (3 steps)
 
@@ -54,3 +55,4 @@ Optional, zero-dependency Cloudflare Worker + Durable Object that broadcasts how
 - **Opt-out / testing overrides:**
   - `?presence=off` disables the live presence socket for that tab (used by `tests/browser-smoke.js`).
   - `?presence=ws://...` or `?presence=wss://...` overrides `PRESENCE_URL` for testing (works on `localhost` and `file://` too; by default local hosts skip `PRESENCE_URL`).
+  - `?collab=off` disables live collaboration sockets; `?collab=ws://127.0.0.1:8787` overrides the collaboration server URL for local `wrangler dev` testing (`http://127.0.0.1:8080/?collab=ws://127.0.0.1:8787`).

@@ -1635,6 +1635,18 @@ body.fs-open #toast { position: fixed; z-index: 140; }
 .sync-btn[data-st="ok"]::after { background: var(--ok); }
 .sync-btn[data-st="warn"]::after { background: var(--warn); }
 
+/* 👥 Canlı birlikte düzenleme */
+.collab-btn { position: relative; }
+.collab-btn[data-st]:not([data-st=""])::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.collab-btn[data-st="busy"]::after { background: #38bdf8; animation: syncPulse 1s ease-in-out infinite; }
+.collab-btn[data-st="warn"]::after { background: var(--warn); }
+.collab-btn[data-st="view"]::after { background: var(--accent); }
+.collab-peers { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.collab-peer { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel2); font-size: 12px; }
+.collab-peer i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.collab-peer button { border: 0; background: transparent; color: var(--accent); padding: 0 2px; font-size: 11px; }
+.collab-name { background: var(--panel2); color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 8px; flex: 1; min-width: 140px; }
+
 /* kat kotu, kat sekmesinde (bodrum katlar ve elle girilen kotlar) */
 .ftab .flv {
   margin-left: 5px;

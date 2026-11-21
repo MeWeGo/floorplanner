@@ -64,7 +64,7 @@ function makeWorkerEnv(allowedOrigins = 'https://mewego.github.io') {
 
   const transformed = workerSrc
     .replace(/^\s*import\s+\{\s*DurableObject\s*\}\s+from\s+['"]cloudflare:workers['"];\s*/m, '')
-    .replace(/\bexport\s+class\s+PresenceRoom\b/, 'class PresenceRoom')
+    .replace(/\bexport\s+class\s+/g, 'class ')
     .replace(/\bexport\s+default\s+/, 'const worker = ');
 
   const { PresenceRoom, worker } = new Function(
