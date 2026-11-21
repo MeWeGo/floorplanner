@@ -1317,7 +1317,12 @@ $('#ptabs').addEventListener('dblclick', e => {
   if (nm && nm.trim()) { P.name = nm.trim(); $('#pname').value = P.name; commit(); renderTabs(); }
 });
 let toastT;
-function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600); }
+// act = { label, fn }: isteğe bağlı tek düğme (tıklanabilir bildirim daha uzun kalır)
+function toast(m, act) {
+  const t = $('#toast'); t.textContent = m; t.classList.toggle('act', !!act);
+  if (act) { const b = document.createElement('button'); b.className = 'btn sm'; b.textContent = act.label; b.onclick = () => { t.classList.remove('show'); act.fn(); }; t.append(' ', b); }
+  t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), act ? 6000 : 2600);
+}
 
 /* ---------- Görünüm ---------- */
 const cv = $('#cv');
@@ -9011,8 +9016,19 @@ async function saveBrowser() {
     const name = (P.name || defName).trim() || defName;
     P.name = name; $('#pname').value = name;
     await dbPut('projects', { name, updatedAt: Date.now(), project: JSON.parse(JSON.stringify(P)) });
-    toast(isEN() ? `“${name}” saved to browser (IndexedDB)` : `“${name}” tarayıcıya (IndexedDB) kaydedildi`);
+    const msg = isEN() ? `“${name}” saved to browser (IndexedDB)` : `“${name}” tarayıcıya (IndexedDB) kaydedildi`;
+    saveDriveStep(msg);
   } catch (e) { toast(L('Kaydedilemedi: ', 'Save failed: ') + e.message); }
+}
+/* Kaydet + Google Drive: bağlıysa hemen eşitler; oturum süresi dolduysa bildirimde "yeniden bağlan" düğmesi;
+   hiç bağlanmamışsa (ve bu adreste Drive kullanılabiliyorsa) oturum başına bir kez "Drive'a da kaydet" önerir. */
+function saveDriveStep(msg) {
+  if (gd.token) { gdSync(true); toast(msg + L(' · Google Drive ile eşitleniyor…', ' · syncing with Google Drive…')); return; }
+  if (!gdUsable()) { toast(msg); return; }
+  if (gdCfg().on) { toast(msg, { label: L("☁ Drive'a yeniden bağlan", "☁ Reconnect Google Drive"), fn: gdConnect }); return; }
+  if (ui.saveDriveHint) { toast(msg); return; }
+  ui.saveDriveHint = true;
+  toast(msg, { label: L("☁ Google Drive'a da kaydet", "☁ Also save to Google Drive"), fn: syncModal });
 }
 function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
 const fname = ext => (P.name || 'plan').replace(/[^\w\-çğıöşüÇĞİÖŞÜ ]+/g, '_') + '.' + ext;
