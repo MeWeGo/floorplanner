@@ -4800,6 +4800,7 @@ function stairSnap(o, p, opt = {}, f = F()) {
 }
 // merdiven boşluğu (#stair): alt kattaki merdivenin üstünde, bir üst katta merdivenle bağlı döşeme boşluğu (void.stair = merdiven id)
 const stairVoidPts = o => furnCorners(o).map(q => ({ x: Math.round(q.x * 10) / 10, y: Math.round(q.y * 10) / 10 }));
+function stairFitH(o, pitch) { return Math.max(35, Math.round(pitch - furnElev(o))); } // Kat yüksekliğine uydur: başlangıç kotu (+/−) düşülür, üst kata yine tam varır (#137)
 function stairReachesUp(o, f) { const i = P.floors.indexOf(f); return furnElev(o) + (+o.h || 0) >= (i < 0 ? floorH(f) + 20 : floorPitch(i)) - 5; }
 function stairVoidOf(o, i = fi) { const up = P.floors[i + 1]; return up && (up.voids || []).find(v => v.stair === o.id) || null; }
 function linkStairVoid(o, i = fi) {
@@ -6650,7 +6651,7 @@ function renderProps() {
   } else if (k === 'furn') {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + (isParamRoof(o) ? '' : fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 })) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
-    if (o.k !== 'stairs' && o.k !== 'ramp') h += fld(L('Yerden yükseklik (cm)', 'Height above floor (cm)'), 'furn', 'elev', furnElev(o), { min: -FURN_ELEV_MAX, max: FURN_ELEV_MAX, step: 5 }); // duvara asılan eşya (#61)
+    h += fld(o.k === 'stairs' || o.k === 'ramp' ? L('Başlangıç kotu (cm)', 'Start level (cm)') : L('Yerden yükseklik (cm)', 'Height above floor (cm)'), 'furn', 'elev', furnElev(o), { min: -FURN_ELEV_MAX, max: FURN_ELEV_MAX, step: 5 }); // duvara asılan eşya (#61); merdiven / rampa: kattan yukarı (+) veya aşağı (−) başlar (#137)
     if (o.k !== 'stairs' && o.k !== 'ramp' && o.k !== 'roof') h += `<label class="f"><span>${L('Tavana sabit', 'On the ceiling')}</span><input type="checkbox" data-k="furn" data-p="mount" ${o.mount === 'ceil' ? 'checked' : ''} title="${L('Kat yüksekliği değişince tavanda kalır', 'Stays on the ceiling when the storey height changes')}"></label>`;
     if (isLightFix(o)) h += lightPanelHtml(o, n);
     else if (partLit(o)) h += partLightPanelHtml(o); // mobilya stüdyosunda eklenen ışıklı parçalar
@@ -7107,12 +7108,12 @@ $('#props').addEventListener('click', e => {
     const o = os[0] && os[0].o; if (!o || o.k !== 'stairs') return;
     if (!P.floors[fi + 1]) P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length));
     const up = P.floors[fi + 1], c = JSON.parse(JSON.stringify(o));
-    c.id = uid(); delete c.grp; delete c.lock; stairDefaults(c, floorPitch(fi + 1)); c.d = o.d; // uzunluk aynı: üst üste oturur
+    c.id = uid(); delete c.grp; delete c.lock; delete c.elev; stairDefaults(c, floorPitch(fi + 1)); c.d = o.d; // uzunluk aynı: üst üste oturur
     up.furn.push(c); linkStairVoid(o);
     fi++; sel = [c.id]; commit(); refresh(); if (ui.view3d && T3) { sync3DFloors(); schedBuild3D(); }
     toast(L('🪜 Merdiven üst kata devam ediyor', '🪜 The stair continues to the floor above')); return;
   }
-  if (a === 'stairfit') { for (const { o } of os) if (o.k === 'stairs') { o.h = curFloorPitch(); o.stepN = Math.round(o.h / 17.5); } commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
+  if (a === 'stairfit') { for (const { o } of os) if (o.k === 'stairs') { o.h = stairFitH(o, curFloorPitch()); o.stepN = Math.round(o.h / 17.5); } commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a.startsWith('lyr')) return layerAct(a, b.dataset.lid);
   const sco = os.length === 1 && os[0].kind === 'section' ? os[0].o : null;
   if (sco && a === 'secflip') { sco.dir = -(sco.dir || 1); commit(); refresh(); if (ui.secCut === sco.id) { applySecClip(); lookAtSection(sco); } return; }
