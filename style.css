@@ -706,6 +706,11 @@ main {
   transform: translateX(-50%) translateY(0);
 }
 
+#toast.act.show { pointer-events: auto; }
+#toast.act { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+#toast .btn { padding: 2px 8px; }
+@media (max-width: 700px) { #toast.act { white-space: normal; flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100vw - 32px); } }
+
 #shapeBar {
   position: absolute;
   top: 46px;
