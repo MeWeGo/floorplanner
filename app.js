@@ -4948,12 +4948,48 @@ function accFan3D(S, w, fan, y0, H, mat, det, lineMat, lt) {
    (a → a, b → b; yerinde kalan uçta yan yok = yelpaze) ve üstte körüklü tavan. İlk konum sabittir; 📍 ile yeniden alınır. */
 const BEL_PITCH = 24, BEL_DEPTH = 8, BEL_T = 2, BEL_ROOF_T = 4;
 function isBelWall(w) { return !!(w && w.bel && w.bel.a && w.bel.b); }
-// yan körükler: ilk uçtan şimdiki uca (1 cm'den az kıpırdayan uçta yok)
+/* Ara konumlar (yelpaze): ilk konumdan şimdiki konuma duvarın kendi hareketi. İki konum arası tek bir döndürme + ölçek
+   (spiral benzerlik, merkez = hareketsiz nokta: menteşede pivot) adım adım uygulanır; dönmeyen harekette düz kaydırma.
+   Böylece her kaburga duvarın bir ara konumudur: menteşede hepsi pivottan çıkan eşit boylu çizgiler, dış kenar yay,
+   kıvrımlar eşit aralıklı. belPose(w)(t) → { a, b }, t = 0 ilk, 1 şimdiki. */
+function belPose(w) {
+  const A0 = w.bel.a, B0 = w.bel.b, A1 = w.a, B1 = w.b, lp = (p, q, t) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
+  const lin = t => ({ a: lp(A0, A1, t), b: lp(B0, B1, t) });
+  const ux = B0.x - A0.x, uy = B0.y - A0.y, vx = B1.x - A1.x, vy = B1.y - A1.y, uu = ux * ux + uy * uy;
+  if (uu < 1 || vx * vx + vy * vy < 1) return lin;
+  const kr = (vx * ux + vy * uy) / uu, ki = (vy * ux - vx * uy) / uu, ang = Math.atan2(ki, kr), mag = Math.hypot(kr, ki); // k = v / u
+  if (Math.abs(ang) < 0.01 || Math.abs(ang) > Math.PI - 0.05) return lin; // dönme yok (kaydırma) ya da tam ters dönme (belirsiz)
+  const mr = A1.x - (kr * A0.x - ki * A0.y), mi = A1.y - (kr * A0.y + ki * A0.x), dr = 1 - kr, di = -ki, dd = dr * dr + di * di;
+  const c = { x: (mr * dr + mi * di) / dd, y: (mi * dr - mr * di) / dd }; // f(z) = k·z + m'in sabit noktası
+  const at = (p, t) => { const sc = Math.pow(mag, t), co = Math.cos(ang * t) * sc, si = Math.sin(ang * t) * sc, x = p.x - c.x, y = p.y - c.y; return { x: c.x + co * x - si * y, y: c.y + si * x + co * y }; };
+  return t => t <= 0 ? { a: { ...A0 }, b: { ...B0 } } : t >= 1 ? { a: { ...A1 }, b: { ...B1 } } : { a: at(A0, t), b: at(B0, t) };
+}
+// kaburgalar: n + 1 ara konum (ilk ve şimdiki dahil); n = en uzun uç yolunun BEL_PITCH aralıklı kıvrım sayısı
+function belRibs(w) {
+  const pose = belPose(w); let ta = 0, tb = 0, prev = pose(0);
+  for (let i = 1; i <= 16; i++) { const q = pose(i / 16); ta += dist(prev.a, q.a); tb += dist(prev.b, q.b); prev = q; }
+  const n = belFolds(Math.max(ta, tb)), out = [];
+  for (let i = 0; i <= n; i++) out.push(pose(i / n));
+  return out;
+}
+// yan körükler: ilk uçtan şimdiki uca, duvarın hareket yolu boyunca (1 cm'den az kıpırdayan uçta yok); path = kaburga uçları
 function belSides(w) {
   if (!isBelWall(w)) return [];
-  const out = [];
-  for (const e of ['a', 'b']) { const p = w.bel[e], q = w[e]; if (dist(p, q) >= 1) out.push({ e, p, q }); }
+  const out = []; let ribs = null;
+  for (const e of ['a', 'b']) {
+    const p = w.bel[e], q = w[e]; if (dist(p, q) < 1) continue;
+    ribs = ribs || belRibs(w); out.push({ e, p, q, path: ribs.map(r => r[e]) });
+  }
   return out;
+}
+// yolun zikzakı: kıvrım noktaları yola dik ± depth / 2, iki uç yolda (düz yolda belZigzag ile aynı)
+function belPathZig(path, depth = BEL_DEPTH) {
+  const n = path.length - 1;
+  return path.map((p, i) => {
+    if (i === 0 || i === n) return { x: p.x, y: p.y };
+    const a = path[i - 1], b = path[i + 1], dx = b.x - a.x, dy = b.y - a.y, m = Math.hypot(dx, dy) || 1, o = (i % 2 ? 1 : -1) * depth / 2;
+    return { x: p.x - dy / m * o, y: p.y + dx / m * o };
+  });
 }
 function belFolds(L) { return Math.max(2, Math.round(L / BEL_PITCH)); }
 // yan körüğün zikzak çizgisi (plan cm): p → q, kıvrımlar dik yönde ± depth / 2, iki uç eksende
@@ -4971,17 +5007,16 @@ function belSegsCross(a, b, c, d) {
 function belRoofPts(w) {
   if (!isBelWall(w) || w.bel.roof === 0 || !belSides(w).length) return null;
   if (belSegsCross(w.bel.a, w.a, w.bel.b, w.b) || belSegsCross(w.bel.a, w.bel.b, w.a, w.b)) return null;
-  const pts = [];
-  for (const p of [w.bel.a, w.bel.b, w.b, w.a]) if (!pts.some(q => dist(p, q) < 1)) pts.push(p);
-  return pts.length >= 3 && polyArea(pts) >= 100 ? pts : null;
+  const ribs = belRibs(w), pts = [];
+  for (const p of [...ribs.map(r => r.a), ...ribs.map(r => r.b).reverse()]) if (!pts.some(q => dist(p, q) < 1)) pts.push(p);
+  for (let i = 0; pts.length > 3 && i < pts.length;) { // düz kenardaki ara noktalar atılır (kaydırmada dörtgen kalır)
+    const p = pts[(i + pts.length - 1) % pts.length], q = pts[i], r = pts[(i + 1) % pts.length];
+    if (Math.abs((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)) < 0.5 * dist(p, r)) pts.splice(i, 1); else i++;
+  }
+  return pts.length >= 3 && Math.abs(polyArea(pts)) >= 100 ? pts : null;
 }
-// tavandaki kıvrım çizgileri: iki yanın aynı sıradaki kıvrım noktalarını birleştirir
-function belRoofFolds(w) {
-  const n = Math.max(belFolds(dist(w.bel.a, w.a)), belFolds(dist(w.bel.b, w.b))), out = [];
-  const lerp = (p, q, t) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
-  for (let i = 1; i < n; i++) out.push([lerp(w.bel.a, w.a, i / n), lerp(w.bel.b, w.b, i / n)]);
-  return out;
-}
+// tavandaki kıvrım çizgileri = ara konumlar (kaburgalar): her biri duvar boyunda, yelpazede pivottan çıkar
+function belRoofFolds(w) { return belRibs(w).slice(1, -1).map(r => [r.a, r.b]); }
 // açılırken ilk konum: duvarın başka bir düzendeki (oda / grup) pozu, yoksa başka bir menteşe konumu, yoksa şimdiki yeri
 function belStart(f, w) {
   const diff = p => p && p.a && p.b && (dist(p.a, w.a) >= 1 || dist(p.b, w.b) >= 1);
@@ -5012,9 +5047,9 @@ function bellowsSvg(f, live) {
       s += `<polygon points="${rp.map(p => p.x + ',' + p.y).join(' ')}" fill="${C.outline ? 'none' : C.wall}" fill-opacity="0.07" stroke="${C.sub}" stroke-width="${sw * 0.6}" stroke-dasharray="10 6" pointer-events="none"/>`;
       for (const [p, q] of belRoofFolds(w)) s += `<line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" stroke="${C.sub}" stroke-opacity="0.45" stroke-width="${sw * 0.45}" stroke-dasharray="4 4" pointer-events="none"/>`;
     }
-    for (const { p, q } of sides) {
-      s += `<path d="M${belZigzag(p, q).map(z => z.x + ' ' + z.y).join('L')}" fill="none" stroke="${C.wall}" stroke-width="${sw}" stroke-linejoin="miter" pointer-events="none"/>`;
-      if (live) s += `<path data-id="${w.id}" d="M${p.x} ${p.y}L${q.x} ${q.y}" fill="none" stroke="transparent" stroke-width="${Math.max(BEL_DEPTH, 12 / view.z)}" pointer-events="stroke" style="cursor:pointer"/>`;
+    for (const { path } of sides) {
+      s += `<path d="M${belPathZig(path).map(z => z.x + ' ' + z.y).join('L')}" fill="none" stroke="${C.wall}" stroke-width="${sw}" stroke-linejoin="miter" pointer-events="none"/>`;
+      if (live) s += `<path data-id="${w.id}" d="M${path.map(z => z.x + ' ' + z.y).join('L')}" fill="none" stroke="transparent" stroke-width="${Math.max(BEL_DEPTH, 12 / view.z)}" pointer-events="stroke" style="cursor:pointer"/>`;
     }
   }
   return s;
@@ -5023,11 +5058,10 @@ function bellowsSvg(f, live) {
 function bellows3D(S, w, y0, H, mat, box, det, lineMat, lt) {
   const sides = belSides(w); if (!sides.length || !(H > 0)) return;
   const col = w.color ? shade(w.color, -0.35) : (lt ? '#57534e' : '#3f3f46'), ht = BEL_T / 2;
-  for (const { p, q } of sides) {
-    const L = dist(p, q), z = belZigzag({ x: 0, y: 0 }, { x: L, y: 0 });
-    const shp = new THREE.Shape([...z.map(v => new THREE.Vector2(v.x, v.y + ht)), ...z.slice().reverse().map(v => new THREE.Vector2(v.x, v.y - ht))]);
+  for (const { path } of sides) {
+    const shp = new THREE.Shape(accFanOutline(belPathZig(path), 2 * ht).map(v => new THREE.Vector2(v.x, v.y)));
     const geo = new THREE.ExtrudeGeometry(shp, { depth: H, bevelEnabled: false }); geo.rotateX(Math.PI / 2);
-    const m = new THREE.Mesh(geo, mat(col)); m.position.set(p.x, y0 + H, p.y); m.rotation.y = -Math.atan2(q.y - p.y, q.x - p.x);
+    const m = new THREE.Mesh(geo, mat(col)); m.position.y = y0 + H;
     m.castShadow = m.receiveShadow = true; m.userData = { wallId: w.id }; S.add(m);
   }
   const rp = belRoofPts(w); if (!rp) return;
@@ -13080,7 +13114,7 @@ function walkSegs(f, z = 0) {
   for (const w of (f && f.walls) || []) {
     const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y); if (L < 1) continue;
     const wb = wallElev(w) - z; if (wb >= WALK.eye || (+w.h > 0 && wb + +w.h <= 30)) continue; // baş üstünde başlayan / ayak altında kalan duvar engellemez (z = merdivende ayak kotu)
-    for (const sd of belSides(w)) out.push({ a: sd.p, b: sd.q, h: BEL_DEPTH / 2 + BEL_T }); // körük yanları da engeller
+    for (const sd of belSides(w)) for (let i = 1; i < sd.path.length; i++) out.push({ a: sd.path[i - 1], b: sd.path[i], h: BEL_DEPTH / 2 + BEL_T }); // körük yanları da engeller
     const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, h = (w.t || 20) / 2;
     const at = t => ({ x: w.a.x + ux * t, y: w.a.y + uy * t });
     const gaps = ((f.ops) || []).filter(o => o.wall === w.id && walkPassable(o))

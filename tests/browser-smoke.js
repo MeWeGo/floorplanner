@@ -574,7 +574,7 @@ check('bellows corridor: fills between the first and current wall position (layo
   if (info.walk < 3) throw new Error('bellows sides do not block walking: ' + JSON.stringify(info));
   if (info.m3 < 3) throw new Error('bellows not built in 3D: ' + JSON.stringify(info));
   if (info.closed !== 0) throw new Error('bellows should close in the first layout: ' + JSON.stringify(info));
-  if (info.fan[0] !== 1 || info.fan[1] !== 3) throw new Error('moving one end should give a fan: ' + JSON.stringify(info));
+  if (info.fan[0] !== 1 || !(info.fan[1] > 3)) throw new Error('moving one end should give a fan with an arc: ' + JSON.stringify(info));
   if (info.undo !== 2 || !info.svg) throw new Error('undo / export failed: ' + JSON.stringify(info));
 });
 

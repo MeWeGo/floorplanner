@@ -21,6 +21,8 @@ const {
   BEL_ROOF_T,
   isBelWall,
   belSides,
+  belRibs,
+  belPathZig,
   belFolds,
   belZigzag,
   belSegsCross,
@@ -43,7 +45,10 @@ const {
   ${fnSrc('setWallDeg')}
   ${constLine('BEL_PITCH')}
   ${fnSrc('isBelWall')}
+  ${fnSrc('belPose')}
+  ${fnSrc('belRibs')}
   ${fnSrc('belSides')}
+  ${fnSrc('belPathZig')}
   ${fnSrc('belFolds')}
   ${fnSrc('belZigzag')}
   ${fnSrc('belSegsCross')}
@@ -56,7 +61,7 @@ const {
   ${fnSrc('bellowsSvg')}
   return {
     BEL_PITCH, BEL_DEPTH, BEL_T, BEL_ROOF_T,
-    isBelWall, belSides, belFolds, belZigzag, belSegsCross,
+    isBelWall, belSides, belFolds, belZigzag, belSegsCross, belRibs, belPathZig,
     belRoofPts, belRoofFolds, belStart, setBelWall, belReset, cleanBel, bellowsSvg,
   };
 `)();
@@ -124,8 +129,9 @@ test('(3) belRoofPts & belRoofFolds: quad, triangle, null cases, and fold count'
     bel: { a: { x: 0, y: 0 }, b: { x: 100, y: 0 } },
   };
   const tri = belRoofPts(fan);
-  assert.ok(Array.isArray(tri) && tri.length === 3, 'fan move gives triangle');
-  assert.strictEqual(belRoofFolds(fan).length, belFolds(Math.hypot(100, 100)) - 1);
+  assert.ok(Array.isArray(tri) && tri.length > 3, 'fan move gives a fan with an arc');
+  assert.ok(tri.slice(1).every(p => Math.abs(Math.hypot(p.x, p.y) - 100) < 1e-6), 'fan edge is an arc around the pivot');
+  assert.strictEqual(belRoofFolds(fan).length, belFolds(Math.PI / 2 * 100) - 1);
 
   const noRoof = { ...parallel, bel: { ...parallel.bel, roof: 0 } };
   assert.strictEqual(belRoofPts(noRoof), null);
@@ -243,4 +249,29 @@ test('(8) source wiring: 2D, 3D, walk, tag, normalize, paste, panel and actions'
   assert.match(fnSrc('applyProp'), /p === 'bel'[\s\S]*?p === 'belRoof'/);
   assert.match(src, /a === 'belhome'[\s\S]*?belReset\(/);
   assert.match(fnSrc('renderProps'), /data-p="bel"/);
+});
+
+test('(9) fan: every fold is an in-between wall position of the same length, from the pivot, evenly spaced', () => {
+  const hinge = { id: 'h', a: { x: 0, y: 0 }, b: { x: 0, y: 300 }, bel: { a: { x: 0, y: 0 }, b: { x: 300, y: 0 } } };
+  const folds = belRoofFolds(hinge);
+  assert.strictEqual(folds.length, belFolds(Math.PI / 2 * 300) - 1);
+  for (const [p, q] of folds) {
+    near(Math.hypot(p.x, p.y), 0, 'rib starts at the pivot');
+    near(Math.hypot(q.x - p.x, q.y - p.y), 300, 'rib has the wall length');
+  }
+  const ribs = belRibs(hinge), gaps = ribs.slice(1).map((r, i) => Math.hypot(r.b.x - ribs[i].b.x, r.b.y - ribs[i].b.y));
+  for (const g of gaps) near(g, gaps[0], 'folds evenly spaced');
+  const side = belSides(hinge)[0];
+  assert.strictEqual(side.e, 'b');
+  for (const p of side.path) near(Math.hypot(p.x, p.y), 300, 'side follows the arc');
+  const zig = belPathZig(side.path, 10);
+  const off = zig.slice(1, -1).map(p => Math.hypot(p.x, p.y) - 300);
+  off.forEach((r, i) => { assert.ok(Math.abs(Math.abs(r) - 5) < 0.2, 'pleat ' + i + ' is half the depth off the arc: ' + r); if (i) assert.ok(Math.sign(r) === -Math.sign(off[i - 1]), 'pleats alternate'); });
+});
+
+test('(10) slide: parallel folds of the wall length, straight sides like before', () => {
+  const slide = { id: 's', a: { x: 0, y: 250 }, b: { x: 300, y: 250 }, bel: { a: { x: 0, y: 0 }, b: { x: 300, y: 0 } } };
+  for (const [p, q] of belRoofFolds(slide)) { near(q.x - p.x, 300, 'rib length'); near(q.y - p.y, 0, 'rib parallel'); }
+  const side = belSides(slide)[0];
+  assert.deepStrictEqual(belPathZig(side.path).map(p => [+p.x.toFixed(6), +p.y.toFixed(6)]), belZigzag(side.p, side.q).map(p => [+p.x.toFixed(6), +p.y.toFixed(6)]));
 });
