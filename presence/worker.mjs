@@ -136,7 +136,7 @@ export class PresenceRoom extends DurableObject {
 
 const COLLAB_COLORS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#0d9488'];
 const COLLAB_ARR_KEYS = ['walls', 'ops', 'furn', 'rooms', 'slabs', 'voids', 'sections', 'axes', 'dims', 'texts', 'sketches', 'drafts'];
-const COLLAB_MAX_MSG = 512 * 1024;
+const COLLAB_MAX_MSG = 2 * 1024 * 1024;
 const COLLAB_MAX_ASSET = 400 * 1024;
 
 function collabBlankFloor(id) {
@@ -263,15 +263,15 @@ export class CollabRoom extends DurableObject {
     return out;
   }
 
-  async savePersistent() {
+  async saveRoom() {
     const st = this.ctx && this.ctx.storage;
-    if (!this.persist || !st || typeof st.put !== 'function') return;
+    if (!st || typeof st.put !== 'function') return;
     try {
       await st.put('room', {
         state: this.state,
         rev: this.rev,
         viewToken: this.viewToken,
-        persist: true,
+        persist: !!this.persist,
         bg: this.assets.bg,
         tex: [...this.assets.tex.entries()],
       });
@@ -343,7 +343,9 @@ export class CollabRoom extends DurableObject {
       return new Response('Expected WebSocket', { status: 426 });
     }
     await this.ensureLoaded();
+    const hadToken = !!this.viewToken;
     this.ensureViewToken();
+    if (!hadToken) await this.saveRoom();
     const url = new URL(request.url);
     const qv = url.searchParams.get('v') || '';
     const role = qv || url.searchParams.get('role') === 'viewer' ? 'viewer' : 'editor';
@@ -378,6 +380,13 @@ export class CollabRoom extends DurableObject {
     if (role === 'editor') welcome.viewToken = this.viewToken;
     this.sendTo(server, welcome);
     this.broadcast({ type: 'peer_join', peer: this.publicPeer(peer) }, server);
+    if (!this.state) {
+      const editorWs = this.liveSockets(server).find(s => {
+        const p = this.peerOf(s);
+        return p && p.role !== 'viewer';
+      });
+      if (editorWs) this.sendTo(editorWs, { type: 'seed_request' });
+    }
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -389,7 +398,7 @@ export class CollabRoom extends DurableObject {
     const len = typeof message === 'string' ? message.length : (message && message.byteLength) || 0;
     if (len > COLLAB_MAX_MSG) {
       try { ws.close(1009, 'message too large'); } catch (_) { }
-      this.cleanupSocket(ws);
+      await this.cleanupSocket(ws);
       return;
     }
     if (typeof message !== 'string') return;
@@ -408,11 +417,7 @@ export class CollabRoom extends DurableObject {
 
     if (msg.type === 'set_persist') {
       this.persist = !!msg.persist;
-      if (this.persist) {
-        await this.savePersistent();
-      } else if (this.ctx && this.ctx.storage && typeof this.ctx.storage.delete === 'function') {
-        try { await this.ctx.storage.delete('room'); } catch (_) { }
-      }
+      await this.saveRoom();
       const note = { type: 'persist', persist: this.persist, from: peer.id };
       this.sendTo(ws, note);
       this.broadcast(note, ws);
@@ -421,13 +426,13 @@ export class CollabRoom extends DurableObject {
 
     if (msg.type === 'seed') {
       if (this.state) {
-        this.sendTo(ws, { type: 'state', rev: this.rev, state: this.state });
+        this.sendTo(ws, { type: 'state', rev: this.rev, state: this.state, hasBg: !!this.assets.bg });
       } else if (msg.state && typeof msg.state === 'object' && Array.isArray(msg.state.floors)) {
         this.state = JSON.parse(JSON.stringify(msg.state));
         this.rev = 1;
-        await this.savePersistent();
+        await this.saveRoom();
         this.sendTo(ws, { type: 'ack', rev: this.rev, clientSeq: msg.clientSeq });
-        this.broadcast({ type: 'state', rev: this.rev, state: this.state, from: peer.id }, ws);
+        this.broadcast({ type: 'state', rev: this.rev, state: this.state, hasBg: !!this.assets.bg, from: peer.id }, ws);
       }
       return;
     }
@@ -440,7 +445,7 @@ export class CollabRoom extends DurableObject {
       }
       this.rev += 1;
       this.state = applyCollabPatch(this.state, msg.patch);
-      await this.savePersistent();
+      await this.saveRoom();
       this.sendTo(ws, { type: 'ack', rev: this.rev, clientSeq: msg.clientSeq });
       this.broadcast({ type: 'patch', rev: this.rev, patch: msg.patch, from: peer.id }, ws);
       return;
@@ -500,7 +505,7 @@ export class CollabRoom extends DurableObject {
         if (msg.data === null) {
           this.assets.bg = null;
           if (this.state) this.state.bg = null;
-          await this.savePersistent();
+          await this.saveRoom();
           this.broadcast({ type: 'asset', kind: 'bg', data: null, from: peer.id }, ws);
           return;
         }
@@ -512,7 +517,7 @@ export class CollabRoom extends DurableObject {
           }
           this.assets.bg = JSON.parse(raw);
           if (this.state) this.state.bg = JSON.parse(raw);
-          await this.savePersistent();
+          await this.saveRoom();
           this.broadcast({ type: 'asset', kind: 'bg', data: this.assets.bg, from: peer.id }, ws);
         }
         return;
@@ -523,7 +528,7 @@ export class CollabRoom extends DurableObject {
           return;
         }
         this.assets.tex.set(msg.id, msg.data);
-        await this.savePersistent();
+        await this.saveRoom();
         this.broadcast({ type: 'asset', kind: 'tex', id: msg.id, data: msg.data, from: peer.id }, ws);
       }
       return;
@@ -538,7 +543,7 @@ export class CollabRoom extends DurableObject {
     }
   }
 
-  cleanupSocket(ws) {
+  async cleanupSocket(ws) {
     const peer = this.peerOf(ws);
     this.peers.delete(ws);
     if (peer) this.broadcast({ type: 'peer_leave', peerId: peer.id }, ws);
@@ -548,6 +553,10 @@ export class CollabRoom extends DurableObject {
       this.assets.bg = null;
       this.assets.tex.clear();
       this.viewToken = '';
+      const st = this.ctx && this.ctx.storage;
+      if (st && typeof st.delete === 'function') {
+        try { await st.delete('room'); } catch (_) { }
+      }
     }
   }
 
@@ -555,12 +564,12 @@ export class CollabRoom extends DurableObject {
     const safeCode = code === 1000 || (code >= 3000 && code <= 4999) ? code : 1000;
     const safeReason = typeof reason === 'string' ? reason.slice(0, 120) : '';
     try { ws.close(safeCode, safeReason); } catch (_) { }
-    this.cleanupSocket(ws);
+    await this.cleanupSocket(ws);
   }
 
   async webSocketError(ws) {
     try { ws.close(1011, 'socket error'); } catch (_) { }
-    this.cleanupSocket(ws);
+    await this.cleanupSocket(ws);
   }
 }
 

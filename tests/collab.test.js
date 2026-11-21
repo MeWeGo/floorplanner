@@ -198,8 +198,8 @@ test('CollabRoom relays seed, object patches, presence, and clears ephemeral sta
   assert.strictEqual(presMsg.peer.name, 'Ada');
   assert.deepStrictEqual(presMsg.peer.sel, ['w2']);
 
-  // Oversized message (> 512 KB) closes socket with 1009.
-  await room.webSocketMessage(sockets[1], 'x'.repeat(512 * 1024 + 10));
+  // Oversized message (> 2 MB) closes socket with 1009.
+  await room.webSocketMessage(sockets[1], 'x'.repeat(2 * 1024 * 1024 + 10));
   assert.strictEqual(sockets[1].closed.code, 1009);
   assert.strictEqual(JSON.parse(sockets[0].sent.at(-1)).type, 'peer_leave');
 
@@ -441,10 +441,11 @@ test('Phase 3: CollabRoom optional persistent storage survives empty room reload
   assert.strictEqual(wReload.rev, 1);
   assert.strictEqual(wReload.state.name, 'Test Plan');
 
-  // Turning persistence off deletes storage and reverts to ephemeral cleanup on empty.
+  // Turning persistence off marks persist=false and deletes storage once everyone leaves.
   await reloaded.webSocketMessage(wsReload, JSON.stringify({ type: 'set_persist', persist: false }));
-  assert.strictEqual(store.has('room'), false);
+  assert.strictEqual(store.get('room').persist, false);
   await reloaded.webSocketClose(wsReload, 1000, '');
+  assert.strictEqual(store.has('room'), false);
   assert.strictEqual(reloaded.state, null);
   assert.strictEqual(reloaded.rev, 0);
 });
@@ -465,4 +466,62 @@ test('Phase 3: collabComputeFollow computes 2D floor/view and 3D camera sync tar
   assert.deepStrictEqual(r3d, { mode: '3d', v3d: { px: 10, py: 200, pz: 300, tx: 0, ty: 80, tz: 0 } });
 
   assert.strictEqual(collabComputeFollow(null, floors, 0, 0.002, 8), null);
+});
+
+test('Bugfix: ephemeral room state survives DO hibernation while participants are connected and clears when empty', async () => {
+  const { worker, env, roomFor, CollabRoom } = makeCollabWorkerEnv();
+  await worker.fetch(new Request('https://x.example/collab/room_hiber1', {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }), env);
+  const { room, sockets, ctx, store } = roomFor('room_hiber1');
+  const hostPlan = baseProject();
+  hostPlan.name = 'Host Plan';
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'seed', state: hostPlan, clientSeq: 1 }));
+  assert.strictEqual(room.persist, false);
+  assert.ok(store.has('room'));
+
+  // Simulate Cloudflare DO hibernation while User A is still open: new CollabRoom instance, empty in-memory state.
+  const hibernated = new CollabRoom(ctx, env);
+  assert.strictEqual(hibernated.state, null);
+
+  // User B clicks User A's link and connects -> receives User A's plan in welcome!
+  await hibernated.fetch(new Request('https://x.example/collab/room_hiber1', {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }));
+  const userB = ctx.getWebSockets().at(-1);
+  const welcomeB = JSON.parse(userB.sent[0]);
+  assert.strictEqual(welcomeB.type, 'welcome');
+  assert.strictEqual(welcomeB.rev, 1);
+  assert.strictEqual(welcomeB.state.name, 'Host Plan');
+
+  // Once both leave an ephemeral room, storage is deleted so nothing persists.
+  await hibernated.webSocketClose(sockets[0], 1000, '');
+  await hibernated.webSocketClose(userB, 1000, '');
+  assert.strictEqual(store.has('room'), false);
+  const freshAfterEmpty = new CollabRoom(ctx, env);
+  await freshAfterEmpty.ensureLoaded();
+  assert.strictEqual(freshAfterEmpty.state, null);
+});
+
+test('Bugfix: joiner connecting before seed triggers seed_request to host and receives host state', async () => {
+  const { worker, env, roomFor } = makeCollabWorkerEnv();
+  await worker.fetch(new Request('https://x.example/collab/room_race1', {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }), env);
+  const { room, sockets } = roomFor('room_race1');
+
+  // Joiner connects before host finished seeding.
+  await worker.fetch(new Request('https://x.example/collab/room_race1', {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }), env);
+  assert.strictEqual(JSON.parse(sockets[1].sent[0]).state, null);
+  assert.strictEqual(JSON.parse(sockets[0].sent.at(-1)).type, 'seed_request');
+
+  // Host responds to seed_request -> joiner gets host's state broadcast.
+  const hostPlan = baseProject();
+  hostPlan.name = 'Delayed Host Plan';
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'seed', state: hostPlan, clientSeq: 1 }));
+  const joinerState = JSON.parse(sockets[1].sent.at(-1));
+  assert.strictEqual(joinerState.type, 'state');
+  assert.strictEqual(joinerState.state.name, 'Delayed Host Plan');
 });
