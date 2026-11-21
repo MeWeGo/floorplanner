@@ -9785,7 +9785,7 @@ function bcPost() {
   try { bc.postMessage({ t: 'proj', win: WIN_ID, id: P.id, s }); } catch (e) { }
 }
 // autosave() başarılı olunca çağrılır
-function syncNoteSave() { bcPost(); gdSyncSoon(); }
+function syncNoteSave() { bcPost(); if (!gdEvery()) gdSyncSoon(); } // 10 dk kipinde Drive'a yükleme zamanlayıcıyla
 
 /* --- Google Drive --- */
 // Google Cloud Console → OAuth istemci kimliği (Web uygulaması, yetkili JavaScript kaynağı: https://mewego.github.io).
@@ -9802,6 +9802,12 @@ const gdSetCfg = c => lsSet('fp_gdrive', c);
 const gdClientId = () => String(gdCfg().cid || GDRIVE_CLIENT_ID || '').trim();
 const gdWeb = () => /^https?:$/.test(location.protocol);
 const gdUsable = () => gdWeb() && !!gdClientId();
+/* Drive'a ne sıklıkla kaydedilsin: gdCfg().every yok = her değişiklikten sonra (3 sn), 10 = 10 dakikada bir (o kipte
+   değişiklik sonrası, 60 sn yoklaması ve sekmeye dönüş eşitlemeyi tetiklemez; 💾 Kaydet ve ⟳ Şimdi eşitle hemen eşitler). */
+const GD_EVERY_OPTS = [0, 10];
+const gdEvery = () => (GD_EVERY_OPTS.includes(+gdCfg().every) ? +gdCfg().every : 0);
+// dakikalık zamanlayıcı: bu tikte otomatik eşitleme yapılsın mı (10 dk kipinde arka plandaki sekme de kaydeder)
+function gdAutoDue(now, every, last, hidden) { return every ? now - last >= every * 60000 : !hidden; }
 const gdState = () => lsJson('fp_gdrive_state');    // { [P.id]: { f: dosya id, v: Drive sürümü, h: son eşitlenen içeriğin özeti } }
 function gdSetState(id, v) { const s = gdState(); if (v) s[id] = v; else delete s[id]; lsSet('fp_gdrive_state', s); }
 // FNV-1a + uzunluk: "son eşitlenen içerik bu mu?" sorusu için yeterli
@@ -10087,7 +10093,14 @@ function gdSectionHtml() {
   }).join('')}</div>` : `<p class="muted">${L('Drive’da henüz proje yok.', 'No projects in Drive yet.')}</p>`;
   return `${pend}<p>✅ ${L('Bağlı', 'Connected')}${c.user ? ': <b>' + esc(c.user) + '</b>' : ''} — <span class="muted">${stat}</span></p>
     <div class="row"><button class="btn primary" data-gd="sync">⟳ ${L('Şimdi eşitle', 'Sync now')}</button><button class="btn" data-gd="list">📂 ${L('Listeyi yenile', 'Refresh list')}</button><button class="btn" data-gd="off">${L('Bağlantıyı kes', 'Disconnect')}</button></div>${err}
+    ${gdEveryHtml()}
     <h4 class="muted" style="margin:10px 0 6px">${L('Drive’daki projelerim', 'My projects in Drive')}</h4>${list}`;
+}
+function gdEveryHtml() {
+    const ev = gdEvery(), opt = (v, t) => `<option value="${v}" ${ev === v ? 'selected' : ''}>${t}</option>`;
+    const next = ev && gd.last ? Math.max(1, Math.ceil((gd.last + ev * 60000 - Date.now()) / 60000)) : 0;
+    return `<label class="f" style="margin-top:8px"><span>${L('Drive’a kaydet', 'Save to Drive')}</span><select data-gdevery style="width:auto;min-width:180px">${opt(0, L('Her değişiklikten sonra', 'After every change'))}${opt(10, L('10 dakikada bir', 'Every 10 minutes'))}</select></label>
+    ${ev ? `<p class="muted" style="font-size:12px;margin:2px 0 0">${L('Değişiklikler 10 dakikada bir Drive’a gider', 'Changes go to Drive every 10 minutes')}${next ? L(` (sonraki ≈ ${next} dk)`, ` (next in ≈ ${next} min)`) : ''}. ${L('💾 Kaydet ve ⟳ Şimdi eşitle hemen kaydeder; bu cihazda her şey zaten tarayıcıya kaydedilir.', '💾 Save and ⟳ Sync now save at once; everything is always saved in this browser too.')}</p>` : ''}`;
 }
 // ☁ Eşitle penceresi: Drive bölümü + başka cihaza gönder
 function syncModal() {
@@ -10163,6 +10176,12 @@ $('#modal').addEventListener('click', e => {
     else if (a === 'share') navigator.share({ title: P.name, url: $('#shUrl').value }).catch(() => { });
   }
 });
+$('#modal').addEventListener('change', e => {
+  const s = ui.modal === 'sync' && e.target.closest('[data-gdevery]'); if (!s) return;
+  const c = gdCfg(), v = +s.value; if (v) c.every = v; else delete c.every; gdSetCfg(c); gdUI();
+  toast(v ? L('Drive’a 10 dakikada bir kaydedilecek', 'Will save to Drive every 10 minutes') : L('Drive’a her değişiklikten sonra kaydedilecek', 'Will save to Drive after every change'));
+  if (!v && gd.token) gdSyncSoon(500); // bekleyen değişiklik hemen gitsin
+});
 // açılışta: oturum belirteci (aynı sekmede yenileme), pencereler arası kanal, #fp / #fpd linki
 async function syncBoot() {
   bcInit();
@@ -10173,8 +10192,8 @@ async function syncBoot() {
   gdUI();
   await openShareHash();
   if (gd.token) gdSyncSoon(800);
-  setInterval(() => { if (gd.token && !document.hidden) gdSync(false); }, 60000);         // başka cihazdaki değişiklikleri al
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && gd.token) gdSyncSoon(400); });
+  setInterval(() => { if (gd.token && gdAutoDue(Date.now(), gdEvery(), gd.last, document.hidden)) gdSync(false); }, 60000); // başka cihazdaki değişiklikleri al / 10 dk kipinde kaydet
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && gd.token && !gdEvery()) gdSyncSoon(400); });
 }
 // başkasından gelebilen link planları (#fp=): hiçbir metin bir HTML / SVG özniteliğinden taşamasın (" < > ` atılır;
 // uygulamada tek tırnaklı öznitelik yok), arka plan görseli yalnızca data:image/… olabilir. Drive dosyaları kullanıcının
