@@ -10570,7 +10570,7 @@ function presenceBoot() {
 /* ---------- Canlı birlikte düzenleme (Cloudflare Durable Object) ---------- */
 const COLLAB_MAX_ASSET = 400 * 1024;
 const collab = {
-  ws: null, url: '', room: '', viewToken: '', role: 'editor', persist: false, peerId: '', color: '#2563eb',
+  ws: null, url: '', room: '', viewToken: '', role: 'editor', persist: false, isHost: false, connectErrShown: false, peerId: '', color: '#2563eb',
   name: (() => { try { return localStorage.getItem('fp_collab_name') || ''; } catch (e) { return ''; } })(),
   rev: 0, peers: new Map(), undoStack: [], redoStack: [], lastSnap: null,
   applying: false, ping: null, retry: null, delay: 1500, closed: false, reconnecting: false,
@@ -10927,6 +10927,7 @@ function collabApplyRemoteState(state, keepBg = false) {
     collab.undoStack = [];
     collab.redoStack = [];
     updateUndo();
+    if (ui.view3d && T3) schedBuild3D();
   } finally {
     collab.applying = false;
   }
@@ -11040,6 +11041,8 @@ function collabJoin(roomId, opts = {}) {
   if (collab.room && collab.room !== id) collabLeave(true);
   collab.closed = false;
   collab.reconnecting = false;
+  collab.isHost = !!opts.host;
+  collab.connectErrShown = false;
   collab.url = url;
   collab.room = id;
   collab.viewToken = vt;
@@ -11102,32 +11105,50 @@ function collabConnect(url, opts = {}) {
         collabApplyRemoteState(msg.state, wasReconnecting);
         if (wasReconnecting) collabFlushPending();
         collabRequestMissingAssets(!!msg.hasBg);
-      } else if (collab.role === 'editor') {
+        if (!wasReconnecting && !collab.isHost) toast(L(`Canlı odaya katıldınız: ${P.name}`, `Joined live room: ${P.name}`));
+      } else if (collab.isHost && collab.role === 'editor') {
         collab.lastSnap = JSON.parse(JSON.stringify(P));
         collab.lastBgKey = collabBgKey(P.bg);
         collabSend({ type: 'seed', state: collabExportState(P), clientSeq: ++collab.cseq });
         if (P.bg) collabSendBgAsset(P.bg);
         for (const t of P.textures || []) { const tx = TEX.get(t.id); if (tx && tx.data) collabSendTexAsset(t.id, tx.data); }
         collabFlushPending();
+      } else if (collab.peers.size > 0) {
+        toast(L('Oda planı yükleniyor…', 'Loading room plan…'));
+      } else {
+        toast(L('Bu canlı oda boş veya sona ermiş — ev sahibi ayrılmış olabilir', 'This live room is empty or has ended — the host may have left'));
       }
       collabSendPresence(true);
       collabRenderUI();
       if (ui.modal === 'collab') collabModal();
       return;
     }
+    if (msg.type === 'seed_request') {
+      if (collab.role === 'editor' && (collab.isHost || collab.lastSnap) && P) {
+        collab.lastSnap = JSON.parse(JSON.stringify(P));
+        collab.lastBgKey = collabBgKey(P.bg);
+        collabSend({ type: 'seed', state: collabExportState(P), clientSeq: ++collab.cseq });
+        if (P.bg) collabSendBgAsset(P.bg);
+        for (const t of P.textures || []) { const tx = TEX.get(t.id); if (tx && tx.data) collabSendTexAsset(t.id, tx.data); }
+      }
+      return;
+    }
     if (msg.type === 'state') {
+      const hadSnap = !!collab.lastSnap;
       collab.rev = msg.rev || collab.rev;
       if (msg.state) {
-        collabApplyRemoteState(msg.state, true);
+        collabApplyRemoteState(msg.state, hadSnap);
         collabFlushPending();
         collabRequestMissingAssets(!!msg.hasBg);
-      } else if (collab.role === 'editor' && P) {
+        if (!hadSnap && !collab.isHost) toast(L(`Canlı odaya katıldınız: ${P.name}`, `Joined live room: ${P.name}`));
+      } else if (collab.role === 'editor' && (collab.isHost || hadSnap) && P) {
         collab.lastSnap = JSON.parse(JSON.stringify(P));
         collabSend({ type: 'seed', state: collabExportState(P), clientSeq: ++collab.cseq });
         if (P.bg) collabSendBgAsset(P.bg);
         collabFlushPending();
       }
       collabRenderUI();
+      if (ui.modal === 'collab') collabModal();
       return;
     }
     if (msg.type === 'resync_needed') {
@@ -11213,6 +11234,10 @@ function collabConnect(url, opts = {}) {
     collab.ws = null;
     clearInterval(collab.ping); collab.ping = null;
     if (collab.closed || !collab.room) return;
+    if (!collab.peerId && collab.status === 'busy' && !collab.connectErrShown) {
+      collab.connectErrShown = true;
+      toast(L('Canlı odaya bağlanılamadı — sunucu yanıt vermiyor', 'Could not connect to live room — server unreachable'));
+    }
     collab.reconnecting = true;
     collab.status = 'warn';
     collabRenderUI();
@@ -11230,7 +11255,7 @@ function collabLeave(silent = false) {
   const ws = collab.ws; collab.ws = null;
   if (ws) { try { ws.close(1000); } catch (e) { } }
   const was = !!collab.room;
-  collab.room = ''; collab.url = ''; collab.viewToken = ''; collab.role = 'editor'; collab.persist = false; collab.peerId = '';
+  collab.room = ''; collab.url = ''; collab.viewToken = ''; collab.role = 'editor'; collab.persist = false; collab.isHost = false; collab.connectErrShown = false; collab.peerId = '';
   collab.rev = 0; collab.status = ''; collab.reconnecting = false; collab.followId = ''; collab.followApplying = false; collab.peers.clear();
   collab.remoteQueue = []; collab.pendingPatches = []; collab.sentTexIds.clear(); collab.lastBgKey = '';
   collab.undoStack = []; collab.redoStack = []; collab.lastSnap = null;
