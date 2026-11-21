@@ -3151,6 +3151,31 @@ check('touch action bar: shown on touch / hidden with a mouse, copy an object in
   return `pasted ${r.type} across tabs, undo ok`;
 });
 
+check('drive save interval: after every change or a timer of any seconds / minutes / hours, clamped, remembered', async page => {
+  const info = await page.evaluate(`(() => {
+    const keep = localStorage.getItem('fp_gdrive'); localStorage.removeItem('fp_gdrive');
+    syncModal();
+    const box = document.getElementById('syncDrive'), out = {};
+    const put = () => { box.innerHTML = gdEveryHtml(); };
+    const fire = (sel, v) => { const el = box.querySelector(sel); el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); };
+    put(); fire('[data-gdmode]', '1'); out.timer = gdCfg();
+    put(); out.fields = !!box.querySelector('[data-gdeveryn]') && !!box.querySelector('[data-gdeveryu]');
+    box.querySelector('[data-gdeveryu]').value = 'h'; fire('[data-gdeveryn]', '2'); out.hours = gdCfg();
+    put(); out.shown = [box.querySelector('[data-gdeveryn]').value, box.querySelector('[data-gdeveryu]').value];
+    box.querySelector('[data-gdeveryu]').value = 's'; fire('[data-gdeveryn]', '3'); out.min = gdEvery(); out.toast = document.getElementById('toast').textContent;
+    put(); fire('[data-gdmode]', '0'); out.off = gdCfg();
+    closeModal();
+    if (keep == null) localStorage.removeItem('fp_gdrive'); else localStorage.setItem('fp_gdrive', keep);
+    return out;
+  })()`);
+  if (info.timer.every !== 600 || info.timer.everyU !== 'm') throw new Error('picking the timer did not start at 10 minutes: ' + JSON.stringify(info));
+  if (!info.fields) throw new Error('number / unit fields missing on a timer');
+  if (info.hours.every !== 7200 || info.hours.everyU !== 'h') throw new Error('2 hours not stored: ' + JSON.stringify(info));
+  if (info.shown[0] !== '2' || info.shown[1] !== 'h') throw new Error('dialog does not show the stored interval: ' + JSON.stringify(info));
+  if (info.min !== 10 || !/10/.test(info.toast)) throw new Error('3 seconds should clamp to 10 s and say so: ' + JSON.stringify(info));
+  if ('every' in info.off || 'everyU' in info.off) throw new Error('"after every change" did not clear the timer: ' + JSON.stringify(info));
+});
+
 check('sync & share: ☁ modal, share link + QR round trip, hostile link sanitised, another window updates the project', async page => {
   const info = await page.evaluate(`(async () => {
     const wait = ms => new Promise(r => setTimeout(r, ms));
