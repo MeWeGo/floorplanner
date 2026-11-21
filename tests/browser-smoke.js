@@ -1183,6 +1183,47 @@ check('IFC import: a Revit-style model opens in a new tab and draws in 2D and 3D
   return `${s.floors} floors, ${s.walls} walls, ${s.ops} openings, ${s.rooms} room; new tab; 3D ${info.view3d ? info.meshes + ' meshes' : 'skipped'}`;
 });
 
+check('DXF import: an AutoCAD plan opens in a new tab with walls, openings, layers and drafting', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 300, 300); commit();
+    const tabsBefore = tabs.length;
+    const buf = await (await fetch('tests/fixtures/plan.dxf')).arrayBuffer();
+    const stats = importDxfText(dxfDecode(new Uint8Array(buf)), 'plan.dxf');
+    const f = F(), dashed = [...document.querySelectorAll('#gSketch path[stroke-dasharray]')].filter(p => p.getAttribute('stroke-dasharray')).length;
+    const out = { stats, tabs: tabs.length - tabsBefore, name: P.name, layers: P.layers.length,
+      walls2d: document.querySelectorAll('#gWalls [data-id]').length, ops2d: document.querySelectorAll('#gOps [data-id]').length,
+      drafts2d: document.querySelectorAll('#gSketch [data-id]').length, texts2d: document.querySelectorAll('#gTexts [data-id]').length, dashed,
+      svgOk: /<svg/.test(exportSvg().svg) };
+    let bad = ''; try { dxfToProject('hello'); } catch (e) { bad = e.message; } out.bad = bad;
+    let dwg = ''; try { dxfDecode(new TextEncoder().encode('AC1032\\0\\0junk')); } catch (e) { dwg = e.message; } out.dwg = dwg;
+    // a layer's parallel drafting lines → walls (one undo step)
+    loadProject(newProject()); layerAct('lyradd'); const lid = P.activeLayer;
+    F().drafts.push({ id: uid(), shape: 'pline', pts: [{ x: 0, y: 0 }, { x: 400, y: 0 }], w: 1, layer: lid }, { id: uid(), shape: 'pline', pts: [{ x: 0, y: 20 }, { x: 400, y: 20 }], w: 1, layer: lid });
+    commit(); renderProps();
+    out.btn = !!document.querySelector('[data-act="lyrwalls"]');
+    const made = layerToWalls(lid);
+    out.made = made; out.wallT = F().walls[0] && F().walls[0].t; out.draftsLeft = F().drafts.length;
+    undo(); out.afterUndo = F().walls.length + '/' + F().drafts.length;
+    importDxfText(dxfDecode(new Uint8Array(buf)), 'plan.dxf');
+    show3D(true); await new Promise(r => setTimeout(r, 600));
+    out.view3d = !!ui.view3d; out.meshes = 0;
+    if (T3 && T3.scene) T3.scene.traverse(o => { if (o.isMesh) out.meshes++; });
+    show3D(false);
+    return out;
+  })()`);
+  const s = info.stats || {};
+  if (s.walls !== 6 || s.ops !== 3 || s.rooms !== 1 || s.furn !== 4 || s.units !== 'mm') throw new Error('DXF import counts wrong: ' + JSON.stringify(info));
+  if (info.tabs !== 1) throw new Error('DXF import did not open in a new tab: ' + JSON.stringify(info));
+  if (info.walls2d < 6 || info.ops2d < 3 || info.drafts2d !== s.drafts - 1 /* the line on the switched-off layer is hidden */ || info.texts2d < s.texts) throw new Error('imported DXF not drawn in 2D: ' + JSON.stringify(info));
+  if (info.layers < 3) throw new Error('DXF layers missing: ' + JSON.stringify(info));
+  if (!info.dashed) throw new Error('dashed drafting lines render without a dash array: ' + JSON.stringify(info));
+  if (!info.svgOk) throw new Error('SVG export failed after a DXF import');
+  if (!/valid DXF/.test(info.bad) || info.dwg !== 'DWG') throw new Error('non-DXF / DWG input was not rejected: ' + JSON.stringify(info));
+  if (!info.btn || info.made !== 1 || info.wallT !== 20 || info.draftsLeft !== 0 || info.afterUndo !== '0/2') throw new Error('layer → walls action wrong: ' + JSON.stringify(info));
+  if (info.view3d && info.meshes < 10) throw new Error('imported DXF has no 3D model: ' + JSON.stringify(info));
+  return `${s.walls} walls, ${s.ops} openings, ${s.furn} furniture, ${s.drafts} drafts, ${info.layers} layers; layer → walls + undo; 3D ${info.view3d ? info.meshes + ' meshes' : 'skipped'}`;
+});
+
 check('multi-part furniture: the billiards table is one item, drawn from its parts in 2D and 3D', async page => {
   const info = await page.evaluate(`(() => {
     const old = { id: 'oldbox1', type: 'custom', name: 'Old box', icon: '▭', k: 'rect', w: 80, d: 40, h: 70, color: '#888888', x: 600, y: 200, rot: 0, label: '' };
