@@ -2141,6 +2141,774 @@ function ifcRooms(walls) {
   return rooms;
 }
 /* IFC-IMPORT:END */
+/* DXF-IMPORT:BEGIN ---------- DXF içe aktarma (AutoCAD / BricsCAD / LibreCAD / DraftSight çizimleri) ----------
+   Saf JS, bağımlılıksız; DOM'a ve global duruma dokunmaz. dxfToProject(text, opts) bir ASCII DXF metnini (R12 … 2018+)
+   tek katlı bir Kat Planı projesine çevirir. dxfDecode(bytes) dosya baytlarını metne çevirir: UTF-8 (2007+) ya da
+   $DWGCODEPAGE kod sayfası (ANSI_1254 Türkçe …). Plan: x = X, y = -Y (SVG'de y aşağı), her şey cm.
+   - Birim: $INSUNITS (mm, cm, m, inç, ft …); yoksa çizim boyutundan tahmin (opts.units ile zorlanabilir).
+   - Katmanlar → P.layers (ad, renk, açık / kapalı, kilit, çıktı). Renk ACI / gerçek renk, BYLAYER / BYBLOCK,
+     çizgi tipi (kesikli / noktalı / eksen) ve çizgi kalınlığı çizim (draft) nesnelerine taşınır.
+   - LINE, LWPOLYLINE / POLYLINE (yay bombeleri), ARC, CIRCLE, ELLIPSE, SPLINE, SOLID / TRACE / 3DFACE, HATCH (dolgu),
+     LEADER, MLEADER → 2B çizim (drafts); TEXT, MTEXT, ATTRIB → metin; doğrusal DIMENSION → ölçü, diğer ölçüler bloklarından çizgi.
+   - INSERT (blok): iç içe, döndürülmüş, ölçekli, aynalı, dizi (satır × sütun) olarak açılır; adı katalogla eşleşen blok
+     (yatak, kanepe, WC …) mobilya olur, kapı / pencere blokları duvara açıklık olur.
+   - Duvarlar (opts.walls !== false): MLINE ve duvar katmanlarındaki (WALL, DUVAR, A-WALL, MUR, WAND …) paralel çizgi
+     çiftleri / kalın çoklu çizgiler duvar olur; aynı doğrudaki parçalar birleşir, kapı yayı / pencere çizgisi / blok olan
+     boşluklar açıklık olur; köşeler IFC bloğunun ifcJoinWalls'u ile kapanır. Odalar: oda katmanındaki kapalı çokgenler,
+     yoksa duvarlardan (ifcRooms); içindeki en büyük yazı oda adı olur.
+   IFC-IMPORT bloğundaki ifcJoinWalls / ifcRooms / ifcCatKey / ifcCleanPoly'yi kullanır (iki dosyada da önce gelir).
+   Bu blok mcp/server.js içinde birebir durur. */
+const DXF_UNITS = { 1: 2.54, 2: 30.48, 4: 0.1, 5: 1, 6: 100, 7: 100000, 8: 0.0000254, 9: 0.00254, 10: 91.44, 14: 10, 15: 1000, 16: 10000 };
+const DXF_UNIT_NAME = { 1: 'in', 2: 'ft', 4: 'mm', 5: 'cm', 6: 'm', 7: 'km', 10: 'yd', 14: 'dm' };
+const DXF_UNIT_KEYS = { mm: 0.1, cm: 1, dm: 10, m: 100, in: 2.54, ft: 30.48 };
+const DXF_MAX_DRAFTS = 40000;  // çizim nesnesi sınırı (2B tuval ve geri al hafif kalsın)
+const DXF_MAX_DEPTH = 12;      // iç içe blok derinliği
+const DXF_WALL_T = [4, 80];    // duvar sayılan çizgi çifti aralığı (cm)
+const DXF_WALL_GAP = 40;       // aynı doğrudaki duvar parçaları bu boşluğa kadar birleşir (T birleşimleri)
+const DXF_OPEN_GAP = [50, 320]; // kanıtı (yay, pencere çizgisi, blok) olan bu genişlikteki boşluk açıklık olur
+const DXF_CODEPAGE = { ANSI_874: 'windows-874', ANSI_932: 'shift_jis', ANSI_936: 'gbk', ANSI_949: 'euc-kr', ANSI_950: 'big5', ANSI_1250: 'windows-1250', ANSI_1251: 'windows-1251', ANSI_1252: 'windows-1252', ANSI_1253: 'windows-1253', ANSI_1254: 'windows-1254', ANSI_1255: 'windows-1255', ANSI_1256: 'windows-1256', ANSI_1257: 'windows-1257', ANSI_1258: 'windows-1258', DOS850: 'ibm850', DOS857: 'ibm857', DOS866: 'ibm866', ISO8859_9: 'iso-8859-9' };
+const dxfTok = s => String(s || '').toLowerCase().split(/[^a-z0-9çğıöşüäéèêàâîôûñ]+/).filter(Boolean);
+const dxfHas = (name, rx) => dxfTok(name).some(w => rx.test(w));
+const DXF_RX_WALL = /^(wall|walls|wal|duvar[a-z0-9çğıöşü]*|perde|mur|murs|muro|muri|muros|wand|wande|waende|pared|paredes|partition|partitions|brick|tugla|tuğla|masonry|bims|gazbeton|ytong|muur)$/;
+const DXF_RX_DOOR = /^(door|doors|kap[ıi][a-z0-9çğıöşü]*|porte|portes|porta|porte|tur|tür|tuer|türen|turen|puerta|puertas|deur|deuren)$/;
+const DXF_RX_WIN = /^(window|windows|win|pencere[a-z0-9çğıöşü]*|fenetre|fenêtre|fenetres|fenster|ventana|ventanas|finestra|venster|glaz|glazing|cam)$/;
+const DXF_RX_ROOM = /^(room|rooms|oda|odalar|mahal|mahaller|space|spaces|raum|räume|piece|pièce|area|alan|alanlar)$/;
+const DXF_RX_SLIDE = /^(slide|sliding|slider|sürgü[a-z0-9çğıöşü]*|surgu[a-z0-9çğıöşü]*|coulissant|schiebe[a-z]*)$/;
+const DXF_RX_DOUBLE = /^(double|dbl|çift|cift|pair|doppel)$/;
+// AutoCAD renk dizini (ACI) → #rrggbb; 7 (beyaz / siyah) ve tanımsızlar null (= tema mürekkebi)
+const DXF_ACI = (() => {
+  const t = [null, '#ff0000', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#ff00ff', null, '#808080', '#c0c0c0'];
+  const hex = v => ('0' + Math.round(v).toString(16)).slice(-2), V = [255, 165, 127, 76, 38];
+  for (let i = 10; i < 250; i++) {
+    const k = i - 10, h = Math.floor(k / 10) * 15, j = k % 10, v = V[j >> 1], s = j & 1 ? 0.5 : 1;
+    const f = n => { const q = (n + h / 60) % 6; return v * (1 - s * Math.max(0, Math.min(q, 4 - q, 1))); };
+    t[i] = '#' + hex(f(5)) + hex(f(3)) + hex(f(1));
+  }
+  [51, 91, 132, 173, 214, 255].forEach((g, i) => { t[250 + i] = i === 5 ? null : '#' + hex(g) + hex(g) + hex(g); });
+  return t;
+})();
+// beyaz kâğıtta okunmayan açık renkler (sarı, camgöbeği …) koyulaştırılır; koyu temada da görünür kalır
+function dxfInk(hex) {
+  if (!hex) return null;
+  const n = parseInt(hex.slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255, lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  if (lum < 0.6) return hex;
+  if (Math.max(r, g, b) - Math.min(r, g, b) < 20) return null; // beyaza yakın gri: mürekkep
+  const k = 0.5 / lum, c = v => ('0' + Math.round(v * k).toString(16)).slice(-2);
+  return '#' + c(r) + c(g) + c(b);
+}
+// Dosya baytları → metin. İkili DXF ve DWG anlaşılır bir hata verir.
+function dxfDecode(bytes) {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const head = String.fromCharCode.apply(null, Array.from(u8.subarray(0, 22)));
+  if (/^AutoCAD Binary DXF/.test(head)) throw new Error('binary DXF');
+  if (/^AC1\d{3}/.test(head)) throw new Error('DWG');
+  let s = null;
+  try { s = new TextDecoder('utf-8', { fatal: true }).decode(u8); } catch (_) { s = null; }
+  if (s == null) {
+    const lat = new TextDecoder('latin1').decode(u8.subarray(0, Math.min(u8.length, 200000)));
+    const m = /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n([^\r\n]*)/.exec(lat), cp = m && DXF_CODEPAGE[m[1].trim().toUpperCase()];
+    try { s = new TextDecoder(cp || 'windows-1252').decode(u8); } catch (_) { s = new TextDecoder('windows-1252').decode(u8); }
+  }
+  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+}
+// \U+XXXX kaçışları ve %%d / %%p / %%c denetim kodları
+function dxfStr(s) {
+  return String(s == null ? '' : s).replace(/\\U\+([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/%%([dDpPcC%]|\d{3}|[uUoOkK])/g, (_, c) => { const l = c.toLowerCase(); return l === 'd' ? '°' : l === 'p' ? '±' : l === 'c' ? '⌀' : c === '%' ? '%' : /\d/.test(c) ? String.fromCharCode(+c) : ''; });
+}
+// MTEXT biçim kodlarını temizler, satırlara böler
+function dxfMtext(s) {
+  let t = dxfStr(s);
+  t = t.replace(/\\S([^;]*?)[\^#/]([^;]*?);/g, '$1/$2');
+  t = t.replace(/\\[fFcCHhTtQqWwAap][^;\\]*;/g, '').replace(/\\[LlOoKkNn]/g, '').replace(/\\~/g, ' ');
+  t = t.replace(/\\P/g, '\n').replace(/\\X/g, '\n').replace(/\\\\/g, '\u0001').replace(/\\([{}])/g, '\u0002$1').replace(/[{}]/g, '').replace(/\u0002/g, '').replace(/\u0001/g, '\\');
+  return t.split('\n').map(x => x.replace(/\s+$/, ''));
+}
+// Grup kodu / değer çiftleri → kayıtlar ({ type, g: [[kod, değer], …] })
+function dxfRecords(text) {
+  const lines = String(text).split(/\r\n|\r|\n/), recs = []; let cur = null;
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    const cs = lines[i].trim(), c = +cs;
+    if (cs === '' || !Number.isInteger(c)) { if (i >= lines.length - 3) break; throw new Error('DXF: line ' + (i + 1)); }
+    const v = lines[i + 1];
+    if (c === 0) { cur = { type: v.trim().toUpperCase(), g: [] }; recs.push(cur); }
+    else if (cur) cur.g.push([c, v]);
+  }
+  return recs;
+}
+const dxfGet = (r, c, d) => { for (const [k, v] of r.g) if (k === c) return v; return d; };
+const dxfNum = (r, c, d = 0) => { const v = dxfGet(r, c); const n = v == null ? NaN : parseFloat(v); return Number.isFinite(n) ? n : d; };
+// 2B afin dönüşüm m = [a, b, c, d, e, f]: x' = a x + c y + e, y' = b x + d y + f
+const dxfMul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+const dxfAp = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+const dxfSimilar = m => { const s1 = m[0] * m[0] + m[1] * m[1], s2 = m[2] * m[2] + m[3] * m[3]; return Math.abs(s1 - s2) <= 1e-6 * Math.max(s1, s2) && Math.abs(m[0] * m[2] + m[1] * m[3]) <= 1e-6 * Math.max(s1, s2); };
+// Nesne koordinat sistemi (OCS, 210/220/230 normali) → WCS düzlem izdüşümü ("arbitrary axis" algoritması)
+function dxfOcs(r, z = 0) {
+  const nx = dxfNum(r, 210, 0), ny = dxfNum(r, 220, 0), nz = dxfNum(r, 230, 1), L = Math.hypot(nx, ny, nz) || 1, N = [nx / L, ny / L, nz / L];
+  if (Math.abs(N[0]) < 1e-9 && Math.abs(N[1]) < 1e-9 && N[2] > 0) return [1, 0, 0, 1, 0, 0];
+  const cr = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  let ax = Math.abs(N[0]) < 1 / 64 && Math.abs(N[1]) < 1 / 64 ? cr([0, 1, 0], N) : cr([0, 0, 1], N);
+  const la = Math.hypot(ax[0], ax[1], ax[2]) || 1; ax = ax.map(v => v / la);
+  const ay = cr(N, ax);
+  return [ax[0], ax[1], ay[0], ay[1], N[0] * z, N[1] * z];
+}
+// Yay örnekleme (açılar radyan, CCW); uçlar dahil
+function dxfArcPts(cx, cy, r, a0, a1, step = Math.PI / 24) {
+  let sw = a1 - a0; while (sw <= 0) sw += 2 * Math.PI; if (sw > 2 * Math.PI) sw = 2 * Math.PI;
+  const n = Math.max(2, Math.min(256, Math.ceil(sw / step))), out = [];
+  for (let i = 0; i <= n; i++) { const t = a0 + sw * i / n; out.push([cx + r * Math.cos(t), cy + r * Math.sin(t)]); }
+  return out;
+}
+// Bombeli (bulge) çoklu çizgi köşeleri → nokta dizisi (yaylar örneklenir)
+function dxfBulgePts(vs, closed) {
+  const out = []; if (!vs.length) return out;
+  const n = vs.length, segs = closed ? n : n - 1;
+  out.push([vs[0][0], vs[0][1]]);
+  for (let i = 0; i < segs; i++) {
+    const p = vs[i], q = vs[(i + 1) % n], b = p[2] || 0;
+    if (Math.abs(b) > 1e-9) {
+      const ch = Math.hypot(q[0] - p[0], q[1] - p[1]); if (ch > 1e-12) {
+        const th = 4 * Math.atan(b), r = ch / (2 * Math.sin(Math.abs(th) / 2)), mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
+        const h = Math.sqrt(Math.max(0, r * r - ch * ch / 4)) * (Math.abs(th) > Math.PI ? -1 : 1), ux = (q[0] - p[0]) / ch, uy = (q[1] - p[1]) / ch;
+        const sg = b > 0 ? 1 : -1, cx = mx - uy * h * sg, cy = my + ux * h * sg;
+        const a0 = Math.atan2(p[1] - cy, p[0] - cx), a1 = Math.atan2(q[1] - cy, q[0] - cx);
+        const pts = b > 0 ? dxfArcPts(cx, cy, r, a0, a1) : dxfArcPts(cx, cy, r, a1, a0).reverse();
+        for (let k = 1; k < pts.length; k++) out.push(pts[k]);
+        continue;
+      }
+    }
+    out.push([q[0], q[1]]);
+  }
+  if (closed && out.length > 1) { const a = out[0], z = out[out.length - 1]; if (Math.hypot(a[0] - z[0], a[1] - z[1]) < 1e-9) out.pop(); }
+  return out;
+}
+// NURBS (de Boor) örnekleme; düğüm vektörü bozuksa kontrol noktaları döner
+function dxfSpline(deg, knots, ctrl, wts, n) {
+  const m = ctrl.length; if (m < 2) return ctrl.slice();
+  if (!knots || knots.length !== m + deg + 1) { knots = []; for (let i = 0; i < m + deg + 1; i++) knots.push(Math.max(0, Math.min(i - deg, m - deg))); }
+  const w = wts && wts.length === m ? wts : ctrl.map(() => 1), t0 = knots[deg], t1 = knots[m], out = [];
+  if (!(t1 > t0)) return ctrl.slice();
+  for (let s = 0; s <= n; s++) {
+    const t = s === n ? t1 - 1e-9 * (t1 - t0) : t0 + (t1 - t0) * s / n;
+    let k = deg; while (k < m - 1 && knots[k + 1] <= t) k++;
+    const d = []; for (let j = 0; j <= deg; j++) { const i = k - deg + j, ww = w[i]; d.push([ctrl[i][0] * ww, ctrl[i][1] * ww, ww]); }
+    for (let r = 1; r <= deg; r++) for (let j = deg; j >= r; j--) {
+      const i = k - deg + j, den = knots[i + deg - r + 1] - knots[i], a = den ? (t - knots[i]) / den : 0;
+      d[j] = [(1 - a) * d[j - 1][0] + a * d[j][0], (1 - a) * d[j - 1][1] + a * d[j][1], (1 - a) * d[j - 1][2] + a * d[j][2]];
+    }
+    const q = d[deg]; out.push([q[0] / (q[2] || 1), q[1] / (q[2] || 1)]);
+  }
+  return out;
+}
+// Çizgi tipi adı → çizim kesik türü
+function dxfDash(name) {
+  const s = String(name || '').toUpperCase();
+  if (!s || /^(CONTINUOUS|BYLAYER|BYBLOCK|SOLID)$/.test(s)) return null;
+  if (/CENTER|CENTRE|DASHDOT|PHANTOM|DIVIDE|AXIS|AKS|EKSEN|BORDER/.test(s)) return 'center';
+  if (/DOT|NOKTA/.test(s)) return 'dotted';
+  if (/DASH|HIDDEN|KESIK|GIZLI|ACAD_ISO/.test(s)) return 'dashed';
+  return null;
+}
+function dxfToProject(text, opts = {}) {
+  const uid = opts.uid || (() => Math.random().toString(36).slice(2, 9)), tr = opts.L || ((a, b) => b), cat = opts.catalog || null;
+  const colors = opts.colors || ['#fde68a', '#bfdbfe', '#bbf7d0', '#fecaca', '#ddd6fe', '#fed7aa', '#a5f3fc', '#fbcfe8'];
+  if (/^\s*AutoCAD Binary DXF/.test(text)) throw new Error(tr('İkili (binary) DXF desteklenmiyor: ASCII DXF olarak kaydedin', 'Binary DXF is not supported: save it as ASCII DXF'));
+  if (/^AC1\d{3}/.test(text)) throw new Error(tr('Bu bir DWG dosyası: CAD programında “Farklı kaydet → DXF” ile kaydedin', 'This is a DWG file: save it as DXF in your CAD program (Save As → DXF)'));
+  const recs = dxfRecords(text);
+  if (!recs.some(r => r.type === 'SECTION')) throw new Error(tr('Geçerli bir DXF dosyası değil', 'Not a valid DXF file'));
+  const stats = { version: '', units: '', unitsGuessed: false, layers: 0, drafts: 0, texts: 0, dims: 0, walls: 0, ops: 0, rooms: 0, furn: 0, blocks: 0, inserts: 0, skipped: 0, skippedTypes: {}, truncated: 0, xrefs: 0 };
+  const skipT = t => { stats.skipped++; stats.skippedTypes[t] = (stats.skippedTypes[t] || 0) + 1; };
+  // --- bölümler
+  const sec = {}; let cur = null;
+  for (const r of recs) {
+    if (r.type === 'SECTION') { cur = String(dxfGet(r, 2, '')).trim().toUpperCase(); sec[cur] = sec[cur] || []; if (cur === 'HEADER') sec[cur].push({ type: 'HEADER', g: r.g.slice(1) }); continue; } // başlık değişkenleri 0 kodsuz, SECTION kaydının içinde
+    if (r.type === 'ENDSEC') { cur = null; continue; }
+    if (r.type === 'EOF') break;
+    if (cur) sec[cur].push(r);
+  }
+  // --- başlık değişkenleri
+  const hdr = {};
+  for (const r of sec.HEADER || []) { let name = null; for (const [c, v] of r.g) { if (c === 9) { name = v.trim(); hdr[name] = {}; } else if (name) hdr[name][c] = v; } }
+  stats.version = hdr.$ACADVER ? String(hdr.$ACADVER[1] || '').trim() : '';
+  // --- tablolar: katman, çizgi tipi
+  const layers = new Map(), ltypes = new Map();
+  for (const r of sec.TABLES || []) {
+    if (r.type === 'LAYER') {
+      const name = dxfStr(String(dxfGet(r, 2, '0')).trim()), ci = dxfNum(r, 62, 7), tc = dxfGet(r, 420), fl = dxfNum(r, 70, 0);
+      const col = tc != null ? '#' + ('00000' + (parseInt(tc, 10) & 0xffffff).toString(16)).slice(-6) : DXF_ACI[Math.abs(ci)] || null;
+      layers.set(name.toUpperCase(), { name, col, off: ci < 0 || !!(fl & 1), lock: !!(fl & 4), plot: dxfNum(r, 290, 1) !== 0 && !/^defpoints$/i.test(name), lt: String(dxfGet(r, 6, '')).trim(), lw: dxfNum(r, 370, -3) });
+    } else if (r.type === 'LTYPE') ltypes.set(String(dxfGet(r, 2, '')).trim().toUpperCase(), dxfDash(dxfGet(r, 2, '')) || dxfDash(dxfGet(r, 3, '')));
+  }
+  const layerOf = n => layers.get(String(n || '0').toUpperCase()) || null;
+  // --- bloklar
+  const blocks = new Map();
+  { let b = null; const list = sec.BLOCKS || [];
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i];
+      if (r.type === 'BLOCK') { b = { name: String(dxfGet(r, 2, '')).trim(), bx: dxfNum(r, 10), by: dxfNum(r, 20), flags: dxfNum(r, 70, 0), ents: [], layer: String(dxfGet(r, 8, '0')).trim() }; blocks.set(b.name.toUpperCase(), b); }
+      else if (r.type === 'ENDBLK') b = null;
+      else if (b) b.ents.push(r);
+    }
+  }
+  stats.blocks = [...blocks.values()].filter(b => !/^\*(model|paper)_space/i.test(b.name)).length;
+  // POLYLINE / VERTEX / SEQEND ve INSERT / ATTRIB / SEQEND gruplanır
+  const group = list => {
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i];
+      if (r.type === 'POLYLINE' || (r.type === 'INSERT' && dxfNum(r, 66, 0) === 1)) {
+        r.kids = []; while (i + 1 < list.length && (list[i + 1].type === 'VERTEX' || list[i + 1].type === 'ATTRIB')) r.kids.push(list[++i]);
+        if (i + 1 < list.length && list[i + 1].type === 'SEQEND') i++;
+      } else if (r.type === 'VERTEX' || r.type === 'SEQEND' || r.type === 'ATTRIB') continue;
+      out.push(r);
+    }
+    return out;
+  };
+  for (const b of blocks.values()) b.ents = group(b.ents);
+  const ents = group(sec.ENTITIES || []);
+  // --- ilkel nesneler (DXF birimi, WCS): pl (çoklu çizgi), arc, circ, text, dim, fill; ins (kapı / pencere / mobilya bloğu)
+  const prims = [], inserts = [], mlines = [];
+  const W = (+opts.maxDrafts || DXF_MAX_DRAFTS) * 2;
+  const style = (r, ctx) => {
+    let lay = String(dxfGet(r, 8, '0')).trim(); if (lay === '0' && ctx.layer) lay = ctx.layer;
+    const L = layerOf(lay), ci = dxfNum(r, 62, 256), tc = dxfGet(r, 420);
+    let col = tc != null ? '#' + ('00000' + (parseInt(tc, 10) & 0xffffff).toString(16)).slice(-6) : ci === 256 ? (L ? L.col : null) : ci === 0 ? ctx.col : DXF_ACI[Math.abs(ci)] || null;
+    if (ci === 256 && tc == null && L == null) col = null;
+    const ltn = String(dxfGet(r, 6, 'BYLAYER')).trim().toUpperCase();
+    const dash = ltn === 'BYLAYER' ? (L ? (ltypes.has(L.lt.toUpperCase()) ? ltypes.get(L.lt.toUpperCase()) : dxfDash(L.lt)) : null) : ltn === 'BYBLOCK' ? ctx.dash : (ltypes.has(ltn) ? ltypes.get(ltn) : dxfDash(ltn));
+    let lw = dxfNum(r, 370, -1); if (lw === -1) lw = L ? L.lw : -3; else if (lw === -2) lw = ctx.lw;
+    return { layer: lay, col, dash, lw };
+  };
+  const add = p => { if (prims.length < W) { p.ix = prims.length; prims.push(p); } else stats.truncated++; };
+  const pl = (r, ctx, m, pts, closed, extra) => { if (pts.length < 2) return; add(Object.assign({ t: 'pl', pts: pts.map(q => dxfAp(m, q[0], q[1])), closed: !!closed, st: style(r, ctx), ent: r.type }, extra || {})); };
+  const arcPrim = (r, ctx, m, cx, cy, rad, a0, a1, full) => {
+    if (!(rad > 0)) return;
+    if (dxfSimilar(m)) {
+      const st = style(r, ctx);
+      if (full) { add({ t: 'circ', c: dxfAp(m, cx, cy), p: dxfAp(m, cx + rad, cy), st, ent: r.type }); return; }
+      let sw = a1 - a0; while (sw <= 0) sw += 2 * Math.PI;
+      const am = a0 + sw / 2, P = a => dxfAp(m, cx + rad * Math.cos(a), cy + rad * Math.sin(a));
+      add({ t: 'arc', p0: P(a0), pm: P(am), p1: P(a0 + sw), c: dxfAp(m, cx, cy), st, ent: r.type });
+    } else pl(r, ctx, m, full ? dxfArcPts(cx, cy, rad, 0, 2 * Math.PI).slice(0, -1) : dxfArcPts(cx, cy, rad, a0, a1), full);
+  };
+  const textPrim = (r, ctx, m, x, y, h, angDeg, str, hj, vj, wf) => {
+    str = String(str || '').trim(); if (!str || !(h > 0)) return;
+    const a = angDeg * Math.PI / 180, dx = Math.cos(a), dy = Math.sin(a), wd = str.length * h * 0.78 * (wf || 1);
+    let ox = 0, oy = 0; // satır başı (sol alt taban çizgisi) ofseti, metin ekseninde
+    if (hj === 1 || hj === 4) ox = -wd / 2; else if (hj === 2) ox = -wd;
+    if (hj === 4 && !vj) oy = -h / 2; else if (vj === 1) oy = h * 0.3; else if (vj === 2) oy = -h / 2; else if (vj === 3) oy = -h;
+    const bx = x + dx * ox - dy * oy, by = y + dy * ox + dx * oy;
+    const p = dxfAp(m, bx, by), q = dxfAp(m, bx + dx, by + dy), u = dxfAp(m, bx - dy * h, by + dx * h);
+    add({ t: 'text', p, ang: Math.atan2(q[1] - p[1], q[0] - p[0]) * 180 / Math.PI, h: Math.hypot(u[0] - p[0], u[1] - p[1]), s: str, st: style(r, ctx), ent: r.type });
+  };
+  const verts = (r, xc, yc) => { const out = []; let cur = null; for (const [c, v] of r.g) { if (c === xc) { cur = [parseFloat(v) || 0, 0, 0]; out.push(cur); } else if (c === yc && cur) cur[1] = parseFloat(v) || 0; else if (c === 42 && cur) cur[2] = parseFloat(v) || 0; } return out; };
+  const pairs = (r, xc, yc) => { const out = []; let cur = null; for (const [c, v] of r.g) { if (c === xc) { cur = [parseFloat(v) || 0, 0]; out.push(cur); } else if (c === yc && cur) cur[1] = parseFloat(v) || 0; } return out; };
+  const nums = (r, code) => r.g.filter(x => x[0] === code).map(x => parseFloat(x[1]) || 0);
+  const insName = r => String(dxfGet(r, 2, '')).trim();
+  // HATCH sınır yolları
+  const hatchLoops = r => {
+    const g = r.g; let i = g.findIndex(x => x[0] === 91); if (i < 0) return [];
+    const np = parseInt(g[i][1], 10) || 0, loops = []; i++;
+    const nx = c => { while (i < g.length && g[i][0] !== c) i++; return i < g.length ? g[i++][1] : null; };
+    const num = c => parseFloat(nx(c)) || 0, peek = c => i < g.length && g[i][0] === c;
+    for (let p = 0; p < np && i < g.length; p++) {
+      const fl = num(92) | 0, pts = [];
+      if (fl & 2) { // çoklu çizgi yolu
+        const hb = num(72) | 0; num(73); const n = num(93) | 0, vs = [];
+        for (let k = 0; k < n && i < g.length; k++) { const x = num(10), y = num(20); vs.push([x, y, hb && peek(42) ? num(42) : 0]); }
+        pts.push(...dxfBulgePts(vs, true));
+      } else { // kenar yolu: çizgi, yay, elips yayı, spline
+        const ne = num(93) | 0;
+        for (let e = 0; e < ne && i < g.length; e++) {
+          const et = num(72) | 0, seg = [];
+          if (et === 1) { const x0 = num(10), y0 = num(20), x1 = num(11), y1 = num(21); seg.push([x0, y0], [x1, y1]); }
+          else if (et === 2 || et === 3) {
+            const cx = num(10), cy = num(20), mx = et === 3 ? num(11) : 0, my = et === 3 ? num(21) : 0, rr = num(40); let s = num(50), en = num(51); const ccw = num(73) | 0;
+            if (!ccw) { s = -s; en = -en; }
+            let a0 = s * Math.PI / 180, a1 = en * Math.PI / 180;
+            if (ccw) { while (a1 <= a0) a1 += 2 * Math.PI; } else { while (a1 >= a0) a1 -= 2 * Math.PI; }
+            const E = et === 2 ? t => [cx + rr * Math.cos(t), cy + rr * Math.sin(t)] : t => [cx + mx * Math.cos(t) - my * rr * Math.sin(t), cy + my * Math.cos(t) + mx * rr * Math.sin(t)];
+            const n = Math.max(4, Math.min(256, Math.ceil(Math.abs(a1 - a0) / (Math.PI / 24)))); for (let k = 0; k <= n; k++) seg.push(E(a0 + (a1 - a0) * k / n));
+          } else if (et === 4) {
+            const deg = num(94) | 0 || 3, nk = num(95) | 0, nc = num(96) | 0, kn = [], cp = [], wt = [];
+            for (let k = 0; k < nk; k++) kn.push(num(40));
+            for (let k = 0; k < nc; k++) { cp.push([num(10), num(20)]); if (peek(42)) wt.push(num(42)); }
+            if (peek(97)) { const nf = num(97) | 0, fp = []; for (let k = 0; k < nf; k++) fp.push([num(11), num(21)]); if (cp.length < 2) cp.push(...fp); }
+            seg.push(...(nk ? dxfSpline(deg, kn, cp, wt.length === nc ? wt : null, Math.min(200, nc * 8)) : cp));
+          }
+          if (seg.length) {
+            if (pts.length) { const z = pts[pts.length - 1], a = seg[0], b = seg[seg.length - 1]; if (Math.hypot(b[0] - z[0], b[1] - z[1]) < Math.hypot(a[0] - z[0], a[1] - z[1]) * 0.5) seg.reverse(); }
+            for (const q of seg) { const z = pts[pts.length - 1]; if (!z || Math.hypot(q[0] - z[0], q[1] - z[1]) > 1e-9) pts.push(q); }
+          }
+        }
+        if (pts.length > 2) { const a = pts[0], z = pts[pts.length - 1]; if (Math.hypot(a[0] - z[0], a[1] - z[1]) < 1e-9) pts.pop(); }
+      }
+      if (pts.length >= 3) loops.push({ pts, outer: !!(fl & 17) }); // kaynak sınır nesneleri (97 + 330) atlanır
+    }
+    return loops;
+  };
+  const blockBox = new Map(); // blok adı → yerel sınır kutusu (çizim birimi)
+  function boxOf(b, depth = 0) {
+    const key = b.name.toUpperCase(); if (blockBox.has(key)) return blockBox.get(key);
+    blockBox.set(key, null);
+    const save = prims.length; walk(b.ents, [1, 0, 0, 1, -b.bx, -b.by], { layer: '', col: null, dash: null, lw: -3, measure: true }, depth + 1);
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const eat = q => { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; };
+    for (let k = save; k < prims.length; k++) { const p = prims[k]; if (p.t === 'pl') p.pts.forEach(eat); else if (p.t === 'arc') { eat(p.p0); eat(p.pm); eat(p.p1); } else if (p.t === 'circ') { const r = Math.hypot(p.p[0] - p.c[0], p.p[1] - p.c[1]); eat([p.c[0] - r, p.c[1] - r]); eat([p.c[0] + r, p.c[1] + r]); } else if (p.t === 'fill') p.pts.forEach(eat); }
+    prims.length = save;
+    const box = x1 > x0 || y1 > y0 ? { x0, y0, x1, y1 } : null; blockBox.set(key, box); return box;
+  }
+  function walk(list, M, ctx, depth) {
+    for (const r of list) {
+      if (prims.length >= W) { stats.truncated++; return; }
+      if (dxfNum(r, 60, 0) === 1) continue;           // görünmez
+      if (depth === 0 && dxfNum(r, 67, 0) === 1) continue; // kâğıt alanı
+      const T = r.type, z = dxfNum(r, 38, 0), skip = t => { if (!ctx.measure) skipT(t); };
+      try {
+        if (T === 'LINE') pl(r, ctx, M, [[dxfNum(r, 10), dxfNum(r, 20)], [dxfNum(r, 11), dxfNum(r, 21)]], false);
+        else if (T === 'LWPOLYLINE') {
+          const m = dxfMul(M, dxfOcs(r, z)), vs = verts(r, 10, 20), cl = (dxfNum(r, 70, 0) & 1) === 1, wd = dxfNum(r, 43, 0) || Math.max(0, ...nums(r, 40), ...nums(r, 41));
+          pl(r, ctx, m, dxfBulgePts(vs, cl), cl, { wd: wd * Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) });
+        } else if (T === 'POLYLINE') {
+          const fl = dxfNum(r, 70, 0); if (fl & 64) { skip('POLYFACE'); continue; }
+          if (fl & 16) { skip('MESH'); continue; }
+          const is3d = !!(fl & 8), m = is3d ? M : dxfMul(M, dxfOcs(r, dxfNum(r, 30, 0)));
+          const vs = (r.kids || []).filter(v => v.type === 'VERTEX' && !(dxfNum(v, 70, 0) & 16)).map(v => [dxfNum(v, 10), dxfNum(v, 20), dxfNum(v, 42, 0)]);
+          const wd = Math.max(dxfNum(r, 40, 0), dxfNum(r, 41, 0));
+          pl(r, ctx, m, dxfBulgePts(vs, !!(fl & 1)), !!(fl & 1), { wd: wd * Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) });
+        } else if (T === 'ARC' || T === 'CIRCLE') {
+          const m = dxfMul(M, dxfOcs(r, dxfNum(r, 30, 0)));
+          arcPrim(r, ctx, m, dxfNum(r, 10), dxfNum(r, 20), dxfNum(r, 40), dxfNum(r, 50) * Math.PI / 180, dxfNum(r, 51) * Math.PI / 180, T === 'CIRCLE');
+        } else if (T === 'ELLIPSE') {
+          const cx = dxfNum(r, 10), cy = dxfNum(r, 20), mx = dxfNum(r, 11), my = dxfNum(r, 21), ra = dxfNum(r, 40, 1), nz = dxfNum(r, 230, 1) < 0 ? -1 : 1;
+          let a0 = dxfNum(r, 41, 0), a1 = dxfNum(r, 42, 2 * Math.PI); const full = Math.abs(a1 - a0 - 2 * Math.PI) < 1e-6 || Math.abs(a1 - a0) < 1e-9;
+          if (full) { a0 = 0; a1 = 2 * Math.PI; } while (a1 <= a0) a1 += 2 * Math.PI;
+          const n = Math.max(8, Math.min(128, Math.ceil((a1 - a0) / (Math.PI / 32)))), pts = [];
+          for (let k = 0; k <= (full ? n - 1 : n); k++) { const t = a0 + (a1 - a0) * k / n; pts.push([cx + mx * Math.cos(t) - my * ra * nz * Math.sin(t), cy + my * Math.cos(t) + mx * ra * nz * Math.sin(t)]); }
+          pl(r, ctx, M, pts, full);
+        } else if (T === 'SPLINE') {
+          const deg = dxfNum(r, 71, 3), fl = dxfNum(r, 70, 0), cp = pairs(r, 10, 20), fp = pairs(r, 11, 21), kn = nums(r, 40), wt = nums(r, 41);
+          const pts = cp.length >= 2 ? dxfSpline(deg, kn, cp, wt.length === cp.length ? wt : null, Math.min(240, Math.max(16, cp.length * 8))) : fp;
+          pl(r, ctx, M, pts, !!(fl & 1) && pts.length > 2);
+        } else if (T === 'SOLID' || T === 'TRACE' || T === '3DFACE') {
+          const m = T === '3DFACE' ? M : dxfMul(M, dxfOcs(r, dxfNum(r, 30, 0)));
+          const p = [[dxfNum(r, 10), dxfNum(r, 20)], [dxfNum(r, 11), dxfNum(r, 21)], [dxfNum(r, 12), dxfNum(r, 22)], [dxfNum(r, 13, dxfNum(r, 12)), dxfNum(r, 23, dxfNum(r, 22))]];
+          let pts = T === '3DFACE' ? p : [p[0], p[1], p[3], p[2]];
+          pts = pts.filter((q, k) => k === 0 || Math.hypot(q[0] - pts[k - 1][0], q[1] - pts[k - 1][1]) > 1e-9);
+          if (pts.length >= 3) add({ t: 'fill', pts: pts.map(q => dxfAp(m, q[0], q[1])), fill: T === '3DFACE' ? 'none' : 'solid', st: style(r, ctx), ent: T });
+        } else if (T === 'HATCH') {
+          const m = dxfMul(M, dxfOcs(r, 0)), solid = dxfNum(r, 70, 0) === 1 || /^SOLID$/i.test(String(dxfGet(r, 2, '')).trim()), st = style(r, ctx);
+          const loops = hatchLoops(r).map(l => ({ pts: l.pts.map(q => dxfAp(m, q[0], q[1])), outer: l.outer }));
+          const inside = (q, poly) => { let c = false; for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) { const A = poly[a], B = poly[b]; if ((A[1] > q[1]) !== (B[1] > q[1]) && q[0] < (B[0] - A[0]) * (q[1] - A[1]) / (B[1] - A[1]) + A[0]) c = !c; } return c; };
+          for (const l of loops) { const hole = loops.some(o => o !== l && o.pts.length > 2 && inside(l.pts[0], o.pts)); add({ t: 'fill', pts: l.pts, fill: hole ? 'none' : solid ? 'solid' : 'hatch', st, ent: T, hatch: true }); }
+        } else if (T === 'TEXT' || T === 'ATTRIB') {
+          if (T === 'ATTRIB' && (dxfNum(r, 70, 0) & 1)) continue;
+          const m = dxfMul(M, dxfOcs(r, dxfNum(r, 30, 0))), hj = dxfNum(r, 72, 0), vj = T === 'ATTRIB' ? dxfNum(r, 74, 0) : dxfNum(r, 73, 0);
+          const al = (hj || vj) && hj !== 3 && hj !== 5 && dxfGet(r, 11) != null;
+          textPrim(r, ctx, m, al ? dxfNum(r, 11) : dxfNum(r, 10), al ? dxfNum(r, 21) : dxfNum(r, 20), dxfNum(r, 40, 2.5), dxfNum(r, 50, 0), dxfStr(dxfGet(r, 1, '')), hj === 3 || hj === 5 ? 0 : hj, hj === 3 || hj === 5 ? 0 : vj, dxfNum(r, 41, 1));
+        } else if (T === 'MTEXT') {
+          let s = ''; for (const [c, v] of r.g) if (c === 3) s += v; s += dxfGet(r, 1, '');
+          const lines = dxfMtext(s), h = dxfNum(r, 40, 2.5), at = dxfNum(r, 71, 1), sp = h * 1.667 * dxfNum(r, 44, 1);
+          let ang = dxfNum(r, 50, 0); if (dxfGet(r, 11) != null) ang = Math.atan2(dxfNum(r, 21), dxfNum(r, 11)) * 180 / Math.PI;
+          const a = ang * Math.PI / 180, ux = -Math.sin(a), uy = Math.cos(a), x = dxfNum(r, 10), y = dxfNum(r, 20), n = lines.length, hj = (at - 1) % 3;
+          const top = at <= 3 ? -h : at <= 6 ? (n - 1) * sp / 2 - h / 2 : (n - 1) * sp;
+          lines.forEach((ln, k) => { const o = top - k * sp; textPrim(r, ctx, M, x + ux * o, y + uy * o, h, ang, ln, hj === 1 ? 1 : hj === 2 ? 2 : 0, 0, 1); });
+        } else if (T === 'DIMENSION') {
+          const ty = dxfNum(r, 70, 0) & 7, bn = insName(r);
+          if ((ty === 0 || ty === 1) && dxfGet(r, 13) != null && dxfGet(r, 14) != null) {
+            const a = dxfAp(M, dxfNum(r, 13), dxfNum(r, 23)), b = dxfAp(M, dxfNum(r, 14), dxfNum(r, 24)), p = dxfAp(M, dxfNum(r, 10), dxfNum(r, 20));
+            let bb = b;
+            if (ty === 0) { const q = dxfAp(M, Math.cos(dxfNum(r, 50) * Math.PI / 180), Math.sin(dxfNum(r, 50) * Math.PI / 180)), o = dxfAp(M, 0, 0), ux = q[0] - o[0], uy = q[1] - o[1], ul = Math.hypot(ux, uy) || 1, s = ((b[0] - a[0]) * ux + (b[1] - a[1]) * uy) / ul / ul; bb = [a[0] + ux * s, a[1] + uy * s]; }
+            add({ t: 'dim', a, b: bb, p, st: style(r, ctx), ent: T });
+          } else {
+            const B = blocks.get(bn.toUpperCase()); if (B && depth < DXF_MAX_DEPTH) walk(B.ents, dxfMul(M, [1, 0, 0, 1, -B.bx, -B.by]), Object.assign({}, ctx, style(r, ctx)), depth + 1); else skip('DIMENSION');
+          }
+        } else if (T === 'LEADER') pl(r, ctx, M, pairs(r, 10, 20), false);
+        else if (T === 'MULTILEADER' || T === 'MLEADER') {
+          let inLine = false, pts = [], txt = null, tp = null, th = 0; const lines = [];
+          for (let k = 0; k < r.g.length; k++) {
+            const [c, v] = r.g[k];
+            if (c === 304 && /LEADER_LINE\{/.test(v)) { inLine = true; pts = []; } else if (c === 305 && inLine) { inLine = false; if (pts.length > 1) lines.push(pts); }
+            else if (inLine && c === 10) pts.push([parseFloat(v) || 0, parseFloat((r.g[k + 1] || [])[1]) || 0]);
+            else if (c === 304 && txt == null) txt = v; else if (c === 12 && !tp) tp = [parseFloat(v) || 0, parseFloat((r.g[k + 1] || [])[1]) || 0]; else if (c === 41 && !th) th = parseFloat(v) || 0;
+          }
+          for (const l of lines) pl(r, ctx, M, l, false);
+          if (txt && tp) dxfMtext(txt).forEach((ln, k) => textPrim(r, ctx, M, tp[0], tp[1] - (k + 1) * (th || 2.5) * 1.667, th || 2.5, 0, ln, 0, 0, 1));
+        } else if (T === 'MLINE') {
+          const n = dxfNum(r, 72, 0), ne = dxfNum(r, 73, 0), cl = (dxfNum(r, 71, 0) & 2) === 2, vs = []; let k = 0;
+          const g = r.g; while (k < g.length && g[k][0] !== 11) k++;
+          for (let v = 0; v < n && k < g.length; v++) {
+            const at = c => { while (k < g.length && g[k][0] !== c) k++; return k < g.length ? parseFloat(g[k++][1]) || 0 : 0; };
+            const x = at(11), y = at(21), dx = at(12), dy = at(22), mx = at(13), my = at(23), offs = [];
+            for (let e = 0; e < ne; e++) { const np = at(74); const ps = []; for (let q = 0; q < np; q++) ps.push(at(41)); const nf = at(75); for (let q = 0; q < nf; q++) at(42); offs.push(ps.length ? ps[0] : 0); }
+            vs.push({ x, y, dx, dy, mx, my, offs });
+          }
+          const m = dxfMul(M, dxfOcs(r, 0));
+          if (vs.length >= 2 && ne >= 1) {
+            const from = prims.length;
+            for (let e = 0; e < ne; e++) pl(r, ctx, m, vs.map(v => [v.x + v.mx * v.offs[e], v.y + v.my * v.offs[e]]), cl);
+            if (!ctx.measure) mlines.push({ prims: prims.slice(from), vs: vs.map(v => { const lo = Math.min(...v.offs), hi = Math.max(...v.offs), c = dxfAp(m, v.x + v.mx * (lo + hi) / 2, v.y + v.my * (lo + hi) / 2), mm = Math.abs(v.mx * -v.dy + v.my * v.dx) || 1, p1 = dxfAp(m, v.x + v.mx * lo, v.y + v.my * lo), p2 = dxfAp(m, v.x + v.mx * hi, v.y + v.my * hi); return { c, t: Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) * mm }; }), closed: cl, st: style(r, ctx) });
+          }
+        } else if (T === 'INSERT' || T === 'ACAD_TABLE') {
+          const bn = insName(r), B = blocks.get(bn.toUpperCase());
+          const attrs = (r.kids || []).filter(k => k.type === 'ATTRIB');
+          if (!B) { if (T === 'INSERT') skip('INSERT'); }
+          else if (B.flags & 4) { if (!ctx.measure) stats.xrefs++; }
+          else if (depth < DXF_MAX_DEPTH) {
+            if (!ctx.measure) stats.inserts++;
+            const m0 = dxfMul(M, dxfOcs(r, dxfNum(r, 30, 0))), sx = dxfNum(r, 41, 1) || 1, sy = dxfNum(r, 42, sx) || 1, a = dxfNum(r, 50, 0) * Math.PI / 180;
+            const nc = Math.max(1, Math.min(100, dxfNum(r, 70, 1) || 1)), nr = Math.max(1, Math.min(100, dxfNum(r, 71, 1) || 1)), cs = dxfNum(r, 44, 0), rs = dxfNum(r, 45, 0);
+            const st = style(r, ctx), sub = { layer: st.layer, col: st.col, dash: st.dash, lw: st.lw, measure: ctx.measure };
+            const c = Math.cos(a), s = Math.sin(a), ix = dxfNum(r, 10), iy = dxfNum(r, 20);
+            for (let ci = 0; ci < nc; ci++) for (let ri = 0; ri < nr; ri++) {
+              const ox = ix + c * ci * cs - s * ri * rs, oy = iy + s * ci * cs + c * ri * rs;
+              const m = dxfMul(m0, dxfMul([c * sx, s * sx, -s * sy, c * sy, ox, oy], [1, 0, 0, 1, -B.bx, -B.by]));
+              const nm = bn.replace(/([a-zçğıöşü])([A-ZÇĞİÖŞÜ])/g, '$1 $2').replace(/(\d+)/g, ' $1 ');
+              const kind = ctx.measure ? null : dxfHas(nm, DXF_RX_DOOR) || dxfHas(st.layer, DXF_RX_DOOR) ? 'door' : dxfHas(nm, DXF_RX_WIN) || dxfHas(st.layer, DXF_RX_WIN) ? 'window' : null;
+              const ck = !ctx.measure && !kind && cat ? ifcCatKey(nm) : null;
+              if (kind || ck) {
+                const box = boxOf(B, depth);
+                if (box) {
+                  const from = prims.length; walk(B.ents, m, sub, depth + 1);
+                  inserts.push({ kind, ck, name: bn, m, box, from, to: prims.length, st, mirror: sx * sy < 0 });
+                  continue;
+                }
+              }
+              walk(B.ents, m, sub, depth + 1);
+            }
+            for (const at of attrs) walk([at], M, ctx, depth);
+          }
+        } else if (T === 'POINT' || T === 'XLINE' || T === 'RAY' || T === 'VIEWPORT' || T === 'ATTDEF') { if (T !== 'ATTDEF' && T !== 'VIEWPORT' && !ctx.measure) skip(T); }
+        else if (!ctx.measure) skip(T);
+      } catch (_) { if (!ctx.measure) skip(T); }
+    }
+  }
+  walk(ents, [1, 0, 0, 1, 0, 0], { layer: '', col: null, dash: null, lw: -3 }, 0);
+  // --- birim ve kaydırma
+  let sc = null; const iu = hdr.$INSUNITS ? parseInt(hdr.$INSUNITS[70], 10) : 0;
+  if (typeof opts.units === 'number' && opts.units > 0) { sc = opts.units; stats.units = opts.units + ' cm'; }
+  else if (opts.units && DXF_UNIT_KEYS[opts.units]) { sc = DXF_UNIT_KEYS[opts.units]; stats.units = opts.units; }
+  else if (DXF_UNITS[iu]) { sc = DXF_UNITS[iu]; stats.units = DXF_UNIT_NAME[iu] || iu + ''; }
+  const xs = [], ys = [];
+  const eatAll = q => { xs.push(q[0]); ys.push(q[1]); };
+  for (const p of prims) { if (p.t === 'pl' || p.t === 'fill') { eatAll(p.pts[0]); eatAll(p.pts[p.pts.length - 1]); } else if (p.t === 'arc') { eatAll(p.p0); eatAll(p.p1); } else if (p.t === 'circ') eatAll(p.c); else if (p.t === 'text') eatAll(p.p); else if (p.t === 'dim') { eatAll(p.a); eatAll(p.b); } }
+  if (!xs.length) throw new Error(tr('DXF dosyasında çizilecek bir şey yok', 'The DXF file has nothing to draw'));
+  const qt = (arr, f) => { const a = arr.slice().sort((p, q) => p - q); return a[Math.min(a.length - 1, Math.max(0, Math.floor(f * (a.length - 1))))]; };
+  const qx0 = qt(xs, 0.02), qx1 = qt(xs, 0.98), qy0 = qt(ys, 0.02), qy1 = qt(ys, 0.98);
+  if (!sc) {
+    const D = Math.hypot(qx1 - qx0, qy1 - qy0) || 1, imp = hdr.$MEASUREMENT && parseInt(hdr.$MEASUREMENT[70], 10) === 0;
+    const cand = imp ? [['in', 2.54], ['ft', 30.48]] : [['mm', 0.1], ['cm', 1], ['m', 100]];
+    let best = cand[0], bd = Infinity; for (const c of cand) { const e = Math.abs(Math.log10(D * c[1] / 2500)); if (e < bd - 1e-9) { bd = e; best = c; } }
+    sc = best[1]; stats.units = best[0]; stats.unitsGuessed = true;
+  }
+  // aykırı uzak nesneler kaydırmayı bozmasın: çeyreklik sınırlarla, 1 m katlarına
+  const sx0 = Math.floor(qx0 * sc / 100) * 100, sy0 = Math.floor(-qy1 * sc / 100) * 100;
+  const r1 = v => Math.round(v * 10) / 10;
+  const P2 = q => ({ x: r1(q[0] * sc - sx0), y: r1(-q[1] * sc - sy0) });
+  // --- katmanlar
+  const lid = new Map(), outLayers = [{ id: '0', name: tr('Varsayılan', 'Default'), color: '#64748b', vis: true, lock: false, print: true }];
+  const layerId = name => {
+    const key = String(name || '0').toUpperCase(); if (key === '0' || key === '') return null;
+    if (lid.has(key)) return lid.get(key);
+    const L = layerOf(name), id = uid();
+    outLayers.push({ id, name: (L ? L.name : name).slice(0, 60), color: (L && dxfInk(L.col)) || '#64748b', vis: !(L && L.off), lock: !!(L && L.lock), print: !L || L.plot });
+    lid.set(key, id); return id;
+  };
+  const withLayer = (o, st) => { const id = layerId(st && st.layer); if (id) o.layer = id; return o; };
+  const lwCm = lw => lw > 0 ? Math.max(0.5, Math.min(8, Math.round(lw) / 10)) : 1;
+  const draftOf = (o, st, wd) => { o.w = wd > 0 ? Math.max(0.5, Math.min(200, r1(wd * sc))) : lwCm(st.lw); if (st.dash) o.dash = st.dash; const c = dxfInk(st.col); if (c) o.color = c; return withLayer(o, st); };
+  // --- duvarlar
+  const walls = [], ops = [], wallLayers = new Set(), used = new Set();
+  const isWallLayer = n => dxfHas(n, DXF_RX_WALL);
+  const wallOn = opts.walls !== false;
+  if (wallOn) {
+    // MLINE → duvar
+    for (const ml of mlines) {
+      const ok = ml.vs.every(v => v.t * sc >= DXF_WALL_T[0] && v.t * sc <= DXF_WALL_T[1] * 1.5); if (!ok) continue;
+      const n = ml.vs.length, segs = ml.closed ? n : n - 1;
+      for (let i = 0; i < segs; i++) { const a = ml.vs[i], b = ml.vs[(i + 1) % n]; walls.push(withLayer({ id: uid(), a: P2(a.c), b: P2(b.c), t: Math.max(1, r1((a.t + b.t) / 2 * sc)), h: 0, wt: 'solid' }, ml.st)); }
+      for (const p of ml.prims) used.add(p);
+    }
+    // kalın çoklu çizgiler (genişlik ≥ 4 cm) ve paralel çizgi çiftleri, duvar katmanlarında
+    const segs = [];
+    for (const p of prims) {
+      if (used.has(p) || !isWallLayer(p.st.layer)) continue;
+      if (p.t === 'pl') {
+        const pts = p.pts;
+        if (p.wd && p.wd * sc >= DXF_WALL_T[0] && p.wd * sc <= DXF_WALL_T[1]) {
+          for (let i = 0; i + 1 < pts.length + (p.closed ? 1 : 0); i++) { const a = P2(pts[i]), b = P2(pts[(i + 1) % pts.length]); if (Math.hypot(b.x - a.x, b.y - a.y) > 1) walls.push(withLayer({ id: uid(), a, b, t: r1(p.wd * sc), h: 0, wt: 'solid' }, p.st)); }
+          used.add(p); wallLayers.add(p.st.layer); continue;
+        }
+        for (let i = 0; i + 1 < pts.length + (p.closed ? 1 : 0); i++) { const a = P2(pts[i]), b = P2(pts[(i + 1) % pts.length]); if (Math.hypot(b.x - a.x, b.y - a.y) >= 5) segs.push({ a, b, src: p }); }
+      } else if (p.t === 'fill' && p.fill !== 'none') {
+        for (let i = 0; i < p.pts.length; i++) { const a = P2(p.pts[i]), b = P2(p.pts[(i + 1) % p.pts.length]); if (Math.hypot(b.x - a.x, b.y - a.y) >= 5) segs.push({ a, b, src: p }); }
+      }
+    }
+    const pw = dxfPairWalls(segs, { tmin: DXF_WALL_T[0], tmax: DXF_WALL_T[1] });
+    for (const w of pw.walls) walls.push(withLayer({ id: uid(), a: w.a, b: w.b, t: w.t, h: 0, wt: 'solid' }, w.src.st));
+    for (const s of pw.used) { used.add(s.src); wallLayers.add(s.src.st.layer); }
+    // dolgu (tarama) duvar katmanında ve duvar bulunduysa gereksiz (duvar kendini çizer)
+    if (walls.length) for (const p of prims) if (p.t === 'fill' && isWallLayer(p.st.layer) && wallLayers.has(p.st.layer)) used.add(p);
+    // duvar gövdesinin içinde kalan duvar katmanı çizgileri (söve / uç kapama çizgileri) de gereksiz
+    const inWall = q => walls.some(w => { const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1, ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, s = (q.x - w.a.x) * ux + (q.y - w.a.y) * uy, n = -(q.x - w.a.x) * uy + (q.y - w.a.y) * ux; return s > -w.t / 2 - 1 && s < L + w.t / 2 + 1 && Math.abs(n) < w.t / 2 + 1; });
+    if (walls.length && walls.length < 4000) for (const p of prims) if (!used.has(p) && p.t === 'pl' && isWallLayer(p.st.layer) && p.pts.length <= 5 && p.pts.every(q => inWall(P2(q)))) used.add(p);
+  }
+  // --- kapı / pencere kanıtları: yaylar, pencere katmanı çizgileri, bloklar
+  const arcs = [], winLines = [], anyLines = [];
+  for (const p of prims) {
+    if (used.has(p)) continue;
+    if (p.t === 'arc') { const c = P2(p.c), a = P2(p.p0), b = P2(p.p1), m = P2(p.pm); arcs.push({ c, r: Math.hypot(a.x - c.x, a.y - c.y), a, b, m, p }); }
+    else if (p.t === 'pl' && !p.closed && p.pts.length === 2) { const s = { a: P2(p.pts[0]), b: P2(p.pts[1]), p }; (dxfHas(p.st.layer, DXF_RX_WIN) ? winLines : anyLines).push(s); }
+  }
+  const insOut = inserts.map(ins => {
+    const b = ins.box, cs = [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]].map(q => P2(dxfAp(ins.m, q[0], q[1])));
+    const c = P2(dxfAp(ins.m, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2)), o = P2(dxfAp(ins.m, 0, 0)), ux = P2(dxfAp(ins.m, 1, 0)), uy = P2(dxfAp(ins.m, 0, 1));
+    const sxl = Math.hypot(ux.x - o.x, ux.y - o.y), syl = Math.hypot(uy.x - o.x, uy.y - o.y);
+    return Object.assign(ins, { cs, c, w: (b.x1 - b.x0) * sxl, d: (b.y1 - b.y0) * syl, rot: Math.atan2(ux.y - o.y, ux.x - o.x) * 180 / Math.PI });
+  });
+  if (walls.length) {
+    const evid = (wl, g0, g1) => {
+      const L = Math.hypot(wl.b.x - wl.a.x, wl.b.y - wl.a.y) || 1, ux = (wl.b.x - wl.a.x) / L, uy = (wl.b.y - wl.a.y) / L, gap = g1 - g0;
+      const S = q => (q.x - wl.a.x) * ux + (q.y - wl.a.y) * uy, N = q => -(q.x - wl.a.x) * uy + (q.y - wl.a.y) * ux;
+      for (const ins of insOut) { if (!ins.kind || ins.used) continue; const s = S(ins.c); if (s > g0 - 15 && s < g1 + 15 && Math.abs(N(ins.c)) < wl.t / 2 + 80) { ins.used = true; return { kind: ins.kind, ins, arcs: arcs.filter(a => a.p.ix >= ins.from && a.p.ix < ins.to) }; } }
+      const ar = arcs.filter(a => !a.used && a.r > gap * 0.35 && a.r < gap * 1.2 && Math.abs(N(a.c)) < wl.t / 2 + 20 && (Math.abs(S(a.c) - g0) < 20 || Math.abs(S(a.c) - g1) < 20));
+      if (ar.length) { // kanat çizgisi (menteşeden yay yarıçapı kadar) da kapıyla gider
+        for (const l of anyLines) for (const a of ar) { const da = Math.hypot(l.a.x - a.c.x, l.a.y - a.c.y), db = Math.hypot(l.b.x - a.c.x, l.b.y - a.c.y), len = Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y); if (Math.min(da, db) < 4 && Math.abs(len - a.r) < a.r * 0.15) l.used = true; }
+        return { kind: 'door', arcs: ar };
+      }
+      const inGap = l => { const sa = S(l.a), sb = S(l.b), lo = Math.min(sa, sb), hi = Math.max(sa, sb); return Math.abs(N(l.a)) < wl.t / 2 + 3 && Math.abs(N(l.b)) < wl.t / 2 + 3 && lo > g0 - 8 && hi < g1 + 8 && hi - lo > gap * 0.7; };
+      const wn = winLines.filter(inGap); if (wn.length) { wn.forEach(l => { l.used = true; }); return { kind: 'window' }; }
+      const an = anyLines.filter(inGap); if (an.length >= 3) { an.forEach(l => { l.used = true; }); return { kind: 'window' }; }
+      return null;
+    };
+    const merged = dxfMergeWalls(walls, { gap: DXF_WALL_GAP, open: DXF_OPEN_GAP, evid });
+    walls.length = 0; walls.push(...merged.walls);
+    for (const g of merged.gaps) ops.push(dxfOpening(g.wall, g.s0, g.s1, g.ev, uid));
+    // sürekli duvarın üstüne konmuş kapı / pencere blokları
+    for (const ins of insOut) {
+      if (!ins.kind || ins.used) continue;
+      let best = null, bd = Infinity;
+      for (const w of walls) { const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y); if (L < 30) continue; const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, s = (ins.c.x - w.a.x) * ux + (ins.c.y - w.a.y) * uy, n = Math.abs(-(ins.c.x - w.a.x) * uy + (ins.c.y - w.a.y) * ux); if (s > 0 && s < L && n < w.t / 2 + 40 && n < bd) { bd = n; best = { w, s, ux, uy, L }; } }
+      if (!best) continue;
+      const sp = ins.cs.map(q => (q.x - best.w.a.x) * best.ux + (q.y - best.w.a.y) * best.uy), lo = Math.max(0, Math.min(...sp)), hi = Math.min(best.L, Math.max(...sp));
+      if (hi - lo < 30) continue;
+      if (ops.some(o => o.wall === best.w.id && Math.abs(o.d - (lo + hi) / 2) < (o.w + hi - lo) / 2)) continue;
+      ins.used = true;
+      ops.push(dxfOpening(best.w, lo, hi, { kind: ins.kind, ins, arcs: arcs.filter(a => a.p.ix >= ins.from && a.p.ix < ins.to) }, uid));
+    }
+    for (const ins of insOut) if (ins.used) for (let k = ins.from; k < ins.to; k++) used.add(prims[k]);
+    for (const a of arcs) if (a.used) used.add(a.p);
+    for (const l of [...winLines, ...anyLines]) if (l.used) used.add(l.p);
+    // köşe birleştirme uçları kaydırır: açıklıklar dünyadaki yerlerinde kalsın
+    const byId = new Map(walls.map(w => [w.id, w])), at = ops.map(o => { const w = byId.get(o.wall), L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1; return { x: w.a.x + (w.b.x - w.a.x) * o.d / L, y: w.a.y + (w.b.y - w.a.y) * o.d / L }; });
+    ifcJoinWalls(walls);
+    ops.forEach((o, k) => { const w = byId.get(o.wall), L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1; o.d = r1(Math.max(o.w / 2, Math.min(L - o.w / 2, (at[k].x - w.a.x) * (w.b.x - w.a.x) / L + (at[k].y - w.a.y) * (w.b.y - w.a.y) / L))); });
+  }
+  // --- mobilya (katalogla eşleşen bloklar)
+  const furn = [];
+  for (const ins of insOut) {
+    if (ins.used || ins.kind || !ins.ck || !cat) continue;
+    let w = ins.w, d = ins.d; if (!(w >= 10 && d >= 10 && w <= 2000 && d <= 2000)) continue;
+    let key = ins.ck; const lg = Math.max(w, d), sh = Math.min(w, d);
+    if (key === 'sofa') key = lg >= 190 ? 'sofa3' : lg >= 130 ? 'sofa2' : 'armchair';
+    else if (key === 'bed') key = sh >= 170 && cat.bedK ? 'bedK' : sh >= 125 ? 'bed2' : 'bed1';
+    else if (key === 'table') key = Math.abs(w - d) < Math.max(2, w * 0.06) && /round|yuvarlak|daire|circ/i.test(ins.name) ? 'tableR' : lg >= 170 ? 'table6' : 'table4';
+    const def = cat[key]; if (!def) continue;
+    if (lg > Math.max(def.w, def.d) * 3 || sh < Math.min(def.w, def.d) * 0.25) continue; // "TABLE" adlı antet bloğu masa olmasın
+    let rot = ins.rot; // P2 y'yi çevirdiği için uygulama uzayındaki açı zaten ekranda saat yönü
+    if ((w < d) !== (def.w < def.d) && lg > sh * 1.25 && Math.max(def.w, def.d) > Math.min(def.w, def.d) * 1.25) { [w, d] = [d, w]; rot += 90; }
+    furn.push(withLayer({ id: uid(), type: def.id, name: tr(def.name, def.en || def.name), icon: def.icon, k: def.k, w: Math.max(5, r1(w)), d: Math.max(5, r1(d)), h: def.h, color: def.color, x: ins.c.x, y: ins.c.y, rot: r1(((rot % 360) + 360) % 360), label: '' }, ins.st));
+    ins.used = true; for (let k = ins.from; k < ins.to; k++) used.add(prims[k]);
+  }
+  // --- odalar
+  const rooms = [], texts = [], dims = [], drafts = [];
+  const inPoly = (q, poly) => { let c = false; for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) { const A = poly[a], B = poly[b]; if ((A.y > q.y) !== (B.y > q.y) && q.x < (B.x - A.x) * (q.y - A.y) / (B.y - A.y) + A.x) c = !c; } return c; };
+  const areaOf = pts => { let s = 0; for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; s += a.x * b.y - b.x * a.y; } return Math.abs(s) / 2; };
+  if (opts.rooms !== false) {
+    for (const p of prims) {
+      if (used.has(p) || p.t !== 'pl' || !p.closed || !dxfHas(p.st.layer, DXF_RX_ROOM)) continue;
+      const pts = ifcCleanPoly(p.pts.map(P2)); if (pts.length < 3 || areaOf(pts) < 10000) continue;
+      rooms.push(withLayer({ id: uid(), name: '', color: colors[rooms.length % colors.length], floor: 'none', pts }, p.st)); used.add(p);
+    }
+    if (!rooms.length && walls.length >= 3) for (const pts of ifcRooms(walls)) rooms.push({ id: uid(), name: '', color: colors[rooms.length % colors.length], floor: 'none', pts });
+  }
+  // --- metinler, ölçüler, çizimler
+  const textObjs = [];
+  for (const p of prims) {
+    if (used.has(p)) continue;
+    if (p.t === 'text') {
+      const q = P2(p.p), size = Math.max(1, r1(p.h * sc / 0.72)), c = dxfInk(p.st.col);
+      const o = withLayer({ id: uid(), x: q.x, y: q.y, text: p.s.slice(0, 500), size, color: c || '#1e293b', rot: r1((((-p.ang) % 360) + 360) % 360) }, p.st);
+      texts.push(o); textObjs.push({ o, p });
+    } else if (p.t === 'dim') {
+      const a = P2(p.a), b = P2(p.b), q = P2(p.p), L = Math.hypot(b.x - a.x, b.y - a.y); if (L < 1) continue;
+      const off = (q.x - a.x) * -(b.y - a.y) / L + (q.y - a.y) * (b.x - a.x) / L;
+      dims.push(withLayer({ id: uid(), a, b, off: r1(off) }, p.st));
+    }
+  }
+  // oda adları: odanın içindeki en büyük harfli yazı (yazı plandan kalkar, oda adı olarak çizilir)
+  for (const r of rooms) {
+    let best = null;
+    for (const t of textObjs) {
+      if (t.taken || !/[A-Za-zÀ-ɏЀ-ӿ]/.test(t.o.text) || t.o.text.length > 40) continue;
+      const cx = t.o.x + Math.cos(-t.p.ang * Math.PI / 180) * t.o.text.length * t.o.size * 0.28, cy = t.o.y + Math.sin(-t.p.ang * Math.PI / 180) * t.o.text.length * t.o.size * 0.28;
+      if (!inPoly({ x: cx, y: cy }, r.pts)) continue;
+      const sc2 = t.o.size + (dxfHas(t.p.st.layer, DXF_RX_ROOM) ? 1000 : 0); if (!best || sc2 > best.sc) best = { t, sc: sc2 };
+    }
+    if (best) { r.name = best.t.o.text.slice(0, 60); best.t.taken = true; }
+    else r.name = tr('Oda ', 'Room ') + (rooms.indexOf(r) + 1);
+  }
+  const keepTexts = texts.filter(o => !textObjs.some(t => t.o === o && t.taken));
+  // çizgiler: aynı biçimdeki uç uca LINE'lar çoklu çizgiye birleşir
+  const lineKey = st => [st.layer, st.col, st.dash, st.lw].join('|');
+  const lines = [];
+  for (const p of prims) {
+    if (used.has(p)) continue;
+    if (p.t === 'pl') { if (p.pts.length === 2 && !p.closed && !p.wd) lines.push(p); else { const pts = p.pts.map(P2).filter((q, i, a) => i === 0 || Math.hypot(q.x - a[i - 1].x, q.y - a[i - 1].y) > 0.05); if (pts.length >= 2) drafts.push(draftOf(Object.assign({ id: uid(), shape: 'pline', pts }, p.closed && pts.length > 2 ? { closed: true } : {}), p.st, p.wd)); } }
+    else if (p.t === 'arc') { const pts = [P2(p.p0), P2(p.pm), P2(p.p1)]; drafts.push(draftOf({ id: uid(), shape: 'arc', pts }, p.st)); }
+    else if (p.t === 'circ') drafts.push(draftOf({ id: uid(), shape: 'circle', pts: [P2(p.c), P2(p.p)] }, p.st));
+    else if (p.t === 'fill') {
+      const pts = p.pts.map(P2).filter((q, i, a) => i === 0 || Math.hypot(q.x - a[i - 1].x, q.y - a[i - 1].y) > 0.05); if (pts.length < 3) continue;
+      const o = draftOf({ id: uid(), shape: 'pline', pts, closed: true }, p.st); if (p.fill !== 'none') { o.fill = p.fill; const c = dxfInk(p.st.col); if (c) o.fillCol = c; }
+      if (p.fill !== 'none') { o.w = Math.min(o.w, 0.5); delete o.dash; } // tarama / dolgunun CAD'de kenar çizgisi yok
+      drafts.push(o);
+    }
+  }
+  { const byKey = new Map(), K = q => Math.round(q.x * 20) + ',' + Math.round(q.y * 20);
+    for (const p of lines) { const a = P2(p.pts[0]), b = P2(p.pts[1]); if (Math.hypot(b.x - a.x, b.y - a.y) < 0.05) continue; const k = lineKey(p.st); let g = byKey.get(k); if (!g) byKey.set(k, g = { st: p.st, segs: [] }); g.segs.push({ a, b }); }
+    for (const g of byKey.values()) {
+      const at = new Map(), link = (k, e) => { let l = at.get(k); if (!l) at.set(k, l = []); l.push(e); };
+      for (const s of g.segs) { s.ka = K(s.a); s.kb = K(s.b); link(s.ka, s); link(s.kb, s); }
+      const nextOf = (k, from) => { const l = at.get(k); if (!l || l.length !== 2) return null; return l[0] === from ? l[1] : l[0]; };
+      for (const s0 of g.segs) {
+        if (s0.done) continue; s0.done = true;
+        const pts = [s0.a, s0.b]; let k = s0.kb, prev = s0;
+        for (let n = nextOf(k, prev); n && !n.done; n = nextOf(k, prev)) { n.done = true; const fw = n.ka === k; pts.push(fw ? n.b : n.a); k = fw ? n.kb : n.ka; prev = n; if (pts.length > 2000) break; }
+        k = s0.ka; prev = s0;
+        for (let n = nextOf(k, prev); n && !n.done; n = nextOf(k, prev)) { n.done = true; const fw = n.ka === k; pts.unshift(fw ? n.b : n.a); k = fw ? n.kb : n.ka; prev = n; if (pts.length > 2000) break; }
+        let closed = false; if (pts.length > 3 && K(pts[0]) === K(pts[pts.length - 1])) { pts.pop(); closed = true; }
+        drafts.push(draftOf(Object.assign({ id: uid(), shape: 'pline', pts }, closed ? { closed: true } : {}), g.st));
+      }
+    }
+  }
+  const maxD = +opts.maxDrafts || DXF_MAX_DRAFTS;
+  if (drafts.length > maxD) { stats.truncated += drafts.length - maxD; drafts.length = maxD; }
+  // --- proje
+  const ts = walls.map(w => w.t).sort((a, b) => a - b), wallT = ts.length ? Math.max(5, Math.round(ts[ts.length >> 1])) : 20, wallH = 270;
+  for (const w of walls) w.h = wallH;
+  const usedLayers = new Set(); for (const arr of [walls, drafts, keepTexts, dims, rooms, furn]) for (const o of arr) if (o.layer) usedLayers.add(o.layer);
+  const layersOut = outLayers.filter(l => l.id === '0' || usedLayers.has(l.id));
+  Object.assign(stats, { layers: layersOut.length, drafts: drafts.length, texts: keepTexts.length, dims: dims.length, walls: walls.length, ops: ops.length, rooms: rooms.length, furn: furn.length });
+  const name = String(opts.name || 'DXF').slice(0, 80);
+  const floor = { id: uid(), name: tr('Zemin Kat', 'Ground Floor'), walls, ops, furn, rooms, slabs: [], voids: [], sections: [], axes: [], dims, texts: keepTexts, sketches: [], drafts, groups: [], slabFloor: 'none', slabColor: null };
+  const project = { v: 2, name, grid: 10, gridType: 'square', wallT, wallH, bg: null, lib: { shapes: [] }, textures: [], floors: [floor] };
+  if (layersOut.length > 1) { project.layers = layersOut; project.activeLayer = '0'; }
+  return { project, stats };
+}
+// Kapı / pencere açıklığı: duvar boyunca [s0, s1] (cm, a ucundan); yay varsa menteşe ucu ve açılma yönü ondan
+function dxfOpening(w, s0, s1, ev, uid) {
+  const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1, ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, wd = Math.max(30, s1 - s0), d = (s0 + s1) / 2;
+  const nm = ev.ins ? ev.ins.name : '', r1 = v => Math.round(v * 10) / 10;
+  const o = { id: uid(), wall: w.id, d: r1(d), w: r1(wd), h: 210, sill: 0, type: 'door', flip: 0, side: 1, open: 0 };
+  if (ev.kind === 'window') { o.type = 'window'; o.h = 120; o.sill = 90; return o; }
+  if (dxfHas(nm, DXF_RX_SLIDE)) { o.type = 'slide'; return o; }
+  const arcs = (ev.arcs || []).filter(a => a.r > wd * 0.3);
+  if (arcs.length) for (const a of arcs) a.used = true;
+  const S = q => (q.x - w.a.x) * ux + (q.y - w.a.y) * uy, N = q => -(q.x - w.a.x) * uy + (q.y - w.a.y) * ux;
+  const ends = arcs.map(a => S(a.c) < d ? 0 : 1);
+  if (dxfHas(nm, DXF_RX_DOUBLE) || (ends.includes(0) && ends.includes(1)) || (wd >= 150 && !arcs.length)) o.type = 'double';
+  if (arcs.length) { const a = arcs[0]; o.flip = S(a.c) < d ? 0 : 1; o.side = N(a.m) - N(a.c) >= 0 ? 1 : -1; } // menteşe = yay merkezi; açılma = yayın orta noktasının tarafı
+  return o;
+}
+// Paralel çizgi çiftleri → duvar parçaları. segs: [{ a, b, src }] (cm). Açı kovası + dik uzaklık sıralaması; en yakın çift önce,
+// her doğru parçasının kullanılan aralıkları tutulur (bir dış çizgi birden çok iç çizgiyle eşleşebilir).
+function dxfPairWalls(segs, o = {}) {
+  const tmin = o.tmin || 4, tmax = o.tmax || 80, minLen = o.minLen || 10, out = [], usedSegs = new Set();
+  if (segs.length > 20000) return { walls: out, used: [] };
+  const B = 180, bins = Array.from({ length: B }, () => []);
+  segs.forEach((s, i) => { s.i = i; });
+  for (const s of segs) {
+    const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y; s.L = Math.hypot(dx, dy); if (s.L < 1) continue;
+    s.ux = dx / s.L; s.uy = dy / s.L; let th = Math.atan2(dy, dx); if (th < 0) th += Math.PI; if (th >= Math.PI) th -= Math.PI;
+    s.bin = Math.min(B - 1, Math.floor(th / Math.PI * B)); s.busy = []; bins[s.bin].push(s);
+  }
+  const cands = [], seen = new Set();
+  for (let b = 0; b < B; b++) {
+    const grp = bins[b].concat(bins[(b + 1) % B]); if (grp.length < 2) continue;
+    const th = (b + 0.5) / B * Math.PI, nx = -Math.sin(th), ny = Math.cos(th);
+    for (const s of grp) s.rho = s.a.x * nx + s.a.y * ny;
+    grp.sort((p, q) => p.rho - q.rho);
+    for (let i = 0; i < grp.length; i++) for (let j = i + 1; j < grp.length && grp[j].rho - grp[i].rho <= tmax + 2; j++) {
+      const s1 = grp[i], s2 = grp[j];
+      if (Math.abs(s1.ux * s2.uy - s1.uy * s2.ux) > 0.026) continue; // ≤ 1,5°
+      const id = s1.i < s2.i ? s1.i + ':' + s2.i : s2.i + ':' + s1.i; if (seen.has(id)) continue; seen.add(id);
+      const m2 = { x: (s2.a.x + s2.b.x) / 2, y: (s2.a.y + s2.b.y) / 2 }, d = Math.abs(-(m2.x - s1.a.x) * s1.uy + (m2.y - s1.a.y) * s1.ux);
+      if (d < tmin || d > tmax) continue;
+      const t2a = (s2.a.x - s1.a.x) * s1.ux + (s2.a.y - s1.a.y) * s1.uy, t2b = (s2.b.x - s1.a.x) * s1.ux + (s2.b.y - s1.a.y) * s1.uy;
+      const lo = Math.max(0, Math.min(t2a, t2b)), hi = Math.min(s1.L, Math.max(t2a, t2b)); if (hi - lo < minLen) continue;
+      cands.push({ s1, s2, d, lo, hi });
+    }
+  }
+  cands.sort((p, q) => p.d - q.d);
+  const free = (s, lo, hi) => { // [lo, hi] (s1 parametresinde) kullanılmamış alt aralıkları
+    let parts = [[lo, hi]];
+    for (const [u0, u1] of s.busy) { const nx = []; for (const [a, b] of parts) { if (u1 <= a || u0 >= b) nx.push([a, b]); else { if (u0 > a) nx.push([a, u0]); if (u1 < b) nx.push([u1, b]); } } parts = nx; }
+    return parts;
+  };
+  for (const c of cands) {
+    const { s1, s2 } = c, P1 = t => ({ x: s1.a.x + s1.ux * t, y: s1.a.y + s1.uy * t });
+    const to2 = t => { const p = P1(t); return (p.x - s2.a.x) * s2.ux + (p.y - s2.a.y) * s2.uy; };
+    for (const [a, b] of free(s1, c.lo, c.hi)) {
+      const u0 = to2(a), u1 = to2(b), lo2 = Math.min(u0, u1), hi2 = Math.max(u0, u1);
+      for (const [p, q] of free(s2, lo2, hi2)) {
+        const back = u => { const p2 = { x: s2.a.x + s2.ux * u, y: s2.a.y + s2.uy * u }; return (p2.x - s1.a.x) * s1.ux + (p2.y - s1.a.y) * s1.uy; };
+        const t0 = Math.min(back(p), back(q)), t1 = Math.max(back(p), back(q)); if (t1 - t0 < minLen) continue;
+        const A = P1(t0), Bp = P1(t1), sgn = (-(s2.a.x - s1.a.x) * s1.uy + (s2.a.y - s1.a.y) * s1.ux) >= 0 ? 1 : -1;
+        const off = c.d / 2 * sgn, nx = -s1.uy, ny = s1.ux, r1 = v => Math.round(v * 10) / 10;
+        out.push({ a: { x: r1(A.x + nx * off), y: r1(A.y + ny * off) }, b: { x: r1(Bp.x + nx * off), y: r1(Bp.y + ny * off) }, t: r1(c.d), src: s1.src });
+        s1.busy.push([t0, t1]); s2.busy.push([p, q]); usedSegs.add(s1); usedSegs.add(s2);
+      }
+    }
+  }
+  // tamamen eşleşen kaynak nesneler "kullanıldı": bir çokgenin ya da çizginin uzunluğunun ≥ %80'i duvar olduysa
+  const cover = new Map();
+  for (const s of segs) { if (!s.L) continue; const e = cover.get(s.src) || { L: 0, u: 0 }; e.L += s.L; for (const [a, b] of s.busy) e.u += b - a; cover.set(s.src, e); }
+  const used = []; for (const s of segs) { const e = cover.get(s.src); if (e && e.u >= e.L * 0.8 && usedSegs.has(s)) used.push(s); }
+  return { walls: out, used };
+}
+// Aynı doğrudaki (açı ≤ 1°, eksen ≤ 1,5 cm, kalınlık ≤ 1,5 cm) duvarları birleştirir; o.gap altı boşluk kapanır,
+// o.open aralığında ve o.evid(...) kanıt verdiyse boşluk açıklık olur → { walls, gaps: [{ wall, s0, s1, ev }] }
+function dxfMergeWalls(walls, o = {}) {
+  const gapMax = o.gap || 40, op = o.open || [50, 320], out = [], gaps = [];
+  if (walls.length > 6000) return { walls, gaps };
+  const info = walls.map(w => { const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1; let ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L; if (ux < -1e-9 || (Math.abs(ux) < 1e-9 && uy < 0)) { ux = -ux; uy = -uy; } return { w, L, ux, uy, rho: -w.a.x * uy + w.a.y * ux }; });
+  const done = new Set();
+  for (let i = 0; i < info.length; i++) {
+    if (done.has(i)) continue;
+    const A = info[i], grp = [A]; done.add(i);
+    for (let j = i + 1; j < info.length; j++) { if (done.has(j)) continue; const B2 = info[j]; if (Math.abs(A.ux * B2.uy - A.uy * B2.ux) > 0.0175 || Math.abs(B2.rho - A.rho) > 1.5 || Math.abs(B2.w.t - A.w.t) > 1.5 || (B2.w.layer || '') !== (A.w.layer || '')) continue; grp.push(B2); done.add(j); }
+    const ux = A.ux, uy = A.uy, rho = grp.reduce((s, g) => s + g.rho, 0) / grp.length, O = { x: -uy * rho, y: ux * rho };
+    const S = q => (q.x - O.x) * ux + (q.y - O.y) * uy;
+    const iv = grp.map(g => { const s0 = S(g.w.a), s1 = S(g.w.b); return { s0: Math.min(s0, s1), s1: Math.max(s0, s1), w: g.w }; }).sort((p, q) => p.s0 - q.s0);
+    const P = s => ({ x: Math.round((O.x + ux * s) * 10) / 10, y: Math.round((O.y + uy * s) * 10) / 10 });
+    let cur = { s0: iv[0].s0, s1: iv[0].s1, w: iv[0].w, holes: [] };
+    const flush = () => {
+      const w = Object.assign({}, cur.w, { a: P(cur.s0), b: P(cur.s1) }); out.push(w);
+      for (const hh of cur.holes) gaps.push({ wall: w, s0: hh[0] - cur.s0, s1: hh[1] - cur.s0, ev: hh[2] });
+    };
+    for (let k = 1; k < iv.length; k++) {
+      const n = iv[k], gap = n.s0 - cur.s1;
+      if (gap <= gapMax) { cur.s1 = Math.max(cur.s1, n.s1); continue; }
+      let ev = null;
+      if (gap >= op[0] && gap <= op[1] && o.evid) { const tmp = { a: P(cur.s0), b: P(n.s1), t: cur.w.t }; const s0 = cur.s1 - cur.s0, s1 = n.s0 - cur.s0; ev = o.evid(tmp, s0, s1); }
+      if (ev) { cur.holes.push([cur.s1, n.s0, ev]); cur.s1 = Math.max(cur.s1, n.s1); continue; }
+      flush(); cur = { s0: n.s0, s1: n.s1, w: n.w, holes: [] };
+    }
+    flush();
+  }
+  return { walls: out, gaps };
+}
+/* DXF-IMPORT:END */
 const CAT_PARTS = { billiard: billiardParts }; // mirror of CAT_PARTS in app.js
 
 /* ---------- Project state ---------- */
@@ -2564,6 +3332,22 @@ tool('import_ifc',
     const { project, stats } = ifcToProject(fs.readFileSync(p, 'utf8'), { uid, colors: ROOMCOL, catalog: BYID, name: a.name || path.basename(p).replace(/\.ifc$/i, '') });
     P = normalizeProject(project);
     return 'Imported ' + (stats.schema || 'IFC') + ' "' + P.name + '" from ' + p + ': ' + stats.floors + ' floor(s), ' + stats.walls + ' walls, ' + stats.ops + ' doors/windows, ' + stats.rooms + ' rooms, ' + stats.slabs + ' slabs, ' + stats.voids + ' slab openings, ' + stats.columns + ' column piece(s), ' + stats.railings + ' railing(s), ' + stats.components + ' component(s), ' + stats.roofs + ' roof(s), ' + stats.stairs + ' stair(s), ' + stats.ramps + ' ramp(s)' + (stats.skipped ? ', ' + stats.skipped + ' item(s) skipped' : '') + '.\n\n' + summarize();
+  });
+tool('import_dxf',
+  'Import a DXF drawing (ASCII DXF R12 … 2018+, from AutoCAD, BricsCAD, DraftSight, LibreCAD, QCAD …; DWG must first be saved as DXF) and make it the working project (one floor). Units come from $INSUNITS (mm, cm, m, in, ft) or are guessed from the drawing size; pass units to override. DXF layers become drawing layers (name, colour, on / off, locked, plot). LINE, LWPOLYLINE / POLYLINE (with arc bulges), ARC, CIRCLE, ELLIPSE, SPLINE, SOLID / TRACE / 3DFACE, HATCH (solid or pattern fill), LEADER and MLEADER become 2D drafting objects (kind "draft") with their colour, line type and line weight; TEXT, MTEXT and ATTRIB become texts; linear DIMENSIONs become dimensions (other dimensions are drawn from their blocks). Block INSERTs are exploded (nested, rotated, scaled, mirrored, arrays); blocks named after catalogue furniture (bed, sofa, chair, table, WC …) become furniture. Unless walls is false: MLINEs and parallel line pairs / wide polylines on wall layers (WALL, DUVAR, A-WALL, MUR, WAND …) become walls; door arcs, window lines and door / window blocks in a wall gap become doors and windows; rooms come from closed polylines on room layers or are detected from the walls and named after the largest text inside.',
+  {
+    path: { type: 'string', description: 'Path to the .dxf file, relative to the server working directory or absolute.' },
+    name: { type: 'string', description: 'Project name. Default: the file name.' },
+    units: { type: 'string', enum: ['mm', 'cm', 'm', 'in', 'ft'], description: 'Drawing unit, overriding $INSUNITS and the guess.' },
+    walls: { type: 'boolean', description: 'Detect walls, doors / windows and rooms (default true). false = everything stays 2D drafting.' },
+  },
+  ['path'],
+  a => {
+    const p = path.resolve(String(a.path));
+    const text = dxfDecode(new Uint8Array(fs.readFileSync(p)));
+    const { project, stats } = dxfToProject(text, { uid, colors: ROOMCOL, catalog: BYID, name: a.name || path.basename(p).replace(/\.dxf$/i, ''), units: a.units || null, walls: a.walls !== false, rooms: a.walls !== false });
+    P = normalizeProject(project);
+    return 'Imported DXF ' + (stats.version || '') + ' "' + P.name + '" from ' + p + ' (units ' + stats.units + (stats.unitsGuessed ? ', guessed' : '') + '): ' + stats.walls + ' walls, ' + stats.ops + ' doors/windows, ' + stats.rooms + ' rooms, ' + stats.furn + ' furniture, ' + stats.drafts + ' drafting objects, ' + stats.texts + ' texts, ' + stats.dims + ' dimensions, ' + stats.layers + ' layer(s)' + (stats.truncated ? ', ' + stats.truncated + ' object(s) over the limit' : '') + (stats.skipped ? ', ' + stats.skipped + ' item(s) skipped (' + Object.keys(stats.skippedTypes).join(', ') + ')' : '') + '.\n\n' + summarize();
   });
 
 tool('save_project',
