@@ -1419,6 +1419,7 @@ function doorLeaf3D(par, o, lw, H, cx, y0, cz, sgn, C, flush = false) {
   }
 }
 function normalizeProject(P) {
+  if (P && 'group' in P) { const g = cleanGroup(P.group); if (g) P.group = g; else delete P.group; }
   if (typeof P.id !== 'string' || !/^[\w-]{6,40}$/.test(P.id)) P.id = uid() + uid(); // eski projeler bir kez kimlik alır
   if (!P.floors || !P.floors.length) P.floors = [newFloor(L('Zemin Kat', 'Ground Floor'))];
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
@@ -1457,6 +1458,37 @@ function loadProject(obj, msg) {
    geçişte stashTab() globalleri sekmeye yazar, sekmeden geri yükler. Pano (ui.clip)
    globaldir, bu yüzden projeler arası kopyala-yapıştır kendiliğinden çalışır. */
 let tabs = [], tabIdx = 0;
+/* Proje grupları: P.group (isteğe bağlı, ≤ 40 karakter; yok = grupsuz, eski projeler aynı kalır). Sekme çubuğunda aynı gruptaki
+   sekmeler renkli bir çipin ardında toplanır (çip tıklanınca katlanır; katlı gruplar fp_tabgrp_off'ta, yalnız görünüm),
+   Projelerim'de her grup ayrı bölümdür. Renk adın özetinden gelir, her yerde aynıdır. */
+const GROUP_MAX = 40;
+function cleanGroup(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, 40) : ''; } // = GROUP_MAX; işlev: normalizeProject dosyada önce gelir
+const projGroup = p => cleanGroup(p && p.group);
+function groupColor(name) { let h = 0; for (const ch of String(name).toLowerCase()) h = (h * 31 + ch.codePointAt(0)) % 360; return `hsl(${h} 62% 55%)`; }
+const lsArr = k => { try { const v = JSON.parse(localStorage.getItem(k) || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } };
+const lsPut = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } };
+// bilinen grup adları: açık sekmeler + daha önce kullanılanlar (öneri listesi için)
+function knownGroups() {
+  const s = new Set(lsArr('fp_groups').map(cleanGroup).filter(Boolean));
+  tabs.forEach((t, i) => { const g = projGroup(i === tabIdx ? P : t.P); if (g) s.add(g); });
+  if (projGroup(P)) s.add(projGroup(P));
+  return [...s].sort((a, b) => a.localeCompare(b));
+}
+function rememberGroup(g) { if (!g) return; const a = lsArr('fp_groups').filter(x => x !== g); a.unshift(g); lsPut('fp_groups', a.slice(0, 30)); }
+// etkin projenin grubunu değiştirir (geri alınabilir, kaydedilir, eşitlenir)
+function setProjGroup(v) {
+  const g = cleanGroup(v); if (g === projGroup(P)) return;
+  if (g) { P.group = g; rememberGroup(g); } else delete P.group;
+  commit(); renderTabs(); if (!sel.length) renderProps();
+}
+function groupPrompt() {
+  const known = knownGroups();
+  const v = prompt(L(`“${P.name}” hangi grupta olsun? (ör. Ahsen’in projeleri) — boş bırakın: grupsuz${known.length ? '\nVar olanlar: ' + known.join(', ') : ''}`,
+    `Which group should “${P.name}” be in? (e.g. Ahsen’s projects) — leave empty for no group${known.length ? '\nExisting: ' + known.join(', ') : ''}`), projGroup(P));
+  if (v != null) setProjGroup(v);
+}
+const tabGrpOff = () => new Set(lsArr('fp_tabgrp_off'));
+function toggleTabGroup(g) { const s = tabGrpOff(); if (s.has(g)) s.delete(g); else s.add(g); lsPut('fp_tabgrp_off', [...s]); renderTabs(); }
 const tabSnapshot = () => ({ P, hist, hi, fi, view: { ...view }, sel: sel.slice() });
 function syncTab() {
   if (!tabs[tabIdx]) tabs[tabIdx] = { id: uid() };
@@ -1518,15 +1550,33 @@ function restoreTabs(st) {
 }
 function renderTabs() {
   const el = $('#ptabs'); if (!el) return;
-  el.innerHTML = tabs.map((t, i) => {
+  const pOf = i => (i === tabIdx ? P : tabs[i].P), off = tabGrpOff(), order = [], by = new Map();
+  tabs.forEach((t, i) => { const g = projGroup(pOf(i)); if (!by.has(g)) { by.set(g, []); order.push(g); } by.get(g).push(i); });
+  order.sort((a, b) => (a ? 1 : 0) - (b ? 1 : 0)); // grupsuzlar önce, gruplar ilk görüldükleri sırayla
+  const tab = i => tabHtml(tabs[i], i, projGroup(pOf(i)));
+  let h = '';
+  for (const g of order) {
+    const ids = by.get(g);
+    if (!g) { h += ids.map(tab).join(''); continue; }
+    const shut = off.has(g), shown = shut ? ids.filter(i => i === tabIdx) : ids;
+    h += `<button class="ptab-grp" data-tabgrp="${esc(g)}" style="--gc:${groupColor(g)}" title="${esc(g)} — ${shut ? L('göstermek için tıkla', 'click to show') : L('katlamak için tıkla', 'click to fold')}">${shut ? '▸' : '▾'} ${esc(g)} <span class="ptg-n">${ids.length}</span></button>`;
+    h += shown.map(tab).join('');
+  }
+  el.innerHTML = h + `<button class="ptab-add" data-tabnew title="${L('Yeni proje sekmesi', 'New project tab')}">＋</button>`;
+}
+function tabHtml(t, i, g) { // g = grubu (renk çizgisi)
     const nm = (i === tabIdx ? P && P.name : t.P && t.P.name) || L('Yeni Proje', 'New Project');
-    return `<div class="ptab${i === tabIdx ? ' on' : ''}" data-tab="${i}" title="${esc(nm)} — ${L('çift tık: yeniden adlandır', 'double-click: rename')}"><span class="ptn">📐 ${esc(nm)}</span><button class="ptx" data-tabclose="${i}" title="${L('Projeyi kapat', 'Close project')}">×</button></div>`;
-  }).join('') + `<button class="ptab-add" data-tabnew title="${L('Yeni proje sekmesi', 'New project tab')}">＋</button>`;
+    return `<div class="ptab${i === tabIdx ? ' on' : ''}${g ? ' ingrp' : ''}" data-tab="${i}"${g ? ` style="--gc:${groupColor(g)}"` : ''} title="${esc(nm)} — ${L('çift tık: yeniden adlandır', 'double-click: rename')}"><span class="ptn">📐 ${esc(nm)}</span><button class="ptx" data-tabclose="${i}" title="${L('Projeyi kapat', 'Close project')}">×</button></div>`;
 }
 $('#ptabs').addEventListener('click', e => {
+  const gc = e.target.closest('[data-tabgrp]'); if (gc) { toggleTabGroup(gc.dataset.tabgrp); return; }
   const c = e.target.closest('[data-tabclose]'); if (c) { e.stopPropagation(); closeTab(+c.dataset.tabclose); return; }
   if (e.target.closest('[data-tabnew]')) { templatesModal(); return; }
   const t = e.target.closest('[data-tab]'); if (t) switchTab(+t.dataset.tab);
+});
+$('#ptabs').addEventListener('contextmenu', e => { // sağ tık: grubu değiştir
+  const t = e.target.closest('[data-tab]'); if (!t) return;
+  e.preventDefault(); if (+t.dataset.tab !== tabIdx) switchTab(+t.dataset.tab); groupPrompt();
 });
 $('#ptabs').addEventListener('dblclick', e => {
   const t = e.target.closest('[data-tab]'); if (!t || e.target.closest('[data-tabclose]')) return;
@@ -7891,6 +7941,7 @@ function slopePanelHtml(o) {
 }
 function projectPanel() {
   const f = F(); let h = `<h3>⚙️ ${L('Proje', 'Project')}</h3>`;
+  h += `<label class="f"><span>${L('Grup', 'Group')}</span><input type="text" data-k="proj" data-p="group" list="grpList" maxlength="${GROUP_MAX}" value="${esc(projGroup(P))}" placeholder="${L('ör. Ahsen’in projeleri', 'e.g. Ahsen’s projects')}"></label><datalist id="grpList">${knownGroups().map(g => `<option value="${esc(g)}">`).join('')}</datalist>`;
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
   h += `<div class="row"><button class="btn sm" data-act="wallhall" title="${L('Tüm katlardaki mevcut duvarları bu yüksekliğe getirir; kat bazlı yükseklikler sıfırlanır', 'Sets every existing wall on every floor to this height; per-floor heights are cleared')}">⬆ ${L('Mevcut tüm duvarlara uygula', 'Apply to all existing walls')}</button></div>`;
   h += layersPanelHtml();
@@ -8030,6 +8081,7 @@ function applyProp(t, final) {
   if (k === 'floor' && p === 'name') { const n = String(v).trim().slice(0, 60); if (!n) { if (final) renderProps(); return; } F().name = n; renderFloors(); if (ui.view3d && T3) sync3DFloors(); if (final) { commit(); renderProps(); } return; } // kat adı
   if (k === 'floor' && p === 'slabOn') { if (v) delete F().noSlab; else F().noSlab = true; if (ui.view3d && T3) schedBuild3D(); commit(); renderProps(); return; } // kat döşemesi aç / kapat
   if (k === 'floor') { F()[p] = v; if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return; }
+  if (k === 'proj' && p === 'group') { if (final) setProjGroup(v); return; } // yazarken değil, bitince (Enter / alandan çıkış)
   if (k === 'proj') { P[p] = v; if (p === 'wallH' && ui.view3d && T3) schedBuild3D(); if (final) { commit(); } return; }
   if (k === 'bg' && P.bg) { P.bg[p] = v; if (p === 'lock' && v) sel = sel.filter(x => x !== 'bg'); render(); if (final) { commit(); if (p === 'lock') renderProps(); } return; }
   if (k === 'wallpos') {
@@ -10070,6 +10122,7 @@ async function saveBrowser() {
 /* Kaydet + Google Drive: bağlıysa hemen eşitler; oturum süresi dolduysa bildirimde "yeniden bağlan" düğmesi;
    hiç bağlanmamışsa (ve bu adreste Drive kullanılabiliyorsa) oturum başına bir kez "Drive'a da kaydet" önerir. */
 function saveDriveStep(msg) {
+  if (gd.token && !gdWanted(P.id)) { toast(msg, { label: L('☁ Bu projeyi Drive ile eşitle', '☁ Sync this project with Drive'), fn: () => { gdPick(P.id, true); gdSync(true); } }); return; }
   if (gd.token) { gdSync(true); toast(msg + L(' · Google Drive ile eşitleniyor…', ' · syncing with Google Drive…')); return; }
   if (!gdUsable()) { toast(msg); return; }
   if (gdCfg().on) { toast(msg, { label: L("☁ Drive'a yeniden bağlan", "☁ Reconnect Google Drive"), fn: gdConnect }); return; }
@@ -10470,6 +10523,32 @@ function exportBimModal(kind) {
   };
   for (const b of document.querySelectorAll('[data-bimdl]')) b.onclick = () => { closeModal(); if (b.dataset.bimdl === 'revit') downloadRevit(); else downloadIfc(); };
 }
+// Projelerim kartları: her grup ayrı bölüm (ada göre), grupsuzlar en sonda; Drive bağlıysa kartta eşitleme seçimi
+function projCardsHtml(list, loc) {
+  const showSync = gdCfg().on && gdUsable();
+  const card = idx => {
+    const it = list[idx];
+    const pr = it.project, dt = it.updatedAt ? new Date(it.updatedAt).toLocaleString(loc, { dateStyle: 'short', timeStyle: 'short' }) : '';
+    const area = (pr.floors || []).reduce((s, fl) => s + (fl.rooms || []).reduce((a, r) => a + polyArea(r.pts), 0), 0);
+    return `<div class="card" style="cursor:default">
+      <div data-open="${idx}" style="cursor:pointer" title="${L('Açmak için tıkla', 'Click to open')}">${projectThumbSvg(pr)}</div>
+      <b>${esc(it.name)}</b>
+      <div class="muted" style="font-size:11px;margin-bottom:6px">${pr.floors.length} ${L('kat', 'floor(s)')} • ${fmtArea(area)}${dt ? ' • ' + dt : ''}</div>
+      <div class="row" style="margin:0">
+        <button class="btn sm primary" data-open="${idx}">${L('Aç', 'Open')}</button>
+        <button class="btn sm" data-dl="${idx}" title="${L('JSON olarak indir', 'Download as JSON')}">⬇ JSON</button>
+        <button class="btn sm" data-grp="${idx}" title="${L('Grubu değiştir', 'Change group')}">🏷 ${projGroup(pr) ? esc(projGroup(pr)) : L('Grup', 'Group')}</button>
+        ${showSync && pr.id ? `<button class="btn sm" data-gdp="${idx}" title="${L('Bu projeyi Google Drive ile eşitle ya da eşitleme', 'Sync this project with Google Drive or not')}">${gdWanted(pr.id) ? '☁ ' + L('Eşitlenir', 'Synced') : '⛔ ' + L('Eşitlenmez', 'Not synced')}</button>` : ''}
+        <button class="btn sm" data-rm="${idx}" style="color:var(--danger)">🗑 ${L('Sil', 'Delete')}</button>
+      </div>
+    </div>`;
+  };
+  const by = new Map(); list.forEach((it, k) => { const g = projGroup(it.project); if (!by.has(g)) by.set(g, []); by.get(g).push(k); });
+  const names = [...by.keys()].filter(Boolean).sort((x, y) => x.localeCompare(y));
+  if (!names.length) return `<div class="cards">${list.map((_, k) => card(k)).join('')}</div>`;
+  const sect = (g, label, col) => `<h4 class="pgrp-h" style="--gc:${col}">${label} <span class="muted" style="font-weight:400">(${by.get(g).length})</span></h4><div class="cards">${by.get(g).map(card).join('')}</div>`;
+  return names.map(g => sect(g, esc(g), groupColor(g))).join('') + (by.has('') ? sect('', L('Grupsuz', 'No group'), 'var(--muted)') : '');
+}
 async function projectsModal() {
   let list = [];
   try { list = await dbGetAll('projects'); list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); } catch (e) { }
@@ -10482,20 +10561,7 @@ async function projectsModal() {
     <button class="btn" id="mSync">☁ ${L('Eşitle ve paylaş…', 'Sync & share…')}</button>
   </div>
   <h4 class="muted" style="margin:12px 0 8px">${L('Tarayıcıda kayıtlı projeler', 'Projects saved in browser')} (${list.length})</h4>
-  ${list.length ? `<div class="cards">${list.map((it, idx) => {
-    const pr = it.project, dt = it.updatedAt ? new Date(it.updatedAt).toLocaleString(loc, { dateStyle: 'short', timeStyle: 'short' }) : '';
-    const area = (pr.floors || []).reduce((s, fl) => s + (fl.rooms || []).reduce((a, r) => a + polyArea(r.pts), 0), 0);
-    return `<div class="card" style="cursor:default">
-      <div data-open="${idx}" style="cursor:pointer" title="${L('Açmak için tıkla', 'Click to open')}">${projectThumbSvg(pr)}</div>
-      <b>${esc(it.name)}</b>
-      <div class="muted" style="font-size:11px;margin-bottom:6px">${pr.floors.length} ${L('kat', 'floor(s)')} • ${fmtArea(area)}${dt ? ' • ' + dt : ''}</div>
-      <div class="row" style="margin:0">
-        <button class="btn sm primary" data-open="${idx}">${L('Aç', 'Open')}</button>
-        <button class="btn sm" data-dl="${idx}" title="${L('JSON olarak indir', 'Download as JSON')}">⬇ JSON</button>
-        <button class="btn sm" data-rm="${idx}" style="color:var(--danger)">🗑 ${L('Sil', 'Delete')}</button>
-      </div>
-    </div>`;
-  }).join('')}</div>` : `<p class="muted">${L('Henüz kayıtlı proje yok. Üstteki <b>💾 Kaydet</b> düğmesiyle projelerinizi buraya ekleyebilirsiniz.', 'No saved projects yet. Use the <b>💾 Save</b> button in the top bar to save projects here.')}</p>`}`, 'projects');
+  ${list.length ? projCardsHtml(list, loc) : `<p class="muted">${L('Henüz kayıtlı proje yok. Üstteki <b>💾 Kaydet</b> düğmesiyle projelerinizi buraya ekleyebilirsiniz.', 'No saved projects yet. Use the <b>💾 Save</b> button in the top bar to save projects here.')}</p>`}`, 'projects');
   $('#mSave').onclick = async () => { await saveBrowser(); projectsModal(); };
   $('#mJson').onclick = () => downloadJson(P);
   $('#mOpenF').onclick = () => $('#fileOpen').click();
@@ -10507,6 +10573,22 @@ async function projectsModal() {
   $('#modal').querySelectorAll('[data-dl]').forEach(b => b.onclick = () => {
     const it = list[+b.dataset.dl];
     if (it) { const n = (it.name || 'plan').replace(/[^\w\-çğıöşüÇĞİÖŞÜ ]+/g, '_') + '.json'; download(n, new Blob([JSON.stringify(it.project, null, 2)], { type: 'application/json' })); }
+  });
+  $('#modal').querySelectorAll('[data-grp]').forEach(b => b.onclick = async () => {
+    const it = list[+b.dataset.grp]; if (!it) return;
+    const known = knownGroups(), cur = projGroup(it.project);
+    const v = prompt(L(`“${it.name}” hangi grupta olsun? — boş bırakın: grupsuz${known.length ? '\nVar olanlar: ' + known.join(', ') : ''}`, `Which group should “${it.name}” be in? — leave empty for no group${known.length ? '\nExisting: ' + known.join(', ') : ''}`), cur);
+    if (v == null) return;
+    const g = cleanGroup(v); if (g) { it.project.group = g; rememberGroup(g); } else delete it.project.group;
+    await dbPut('projects', it);
+    if (P && it.project.id === P.id) setProjGroup(g); // açık proje de aynı gruba geçer
+    projectsModal();
+  });
+  $('#modal').querySelectorAll('[data-gdp]').forEach(b => b.onclick = () => {
+    const it = list[+b.dataset.gdp], id = it && it.project.id; if (!id) return;
+    const on = !gdWanted(id); gdPick(id, on);
+    if (on && P && id === P.id && gd.token) gdSyncSoon(300);
+    projectsModal();
   });
   $('#modal').querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
     const it = list[+b.dataset.rm];
@@ -10845,6 +10927,11 @@ function gdAutoDue(now, every, last, tryAt, hidden) {
   const period = (every || 60) * 1000;
   return now - last >= period && now - tryAt >= Math.min(period, 60000);
 }
+/* Hangi projeler Drive ile eşitlensin (bu cihazda): fp_gdrive_pick = { [P.id]: 1 | 0 } projeye özel seçim; seçim yoksa
+   gdCfg().pick: yok = otomatik (eski davranış), 'chosen' = yalnız seçtiklerim. Drive'dan açılan ya da Drive linki yapılan proje seçilir. */
+const gdPicks = () => lsJson('fp_gdrive_pick');
+function gdWanted(id) { if (!id) return false; const m = gdPicks(); return Object.prototype.hasOwnProperty.call(m, id) ? !!m[id] : gdCfg().pick !== 'chosen'; }
+function gdPick(id, on) { if (!id) return; const m = gdPicks(); m[id] = on ? 1 : 0; lsSet('fp_gdrive_pick', m); }
 const gdState = () => lsJson('fp_gdrive_state');    // { [P.id]: { f: dosya id, v: Drive sürümü, h: son eşitlenen içeriğin özeti } }
 function gdSetState(id, v) { const s = gdState(); if (v) s[id] = v; else delete s[id]; lsSet('fp_gdrive_state', s); }
 // FNV-1a + uzunluk: "son eşitlenen içerik bu mu?" sorusu için yeterli
@@ -10969,6 +11056,7 @@ async function gdSync(manual) {
   if (!gd.token) { if (manual) gdConnect(); return; }
   if (gd.busy) { gd.again = true; return; }
   if (gd.conflict || !P) { gdUI(); return; }
+  if (!gdWanted(P.id)) { if (manual) toast(L('Bu proje Drive ile eşitlenmiyor — ☁ Eşitle penceresinde “Bu projeyi eşitle”yi açın', 'This project is not synced with Drive — turn on “Sync this project” in the ☁ dialog')); gdUI(); return; }
   if (!syncIdle()) { gdSyncSoon(2000); return; }
   gd.busy = true; gd.status = 'busy'; gdUI();
   try {
@@ -11066,6 +11154,7 @@ async function gdOpenFile(fileId) {
     const o = JSON.parse(s);
     if (!o || !Array.isArray(o.floors)) throw new Error(L('geçersiz plan', 'invalid plan'));
     o.id = (meta.appProperties && meta.appProperties.fpId) || o.id || pid();
+    gdPick(o.id, true); // Drive'dan açılan proje eşitlenir
     await gdPullTex(o);
     if (ui.modal === 'sync') closeModal();
     const msg = isEN() ? `Opened “${o.name || meta.name}” from Google Drive` : `“${o.name || meta.name}” Google Drive’dan açıldı`;
@@ -11121,8 +11210,8 @@ function gdSectionHtml() {
       <div class="row"><button class="btn primary" data-gd="mine">💻 ${L('Bu cihazdakini tut', 'Keep this device’s')}</button><button class="btn" data-gd="theirs">☁ ${L('Drive’dakini al', 'Use the Drive version')}</button><button class="btn" data-gd="both">⧉ ${L('İkisini de tut', 'Keep both')}</button></div>
       <p class="muted" style="font-size:12px">${L('“İkisini de tut” bu cihazdakini yeni bir proje yapar ve Drive’dakini yeni sekmede açar. Geri al her zaman çalışır.', '“Keep both” makes this device’s copy a new project and opens the Drive version in a new tab. Undo always works.')}</p>`;
   }
-  const st = P && gdState()[P.id];
-  const stat = gd.status === 'busy' ? L('eşitleniyor…', 'syncing…') : st ? L('bu proje eşitlendi', 'this project is synced') + (gd.last ? ' • ' + new Date(gd.last).toLocaleTimeString(loc, { timeStyle: 'short' }) : '')
+  const st = P && gdState()[P.id], want = P && gdWanted(P.id);
+  const stat = !want ? L('bu proje eşitlenmiyor', 'this project is not synced') : gd.status === 'busy' ? L('eşitleniyor…', 'syncing…') : st ? L('bu proje eşitlendi', 'this project is synced') + (gd.last ? ' • ' + new Date(gd.last).toLocaleTimeString(loc, { timeStyle: 'short' }) : '')
     : (P && isPristine(P) ? L('boş proje — çizince kaydedilir', 'empty project — saved once you draw') : L('bu proje henüz Drive’da değil', 'this project is not in Drive yet'));
   const list = gd.list == null ? `<p class="muted">${L('Yükleniyor…', 'Loading…')}</p>` : gd.list.length ? `<div class="gd-list">${gd.list.map(f => {
     const open = P && f.appProperties && f.appProperties.fpId === P.id;
@@ -11130,9 +11219,28 @@ function gdSectionHtml() {
   }).join('')}</div>` : `<p class="muted">${L('Drive’da henüz proje yok.', 'No projects in Drive yet.')}</p>`;
   return `${pend}<p>✅ ${L('Bağlı', 'Connected')}${c.user ? ': <b>' + esc(c.user) + '</b>' : ''} — <span class="muted">${stat}</span></p>
     <div class="row"><button class="btn primary" data-gd="sync">⟳ ${L('Şimdi eşitle', 'Sync now')}</button><button class="btn" data-gd="list">📂 ${L('Listeyi yenile', 'Refresh list')}</button><button class="btn" data-gd="off">${L('Bağlantıyı kes', 'Disconnect')}</button></div>${err}
+    ${gdPickHtml(want, st)}
     ${gdEveryHtml()}
     <h4 class="muted" style="margin:10px 0 6px">${L('Drive’daki projelerim', 'My projects in Drive')}</h4>${list}`;
 }
+// projeye özel eşitleme seçimi + yeni projeler için varsayılan
+function gdPickHtml(want, st) {
+  const chosen = gdCfg().pick === 'chosen';
+  return `<label class="f" style="margin-top:8px"><span>☁ ${L('Bu projeyi eşitle', 'Sync this project')}</span><input type="checkbox" data-gdpick ${want ? 'checked' : ''}></label>
+    ${!want && st ? `<p class="muted" style="font-size:12px;margin:0 0 4px">${L('Drive’daki kopyası duruyor ama artık güncellenmiyor.', 'Its copy stays in Drive but is no longer updated.')}</p>` : ''}
+    <label class="f"><span>${L('Yeni projeler', 'New projects')}</span><select data-gdpickmode style="width:auto;min-width:180px"><option value="all" ${chosen ? '' : 'selected'}>${L('Otomatik eşitlenir', 'Sync automatically')}</option><option value="chosen" ${chosen ? 'selected' : ''}>${L('Yalnız seçtiklerim', 'Only the ones I choose')}</option></select></label>`;
+}
+$('#modal').addEventListener('change', e => {
+  if (ui.modal !== 'sync' || !P) return;
+  const pk = e.target.closest('[data-gdpick]'), md = e.target.closest('[data-gdpickmode]'); if (!pk && !md) return;
+  if (md) { const c = gdCfg(); if (md.value === 'chosen') c.pick = 'chosen'; else delete c.pick; gdSetCfg(c); }
+  if (pk) {
+    gdPick(P.id, pk.checked);
+    if (pk.checked) { toast(L('Bu proje Drive ile eşitlenecek', 'This project will sync with Drive')); if (gd.token) gdSyncSoon(300); }
+    else toast(gdState()[P.id] ? L('Eşitleme kapandı — Drive’daki kopyası duruyor', 'Sync turned off — its copy stays in Drive') : L('Bu proje Drive’a gönderilmeyecek', 'This project will not be sent to Drive'));
+  }
+  gdUI();
+});
 function gdEveryHtml() {
   const ev = gdEvery(), u = ev ? gdEveryUnit(ev) : 'm', n = ev ? +(ev / GD_UNITS[u]).toFixed(2) : 10;
   const opt = (v, t, on) => `<option value="${v}" ${on ? 'selected' : ''}>${t}</option>`;
@@ -11165,6 +11273,7 @@ async function shareShow(kind) {
   let url = '', note = '';
   try {
     if (kind === 'drive') {
+      gdPick(P.id, true); // Drive linki = bu proje Drive'da
       await gdSync(false);
       const st = P && gdState()[P.id];
       if (!st) throw new Error(isPristine(P) ? L('boş proje Drive’a kaydedilmez', 'an empty project is not saved to Drive') : L('proje Drive’a kaydedilemedi', 'the project could not be saved to Drive'));
@@ -17615,6 +17724,8 @@ function applyLangUI() {
   $('#bUndo').title = L('Geri al (Ctrl+Z)', 'Undo (Ctrl+Z)');
   $('#bRedo').title = L('Yinele (Ctrl+Y)', 'Redo (Ctrl+Y)');
   $('#bPrint').textContent = L('🖨 PDF / Yazdır', '🖨 PDF / Print');
+  $('#bDl').textContent = L('⬇ İndir ▾', '⬇ Download ▾'); $('#bDl').title = L('İndir: görüntü (PNG, SVG, PDF) ya da dosya (JSON, IFC, Revit)', 'Download: an image (PNG, SVG, PDF) or a file (JSON, IFC, Revit)');
+  $('#dlHImg').textContent = L('Görüntü', 'Image'); $('#dlHFile').textContent = L('Dosya', 'File');
   $('#b2d').textContent = L('2B', '2D');
   $('#b2d').title = L('2B Katı Görünüm', '2D Solid View');
   if ($('#bCad')) {
@@ -17696,6 +17807,18 @@ $('#bNew').onclick = templatesModal; $('#bProjects').onclick = projectsModal;
 $('#bSync').onclick = () => (gd.status === 'auth' ? gdConnect() : syncModal());
 if ($('#bCollab')) $('#bCollab').onclick = () => collabModal();
 $('#bSave').onclick = saveBrowser;
+/* Tek İndir düğmesi: PNG / SVG / PDF ve JSON / IFC / Revit aynı menüde (düğmelerin kimlikleri ve işleyicileri aynı kaldı) */
+function dlMenuOpen(on) {
+  const m = $('#dlMenu'), b = $('#bDl'); if (!m || !b) return;
+  if (on == null) on = m.hidden;
+  m.hidden = !on; b.setAttribute('aria-expanded', String(on)); b.classList.toggle('on', on);
+  if (on) { const r = b.getBoundingClientRect(); m.style.top = Math.round(r.bottom + 4) + 'px'; m.style.left = Math.round(Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))) + 'px'; }
+}
+$('#bDl').onclick = e => { e.stopPropagation(); dlMenuOpen(); };
+$('#dlMenu').addEventListener('click', e => { if (e.target.closest('button')) dlMenuOpen(false); }); // düğmenin kendi işi önce çalışır
+document.addEventListener('pointerdown', e => { if (!e.target.closest('#dlMenu, #bDl')) dlMenuOpen(false); }, true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#dlMenu').hidden) { dlMenuOpen(false); e.stopPropagation(); } }, true);
+window.addEventListener('resize', () => dlMenuOpen(false));
 $('#bJson').onclick = () => downloadJson(P);
 $('#bRevit').onclick = () => exportBim('revit');
 $('#bIfc').onclick = () => exportBim('ifc');
