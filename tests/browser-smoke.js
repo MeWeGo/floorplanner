@@ -3217,6 +3217,85 @@ check('drive save interval: after every change or a timer of any seconds / minut
   if ('every' in info.off || 'everyU' in info.off) throw new Error('"after every change" did not clear the timer: ' + JSON.stringify(info));
 });
 
+check('one Download menu: opens under its button, runs the export, closes on Esc / outside click', async page => {
+  const info = await page.evaluate(`(() => {
+    const b = document.getElementById('bDl'), m = document.getElementById('dlMenu'), out = {};
+    out.inside = ['bPng', 'bSvg', 'bPrint', 'bJson', 'bIfc', 'bRevit'].every(id => m.contains(document.getElementById(id)));
+    b.click(); const r = m.getBoundingClientRect(), br = b.getBoundingClientRect();
+    out.open = !m.hidden && r.width > 100 && r.top >= br.bottom && r.right <= innerWidth + 1 && b.getAttribute('aria-expanded') === 'true';
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); out.esc = m.hidden;
+    b.click(); document.getElementById('cv').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); out.outside = m.hidden;
+    b.click(); document.getElementById('bPrint').click(); out.ran = ui.modal === 'plot'; out.closedAfter = m.hidden; closeModal();
+    return out;
+  })()`);
+  if (!info.inside) throw new Error('export buttons are not inside the Download menu');
+  if (!info.open) throw new Error('Download menu did not open under its button: ' + JSON.stringify(info));
+  if (!info.esc || !info.outside) throw new Error('Download menu does not close on Esc / outside click: ' + JSON.stringify(info));
+  if (!info.ran || !info.closedAfter) throw new Error('menu item did not run its export or the menu stayed open: ' + JSON.stringify(info));
+});
+
+check('project groups: tabs gather behind a folding group chip, panel + right-click set the group, My Projects has a section per group, undo', async page => {
+  const info = await page.evaluate(`(async () => {
+    const mk = (name) => { const p = newProject(); p.name = name; p.floors[0].walls.push(mkWall({ x: 0, y: 0 }, { x: 300, y: 0 })); return p; };
+    try { localStorage.removeItem('fp_tabgrp_off'); } catch (e) { }
+    const out = {};
+    tabs = []; tabIdx = 0; // start from a single tab (earlier checks leave tabs open)
+    loadProject(mk('A1')); setProjGroup('Ahsen');
+    newTabSlot(); loadProject(mk('Z1')); setProjGroup('Zehra');
+    newTabSlot(); loadProject(mk('A2'));
+    sel = []; refresh();
+    const inp = document.querySelector('#props input[data-p="group"]'); out.field = !!inp;
+    inp.value = 'Ahsen'; inp.dispatchEvent(new Event('change', { bubbles: true })); out.grp = P.group;
+    const names = () => [...document.querySelectorAll('#ptabs .ptab .ptn, #ptabs .ptab-grp')].map(e => e.classList.contains('ptab-grp') ? '[' + e.dataset.tabgrp + ']' : e.textContent.replace(/^\\S+\\s/, ''));
+    out.order = names().join(' ');
+    document.querySelector('#ptabs [data-tabgrp="Zehra"]').click(); out.folded = names().join(' ');
+    document.querySelector('#ptabs [data-tabgrp="Zehra"]').click();
+    const keep = window.prompt; window.prompt = () => 'Zehra';
+    const a2 = [...document.querySelectorAll('#ptabs .ptab')].find(e => /A2/.test(e.textContent));
+    a2.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); window.prompt = keep;
+    out.right = P.group; undo(); out.undo = P.group;
+    await dbPut('projects', { name: '__g1', updatedAt: 3, project: { ...mk('__g1'), group: 'Zehra' } });
+    await dbPut('projects', { name: '__g2', updatedAt: 2, project: { ...mk('__g2'), group: 'Ahsen' } });
+    await dbPut('projects', { name: '__g3', updatedAt: 1, project: mk('__g3') });
+    await projectsModal();
+    out.sections = [...document.querySelectorAll('#modal .pgrp-h')].map(h => h.firstChild.textContent.trim());
+    closeModal(); for (const n of ['__g1', '__g2', '__g3']) await dbDel('projects', n);
+    return out;
+  })()`);
+  if (!info.field || info.grp !== 'Ahsen') throw new Error('project panel group field did not set the group: ' + JSON.stringify(info));
+  if (info.order !== '[Ahsen] A1 A2 [Zehra] Z1') throw new Error('tabs are not gathered by group: ' + info.order);
+  if (info.folded !== '[Ahsen] A1 A2 [Zehra]') throw new Error('folding a group did not hide its tabs: ' + info.folded);
+  if (info.right !== 'Zehra' || info.undo !== 'Ahsen') throw new Error('right-click group / undo failed: ' + JSON.stringify(info));
+  if (info.sections.join('|') !== 'Ahsen|Zehra|No group') throw new Error('My Projects sections wrong: ' + JSON.stringify(info.sections));
+});
+
+check('choose which projects sync with Drive: per-project switch, "only the ones I choose" default, My Projects toggle', async page => {
+  const info = await page.evaluate(`(async () => {
+    const keepCfg = localStorage.getItem('fp_gdrive'), keepPick = localStorage.getItem('fp_gdrive_pick'), out = {};
+    localStorage.removeItem('fp_gdrive_pick'); gdSetCfg({ on: true });
+    const p = newProject(); p.name = '__drive'; p.floors[0].walls.push(mkWall({ x: 0, y: 0 }, { x: 300, y: 0 })); loadProject(p);
+    out.def = gdWanted(P.id);
+    await dbPut('projects', { name: '__drive', updatedAt: 9, project: JSON.parse(JSON.stringify(P)) });
+    await projectsModal();
+    const t = document.querySelector('#modal [data-gdp]'); out.card = t && t.textContent;
+    t.click(); await new Promise(r => setTimeout(r, 50)); out.off = gdWanted(P.id);
+    out.card2 = (document.querySelector('#modal [data-gdp]') || {}).textContent;
+    closeModal(); await dbDel('projects', '__drive');
+    gd.token = 'test'; gd.list = []; syncModal();
+    const cb = document.querySelector('#modal [data-gdpick]'); out.box = !!cb && !cb.checked;
+    const sel = document.querySelector('#modal [data-gdpickmode]'); sel.value = 'chosen'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+    out.mode = gdCfg().pick; out.newDefault = gdWanted('someOtherProject');
+    closeModal(); gd.token = null; gd.list = null; clearTimeout(gd.timer);
+    if (keepCfg == null) localStorage.removeItem('fp_gdrive'); else localStorage.setItem('fp_gdrive', keepCfg);
+    if (keepPick == null) localStorage.removeItem('fp_gdrive_pick'); else localStorage.setItem('fp_gdrive_pick', keepPick);
+    return out;
+  })()`);
+  if (info.def !== true) throw new Error('projects should sync by default (old behaviour)');
+  if (!/Synced/.test(info.card || '') || info.off !== false || !/Not synced/.test(info.card2 || '')) throw new Error('My Projects sync toggle failed: ' + JSON.stringify(info));
+  if (!info.box) throw new Error('sync dialog should show "Sync this project" unticked for a project turned off: ' + JSON.stringify(info));
+  if (info.mode !== 'chosen' || info.newDefault !== false) throw new Error('"only the ones I choose" not applied: ' + JSON.stringify(info));
+});
+
 check('sync & share: ☁ modal, share link + QR round trip, hostile link sanitised, another window updates the project', async page => {
   const info = await page.evaluate(`(async () => {
     const wait = ms => new Promise(r => setTimeout(r, ms));
