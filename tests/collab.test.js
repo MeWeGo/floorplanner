@@ -293,3 +293,67 @@ test('collabEndpoint resolves production /collab URLs, local skips, and ?collab 
   const disabled = { protocol: 'https:', hostname: 'mewego.github.io', search: '?collab=off' };
   assert.strictEqual(makeClientCollabEnv(disabled).collabEndpoint('room1234', 'wss://h.workers.dev/ws', disabled), '');
 });
+
+test('Phase 2: CollabRoom relays drag ghosts, resyncs reconnecting clients, and syncs bg/tex assets with 400 KB limit', async () => {
+  const { worker, env, roomFor } = makeCollabWorkerEnv();
+  await worker.fetch(new Request('https://x.example/collab/room_phase2', {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }), env);
+  await worker.fetch(new Request('https://x.example/collab/room_phase2', {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }), env);
+  const { room, sockets } = roomFor('room_phase2');
+  const p0 = baseProject();
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'seed', state: p0, clientSeq: 1 }));
+
+  // Drag ghost message relays to peer 2 without bumping rev or touching state.
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'drag', floorId: 'f1', ids: ['w1'], dx: 45, dy: -20 }));
+  assert.strictEqual(room.rev, 1);
+  const dragMsg = JSON.parse(sockets[1].sent.at(-1));
+  assert.strictEqual(dragMsg.type, 'drag');
+  assert.deepStrictEqual(dragMsg.ids, ['w1']);
+  assert.strictEqual(dragMsg.dx, 45);
+  assert.strictEqual(dragMsg.dy, -20);
+
+  // Release clears peer drag.
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'drag', ids: [] }));
+  assert.deepStrictEqual(JSON.parse(sockets[1].sent.at(-1)).ids, []);
+
+  // Asset sync: bg + tex under 400 KB relay and are served on asset_req; >400 KB is rejected.
+  const bgObj = { id: 'bg', src: 'data:image/png;base64,AAA', x: 0, y: 0, w: 800, h: 600, op: 0.5, lock: false };
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'asset', kind: 'bg', data: bgObj }));
+  assert.strictEqual(JSON.parse(sockets[1].sent.at(-1)).kind, 'bg');
+
+  const texData = 'data:image/png;base64,BBBB';
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'asset', kind: 'tex', id: 'tx1', data: texData }));
+  assert.strictEqual(JSON.parse(sockets[1].sent.at(-1)).id, 'tx1');
+
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'asset', kind: 'tex', id: 'txbig', data: 'data:image/png;base64,' + 'A'.repeat(400 * 1024 + 5) }));
+  const rej = JSON.parse(sockets[0].sent.at(-1));
+  assert.strictEqual(rej.type, 'asset_rejected');
+  assert.strictEqual(rej.reason, 'too_large');
+
+  // Resync and asset_req return current state + stored assets.
+  await room.webSocketMessage(sockets[1], JSON.stringify({ type: 'resync', sinceRev: 0 }));
+  const stMsg = JSON.parse(sockets[1].sent.at(-1));
+  assert.strictEqual(stMsg.type, 'state');
+  assert.strictEqual(stMsg.hasBg, true);
+
+  await room.webSocketMessage(sockets[1], JSON.stringify({ type: 'asset_req', kind: 'tex', id: 'tx1' }));
+  assert.strictEqual(JSON.parse(sockets[1].sent.at(-1)).data, texData);
+});
+
+test('Phase 2: collabPeerEditing detects peers selecting or dragging matching object IDs', () => {
+  const fn = fnSrcOf(appSrc, 'collabPeerEditing');
+  const collabPeerEditing = new Function(`${fn}\nreturn collabPeerEditing;`)();
+  const peers = new Map([
+    ['p1', { id: 'p1', name: 'Mert', sel: ['w1'], drag: null }],
+    ['p2', { id: 'p2', name: 'Ece', sel: [], drag: { ids: ['f9'] } }],
+  ]);
+  const hit1 = collabPeerEditing(['w1', 'w2'], peers);
+  assert.strictEqual(hit1.peer.name, 'Mert');
+  assert.strictEqual(hit1.id, 'w1');
+  const hit2 = collabPeerEditing(['f9'], peers);
+  assert.strictEqual(hit2.peer.name, 'Ece');
+  assert.strictEqual(collabPeerEditing(['w99'], peers), null);
+});

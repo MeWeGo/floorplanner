@@ -137,6 +137,7 @@ export class PresenceRoom extends DurableObject {
 const COLLAB_COLORS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#0d9488'];
 const COLLAB_ARR_KEYS = ['walls', 'ops', 'furn', 'rooms', 'slabs', 'voids', 'sections', 'axes', 'dims', 'texts', 'sketches', 'drafts'];
 const COLLAB_MAX_MSG = 512 * 1024;
+const COLLAB_MAX_ASSET = 400 * 1024;
 
 function collabBlankFloor(id) {
   return {
@@ -221,6 +222,7 @@ export class CollabRoom extends DurableObject {
     this.rev = 0;
     this.peers = new Map();
     this.seq = 0;
+    this.assets = { bg: null, tex: new Map() };
   }
 
   liveSockets(exclude) {
@@ -251,6 +253,7 @@ export class CollabRoom extends DurableObject {
       sel: Array.isArray(p.sel) ? p.sel : [],
       x: typeof p.x === 'number' ? p.x : null,
       y: typeof p.y === 'number' ? p.y : null,
+      drag: p.drag || null,
       role: p.role || 'editor',
     };
   }
@@ -306,6 +309,7 @@ export class CollabRoom extends DurableObject {
       role: peer.role,
       rev: this.rev,
       state: this.state,
+      hasBg: !!this.assets.bg,
       peers: this.publicPeers(server),
     });
     this.broadcast({ type: 'peer_join', peer: this.publicPeer(peer) }, server);
@@ -363,6 +367,76 @@ export class CollabRoom extends DurableObject {
       if (Array.isArray(msg.sel)) peer.sel = msg.sel.filter(s => typeof s === 'string').slice(0, 100);
       this.savePeer(ws, peer);
       this.broadcast({ type: 'presence', peer: this.publicPeer(peer) }, ws);
+      return;
+    }
+
+    if (msg.type === 'drag') {
+      const ids = Array.isArray(msg.ids) ? msg.ids.filter(s => typeof s === 'string').slice(0, 100) : [];
+      const dx = typeof msg.dx === 'number' && Number.isFinite(msg.dx) ? msg.dx : 0;
+      const dy = typeof msg.dy === 'number' && Number.isFinite(msg.dy) ? msg.dy : 0;
+      const floorId = typeof msg.floorId === 'string' ? msg.floorId : null;
+      peer.drag = ids.length ? { floorId, ids, dx, dy } : null;
+      this.savePeer(ws, peer);
+      this.broadcast({
+        type: 'drag',
+        from: peer.id,
+        color: peer.color,
+        name: peer.name || '',
+        floorId,
+        ids,
+        dx,
+        dy,
+      }, ws);
+      return;
+    }
+
+    if (msg.type === 'resync') {
+      this.sendTo(ws, {
+        type: 'state',
+        rev: this.rev,
+        state: this.state,
+        hasBg: !!this.assets.bg,
+      });
+      return;
+    }
+
+    if (msg.type === 'asset') {
+      if (msg.kind === 'bg') {
+        if (msg.data === null) {
+          this.assets.bg = null;
+          if (this.state) this.state.bg = null;
+          this.broadcast({ type: 'asset', kind: 'bg', data: null, from: peer.id }, ws);
+          return;
+        }
+        if (msg.data && typeof msg.data === 'object') {
+          const raw = JSON.stringify(msg.data);
+          if (raw.length > COLLAB_MAX_ASSET) {
+            this.sendTo(ws, { type: 'asset_rejected', kind: 'bg', reason: 'too_large' });
+            return;
+          }
+          this.assets.bg = JSON.parse(raw);
+          if (this.state) this.state.bg = JSON.parse(raw);
+          this.broadcast({ type: 'asset', kind: 'bg', data: this.assets.bg, from: peer.id }, ws);
+        }
+        return;
+      }
+      if (msg.kind === 'tex' && typeof msg.id === 'string' && /^[\w-]{1,32}$/.test(msg.id) && typeof msg.data === 'string' && msg.data.startsWith('data:image/')) {
+        if (msg.data.length > COLLAB_MAX_ASSET) {
+          this.sendTo(ws, { type: 'asset_rejected', kind: 'tex', id: msg.id, reason: 'too_large' });
+          return;
+        }
+        this.assets.tex.set(msg.id, msg.data);
+        this.broadcast({ type: 'asset', kind: 'tex', id: msg.id, data: msg.data, from: peer.id }, ws);
+      }
+      return;
+    }
+
+    if (msg.type === 'asset_req') {
+      if (msg.kind === 'bg' && this.assets.bg) {
+        this.sendTo(ws, { type: 'asset', kind: 'bg', data: this.assets.bg });
+      } else if (msg.kind === 'tex' && typeof msg.id === 'string' && this.assets.tex.has(msg.id)) {
+        this.sendTo(ws, { type: 'asset', kind: 'tex', id: msg.id, data: this.assets.tex.get(msg.id) });
+      }
     }
   }
 
@@ -373,6 +447,8 @@ export class CollabRoom extends DurableObject {
     if (this.liveSockets(ws).length === 0) {
       this.state = null;
       this.rev = 0;
+      this.assets.bg = null;
+      this.assets.tex.clear();
     }
   }
 

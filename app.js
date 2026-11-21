@@ -6184,6 +6184,7 @@ function cancelTouchSingle() {
       if (d.origAll) for (const { o: mo } of selObjs()) { const g = d.origAll.get(mo.id); if (g) Object.assign(mo, JSON.parse(JSON.stringify(g))); }
     }
     ui.drag = null;
+    if (typeof collabSendDrag === 'function') collabSendDrag([], 0, 0, true);
   }
   ui.pen = null;
   if (touchSnap) {
@@ -6581,6 +6582,7 @@ function cvUp(e) {
     refresh(); return;
   }
   if (d.type === 'move' || d.type === 'handle') {
+    if (typeof collabSendDrag === 'function') collabSendDrag([], 0, 0, true);
     if (!d.moved && d.type === 'move' && d.clickedId && !e.shiftKey && !e.altKey) { // Alt: tek üye seçimi, düzen geçişi yapma
       const fd = find(d.clickedId);
       if (fd && fd.kind === 'wall' && !fd.o.grp && Array.isArray(fd.o.angles) && fd.o.angles.length >= 2) {
@@ -6639,6 +6641,7 @@ function startMove(raw, e) {
   const first = objs.find(x => orig.has(x.o.id)); let anchor = { x: raw.x, y: raw.y };
   if (first) { const o = orig.get(first.o.id); anchor = AB_KINDS.has(first.kind) ? o.a : PTS_KINDS.has(first.kind) ? o.pts[0] : first.kind === 'op' ? anchor : { x: o.x, y: o.y }; }
   ui.drag = { type: 'move', start: raw, orig, conn, roomInner, anchor, moved: false, locked: objs.length - orig.size };
+  if (typeof collabSoftLockWarn === 'function' && orig.size) collabSoftLockWarn([...orig.keys()]);
 }
 function doMove(raw, e) {
   const d = ui.drag; let dx = raw.x - d.start.x, dy = raw.y - d.start.y;
@@ -6671,6 +6674,7 @@ function doMove(raw, e) {
   }
   for (const c of d.conn) { c.w[c.e] = { x: c.o.x + dx, y: c.o.y + dy }; }
   if (d.roomInner) for (const it of d.roomInner) { it.o.x = it.g.x + dx; it.o.y = it.g.y + dy; }
+  if (typeof collabSendDrag === 'function') collabSendDrag([...d.orig.keys()], dx, dy);
   scheduleRender();
 }
 function startHandle(h, raw, e) {
@@ -6694,6 +6698,7 @@ function startHandle(h, raw, e) {
   const origCenter = origBb && { x: (origBb.x0 + origBb.x1) / 2, y: (origBb.y0 + origBb.y1) / 2 };
   const origAngle = h === 'grot' && origCenter ? Math.atan2(raw.y - origCenter.y, raw.x - origCenter.x) * 180 / Math.PI : 0;
   ui.drag = { type: 'handle', h, orig, conn, origAll, origBb, origCenter, origAngle, moved: false };
+  if (typeof collabSoftLockWarn === 'function') collabSoftLockWarn(origAll ? [...origAll.keys()] : [o.id]);
 }
 function doHandle(raw, e) {
   const d = ui.drag, h = d.h, o = selObjs()[0]?.o; if (!o) return; d.moved = true;
@@ -6770,6 +6775,7 @@ function doHandle(raw, e) {
     else if (h === 'bgS') { o.h = Math.max(20, Math.round(p.y - y0)); }
     else if (h === 'bgN') { o.h = Math.max(20, Math.round(y1 - p.y)); o.y = y1 - o.h; }
   }
+  if (typeof collabSendDrag === 'function') collabSendDrag(d.origAll ? [...d.origAll.keys()] : [o.id], 0, 0);
   scheduleRender();
 }
 
@@ -7189,6 +7195,7 @@ function affects3D(k, p) {
   return false; // dim/text/bg/layer 3B'yi etkilemez
 }
 function applyProp(t, final) {
+  if (final && typeof collabSoftLockWarn === 'function' && sel.length) collabSoftLockWarn(sel);
   const render = final ? window.render : scheduleRender; // canlı giriş: karede bir çizim
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
@@ -10544,12 +10551,14 @@ function presenceBoot() {
 }
 
 /* ---------- Canlı birlikte düzenleme (Cloudflare Durable Object) ---------- */
+const COLLAB_MAX_ASSET = 400 * 1024;
 const collab = {
-  ws: null, room: '', viewToken: '', role: 'editor', peerId: '', color: '#2563eb',
+  ws: null, url: '', room: '', viewToken: '', role: 'editor', peerId: '', color: '#2563eb',
   name: (() => { try { return localStorage.getItem('fp_collab_name') || ''; } catch (e) { return ''; } })(),
   rev: 0, peers: new Map(), undoStack: [], redoStack: [], lastSnap: null,
-  applying: false, ping: null, retry: null, delay: 1500, closed: false,
-  presLast: 0, presTimer: null, cseq: 0, status: '', remoteQueue: [],
+  applying: false, ping: null, retry: null, delay: 1500, closed: false, reconnecting: false,
+  presLast: 0, presTimer: null, dragLast: 0, dragTimer: null, cseq: 0, status: '',
+  remoteQueue: [], pendingPatches: [], lastBgKey: '', sentTexIds: new Set(), lastWarnAt: 0,
 };
 
 function collabNewRoomId() {
@@ -10628,7 +10637,112 @@ function collabSend(obj) {
 
 function collabSendPatch(patch) {
   if (!patch) return false;
-  return collabSend({ type: 'patch', patch, clientSeq: ++collab.cseq });
+  if (collabSend({ type: 'patch', patch, clientSeq: ++collab.cseq })) return true;
+  if (collab.room && collab.role === 'editor' && !collab.closed) {
+    collab.pendingPatches.push(patch);
+    if (collab.pendingPatches.length > 200) collab.pendingPatches.shift();
+  }
+  return false;
+}
+
+function collabBgKey(bg) {
+  return bg ? JSON.stringify(bg) : '';
+}
+
+function collabSendBgAsset(bg) {
+  if (!collab.room || collab.role !== 'editor' || !collab.ws || collab.ws.readyState !== 1) return;
+  if (!bg) { collabSend({ type: 'asset', kind: 'bg', data: null }); return; }
+  const raw = JSON.stringify(bg);
+  if (raw.length > COLLAB_MAX_ASSET) {
+    toast(L('Arka plan görseli canlı aktarım için çok büyük (> 400 KB)', 'Background image is too large to sync live (> 400 KB)'));
+    return;
+  }
+  collabSend({ type: 'asset', kind: 'bg', data: bg });
+}
+
+function collabSendTexAsset(id, data) {
+  if (!collab.room || collab.role !== 'editor' || !collab.ws || collab.ws.readyState !== 1) return;
+  if (!data || data.length > COLLAB_MAX_ASSET) {
+    toast(L('Özel doku canlı aktarım için çok büyük (> 400 KB)', 'Custom texture is too large to sync live (> 400 KB)'));
+    return;
+  }
+  if (collabSend({ type: 'asset', kind: 'tex', id, data })) collab.sentTexIds.add(id);
+}
+
+function collabSyncAssetsAfterCommit() {
+  if (!collab.room || collab.role !== 'editor') return;
+  const bgk = collabBgKey(P.bg);
+  if (bgk !== collab.lastBgKey) {
+    collab.lastBgKey = bgk;
+    collabSendBgAsset(P.bg);
+  }
+  for (const t of P.textures || []) {
+    if (collab.sentTexIds.has(t.id)) continue;
+    const e = TEX.get(t.id);
+    if (e && e.data) collabSendTexAsset(t.id, e.data);
+  }
+}
+
+async function collabRequestMissingAssets(hasBg = false) {
+  if (!collab.room || !collab.ws || collab.ws.readyState !== 1) return;
+  if (hasBg && !P.bg) collabSend({ type: 'asset_req', kind: 'bg' });
+  await ensureTextures(P);
+  for (const t of P.textures || []) {
+    if (!TEX.has(t.id)) collabSend({ type: 'asset_req', kind: 'tex', id: t.id });
+  }
+}
+
+function collabPeerEditing(ids, peersMap = collab.peers) {
+  if (!ids || !peersMap || !peersMap.size) return null;
+  const set = ids instanceof Set ? ids : new Set(ids);
+  if (!set.size) return null;
+  for (const peer of peersMap.values()) {
+    if (!peer) continue;
+    for (const sid of peer.sel || []) if (set.has(sid)) return { peer, id: sid };
+    if (peer.drag && Array.isArray(peer.drag.ids)) {
+      for (const did of peer.drag.ids) if (set.has(did)) return { peer, id: did };
+    }
+  }
+  return null;
+}
+
+function collabSoftLockWarn(ids) {
+  if (!collab.room || !collab.peers.size) return;
+  const hit = collabPeerEditing(ids);
+  if (!hit) return;
+  const now = Date.now();
+  if (now - collab.lastWarnAt < 2500) return;
+  collab.lastWarnAt = now;
+  const nm = hit.peer.name || L('Başka bir kullanıcı', 'Another user');
+  toast(L(`⚠ ${nm} şu an bu nesneyi düzenliyor`, `⚠ ${nm} is currently editing this object`));
+}
+
+function collabSendDrag(ids, dx = 0, dy = 0, force = false) {
+  if (!collab.room || collab.role !== 'editor' || !collab.ws || collab.ws.readyState !== 1) return;
+  const list = Array.isArray(ids) ? ids.slice(0, 100) : [];
+  if (!list.length) {
+    clearTimeout(collab.dragTimer); collab.dragTimer = null;
+    collab.dragLast = Date.now();
+    collabSend({ type: 'drag', ids: [] });
+    return;
+  }
+  const now = Date.now();
+  if (!force && now - collab.dragLast < 65) {
+    if (!collab.dragTimer) {
+      collab.dragTimer = setTimeout(() => { collab.dragTimer = null; collabSendDrag(list, dx, dy, true); }, 65);
+    }
+    return;
+  }
+  clearTimeout(collab.dragTimer); collab.dragTimer = null;
+  collab.dragLast = now;
+  const fl = F();
+  collabSend({
+    type: 'drag',
+    floorId: fl ? fl.id : null,
+    ids: list,
+    dx: Math.round((+dx || 0) * 10) / 10,
+    dy: Math.round((+dy || 0) * 10) / 10,
+  });
 }
 
 function collabOnCommit(serialized) {
@@ -10636,13 +10750,15 @@ function collabOnCommit(serialized) {
   if (!collab.lastSnap) { collab.lastSnap = JSON.parse(serialized); return; }
   const next = JSON.parse(serialized);
   const patch = collabDiff(collab.lastSnap, next);
-  if (!patch) return;
-  const inv = collabInvert(collab.lastSnap, patch);
-  collab.undoStack.push({ patch, inv });
-  if (collab.undoStack.length > 150) collab.undoStack.shift();
-  collab.redoStack = [];
-  collab.lastSnap = next;
-  collabSendPatch(patch);
+  if (patch) {
+    const inv = collabInvert(collab.lastSnap, patch);
+    collab.undoStack.push({ patch, inv });
+    if (collab.undoStack.length > 150) collab.undoStack.shift();
+    collab.redoStack = [];
+    collab.lastSnap = next;
+    collabSendPatch(patch);
+  }
+  collabSyncAssetsAfterCommit();
 }
 
 function collabApplyStep(stepPatch) {
@@ -10700,6 +10816,7 @@ function collabApplyRemotePatch(patch) {
     autosave();
     updateUndo();
     if (ui.view3d && T3) schedBuild3D();
+    collabRequestMissingAssets(false);
   } finally {
     collab.applying = false;
   }
@@ -10711,17 +10828,40 @@ function collabFlushRemote() {
   for (const p of q) collabApplyRemotePatch(p);
 }
 
-function collabApplyRemoteState(state) {
+function collabApplyRemoteState(state, keepBg = false) {
   if (!state || !Array.isArray(state.floors)) return;
   collab.applying = true;
   try {
     if (ui.modal === 'templates') closeModal();
-    if (!collab.lastSnap && !isPristine(P) && P.id !== state.id) newTabSlot();
-    loadProject(JSON.parse(JSON.stringify(state)));
+    const oldBg = keepBg ? collabClone(P && P.bg) : null;
+    if (!collab.lastSnap && !collab.reconnecting && !isPristine(P) && P.id !== state.id) newTabSlot();
+    const copy = JSON.parse(JSON.stringify(state));
+    if (keepBg && oldBg && !copy.bg) copy.bg = oldBg;
+    loadProject(copy);
     collab.lastSnap = JSON.parse(JSON.stringify(P));
+    collab.lastBgKey = collabBgKey(P.bg);
     collab.undoStack = [];
     collab.redoStack = [];
     updateUndo();
+  } finally {
+    collab.applying = false;
+  }
+}
+
+function collabFlushPending() {
+  if (!collab.pendingPatches.length || collab.role !== 'editor') return;
+  const pending = collab.pendingPatches.splice(0);
+  collab.applying = true;
+  try {
+    for (const p of pending) {
+      collabApply(P, p);
+      collabSendPatch(p);
+    }
+    normalizeProject(P);
+    collab.lastSnap = JSON.parse(JSON.stringify(P));
+    refresh();
+    autosave();
+    if (ui.view3d && T3) schedBuild3D();
   } finally {
     collab.applying = false;
   }
@@ -10754,21 +10894,40 @@ function collabOverlaySvg(C, z) {
   const fl = F(), fid = fl ? fl.id : null;
   let out = '';
   for (const peer of collab.peers.values()) {
-    if (peer.floorId && fid && peer.floorId !== fid) continue;
     const col = esc(peer.color || '#2563eb');
-    for (const sid of peer.sel || []) {
-      const fd = find(sid);
-      if (!fd) continue;
-      const bb = bboxOf(fd.kind, fd.o);
-      if (!bb) continue;
-      const pad = 4 / z;
-      out += `<rect x="${bb.x0 - pad}" y="${bb.y0 - pad}" width="${Math.max(pad, bb.x1 - bb.x0 + 2 * pad)}" height="${Math.max(pad, bb.y1 - bb.y0 + 2 * pad)}" fill="none" stroke="${col}" stroke-width="${1.8 / z}" stroke-dasharray="${5 / z} ${3 / z}" rx="${3 / z}" pointer-events="none"/>`;
-    }
-    if (typeof peer.x === 'number' && typeof peer.y === 'number') {
-      const x = peer.x, y = peer.y, s = 1 / z;
-      const label = esc(peer.name || L('Misafir', 'Guest'));
-      out += `<path d="M${x} ${y} l${12 * s} ${5 * s} l${-5 * s} ${2 * s} l${-2 * s} ${5 * s} Z" fill="${col}" stroke="${C.halo}" stroke-width="${1.5 * s}" stroke-linejoin="round" pointer-events="none"/>`;
-      out += `<text x="${x + 13 * s}" y="${y + 15 * s}" font-size="${11 * s}" font-weight="600" fill="${col}" stroke="${C.halo}" stroke-width="${3 * s}" paint-order="stroke" pointer-events="none">${label}</text>`;
+    const sameFloor = !peer.floorId || !fid || peer.floorId === fid;
+    if (sameFloor) {
+      let lockedLabelAt = null;
+      for (const sid of peer.sel || []) {
+        const fd = find(sid);
+        if (!fd) continue;
+        const bb = bboxOf(fd.kind, fd.o);
+        if (!bb) continue;
+        const pad = 4 / z;
+        out += `<rect x="${bb.x0 - pad}" y="${bb.y0 - pad}" width="${Math.max(pad, bb.x1 - bb.x0 + 2 * pad)}" height="${Math.max(pad, bb.y1 - bb.y0 + 2 * pad)}" fill="none" stroke="${col}" stroke-width="${1.8 / z}" stroke-dasharray="${5 / z} ${3 / z}" rx="${3 / z}" pointer-events="none"/>`;
+        if (!lockedLabelAt) lockedLabelAt = { x: bb.x0 - pad, y: bb.y0 - pad - 4 / z };
+      }
+      if (peer.drag && Array.isArray(peer.drag.ids) && peer.drag.ids.length && (!peer.drag.floorId || peer.drag.floorId === fid)) {
+        const dx = +peer.drag.dx || 0, dy = +peer.drag.dy || 0;
+        for (const did of peer.drag.ids) {
+          const fd = find(did);
+          if (!fd) continue;
+          const bb = bboxOf(fd.kind, fd.o);
+          if (!bb) continue;
+          out += `<rect x="${bb.x0 + dx}" y="${bb.y0 + dy}" width="${Math.max(4 / z, bb.x1 - bb.x0)}" height="${Math.max(4 / z, bb.y1 - bb.y0)}" fill="${col}" fill-opacity=".14" stroke="${col}" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${3 / z}" rx="${3 / z}" pointer-events="none"/>`;
+          if (!lockedLabelAt) lockedLabelAt = { x: bb.x0 + dx, y: bb.y0 + dy - 4 / z };
+        }
+      }
+      if (lockedLabelAt) {
+        const nm = esc(peer.name || L('Misafir', 'Guest'));
+        out += `<text x="${lockedLabelAt.x}" y="${lockedLabelAt.y}" font-size="${10 / z}" font-weight="600" fill="${col}" stroke="${C.halo}" stroke-width="${2.5 / z}" paint-order="stroke" pointer-events="none">🔒 ${nm}</text>`;
+      }
+      if (typeof peer.x === 'number' && typeof peer.y === 'number') {
+        const x = peer.x, y = peer.y, s = 1 / z;
+        const label = esc(peer.name || L('Misafir', 'Guest'));
+        out += `<path d="M${x} ${y} l${12 * s} ${5 * s} l${-5 * s} ${2 * s} l${-2 * s} ${5 * s} Z" fill="${col}" stroke="${C.halo}" stroke-width="${1.5 * s}" stroke-linejoin="round" pointer-events="none"/>`;
+        out += `<text x="${x + 13 * s}" y="${y + 15 * s}" font-size="${11 * s}" font-weight="600" fill="${col}" stroke="${C.halo}" stroke-width="${3 * s}" paint-order="stroke" pointer-events="none">${label}</text>`;
+      }
     }
   }
   return out;
@@ -10790,23 +10949,37 @@ function collabJoin(roomId, opts = {}) {
   }
   if (collab.room && collab.room !== id) collabLeave(true);
   collab.closed = false;
+  collab.reconnecting = false;
+  collab.url = url;
   collab.room = id;
   collab.viewToken = vt;
   collab.role = vt ? 'viewer' : 'editor';
   collab.status = 'busy';
   collab.peers.clear();
   collab.remoteQueue = [];
+  collab.pendingPatches = [];
+  collab.sentTexIds = new Set();
+  collab.lastBgKey = opts.host ? collabBgKey(P.bg) : '';
   collab.lastSnap = opts.host ? JSON.parse(JSON.stringify(P)) : null;
   collabRenderUI();
   collabConnect(url, opts);
 }
 
+function collabScheduleReconnect(url) {
+  if (collab.closed || !collab.room || !url) return;
+  clearTimeout(collab.retry);
+  const wait = Math.round(collab.delay * (1 + Math.random() * 0.25));
+  collab.delay = Math.min(15000, collab.delay * 2);
+  collab.retry = setTimeout(() => collabConnect(url), wait);
+}
+
 function collabConnect(url, opts = {}) {
   if (collab.closed || !collab.room || typeof WebSocket !== 'function') return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) { collabScheduleReconnect(url); return; }
   clearTimeout(collab.retry); collab.retry = null;
   if (collab.ws) { try { collab.ws.close(1000); } catch (e) { } collab.ws = null; }
   let ws;
-  try { ws = new WebSocket(url); } catch (e) { collab.status = 'warn'; collabRenderUI(); return; }
+  try { ws = new WebSocket(url); } catch (e) { collab.status = 'warn'; collabRenderUI(); collabScheduleReconnect(url); return; }
   collab.ws = ws;
   ws.onopen = () => {
     if (collab.ws !== ws) return;
@@ -10816,6 +10989,7 @@ function collabConnect(url, opts = {}) {
     collab.ping = setInterval(() => {
       if (ws.readyState === 1) { try { ws.send('ping'); } catch (e) { } }
     }, 45000);
+    if (collab.reconnecting) collabSend({ type: 'resync', sinceRev: collab.rev });
     collabRenderUI();
   };
   ws.onmessage = e => {
@@ -10827,14 +11001,22 @@ function collabConnect(url, opts = {}) {
       collab.peerId = msg.peerId || '';
       collab.color = msg.color || '#2563eb';
       collab.role = msg.role || 'editor';
+      const wasReconnecting = collab.reconnecting;
+      collab.reconnecting = false;
       collab.rev = msg.rev || 0;
       collab.peers.clear();
       for (const p of msg.peers || []) if (p && p.id && p.id !== collab.peerId) collab.peers.set(p.id, p);
       if (msg.state) {
-        collabApplyRemoteState(msg.state);
+        collabApplyRemoteState(msg.state, wasReconnecting);
+        if (wasReconnecting) collabFlushPending();
+        collabRequestMissingAssets(!!msg.hasBg);
       } else if (collab.role === 'editor') {
         collab.lastSnap = JSON.parse(JSON.stringify(P));
+        collab.lastBgKey = collabBgKey(P.bg);
         collabSend({ type: 'seed', state: collabExportState(P), clientSeq: ++collab.cseq });
+        if (P.bg) collabSendBgAsset(P.bg);
+        for (const t of P.textures || []) { const tx = TEX.get(t.id); if (tx && tx.data) collabSendTexAsset(t.id, tx.data); }
+        collabFlushPending();
       }
       collabSendPresence(true);
       collabRenderUI();
@@ -10843,8 +11025,21 @@ function collabConnect(url, opts = {}) {
     }
     if (msg.type === 'state') {
       collab.rev = msg.rev || collab.rev;
-      collabApplyRemoteState(msg.state);
+      if (msg.state) {
+        collabApplyRemoteState(msg.state, true);
+        collabFlushPending();
+        collabRequestMissingAssets(!!msg.hasBg);
+      } else if (collab.role === 'editor' && P) {
+        collab.lastSnap = JSON.parse(JSON.stringify(P));
+        collabSend({ type: 'seed', state: collabExportState(P), clientSeq: ++collab.cseq });
+        if (P.bg) collabSendBgAsset(P.bg);
+        collabFlushPending();
+      }
       collabRenderUI();
+      return;
+    }
+    if (msg.type === 'resync_needed') {
+      collabSend({ type: 'resync', sinceRev: collab.rev });
       return;
     }
     if (msg.type === 'ack') {
@@ -10857,6 +11052,36 @@ function collabConnect(url, opts = {}) {
       collabApplyRemotePatch(msg.patch);
       return;
     }
+    if (msg.type === 'drag' && msg.from && msg.from !== collab.peerId) {
+      const p = collab.peers.get(msg.from) || { id: msg.from, color: msg.color || '#2563eb', name: msg.name || '', sel: [] };
+      p.drag = Array.isArray(msg.ids) && msg.ids.length ? { floorId: msg.floorId || null, ids: msg.ids, dx: msg.dx || 0, dy: msg.dy || 0 } : null;
+      collab.peers.set(msg.from, p);
+      if (!ui.view3d) drawPreview();
+      return;
+    }
+    if (msg.type === 'asset') {
+      if (msg.kind === 'bg') {
+        collab.applying = true;
+        try {
+          P.bg = msg.data ? collabClone(msg.data) : null;
+          collab.lastBgKey = collabBgKey(P.bg);
+          collab.lastSnap = JSON.parse(JSON.stringify(P));
+          refresh();
+          autosave();
+        } finally { collab.applying = false; }
+      } else if (msg.kind === 'tex' && msg.id && typeof msg.data === 'string' && msg.data.startsWith('data:image/')) {
+        cacheTex(msg.id, msg.data);
+        dbPut('textures', { id: msg.id, data: msg.data }).catch(() => { });
+        collab.sentTexIds.add(msg.id);
+        render();
+        if (ui.view3d && T3) schedBuild3D();
+      }
+      return;
+    }
+    if (msg.type === 'asset_rejected') {
+      toast(L('Görsel canlı oda limiti (400 KB) nedeniyle gönderilemedi', 'Image exceeds the 400 KB live sync limit'));
+      return;
+    }
     if (msg.type === 'peer_join' && msg.peer && msg.peer.id !== collab.peerId) {
       collab.peers.set(msg.peer.id, msg.peer);
       collabRenderUI();
@@ -10865,6 +11090,8 @@ function collabConnect(url, opts = {}) {
       return;
     }
     if (msg.type === 'presence' && msg.peer && msg.peer.id !== collab.peerId) {
+      const old = collab.peers.get(msg.peer.id);
+      if (old && old.drag && msg.peer.drag === undefined) msg.peer.drag = old.drag;
       collab.peers.set(msg.peer.id, msg.peer);
       if (ui.modal === 'collab') collabRefreshPeersDom();
       if (!ui.view3d) drawPreview();
@@ -10883,9 +11110,11 @@ function collabConnect(url, opts = {}) {
     collab.ws = null;
     clearInterval(collab.ping); collab.ping = null;
     if (collab.closed || !collab.room) return;
+    collab.reconnecting = true;
     collab.status = 'warn';
     collabRenderUI();
     if (ui.modal === 'collab') collabModal();
+    collabScheduleReconnect(url);
   };
 }
 
@@ -10894,11 +11123,13 @@ function collabLeave(silent = false) {
   clearTimeout(collab.retry); collab.retry = null;
   clearInterval(collab.ping); collab.ping = null;
   clearTimeout(collab.presTimer); collab.presTimer = null;
+  clearTimeout(collab.dragTimer); collab.dragTimer = null;
   const ws = collab.ws; collab.ws = null;
   if (ws) { try { ws.close(1000); } catch (e) { } }
   const was = !!collab.room;
-  collab.room = ''; collab.viewToken = ''; collab.role = 'editor'; collab.peerId = '';
-  collab.rev = 0; collab.status = ''; collab.peers.clear(); collab.remoteQueue = [];
+  collab.room = ''; collab.url = ''; collab.viewToken = ''; collab.role = 'editor'; collab.peerId = '';
+  collab.rev = 0; collab.status = ''; collab.reconnecting = false; collab.peers.clear();
+  collab.remoteQueue = []; collab.pendingPatches = []; collab.sentTexIds.clear(); collab.lastBgKey = '';
   collab.undoStack = []; collab.redoStack = []; collab.lastSnap = null;
   if (P) { hist = [JSON.stringify(P)]; hi = 0; updateUndo(); }
   collabRenderUI();
@@ -11002,6 +11233,14 @@ function collabBoot() {
     qv = sp.get('v') || '';
   } catch (e) { }
   if (qr && /^[A-Za-z0-9_-]{6,64}$/.test(qr)) collabJoin(qr, { viewToken: qv });
+  window.addEventListener('online', () => {
+    if (collab.room && !collab.closed && !collab.ws && collab.url) { collab.delay = 1500; collabConnect(collab.url); }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && collab.room && !collab.closed && !collab.ws && collab.url && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+      collab.delay = 1500; collabConnect(collab.url);
+    }
+  });
   window.addEventListener('pagehide', () => {
     if (collab.ws) { collab.closed = true; try { collab.ws.close(1000); } catch (e) { } }
   });
