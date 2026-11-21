@@ -10555,7 +10555,7 @@ function bcPost() {
   try { bc.postMessage({ t: 'proj', win: WIN_ID, id: P.id, s }); } catch (e) { }
 }
 // autosave() başarılı olunca çağrılır
-function syncNoteSave() { bcPost(); gdSyncSoon(); }
+function syncNoteSave() { bcPost(); if (!gdEvery()) gdSyncSoon(); } // zamanlayıcı kipinde Drive'a yükleme zamanlayıcıyla
 
 /* --- Google Drive --- */
 // Google Cloud Console → OAuth istemci kimliği (Web uygulaması, yetkili JavaScript kaynağı: https://mewego.github.io).
@@ -10572,6 +10572,30 @@ const gdSetCfg = c => lsSet('fp_gdrive', c);
 const gdClientId = () => String(gdCfg().cid || GDRIVE_CLIENT_ID || '').trim();
 const gdWeb = () => /^https?:$/.test(location.protocol);
 const gdUsable = () => gdWeb() && !!gdClientId();
+
+/* Drive'a ne sıklıkla kaydedilsin: gdCfg().every yok = her değişiklikten sonra (3 sn) + dakikada bir yoklama; every = kullanıcının
+   seçtiği aralık (saniye; everyU = gösterilen birim s / m / h). Zamanlayıcı kipinde değişiklik sonrası, yoklama ve sekmeye dönüş
+   eşitlemeyi tetiklemez; 💾 Kaydet ve ⟳ Şimdi eşitle hemen eşitler. */
+const GD_EVERY_MIN = 10, GD_EVERY_MAX = 7 * 86400; // saniye: en az 10 sn, en çok 7 gün
+const GD_UNITS = { s: 1, m: 60, h: 3600 };
+function gdEvery() { const n = Math.round(+gdCfg().every); return Number.isFinite(n) && n > 0 ? clamp(n, GD_EVERY_MIN, GD_EVERY_MAX) : 0; }
+function gdEveryUnit(sec) { const u = gdCfg().everyU; return GD_UNITS[u] ? u : sec % 3600 === 0 ? 'h' : sec % 60 === 0 ? 'm' : 's'; }
+// süre metni: 45 sn, 10 dk, 2 sa 30 dk
+function gdFmtDur(sec) {
+  sec = Math.max(1, Math.round(sec));
+  if (sec < 60) return sec + L(' sn', ' s');
+  if (sec < 3600) return Math.round(sec / 60) + L(' dk', ' min');
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h + L(' sa', ' h') + (m ? ' ' + m + L(' dk', ' min') : '');
+}
+/* 5 saniyelik zamanlayıcı: bu tikte otomatik eşitleme yapılsın mı. every = 0 → görünür sekmede dakikada bir yoklama;
+   every > 0 → son eşitlemeden every saniye sonra (arka plandaki sekme de kaydeder). Başarısız bir denemeden sonra
+   en geç dakikada bir yeniden dener (tryAt = son otomatik deneme). */
+function gdAutoDue(now, every, last, tryAt, hidden) {
+  if (!every && hidden) return false;
+  const period = (every || 60) * 1000;
+  return now - last >= period && now - tryAt >= Math.min(period, 60000);
+}
 const gdState = () => lsJson('fp_gdrive_state');    // { [P.id]: { f: dosya id, v: Drive sürümü, h: son eşitlenen içeriğin özeti } }
 function gdSetState(id, v) { const s = gdState(); if (v) s[id] = v; else delete s[id]; lsSet('fp_gdrive_state', s); }
 // FNV-1a + uzunluk: "son eşitlenen içerik bu mu?" sorusu için yeterli
@@ -10857,7 +10881,17 @@ function gdSectionHtml() {
   }).join('')}</div>` : `<p class="muted">${L('Drive’da henüz proje yok.', 'No projects in Drive yet.')}</p>`;
   return `${pend}<p>✅ ${L('Bağlı', 'Connected')}${c.user ? ': <b>' + esc(c.user) + '</b>' : ''} — <span class="muted">${stat}</span></p>
     <div class="row"><button class="btn primary" data-gd="sync">⟳ ${L('Şimdi eşitle', 'Sync now')}</button><button class="btn" data-gd="list">📂 ${L('Listeyi yenile', 'Refresh list')}</button><button class="btn" data-gd="off">${L('Bağlantıyı kes', 'Disconnect')}</button></div>${err}
+    ${gdEveryHtml()}
     <h4 class="muted" style="margin:10px 0 6px">${L('Drive’daki projelerim', 'My projects in Drive')}</h4>${list}`;
+}
+function gdEveryHtml() {
+  const ev = gdEvery(), u = ev ? gdEveryUnit(ev) : 'm', n = ev ? +(ev / GD_UNITS[u]).toFixed(2) : 10;
+  const opt = (v, t, on) => `<option value="${v}" ${on ? 'selected' : ''}>${t}</option>`;
+  const left = ev && gd.last ? (gd.last + ev * 1000 - Date.now()) / 1000 : 0;
+  let h = `<label class="f" style="margin-top:8px"><span>${L('Drive’a kaydet', 'Save to Drive')}</span><select data-gdmode style="width:auto;min-width:180px">${opt(0, L('Her değişiklikten sonra', 'After every change'), !ev)}${opt(1, L('Belirli aralıklarla', 'On a timer'), ev)}</select></label>`;
+  if (ev) h += `<label class="f"><span>${L('Aralık', 'Interval')}</span><span class="row" style="gap:6px;flex-wrap:nowrap"><input type="number" data-gdeveryn min="1" step="any" value="${n}" style="width:90px"><select data-gdeveryu style="width:auto">${opt('s', L('saniye', 'seconds'), u === 's')}${opt('m', L('dakika', 'minutes'), u === 'm')}${opt('h', L('saat', 'hours'), u === 'h')}</select></span></label>
+    <p class="muted" style="font-size:12px;margin:4px 0 0">${L(`Değişiklikler ${gdFmtDur(ev)} aralıkla Drive’a gider`, `Changes go to Drive every ${gdFmtDur(ev)}`)}${left > 0 ? L(` (sonraki ≈ ${gdFmtDur(left)})`, ` (next in ≈ ${gdFmtDur(left)})`) : ''}. ${L(`En az ${GD_EVERY_MIN} sn, en çok 7 gün. 💾 Kaydet ve ⟳ Şimdi eşitle hemen kaydeder; bu cihazda her şey zaten tarayıcıya kaydedilir.`, `At least ${GD_EVERY_MIN} s, at most 7 days. 💾 Save and ⟳ Sync now save at once; everything is always saved in this browser too.`)}</p>`;
+  return h;
 }
 // ☁ Eşitle penceresi: Drive bölümü + başka cihaza gönder
 function syncModal() {
@@ -10933,6 +10967,29 @@ $('#modal').addEventListener('click', e => {
     else if (a === 'share') navigator.share({ title: P.name, url: $('#shUrl').value }).catch(() => { });
   }
 });
+// Drive'a kaydetme aralığı (saniye; 0 = her değişiklikten sonra). Sınırlara kırpar, kaydedilen değeri döndürür.
+function gdSetEvery(sec, unit) {
+  const c = gdCfg();
+  if (!sec) { delete c.every; delete c.everyU; gdSetCfg(c); return 0; }
+  const v = clamp(Math.round(sec), GD_EVERY_MIN, GD_EVERY_MAX); c.every = v; c.everyU = GD_UNITS[unit] ? unit : gdEveryUnit(v); gdSetCfg(c); return v;
+}
+$('#modal').addEventListener('change', e => {
+  if (ui.modal !== 'sync') return;
+  const mode = e.target.closest('[data-gdmode]'), num = e.target.closest('[data-gdeveryn], [data-gdeveryu]'); if (!mode && !num) return;
+  let v, msg;
+  if (mode) {
+    const cur = gdEvery();
+    v = +mode.value ? gdSetEvery(cur || 600, cur ? gdEveryUnit(cur) : 'm') : gdSetEvery(0);
+  } else {
+    const n = +($('#modal [data-gdeveryn]') || {}).value, u = ($('#modal [data-gdeveryu]') || {}).value || 'm';
+    if (!(n > 0)) { toast(L('Pozitif bir sayı girin', 'Enter a positive number')); gdUI(); return; }
+    const want = Math.round(n * (GD_UNITS[u] || 60)); v = gdSetEvery(want, u);
+    if (v !== want) msg = L(`Aralık ${gdFmtDur(v)} olarak ayarlandı (en az ${GD_EVERY_MIN} sn, en çok 7 gün)`, `Interval set to ${gdFmtDur(v)} (at least ${GD_EVERY_MIN} s, at most 7 days)`);
+  }
+  gdUI();
+  if (v) toast(msg || L(`Drive’a ${gdFmtDur(v)} aralıkla kaydedilecek`, `Will save to Drive every ${gdFmtDur(v)}`));
+  else { toast(L('Drive’a her değişiklikten sonra kaydedilecek', 'Will save to Drive after every change')); if (gd.token) gdSyncSoon(500); } // bekleyen değişiklik hemen gitsin
+});
 // açılışta: oturum belirteci (aynı sekmede yenileme), pencereler arası kanal, #fp / #fpd linki
 async function syncBoot() {
   bcInit();
@@ -10943,8 +11000,10 @@ async function syncBoot() {
   gdUI();
   await openShareHash();
   if (gd.token) gdSyncSoon(800);
-  setInterval(() => { if (gd.token && !document.hidden) gdSync(false); }, 60000);         // başka cihazdaki değişiklikleri al
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && gd.token) gdSyncSoon(400); });
+  setInterval(() => { // başka cihazdaki değişiklikleri al / zamanlayıcı kipinde kaydet
+    const now = Date.now(); if (gd.token && gdAutoDue(now, gdEvery(), gd.last, gd.tryAt || 0, document.hidden)) { gd.tryAt = now; gdSync(false); }
+  }, 5000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && gd.token && !gdEvery()) gdSyncSoon(400); });
 }
 // başkasından gelebilen link planları (#fp=): hiçbir metin bir HTML / SVG özniteliğinden taşamasın (" < > ` atılır;
 // uygulamada tek tırnaklı öznitelik yok), arka plan görseli yalnızca data:image/… olabilir. Drive dosyaları kullanıcının
