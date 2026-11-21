@@ -972,6 +972,7 @@ function collabInvert(prev, patch) {
 let saveTimer = null;
 function commit() {
   if (typeof collab !== 'undefined' && collab.applying) return;
+  if (typeof collabReadOnly === 'function' && collabReadOnly()) return;
   if (typeof grpEditAbsorb === 'function') grpEditAbsorb(); // grup düzenleme modunda yeni çizilenler gruba katılır
   for (const fl of P.floors) syncAccWalls(fl, true); // akordiyon duvarlar bağlı uçları izler (düzen pozundan önce)
   if (typeof syncActiveVars === 'function') syncActiveVars();
@@ -1553,9 +1554,11 @@ function applyView() {
     const G = gridScale();
     gl.textContent = (P.gridType || 'square') === 'none' ? '' : L('Izgara', 'Grid') + ' ' + gridStepLabel(G.minor || G.major);
   }
+  if (typeof collab !== 'undefined' && collab.room && collab.peers.size && !collab.followApplying && typeof collabSendPresence === 'function') collabSendPresence(false);
 }
 let zoomLimT = 0;
 function zoomAt(f, sx, sy) {
+  if (typeof collabStopFollow === 'function' && typeof collab !== 'undefined' && !collab.followApplying) collabStopFollow(true);
   const nz = clamp(view.z * f, MIN_ZOOM, MAX_ZOOM), wx = (sx - view.x) / view.z, wy = (sy - view.y) / view.z;
   if (nz === view.z && f !== 1 && Date.now() - zoomLimT > 2500) { // sınırda tekerlek boşa dönmesin: ne olduğunu söyle
     zoomLimT = Date.now();
@@ -1564,6 +1567,7 @@ function zoomAt(f, sx, sy) {
   view.z = nz; view.x = sx - wx * nz; view.y = sy - wy * nz; scheduleRender();
 }
 function fit() {
+  if (typeof collabStopFollow === 'function' && typeof collab !== 'undefined' && !collab.followApplying && !collab.applying) collabStopFollow(false);
   const s = svgSize(); let b = contentBounds();
   if (!b && P.bg) b = { x0: P.bg.x, y0: P.bg.y, x1: P.bg.x + P.bg.w, y1: P.bg.y + P.bg.h };
   if (!b) b = { x0: 0, y0: 0, x1: 1000, y1: 700 };
@@ -5360,6 +5364,7 @@ function deleteIds(ids) {
   sel = sel.filter(id => !s.has(id));
 }
 function deleteSel() {
+  if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; }
   if (!sel.length) return;
   const ids = sel.filter(pickable), del = ids.filter(id => !isLocked(find(id)?.o));
   if (del.length < ids.length) lockToast(ids.length - del.length);
@@ -6248,12 +6253,15 @@ function cvDown(e) {
   }
   setCursor(e);
   const raw = ui.raw, cur = ui.cur;
-  if (e.button === 1 || tool === 'pan' || ui.space) { ui.drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y }; cv.style.cursor = 'grabbing'; return; }
+  if (e.button === 1 || tool === 'pan' || ui.space) { if (typeof collabStopFollow === 'function') collabStopFollow(true); ui.drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y }; cv.style.cursor = 'grabbing'; return; }
   if (e.button !== 0) return;
+  const ro = typeof collabReadOnly === 'function' && collabReadOnly();
+  if (ro && tool !== 'select') { collabViewerToast(); return; }
   const f = F();
   switch (tool) {
     case 'select': {
       if (ui.hpAdd) { // ＋ Eğim noktası: yüzeyin içine / kenarına / köşesine tıklanan yere nokta (kot 0)
+        if (ro) { collabViewerToast(); return; }
         const r = sel.length === 1 && sel[0] === ui.hpAdd ? find(ui.hpAdd) : null;
         if (!r || !r.o.pts) { ui.hpAdd = null; renderProps(); }
         else {
@@ -6268,7 +6276,7 @@ function cvDown(e) {
         }
       }
       const wd = e.target.closest('[data-wdim]');
-      if (wd && !e.shiftKey && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); openWallDimInput(wd.dataset.wdim, e.clientX, e.clientY); return; }
+      if (wd && !e.shiftKey && !(e.ctrlKey || e.metaKey)) { if (ro) { collabViewerToast(); return; } e.preventDefault(); openWallDimInput(wd.dataset.wdim, e.clientX, e.clientY); return; }
       const h = e.target.closest('[data-h]');
       if (h) { startHandle(h.dataset.h, raw, e); return; }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && cycleStackAt(e)) { // Ctrl+tık: alttaki nesneyi seç
@@ -6509,6 +6517,7 @@ function cvMove(e) {
       const [p1, p2] = [...touchPts.values()], r = cv.getBoundingClientRect();
       const mx = (p1.x + p2.x) / 2 - r.left, my = (p1.y + p2.y) / 2 - r.top, d = Math.hypot(p2.x - p1.x, p2.y - p1.y);
       if (pinch && pinch.active) {
+        if (typeof collabStopFollow === 'function') collabStopFollow(true);
         const nz = pinch.d0 > 4 && d > 4 ? clamp(pinch.z0 * d / pinch.d0, MIN_ZOOM, MAX_ZOOM) : view.z;
         view.z = nz; view.x = mx - pinch.wx * nz; view.y = my - pinch.wy * nz;
         scheduleRender();
@@ -6621,6 +6630,7 @@ cv.addEventListener('pointercancel', e => {
 
 /* ---------- Taşıma ---------- */
 function startMove(raw, e) {
+  if (typeof collabReadOnly === 'function' && collabReadOnly()) return;
   const join = e && e.altKey ? !ui.connWalls : ui.connWalls;
   const objs = selObjs(), orig = new Map(), conn = [];
   for (const { o } of objs) if (!isLocked(o)) orig.set(o.id, JSON.parse(JSON.stringify(o))); // kilitli nesne yerinde kalır
@@ -6678,6 +6688,7 @@ function doMove(raw, e) {
   scheduleRender();
 }
 function startHandle(h, raw, e) {
+  if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; }
   const os = selObjs(); if (!os.length) return;
   if (os.some(x => isLocked(x.o))) { lockToast(os.filter(x => isLocked(x.o)).length); return; }
   const o = os[0].o, orig = JSON.parse(JSON.stringify(o)), conn = [];
@@ -7195,6 +7206,11 @@ function affects3D(k, p) {
   return false; // dim/text/bg/layer 3B'yi etkilemez
 }
 function applyProp(t, final) {
+  if (t && t.dataset && t.dataset.k !== 'layer' && t.dataset.k !== 'ul' && typeof collabReadOnly === 'function' && collabReadOnly()) {
+    collabViewerToast();
+    if (final) renderProps();
+    return;
+  }
   if (final && typeof collabSoftLockWarn === 'function' && sel.length) collabSoftLockWarn(sel);
   const render = final ? window.render : scheduleRender; // canlı giriş: karede bir çizim
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
@@ -7603,6 +7619,7 @@ function renderFloors() {
 $('#floors').addEventListener('click', e => {
   const t = e.target.closest('[data-fl]'); if (t) { fi = +t.dataset.fl; sel = []; refresh(); return; }
   const a = e.target.closest('[data-fa]'); if (!a) return;
+  if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; }
   if (a.dataset.fa === 'ren') return renameFloor(fi); // dokunmatikte çift dokunma yerine
   if (a.dataset.fa === 'add') { P.floors.push(newFloor(L('Kat ', 'Floor ') + P.floors.length)); P.floors[P.floors.length - 1].axes = (F().axes || []).map(x => ({ ...JSON.parse(JSON.stringify(x)), id: uid() })); // yeni kat aksları devralır const bi = P.floors.length - 2; for (const o of P.floors[bi].furn) if (o.k === 'stairs' && stairReachesUp(o, P.floors[bi])) linkStairVoid(o, bi); fi = P.floors.length - 1; // alttaki merdivenlerin boşluğu yeni katta açılır
   sel = []; commit(); fit(); refresh(); if (ui.view3d && T3) { sync3DFloors(); schedBuild3D(); } }
@@ -7622,7 +7639,7 @@ function addBasement(h = P.wallH) {
   toast(L(`⬇ ${b.name}: ${fmtLevel(b.lvl)} → ${fmtLevel(b.lvl + h)}`, `⬇ ${b.name}: ${fmtLevel(b.lvl)} → ${fmtLevel(b.lvl + h)}`));
   return b;
 }
-function renameFloor(i) { const f = P.floors[i]; if (!f) return; const n = (prompt(L('Kat adı:', 'Floor name:'), f.name) || '').trim(); if (n && n !== f.name) { f.name = n; commit(); refresh(); } }
+function renameFloor(i) { if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; } const f = P.floors[i]; if (!f) return; const n = (prompt(L('Kat adı:', 'Floor name:'), f.name) || '').trim(); if (n && n !== f.name) { f.name = n; commit(); refresh(); } }
 $('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) renameFloor(+t.dataset.fl); });
 function refresh() { if (ui.lenTyped && !(sel.length === 1 && find(sel[0])?.kind === 'wall')) ui.lenTyped = ''; render(); renderProps(); renderFloors(); updateTools(); syncLayerUI(); if (typeof collabSendPresence === 'function') collabSendPresence(true); }
 
@@ -10553,13 +10570,74 @@ function presenceBoot() {
 /* ---------- Canlı birlikte düzenleme (Cloudflare Durable Object) ---------- */
 const COLLAB_MAX_ASSET = 400 * 1024;
 const collab = {
-  ws: null, url: '', room: '', viewToken: '', role: 'editor', peerId: '', color: '#2563eb',
+  ws: null, url: '', room: '', viewToken: '', role: 'editor', persist: false, peerId: '', color: '#2563eb',
   name: (() => { try { return localStorage.getItem('fp_collab_name') || ''; } catch (e) { return ''; } })(),
   rev: 0, peers: new Map(), undoStack: [], redoStack: [], lastSnap: null,
   applying: false, ping: null, retry: null, delay: 1500, closed: false, reconnecting: false,
   presLast: 0, presTimer: null, dragLast: 0, dragTimer: null, cseq: 0, status: '',
   remoteQueue: [], pendingPatches: [], lastBgKey: '', sentTexIds: new Set(), lastWarnAt: 0,
+  followId: '', followApplying: false, lastRoToastAt: 0,
 };
+
+function collabReadOnly() {
+  return !!(collab.room && collab.role === 'viewer');
+}
+
+function collabViewerToast() {
+  const now = Date.now();
+  if (now - collab.lastRoToastAt < 1800) return;
+  collab.lastRoToastAt = now;
+  toast(L('👁 Salt okunur mod — değişiklik yapılamaz', '👁 View-only mode — editing is disabled'));
+}
+
+function collabStopFollow(notify = true) {
+  if (!collab.followId || collab.followApplying) return;
+  collab.followId = '';
+  if (ui.modal === 'collab') collabRefreshPeersDom();
+  if (notify) toast(L('Takip bırakıldı', 'Stopped following'));
+}
+
+function collabComputeFollow(peer, floors, curFi, minZoom, maxZoom) {
+  if (!peer || typeof peer !== 'object') return null;
+  if (peer.v3d && typeof peer.v3d.px === 'number') {
+    return { mode: '3d', v3d: peer.v3d };
+  }
+  if (peer.view && typeof peer.view.x === 'number' && typeof peer.view.y === 'number' && typeof peer.view.z === 'number') {
+    const idx = peer.view.floorId && Array.isArray(floors) ? floors.findIndex(f => f.id === peer.view.floorId) : -1;
+    const z = Math.min(maxZoom || 8, Math.max(minZoom || 0.002, peer.view.z));
+    return { mode: '2d', floorIdx: idx >= 0 && idx !== curFi ? idx : curFi, view: { x: peer.view.x, y: peer.view.y, z } };
+  }
+  return null;
+}
+
+function collabApplyFollow(peer) {
+  if (!collab.followId || !peer || peer.id !== collab.followId || !P) return;
+  const plan = collabComputeFollow(peer, P.floors, fi, MIN_ZOOM, MAX_ZOOM);
+  if (!plan) return;
+  collab.followApplying = true;
+  try {
+    if (plan.mode === '3d' && ui.view3d && T3) {
+      T3.cam.position.set(plan.v3d.px, plan.v3d.py, plan.v3d.pz);
+      T3.ctl.target.set(plan.v3d.tx, plan.v3d.ty, plan.v3d.tz);
+      T3.ctl.update();
+      req3D();
+    } else if (plan.mode === '2d' && !ui.view3d) {
+      if (plan.floorIdx !== fi) {
+        fi = plan.floorIdx;
+        sel = [];
+        render();
+        renderFloors();
+        renderProps();
+      }
+      view.x = plan.view.x;
+      view.y = plan.view.y;
+      view.z = plan.view.z;
+      scheduleRender();
+    }
+  } finally {
+    collab.followApplying = false;
+  }
+}
 
 function collabNewRoomId() {
   const abc = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -10623,6 +10701,12 @@ function collabRenderUI() {
     b.dataset.st = '';
     b.textContent = L('👥 Canlı', '👥 Live');
     b.title = L('Canlı birlikte düzenleme başlat veya katıl', 'Start or join live collaboration');
+    return;
+  }
+  if (collab.role === 'viewer') {
+    b.dataset.st = collab.status === 'warn' ? 'warn' : 'view';
+    b.textContent = L(`👁 Salt okunur (${n})`, `👁 View-only (${n})`);
+    b.title = L(`Salt okunur oturum — ${n} kişi bağlı`, `View-only session — ${n} people connected`);
     return;
   }
   b.dataset.st = collab.status === 'warn' ? 'warn' : collab.status === 'busy' ? 'busy' : 'ok';
@@ -10878,15 +10962,21 @@ function collabSendPresence(force = false) {
   }
   clearTimeout(collab.presTimer); collab.presTimer = null;
   collab.presLast = now;
-  const fl = F();
-  collabSend({
+  const fl = F(), fid = fl ? fl.id : null;
+  const payload = {
     type: 'presence',
     name: collab.name || '',
-    floorId: fl ? fl.id : null,
+    floorId: fid,
     x: ui.raw ? Math.round(ui.raw.x * 10) / 10 : null,
     y: ui.raw ? Math.round(ui.raw.y * 10) / 10 : null,
     sel: sel.slice(0, 100),
-  });
+    view: { x: Math.round(view.x * 100) / 100, y: Math.round(view.y * 100) / 100, z: +view.z.toFixed(4), floorId: fid },
+    v3d: ui.view3d && T3 ? {
+      px: Math.round(T3.cam.position.x * 10) / 10, py: Math.round(T3.cam.position.y * 10) / 10, pz: Math.round(T3.cam.position.z * 10) / 10,
+      tx: Math.round(T3.ctl.target.x * 10) / 10, ty: Math.round(T3.ctl.target.y * 10) / 10, tz: Math.round(T3.ctl.target.z * 10) / 10,
+    } : null,
+  };
+  collabSend(payload);
 }
 
 function collabOverlaySvg(C, z) {
@@ -11001,6 +11091,8 @@ function collabConnect(url, opts = {}) {
       collab.peerId = msg.peerId || '';
       collab.color = msg.color || '#2563eb';
       collab.role = msg.role || 'editor';
+      collab.persist = !!msg.persist;
+      if (msg.viewToken) collab.viewToken = msg.viewToken;
       const wasReconnecting = collab.reconnecting;
       collab.reconnecting = false;
       collab.rev = msg.rev || 0;
@@ -11082,6 +11174,15 @@ function collabConnect(url, opts = {}) {
       toast(L('Görsel canlı oda limiti (400 KB) nedeniyle gönderilemedi', 'Image exceeds the 400 KB live sync limit'));
       return;
     }
+    if (msg.type === 'persist') {
+      collab.persist = !!msg.persist;
+      if (ui.modal === 'collab') collabModal();
+      return;
+    }
+    if (msg.type === 'error' && msg.code === 'readonly') {
+      collabViewerToast();
+      return;
+    }
     if (msg.type === 'peer_join' && msg.peer && msg.peer.id !== collab.peerId) {
       collab.peers.set(msg.peer.id, msg.peer);
       collabRenderUI();
@@ -11093,12 +11194,14 @@ function collabConnect(url, opts = {}) {
       const old = collab.peers.get(msg.peer.id);
       if (old && old.drag && msg.peer.drag === undefined) msg.peer.drag = old.drag;
       collab.peers.set(msg.peer.id, msg.peer);
+      if (collab.followId === msg.peer.id) collabApplyFollow(msg.peer);
       if (ui.modal === 'collab') collabRefreshPeersDom();
       if (!ui.view3d) drawPreview();
       return;
     }
     if (msg.type === 'peer_leave' && msg.peerId) {
       collab.peers.delete(msg.peerId);
+      if (collab.followId === msg.peerId) collab.followId = '';
       collabRenderUI();
       if (ui.modal === 'collab') collabModal();
       else if (!ui.view3d) drawPreview();
@@ -11127,8 +11230,8 @@ function collabLeave(silent = false) {
   const ws = collab.ws; collab.ws = null;
   if (ws) { try { ws.close(1000); } catch (e) { } }
   const was = !!collab.room;
-  collab.room = ''; collab.url = ''; collab.viewToken = ''; collab.role = 'editor'; collab.peerId = '';
-  collab.rev = 0; collab.status = ''; collab.reconnecting = false; collab.peers.clear();
+  collab.room = ''; collab.url = ''; collab.viewToken = ''; collab.role = 'editor'; collab.persist = false; collab.peerId = '';
+  collab.rev = 0; collab.status = ''; collab.reconnecting = false; collab.followId = ''; collab.followApplying = false; collab.peers.clear();
   collab.remoteQueue = []; collab.pendingPatches = []; collab.sentTexIds.clear(); collab.lastBgKey = '';
   collab.undoStack = []; collab.redoStack = []; collab.lastSnap = null;
   if (P) { hist = [JSON.stringify(P)]; hi = 0; updateUndo(); }
@@ -11146,7 +11249,9 @@ function collabPeersHtml() {
   const others = [...collab.peers.values()].map(p => {
     const nm = esc(p.name || L('Misafir', 'Guest'));
     const fl = p.floorId && flMap.get(p.floorId) ? ` · ${esc(flMap.get(p.floorId))}` : '';
-    return `<span class="collab-peer"><i style="background:${esc(p.color || '#2563eb')}"></i><span>${nm}${fl}</span></span>`;
+    const roTag = p.role === 'viewer' ? ' 👁' : '';
+    const flw = collab.followId === p.id;
+    return `<span class="collab-peer"><i style="background:${esc(p.color || '#2563eb')}"></i><span>${nm}${roTag}${fl}</span><button type="button" data-clfollow="${esc(p.id)}">${flw ? L('✕ Bırak', '✕ Following') : L('👁 Takip et', '👁 Follow')}</button></span>`;
   }).join('');
   return `<div class="collab-peers" id="collabPeers">${selfPill}${others}</div>`;
 }
@@ -11181,18 +11286,25 @@ function collabModal() {
     return;
   }
   const url = collabRoomUrl(collab.room);
+  const viewUrl = collab.role === 'editor' && collab.viewToken ? collabRoomUrl(collab.room, collab.viewToken) : '';
   const qr = url && url.length <= SHARE_QR_MAX ? qrSvg(url, 'M', 4) : '';
-  const stTxt = collab.status === 'warn' ? L('⚠ Bağlantı kesildi', '⚠ Disconnected')
+  const stTxt = collab.status === 'warn' ? L('⚠ Bağlantı kesildi — yeniden bağlanılıyor', '⚠ Disconnected — reconnecting')
     : collab.status === 'busy' ? L('⟳ Bağlanıyor…', '⟳ Connecting…')
+    : collab.role === 'viewer' ? L('👁 Salt okunur — plan anlık güncelleniyor', '👁 View-only — live updates active')
     : L('● Bağlı — değişiklikler anlık eşitleniyor', '● Connected — edits sync live');
+  const editorLinks = collab.role === 'editor' ? `
+      <div class="row"><input id="clUrl" readonly value="${esc(url)}" style="flex:1;min-width:200px"><button class="btn sm primary" data-cl="copy">📋 ${L('Düzenleme linki', 'Copy edit link')}</button>${navigator.share ? `<button class="btn sm" data-cl="share">📤 ${L('Paylaş…', 'Share…')}</button>` : ''}</div>
+      ${viewUrl ? `<div class="row" style="margin-top:6px"><input id="clViewUrl" readonly value="${esc(viewUrl)}" style="flex:1;min-width:200px"><button class="btn sm" data-cl="copyview">👁 ${L('Salt okunur link', 'Copy view-only link')}</button></div>` : ''}
+      <label class="chk-pill" style="margin-top:8px"><input type="checkbox" id="clPersist" ${collab.persist ? 'checked' : ''}> <span>${L('Odayı kalıcı kaydet (herkes çıksa da kalsın)', 'Persist room (keep snapshot even after everyone leaves)')}</span></label>
+      <p class="muted" style="font-size:12px;margin-bottom:0">${L('Düzenleme linki olanlar planı değiştirebilir; salt okunur link yalnızca izlemeye ve takip etmeye izin verir.', 'Edit links allow changes; view-only links allow inspecting and following only.')}</p>`
+    : `<p class="muted" style="font-size:12px;margin:0">${L('Salt okunur moddasınız: katları değiştirebilir, 3B gezebilir ve diğer katılımcıları takip edebilirsiniz.', 'You are in view-only mode: you can switch floors, orbit in 3D, and follow other participants.')}</p>`;
   openModal(`<h2>👥 ${L('Canlı birlikte düzenleme', 'Live collaboration')} <button class="btn sm" data-close>✕</button></h2>
     <p style="margin:0 0 8px;font-size:12.5px"><b>${stTxt}</b></p>
     ${nameRow}
     ${collabPeersHtml()}
     <div class="sh-out">
-      ${qr ? `<div class="sh-qr">${qr}</div>` : ''}
-      <div class="row"><input id="clUrl" readonly value="${esc(url)}" style="flex:1;min-width:200px"><button class="btn sm primary" data-cl="copy">📋 ${L('Linki kopyala', 'Copy link')}</button>${navigator.share ? `<button class="btn sm" data-cl="share">📤 ${L('Paylaş…', 'Share…')}</button>` : ''}</div>
-      <p class="muted" style="font-size:12px">${L('Bu linke sahip olan herkes odaya katılıp planı düzenleyebilir.', 'Anyone with this link can join the room and edit the plan.')}</p>
+      ${collab.role === 'editor' && qr ? `<div class="sh-qr">${qr}</div>` : ''}
+      ${editorLinks}
     </div>
     <div class="row" style="margin-top:12px"><button class="btn" data-cl="leave">🚪 ${L('Oturumdan ayrıl', 'Leave session')}</button></div>`, 'collab');
 }
@@ -11205,8 +11317,25 @@ $('#modal').addEventListener('input', e => {
     collabRefreshPeersDom();
   }
 });
+$('#modal').addEventListener('change', e => {
+  if (ui.modal === 'collab' && e.target && e.target.id === 'clPersist') {
+    const val = !!e.target.checked;
+    collab.persist = val;
+    collabSend({ type: 'set_persist', persist: val });
+  }
+});
 $('#modal').addEventListener('click', e => {
   if (ui.modal !== 'collab') return;
+  const flw = e.target.closest('[data-clfollow]');
+  if (flw) {
+    const pid = flw.dataset.clfollow;
+    collab.followId = collab.followId === pid ? '' : pid;
+    if (collab.followId && collab.peers.has(collab.followId)) {
+      collabApplyFollow(collab.peers.get(collab.followId));
+    }
+    collabRefreshPeersDom();
+    return;
+  }
   const b = e.target.closest('[data-cl]');
   if (!b) return;
   const a = b.dataset.cl;
@@ -11217,6 +11346,8 @@ $('#modal').addEventListener('click', e => {
     collabJoin(parsed.roomId, { viewToken: parsed.viewToken });
   } else if (a === 'copy') {
     copyText($('#clUrl').value).then(ok => toast(ok ? L('Oda linki kopyalandı', 'Room link copied') : L('Kopyalanamadı', 'Could not copy')));
+  } else if (a === 'copyview') {
+    copyText($('#clViewUrl').value).then(ok => toast(ok ? L('Salt okunur link kopyalandı', 'View-only link copied') : L('Kopyalanamadı', 'Could not copy')));
   } else if (a === 'share') {
     navigator.share({ title: P.name, url: $('#clUrl').value }).catch(() => { });
   } else if (a === 'leave') {
@@ -13847,11 +13978,19 @@ function init3D() {
     if (mv > 0 && dh !== null) nd = Math.max(30, Math.min(nd, (dh - mv) * cos)); // …ya da imleçteki yüzeyin derinliği
     t.copy(cam.position).addScaledVector(fwd, nd);
     zHit = dh === null ? null : { t: now, x: e.clientX, y: e.clientY, d: Math.max(0, dh - mv) };
+    if (typeof collabStopFollow === 'function') collabStopFollow(true);
     noteNav3D(); T3.ctl.update(); req3D();
+    if (typeof collabSendPresence === 'function' && typeof collab !== 'undefined' && collab.room && collab.peers.size && !collab.followApplying) collabSendPresence(false);
   }, { passive: false });
   const ctl = new THREE.OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.maxPolarAngle = ORBIT_MAX_POLAR;
-  ctl.addEventListener('start', () => { if (ui.view3d && ui.live3d && !ui.shot) { T3.ctlUser = true; noteNav3D(); } });
-  ctl.addEventListener('change', () => { if (ui.view3d && ui.live3d && !ui.shot && T3.ctlUser) noteNav3D(); });
+  ctl.addEventListener('start', () => {
+    if (typeof collabStopFollow === 'function') collabStopFollow(true);
+    if (ui.view3d && ui.live3d && !ui.shot) { T3.ctlUser = true; noteNav3D(); }
+  });
+  ctl.addEventListener('change', () => {
+    if (ui.view3d && ui.live3d && !ui.shot && T3.ctlUser) noteNav3D();
+    if (ui.view3d && typeof collabSendPresence === 'function' && typeof collab !== 'undefined' && collab.room && collab.peers.size && !collab.followApplying) collabSendPresence(false);
+  });
   let downPt = null;
   // 3B dokunmatik iki parmak (#80): ikinci parmak indiğinde tek parmakla başlamış mobilya/açıklık sürüklemesini iptal et ki OrbitControls yakınlaştırabilsin
   r.domElement.addEventListener('touchstart', e => {

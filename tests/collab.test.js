@@ -64,13 +64,19 @@ function makeCollabWorkerEnv(allowedOrigins = 'https://mewego.github.io') {
   function roomFor(name) {
     if (!rooms.has(name)) {
       const sockets = [];
+      const store = new Map();
       const ctx = {
         autoResponse: null,
         setWebSocketAutoResponse(pair) { this.autoResponse = pair; },
         acceptWebSocket(ws) { sockets.push(ws); },
         getWebSockets() { return sockets.filter(s => s.readyState === 1); },
+        storage: {
+          async get(k) { return store.has(k) ? JSON.parse(JSON.stringify(store.get(k))) : undefined; },
+          async put(k, v) { store.set(k, JSON.parse(JSON.stringify(v))); },
+          async delete(k) { store.delete(k); },
+        },
       };
-      rooms.set(name, { room: new CollabRoom(ctx, env), sockets, ctx });
+      rooms.set(name, { room: new CollabRoom(ctx, env), sockets, ctx, store });
     }
     return rooms.get(name);
   }
@@ -82,7 +88,7 @@ function makeCollabWorkerEnv(allowedOrigins = 'https://mewego.github.io') {
       get: ({ name }) => roomFor(name).room,
     },
   };
-  return { worker, env, roomFor };
+  return { worker, env, roomFor, CollabRoom };
 }
 
 function makeDiffEnv() {
@@ -356,4 +362,107 @@ test('Phase 2: collabPeerEditing detects peers selecting or dragging matching ob
   const hit2 = collabPeerEditing(['f9'], peers);
   assert.strictEqual(hit2.peer.name, 'Ece');
   assert.strictEqual(collabPeerEditing(['w99'], peers), null);
+});
+
+test('Phase 3: CollabRoom enforces view-only role (?v=) and rejects mutations from viewers', async () => {
+  const { worker, env, roomFor } = makeCollabWorkerEnv();
+  const { collabDiff } = makeDiffEnv();
+
+  await worker.fetch(new Request('https://x.example/collab/room_phase3', {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }), env);
+  const { room, sockets } = roomFor('room_phase3');
+  const welcomeEditor = JSON.parse(sockets[0].sent[0]);
+  assert.strictEqual(welcomeEditor.role, 'editor');
+  assert.ok(welcomeEditor.viewToken && welcomeEditor.viewToken.length >= 8);
+
+  const p0 = baseProject();
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'seed', state: p0, clientSeq: 1 }));
+
+  // Connect viewer using ?v=<viewToken>
+  await worker.fetch(new Request(`https://x.example/collab/room_phase3?v=${welcomeEditor.viewToken}`, {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }), env);
+  const viewerWs = sockets[1];
+  const welcomeViewer = JSON.parse(viewerWs.sent[0]);
+  assert.strictEqual(welcomeViewer.role, 'viewer');
+  assert.strictEqual(welcomeViewer.viewToken, undefined);
+
+  // Viewer cannot send patch, drag, asset, or set_persist.
+  const p1 = JSON.parse(JSON.stringify(p0));
+  p1.name = 'Vandalized';
+  const badPatch = collabDiff(p0, p1);
+  for (const msg of [
+    { type: 'patch', patch: badPatch },
+    { type: 'drag', ids: ['w1'], dx: 10, dy: 10 },
+    { type: 'asset', kind: 'bg', data: null },
+    { type: 'set_persist', persist: true },
+  ]) {
+    await room.webSocketMessage(viewerWs, JSON.stringify(msg));
+    const reply = JSON.parse(viewerWs.sent.at(-1));
+    assert.strictEqual(reply.type, 'error');
+    assert.strictEqual(reply.code, 'readonly');
+  }
+  assert.strictEqual(room.state.name, 'Test Plan');
+  assert.strictEqual(room.rev, 1);
+
+  // Viewer CAN send presence updates (with view/v3d) and request resync.
+  await room.webSocketMessage(viewerWs, JSON.stringify({ type: 'presence', name: 'Spectator', view: { x: 10, y: 20, z: 0.5, floorId: 'f1' } }));
+  const pres = JSON.parse(sockets[0].sent.at(-1));
+  assert.strictEqual(pres.type, 'presence');
+  assert.strictEqual(pres.peer.role, 'viewer');
+  assert.deepStrictEqual(pres.peer.view, { x: 10, y: 20, z: 0.5, floorId: 'f1' });
+});
+
+test('Phase 3: CollabRoom optional persistent storage survives empty room reload and clears when disabled', async () => {
+  const { worker, env, roomFor, CollabRoom } = makeCollabWorkerEnv();
+  await worker.fetch(new Request('https://x.example/collab/room_persist1', {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }), env);
+  const { room, sockets, ctx, store } = roomFor('room_persist1');
+  const p0 = baseProject();
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'seed', state: p0, clientSeq: 1 }));
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'set_persist', persist: true }));
+  assert.strictEqual(room.persist, true);
+  assert.ok(store.has('room'));
+
+  // All peers disconnect -> persistent state remains in storage and memory.
+  await room.webSocketClose(sockets[0], 1000, '');
+  assert.strictEqual(room.state.name, 'Test Plan');
+
+  // Fresh Durable Object instance reloads persisted room from ctx.storage on next connect.
+  const reloaded = new CollabRoom(ctx, env);
+  await reloaded.fetch(new Request('https://x.example/collab/room_persist1', {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }));
+  const wsReload = ctx.getWebSockets().at(-1);
+  const wReload = JSON.parse(wsReload.sent[0]);
+  assert.strictEqual(wReload.persist, true);
+  assert.strictEqual(wReload.rev, 1);
+  assert.strictEqual(wReload.state.name, 'Test Plan');
+
+  // Turning persistence off deletes storage and reverts to ephemeral cleanup on empty.
+  await reloaded.webSocketMessage(wsReload, JSON.stringify({ type: 'set_persist', persist: false }));
+  assert.strictEqual(store.has('room'), false);
+  await reloaded.webSocketClose(wsReload, 1000, '');
+  assert.strictEqual(reloaded.state, null);
+  assert.strictEqual(reloaded.rev, 0);
+});
+
+test('Phase 3: collabComputeFollow computes 2D floor/view and 3D camera sync targets', () => {
+  const fn = fnSrcOf(appSrc, 'collabComputeFollow');
+  const collabComputeFollow = new Function(`${fn}\nreturn collabComputeFollow;`)();
+  const floors = [{ id: 'f1' }, { id: 'f2' }];
+
+  const r2d = collabComputeFollow({ view: { x: 100, y: -50, z: 1.2, floorId: 'f2' } }, floors, 0, 0.002, 8);
+  assert.deepStrictEqual(r2d, { mode: '2d', floorIdx: 1, view: { x: 100, y: -50, z: 1.2 } });
+
+  const rClamped = collabComputeFollow({ view: { x: 0, y: 0, z: 99, floorId: 'f1' } }, floors, 0, 0.002, 8);
+  assert.strictEqual(rClamped.view.z, 8);
+  assert.strictEqual(rClamped.floorIdx, 0);
+
+  const r3d = collabComputeFollow({ v3d: { px: 10, py: 200, pz: 300, tx: 0, ty: 80, tz: 0 } }, floors, 0, 0.002, 8);
+  assert.deepStrictEqual(r3d, { mode: '3d', v3d: { px: 10, py: 200, pz: 300, tx: 0, ty: 80, tz: 0 } });
+
+  assert.strictEqual(collabComputeFollow(null, floors, 0, 0.002, 8), null);
 });

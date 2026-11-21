@@ -223,6 +223,59 @@ export class CollabRoom extends DurableObject {
     this.peers = new Map();
     this.seq = 0;
     this.assets = { bg: null, tex: new Map() };
+    this.viewToken = '';
+    this.persist = false;
+    this.loaded = false;
+  }
+
+  async ensureLoaded() {
+    if (this.loaded) return;
+    this.loaded = true;
+    const st = this.ctx && this.ctx.storage;
+    if (!st || typeof st.get !== 'function') return;
+    try {
+      const saved = await st.get('room');
+      if (saved && typeof saved === 'object') {
+        this.state = saved.state || null;
+        this.rev = typeof saved.rev === 'number' ? saved.rev : 0;
+        this.viewToken = typeof saved.viewToken === 'string' ? saved.viewToken : '';
+        this.persist = !!saved.persist;
+        this.assets = {
+          bg: saved.bg || null,
+          tex: new Map(Array.isArray(saved.tex) ? saved.tex : []),
+        };
+      }
+    } catch (_) { }
+  }
+
+  ensureViewToken() {
+    if (this.viewToken) return this.viewToken;
+    const abc = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let out = '';
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      const buf = new Uint8Array(12);
+      crypto.getRandomValues(buf);
+      for (let i = 0; i < buf.length; i++) out += abc[buf[i] % abc.length];
+    } else {
+      while (out.length < 12) out += abc[Math.floor(Math.random() * abc.length)];
+    }
+    this.viewToken = out;
+    return out;
+  }
+
+  async savePersistent() {
+    const st = this.ctx && this.ctx.storage;
+    if (!this.persist || !st || typeof st.put !== 'function') return;
+    try {
+      await st.put('room', {
+        state: this.state,
+        rev: this.rev,
+        viewToken: this.viewToken,
+        persist: true,
+        bg: this.assets.bg,
+        tex: [...this.assets.tex.entries()],
+      });
+    } catch (_) { }
   }
 
   liveSockets(exclude) {
@@ -254,6 +307,8 @@ export class CollabRoom extends DurableObject {
       x: typeof p.x === 'number' ? p.x : null,
       y: typeof p.y === 'number' ? p.y : null,
       drag: p.drag || null,
+      view: p.view || null,
+      v3d: p.v3d || null,
       role: p.role || 'editor',
     };
   }
@@ -287,6 +342,11 @@ export class CollabRoom extends DurableObject {
     if (String(request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') {
       return new Response('Expected WebSocket', { status: 426 });
     }
+    await this.ensureLoaded();
+    this.ensureViewToken();
+    const url = new URL(request.url);
+    const qv = url.searchParams.get('v') || '';
+    const role = qv || url.searchParams.get('role') === 'viewer' ? 'viewer' : 'editor';
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.ctx.acceptWebSocket(server);
@@ -299,19 +359,24 @@ export class CollabRoom extends DurableObject {
       sel: [],
       x: null,
       y: null,
-      role: 'editor',
+      view: null,
+      v3d: null,
+      role,
     };
     this.savePeer(server, peer);
-    this.sendTo(server, {
+    const welcome = {
       type: 'welcome',
       peerId: peer.id,
       color: peer.color,
       role: peer.role,
+      persist: this.persist,
       rev: this.rev,
       state: this.state,
       hasBg: !!this.assets.bg,
       peers: this.publicPeers(server),
-    });
+    };
+    if (role === 'editor') welcome.viewToken = this.viewToken;
+    this.sendTo(server, welcome);
     this.broadcast({ type: 'peer_join', peer: this.publicPeer(peer) }, server);
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -328,11 +393,31 @@ export class CollabRoom extends DurableObject {
       return;
     }
     if (typeof message !== 'string') return;
+    await this.ensureLoaded();
     let msg;
     try { msg = JSON.parse(message); } catch (_) { return; }
     if (!msg || typeof msg !== 'object') return;
     const peer = this.peerOf(ws);
     if (!peer) return;
+
+    const writeTypes = ['seed', 'patch', 'drag', 'asset', 'set_persist'];
+    if (peer.role === 'viewer' && writeTypes.includes(msg.type)) {
+      this.sendTo(ws, { type: 'error', code: 'readonly' });
+      return;
+    }
+
+    if (msg.type === 'set_persist') {
+      this.persist = !!msg.persist;
+      if (this.persist) {
+        await this.savePersistent();
+      } else if (this.ctx && this.ctx.storage && typeof this.ctx.storage.delete === 'function') {
+        try { await this.ctx.storage.delete('room'); } catch (_) { }
+      }
+      const note = { type: 'persist', persist: this.persist, from: peer.id };
+      this.sendTo(ws, note);
+      this.broadcast(note, ws);
+      return;
+    }
 
     if (msg.type === 'seed') {
       if (this.state) {
@@ -340,6 +425,7 @@ export class CollabRoom extends DurableObject {
       } else if (msg.state && typeof msg.state === 'object' && Array.isArray(msg.state.floors)) {
         this.state = JSON.parse(JSON.stringify(msg.state));
         this.rev = 1;
+        await this.savePersistent();
         this.sendTo(ws, { type: 'ack', rev: this.rev, clientSeq: msg.clientSeq });
         this.broadcast({ type: 'state', rev: this.rev, state: this.state, from: peer.id }, ws);
       }
@@ -354,6 +440,7 @@ export class CollabRoom extends DurableObject {
       }
       this.rev += 1;
       this.state = applyCollabPatch(this.state, msg.patch);
+      await this.savePersistent();
       this.sendTo(ws, { type: 'ack', rev: this.rev, clientSeq: msg.clientSeq });
       this.broadcast({ type: 'patch', rev: this.rev, patch: msg.patch, from: peer.id }, ws);
       return;
@@ -365,6 +452,14 @@ export class CollabRoom extends DurableObject {
       if (typeof msg.x === 'number' && Number.isFinite(msg.x)) peer.x = msg.x;
       if (typeof msg.y === 'number' && Number.isFinite(msg.y)) peer.y = msg.y;
       if (Array.isArray(msg.sel)) peer.sel = msg.sel.filter(s => typeof s === 'string').slice(0, 100);
+      if (msg.view && typeof msg.view === 'object' && Number.isFinite(msg.view.x) && Number.isFinite(msg.view.y) && Number.isFinite(msg.view.z)) {
+        peer.view = { x: msg.view.x, y: msg.view.y, z: msg.view.z, floorId: typeof msg.view.floorId === 'string' ? msg.view.floorId : null };
+      }
+      if (msg.v3d && typeof msg.v3d === 'object' && ['px', 'py', 'pz', 'tx', 'ty', 'tz'].every(k => Number.isFinite(msg.v3d[k]))) {
+        peer.v3d = { px: msg.v3d.px, py: msg.v3d.py, pz: msg.v3d.pz, tx: msg.v3d.tx, ty: msg.v3d.ty, tz: msg.v3d.tz };
+      } else if (msg.v3d === null) {
+        peer.v3d = null;
+      }
       this.savePeer(ws, peer);
       this.broadcast({ type: 'presence', peer: this.publicPeer(peer) }, ws);
       return;
@@ -405,6 +500,7 @@ export class CollabRoom extends DurableObject {
         if (msg.data === null) {
           this.assets.bg = null;
           if (this.state) this.state.bg = null;
+          await this.savePersistent();
           this.broadcast({ type: 'asset', kind: 'bg', data: null, from: peer.id }, ws);
           return;
         }
@@ -416,6 +512,7 @@ export class CollabRoom extends DurableObject {
           }
           this.assets.bg = JSON.parse(raw);
           if (this.state) this.state.bg = JSON.parse(raw);
+          await this.savePersistent();
           this.broadcast({ type: 'asset', kind: 'bg', data: this.assets.bg, from: peer.id }, ws);
         }
         return;
@@ -426,6 +523,7 @@ export class CollabRoom extends DurableObject {
           return;
         }
         this.assets.tex.set(msg.id, msg.data);
+        await this.savePersistent();
         this.broadcast({ type: 'asset', kind: 'tex', id: msg.id, data: msg.data, from: peer.id }, ws);
       }
       return;
@@ -444,11 +542,12 @@ export class CollabRoom extends DurableObject {
     const peer = this.peerOf(ws);
     this.peers.delete(ws);
     if (peer) this.broadcast({ type: 'peer_leave', peerId: peer.id }, ws);
-    if (this.liveSockets(ws).length === 0) {
+    if (this.liveSockets(ws).length === 0 && !this.persist) {
       this.state = null;
       this.rev = 0;
       this.assets.bg = null;
       this.assets.tex.clear();
+      this.viewToken = '';
     }
   }
 
