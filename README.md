@@ -329,4 +329,13 @@ Every `git push` to `main` updates the GitHub Pages site automatically.
 
 ## 📄 License
 
-No license has been declared yet. Add a `LICENSE` file (e.g. MIT) to define reuse terms.
+Kat Planı Çizici is **source-available for noncommercial use** under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
+
+- ✅ **Allowed:** personal use, study, research and experiments, hobby projects, teaching, and use by schools, universities, public research organisations, charities and government institutions. You may change the code and share it, as long as the use stays noncommercial and you keep the license and the `Required Notice` line from [`LICENSE.md`](LICENSE.md).
+- ❌ **Not allowed without permission:** any commercial use. That includes selling the app or a modified version, offering it as a paid service, or using it inside a product or paid work for a company.
+
+Want to use it commercially? Open an issue or contact the author through [GitHub](https://github.com/MeWeGo) to ask about a commercial license.
+
+Bundled third-party code keeps its own license: Three.js (loaded from a CDN) is MIT-licensed.
+
+**Contributions are welcome:** fork it, improve it, open issues and pull requests. By contributing a pull request you agree that your contribution is released under the same license and that the author may also offer it under other terms (for example, a commercial license).

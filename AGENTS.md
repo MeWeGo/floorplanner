@@ -35,6 +35,7 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 | `.github/workflows/` | `ci.yml` (tests) and `deploy.yml` (test-gated Pages publish) — see §12 |
 | `privacy.html` | Bilingual privacy policy (no script), linked from the ☁ Sync dialog and required by the Google OAuth consent screen; deployed next to the app |
 | `legacy-index.html` | Original prototype. **Do not edit**; kept for reference only |
+| `LICENSE.md` | PolyForm Noncommercial 1.0.0 + the `Required Notice` copyright line. Do not edit the license text |
 | `README.md` | User-facing docs. Keep shortcuts / features in sync with the code |
 | `.github/ISSUE_GUIDE.md` | How to write a GitHub issue (title, templates, rules, checklist) — see §13 |
 
@@ -845,4 +846,4 @@ gh issue create --title "..." \
 
 ## 14. Roadmap Ideas (not implemented)
 
-Imperial units · roof & terrain in 3D · cost / materials list · wall-linked room polygons (auto-update) · PWA / offline caching of Three.js · custom user templates · curved walls · LICENSE file.
+Imperial units · roof & terrain in 3D · cost / materials list · wall-linked room polygons (auto-update) · PWA / offline caching of Three.js · custom user templates · curved walls.
