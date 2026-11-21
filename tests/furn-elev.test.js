@@ -123,11 +123,11 @@ test('(4) source wiring checks with loose regexes', () => {
   assert.match(furnSvgBody, /stroke-dasharray/, 'furnSvg must use stroke-dasharray for raised items');
   assert.match(furnSvgBody, /▲/, 'furnSvg must emit ▲ tag for raised items');
 
-  // panel field elev is hidden for stairs and ramp
+  // panel field elev is shown for every item; stairs / ramps call it "Start level" (#137)
   assert.match(
     src,
-    /o\.k\s*!==\s*['"]stairs['"]\s*&&\s*o\.k\s*!==\s*['"]ramp['"][\s\S]*?['"]furn['"]\s*,\s*['"]elev['"]/,
-    'panel field elev must be hidden for stairs and ramp'
+    /'Start level \(cm\)'\) : L\('Yerden yükseklik \(cm\)', 'Height above floor \(cm\)'\), 'furn', 'elev'/,
+    'panel field elev must be shown, labelled "Start level" for stairs and ramps'
   );
 
   // applyProp clamps elev to 0..FURN_ELEV_MAX
