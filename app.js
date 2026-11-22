@@ -3980,7 +3980,37 @@ function ifcToProject(text, opts = {}) {
       pts: ft.pts.map(p => { const dx = p.x - rc.cx, dy = p.y - rc.cy; return { x: r1(dx * c + dy * sn), y: r1(-dx * sn + dy * c) }; }) });
   };
   const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (Math.abs(el) >= 3) o.elev = Math.max(-500, Math.min(500, el)); return o; }; // ±500 = FURN_ELEV_MAX (#61); eksi = birleşen alt seviye
+  /* Bu uygulamanın kendi IFC dışa aktarımı: her eşya kendi ayarlarını FloorPlanner.Item (JSON) özelliğinde taşır. Varsa eşya
+     ondan aynen kurulur (tür, ölçü, renk, merdiven / çatı / lamba alanları, parçalar); yer ve yön IFC yerleşiminden gelir, yani
+     başka bir programda taşınan eşya yeni yerinde açılır. Yoksa (Revit, ArchiCAD …) aşağıdaki gövdeden tanıma çalışır.
+     Değerler dosyadan gelir: tırnak / < > / ` atılır, prototip anahtarları düşer, derinlik ve boyut sınırlı. */
+  const fpDone = new Set(), FP_DROP = new Set(['id', 'x', 'y', 'rot', 'elev', 'layer', 'grp', 'lock', '__proto__', 'constructor', 'prototype']);
+  const fpClean = (v, d) => {
+    if (d > 8) return undefined;
+    if (typeof v === 'string') return v.replace(/["<>`]/g, '').slice(0, 4000);
+    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
+    if (typeof v === 'boolean' || v === null) return v;
+    if (Array.isArray(v)) return v.slice(0, 5000).map(x => fpClean(x, d + 1)).filter(x => x !== undefined);
+    if (typeof v !== 'object') return undefined;
+    const o = {}; for (const k of Object.keys(v)) { if (d === 0 ? FP_DROP.has(k) : k === '__proto__' || k === 'constructor' || k === 'prototype') continue; const c = fpClean(v[k], d + 1); if (c !== undefined) o[k.replace(/["<>`]/g, '')] = c; }
+    return o;
+  };
+  for (const id of psets.keys()) {
+    const js = propOf(id, /^FloorPlannerItem$/); if (!js) continue;
+    let o; try { o = fpClean(JSON.parse(js), 0); } catch (e) { continue; }
+    if (!o || Array.isArray(o) || typeof o.type !== 'string' || !o.type || !['w', 'd', 'h'].every(k => +o[k] > 0 && +o[k] <= 1e5)) continue;
+    const M = place(R(A(id)[5])), c = toPlan(M.o), th = Math.atan2(-M.x[1], M.x[0]) * 180 / Math.PI, st = storeyOf(id, c[2]);
+    o.id = uid(); o.x = r1(c[0]); o.y = r1(c[1]); o.rot = r1((((th % 360) + 360) % 360) % 360);
+    const el = Math.round(c[2] - (st ? st.z : 0)); if (el) o.elev = Math.max(-500, Math.min(500, el)); // serbest döşeme payı aşağıda düşülür
+    if (typeof o.name !== 'string' || !o.name) o.name = nameOf(id) || o.type;
+    fl(st).furn.push(o); fpDone.add(id);
+    const k = o.k === 'stairs' ? 'stairs' : o.k === 'ramp' ? 'ramps' : o.k === 'roof' ? 'roofs' : 'components'; stats[k] = (stats[k] || 0) + 1;
+    if (opts.catalog && opts.catalog[o.type]) stats.matched++;
+  }
+  // gövdesi FloorPlanner eşyasının içinde kalan parçalar (montaj çocukları) ayrıca gelmez
+  const fpUnder = id => { for (let p = parent.get(id), k = 0; p && k < 30; p = parent.get(p), k++) if (fpDone.has(p)) return true; return false; };
   for (const id of ids(IFC_COLUMNS)) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 0.5) { stats.skipped++; continue; }
     const [z0, z1] = zr(g.body), h0 = Math.max(10, Math.min(5000, Math.round(z1 - z0)));
     const rc = ifcRect(ft.pts.map(p => [p.x, p.y])), nm = nameOf(id).slice(0, 80);
@@ -4055,6 +4085,7 @@ function ifcToProject(text, opts = {}) {
   };
   const compIds = ids(IFC_COMPONENTS), compSet = new Set(compIds);
   for (const id of compIds) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     let up = false; for (let p = parent.get(id), k = 0; p && k < 30; p = parent.get(p), k++) if (compSet.has(p)) { up = true; break; }
     if (up || railProxy.has(id) || usedProxy.has(id) || under(id, STAIRISH) || under(id, ROOFISH)) continue; // usedProxy: açıklığın penceresi / kapısı oldu // montajın parçası (montaj tek şekil gelir) ya da korkuluk (duvar olarak geldi)
     let g = geom(id);
@@ -4074,6 +4105,7 @@ function ifcToProject(text, opts = {}) {
   const roofIds = ids(new Set(['IFCROOF'])).filter(id => !under(id, ROOFISH));
   for (const id of ids(IFC_SLABS)) { const a = A(id); if (a[8] && a[8].e === 'ROOF' && !under(id, ROOFISH)) roofIds.push(id); }
   for (const id of roofIds) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     let faces = facesOf(id); if (!faces.length) for (const c of allKids(id)) faces.push(...facesOf(c));
     let g = geom(id); if (!g.body.length) { const body = []; for (const c of allKids(id)) body.push(...geom(c).body); g = { body, foot: [], axis: [] }; }
     const pts = faces.length ? faces.flat() : g.body; if (pts.length < 3) { stats.skipped++; continue; }
@@ -4129,6 +4161,7 @@ function ifcToProject(text, opts = {}) {
   const stairIds = ids(new Set(['IFCSTAIR'])).filter(id => !under(id, STAIRISH));
   for (const id of ids(new Set(['IFCSTAIRFLIGHT']))) if (!under(id, STAIRISH)) stairIds.push(id);
   for (const id of stairIds) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     const parts = [id, ...allKids(id)], body = [];
     for (const c of parts) body.push(...geom(c).body);
     if (body.length < 3) { stats.skipped++; continue; }
@@ -4155,6 +4188,7 @@ function ifcToProject(text, opts = {}) {
   const rampIds = ids(new Set(['IFCRAMP'])).filter(id => !under(id, STAIRISH));
   for (const id of ids(new Set(['IFCRAMPFLIGHT']))) if (!under(id, STAIRISH)) rampIds.push(id);
   for (const id of rampIds) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     const fls = T(id) === 'IFCRAMP' ? allKids(id).filter(c => T(c) === 'IFCRAMPFLIGHT') : [];
     const runs = fls.length ? fls.map(c => ({ c, body: geom(c).body })) : [{ c: id, body: [id, ...allKids(id)].flatMap(c => geom(c).body) }];
     const nm = nameOf(id);
@@ -4212,6 +4246,29 @@ function ifcToProject(text, opts = {}) {
   });
   // bodrum katlı model: zemin altındaki kat varsa her kat gerçek kotunu alır (Floor.lvl, ±0 = zemin); yoksa eskisi gibi dizilir
   if (floors.some(({ b }) => b.s && b.s.z < -50)) floors.forEach(({ b, f }) => { if (b.s && Number.isFinite(b.s.z)) f.lvl = Math.round(b.s.z); });
+  /* Eşya kotu, altındaki serbest döşemeye göre: IFC'deki kot kata göre mutlaktır, uygulama ise eşyayı (3B, kesit, IFC / Revit
+     dışa aktarımı) merkezinin altındaki son döşemenin off'u kadar zaten yükseltir — 45 cm yükseltilmiş döşemede eşya 90 cm'de
+     yüzüyordu, tavana asılı sarkıt bir üst kata taşıyordu. Aynı kural: dizideki son içeren döşeme. */
+  for (const { f } of floors) for (const o of f.furn) {
+    let off = 0; for (let i = f.slabs.length - 1; i >= 0; i--) if (ifcInPoly([o.x, o.y], f.slabs[i].pts.map(p => [p.x, p.y]))) { off = +f.slabs[i].off || 0; break; }
+    if (!off) continue;
+    const e = r1((+o.elev || 0) - off); if (Math.abs(e) < 1) delete o.elev; else o.elev = Math.max(-500, Math.min(500, e));
+  }
+  /* Kendi döşemesi olan kat (odalarının çoğu IFC döşemesinin üstünde): uygulamanın otomatik döşemesi kapanır (Floor.noSlab),
+     yoksa 3B'de ve dışa aktarımda iki döşeme üst üste biner. Odası yoksa döşeme alanı duvar kutusunun yarısını geçmeli. */
+  for (const { f } of floors) {
+    if (!f.slabs.length) continue;
+    const sp = f.slabs.map(s => s.pts.map(p => [p.x, p.y])), on = q => sp.some(s => ifcInPoly(q, s));
+    const rc = f.rooms.map(r => { let x = 0, y = 0; for (const p of r.pts) { x += p.x; y += p.y; } return [x / r.pts.length, y / r.pts.length]; });
+    let cover;
+    if (rc.length) cover = rc.filter(on).length / rc.length >= 0.6;
+    else {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const w of f.walls) for (const p of [w.a, w.b]) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+      cover = x1 > x0 && sp.reduce((s, q) => s + Math.abs(ifcArea(q)), 0) >= 0.5 * (x1 - x0) * (y1 - y0);
+    }
+    if (cover) f.noSlab = true;
+  }
   stats.floors = floors.length; stats.levelsMerged = merged;
   const pa = proj ? A(proj) : [];
   const nm = String(pa[5] || pa[2] || '').trim();
@@ -10287,6 +10344,11 @@ function rvInsidePt(pts) {
   }
   return best || c;
 }
+// eşyanın kendi ayarları (IFC'de FloorPlanner.Item): bu uygulama IFC'yi geri açınca eşyayı gövdeden tahmin etmeden aynen kurar
+function rvItemParams(o) {
+  const q = {}; for (const k of Object.keys(o)) if (!['id', 'x', 'y', 'rot', 'elev', 'layer', 'grp', 'lock'].includes(k) && o[k] !== undefined) q[k] = o[k];
+  return JSON.parse(JSON.stringify(q));
+}
 function revitExport(proj = P) {
   const pt = p => [rvFt(p.x), rvFt(-p.y)], vec = (x, y) => [rvR(x), rvR(-y)];
   const out = { format: 'floorplanner-revit', v: 1, units: 'ft', name: proj.name || 'plan', made: new Date().toISOString(),
@@ -10324,7 +10386,7 @@ function revitExport(proj = P) {
         });
         out.items.push(Object.assign({ id: o.id, level: lv, type: o.type || '', cat: rvCat(o), name: o.label || o.name || (BYID[o.type] ? L(BYID[o.type].name, BYID[o.type].en) : o.type || ''),
           en: BYID[o.type] ? BYID[o.type].en : '', at: pt(o), rot: rvR(-(o.rot || 0)), elev: rvFt(el), w: rvFt(o.w), d: rvFt(o.d), h: rvFt(o.h), color: o.color || '', mats, faces },
-          o.k === 'stairs' ? { risers: stairSteps(o).n, stairType: o.stairType || 'straight' } : {}, furnTilted(o) ? { tilted: true } : {}));
+          o.k === 'stairs' ? { risers: stairSteps(o).n, stairType: o.stairType || 'straight' } : {}, furnTilted(o) ? { tilted: true } : {}, { fp: rvItemParams(o) }));
       }
     });
   } finally { P = keepP; fi = keep; }
@@ -10355,7 +10417,7 @@ function ifcFromExchange(x, opts = {}) {
   const FT = 0.3048, rnd = opts.random || Math.random, out = [];
   let n = 0;
   const E = s => { out.push('#' + (++n) + '=' + s + ';'); return '#' + n; };
-  const R = v => { let t = Math.round(v * 1e6) / 1e6; if (Object.is(t, -0)) t = 0; const s = String(t); return /[.e]/.test(s) ? s : s + '.'; };
+  const R = v => { let t = Math.round((Number.isFinite(+v) ? +v : 0) * 1e6) / 1e6; if (Object.is(t, -0)) t = 0; const s = String(t).toUpperCase(); if (s.includes('E')) { const [m, e] = s.split('E'); return (m.includes('.') ? m : m + '.') + 'E' + e; } return s.includes('.') ? s : s + '.'; };
   const M = v => R((+v || 0) * FT); // fit → metre
   const S = v => {
     if (v == null || v === '') return '$';
@@ -10368,10 +10430,10 @@ function ifcFromExchange(x, opts = {}) {
   const L = a => '(' + a.join(',') + ')';
   const P3 = (x0, y0, z0) => E(`IFCCARTESIANPOINT((${R(x0)},${R(y0)},${R(z0)}))`);
   const P2 = (x0, y0) => E(`IFCCARTESIANPOINT((${R(x0)},${R(y0)}))`);
-  const D3 = (x0, y0, z0) => E(`IFCDIRECTION((${R(x0)},${R(y0)},${R(z0)}))`);
+  const D3 = (x0, y0, z0) => { const m = Math.hypot(x0, y0, z0) || 1; return m > 1e-9 ? E(`IFCDIRECTION((${R(x0 / m)},${R(y0 / m)},${R(z0 / m)}))`) : E('IFCDIRECTION((1.,0.,0.))'); };
   const Z = D3(0, 0, 1), O = P3(0, 0, 0);
   const AX = (p, xd) => E(`IFCAXIS2PLACEMENT3D(${p},${xd ? Z : '$'},${xd || '$'})`);
-  const LP = (rel, x0, y0, z0, dx, dy) => E(`IFCLOCALPLACEMENT(${rel || '$'},${AX(x0 || y0 || z0 ? P3(x0, y0, z0) : O, dx != null && (Math.abs(dx - 1) > 1e-9 || Math.abs(dy) > 1e-9) ? D3(dx, dy, 0) : null)})`);
+  const LP = (rel, x0, y0, z0, dx, dy) => E(`IFCLOCALPLACEMENT(${rel || '$'},${AX(x0 || y0 || z0 ? P3(x0, y0, z0) : O, dx != null && Math.hypot(dx, dy) > 1e-9 && (Math.abs(dx - 1) > 1e-9 || Math.abs(dy) > 1e-9) ? D3(dx, dy, 0) : null)})`);
   // units, contexts, project → site → building
   const units = E(`IFCUNITASSIGNMENT((${E('IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.)')},${E('IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.)')},${E('IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.)')},${E('IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.)')}))`);
   const ctx = E(`IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,0.00001,${AX(O)},${E('IFCDIRECTION((0.,1.))')})`);
@@ -10397,9 +10459,10 @@ function ifcFromExchange(x, opts = {}) {
   const styled = (item, c, glass) => { if (c || glass) E(`IFCSTYLEDITEM(${item},(${style(c, glass)}),$)`); return item; };
   const shape = reps => E(`IFCPRODUCTDEFINITIONSHAPE($,$,${L(reps)})`);
   const rep = (cx, id, type, items) => E(`IFCSHAPEREPRESENTATION(${cx},'${id}','${type}',${L(items)})`);
-  const extrude = (prof, z0, h) => E(`IFCEXTRUDEDAREASOLID(${prof},${AX(z0 ? P3(0, 0, z0) : O)},${Z},${R(h)})`);
-  const rect = (cx, cy, w, d) => E(`IFCRECTANGLEPROFILEDEF(.AREA.,$,${E(`IFCAXIS2PLACEMENT2D(${P2(cx, cy)},$)`)},${R(w)},${R(d)})`);
-  const pline = pts => { const p = pts.map(q => P2(q[0], q[1])); return E(`IFCPOLYLINE(${L(p.concat([p[0]]))})`); };
+  const extrude = (prof, z0, h) => E(`IFCEXTRUDEDAREASOLID(${prof},${AX(z0 ? P3(0, 0, z0) : O)},${Z},${R(Math.max(0.001, +h || 0))})`); // IfcPositiveLengthMeasure
+  const rect = (cx, cy, w, d) => E(`IFCRECTANGLEPROFILEDEF(.AREA.,$,${E(`IFCAXIS2PLACEMENT2D(${P2(cx, cy)},$)`)},${R(Math.max(0.001, +w || 0))},${R(Math.max(0.001, +d || 0))})`);
+  const ring = pts => { const o = []; for (const q of pts) { const l = o[o.length - 1]; if (!l || Math.hypot(q[0] - l[0], q[1] - l[1]) > 1e-5) o.push(q); } while (o.length > 1 && Math.hypot(o[0][0] - o[o.length - 1][0], o[0][1] - o[o.length - 1][1]) <= 1e-5) o.pop(); return o.length >= 3 ? o : null; };
+  const pline = pts => { const p = ring(pts).map(q => P2(q[0], q[1])); return E(`IFCPOLYLINE(${L(p.concat([p[0]]))})`); };
   // storeys
   const st = {}, contained = {};
   const levels = (x.levels || []).slice().sort((a, b) => a.elev - b.elev);
@@ -10420,7 +10483,7 @@ function ifcFromExchange(x, opts = {}) {
     const solid = styled(extrude(rect(len / 2, 0, len, t), 0, h), w.color || (kind === 'curtain' ? '#9cc7e6' : null), kind === 'curtain');
     const axis = rep(axisC, 'Axis', 'Curve2D', [E(`IFCPOLYLINE((${P2(0, 0)},${P2(len, 0)}))`)]);
     const sh = shape([axis, rep(body, 'Body', 'SweptSolid', [solid])]);
-    const ent = kind === 'railing' || kind === 'fence' ? E(`IFCRAILING(${G()},$,${S(kind === 'fence' ? 'Fence' : 'Railing')},$,$,${pl},${sh},$,${kind === 'fence' ? '.USERDEFINED.' : '.GUARDRAIL.'})`)
+    const ent = kind === 'railing' || kind === 'fence' ? E(`IFCRAILING(${G()},$,${S(kind === 'fence' ? 'Fence' : 'Railing')},$,${kind === 'fence' ? "'Fence'" : '$'},${pl},${sh},$,${kind === 'fence' ? '.USERDEFINED.' : '.GUARDRAIL.'})`)
       : kind === 'curtain' ? E(`IFCCURTAINWALL(${G()},$,'Curtain wall',$,$,${pl},${sh},$,.NOTDEFINED.)`)
       : E(`IFCWALL(${G()},$,'Wall',$,$,${pl},${sh},$,.STANDARD.)`);
     walls[w.id] = { ent, pl, ax, ay, ux: dx / Lw, uy: dy / Lw, t, base, w };
@@ -10459,7 +10522,8 @@ function ifcFromExchange(x, opts = {}) {
   for (const f of x.floors || []) {
     const s = lvOf(f.level), loops = (f.loops || []).filter(l => l && l.length >= 3);
     if (!loops.length) continue;
-    const t = (+f.t || 0.656) * FT, top = (+f.top || 0) * FT, sc = loops.map(l => l.map(p => [p[0] * FT, p[1] * FT]));
+    const t = (+f.t || 0.656) * FT, top = (+f.top || 0) * FT, sc = loops.map(l => ring(l.map(p => [p[0] * FT, p[1] * FT]))).filter((l, i) => i ? l : true);
+    if (!sc[0]) continue;
     const prof = sc.length > 1 ? E(`IFCARBITRARYPROFILEDEFWITHVOIDS(.AREA.,$,${pline(sc[0])},${L(sc.slice(1).map(pline))})`) : E(`IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,${pline(sc[0])})`);
     const pl = LP(s.pl, 0, 0, top - t);
     const ent = E(`IFCSLAB(${G()},$,${S(f.name || (f.kind === 'free' ? 'Slab' : 'Floor slab'))},$,$,${pl},${shape([rep(body, 'Body', 'SweptSolid', [extrude(prof, 0, t)])])},$,.FLOOR.)`);
@@ -10467,13 +10531,13 @@ function ifcFromExchange(x, opts = {}) {
   }
   // rooms
   for (const r of x.rooms || []) {
-    const s = lvOf(r.level); if (!r.loop || r.loop.length < 3) continue;
+    const s = lvOf(r.level); if (!r.loop || !ring(r.loop.map(p => [p[0] * FT, p[1] * FT]))) continue;
     const prof = E(`IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,${pline(r.loop.map(p => [p[0] * FT, p[1] * FT]))})`);
     const ent = E(`IFCSPACE(${G()},$,${S(r.name || 'Room')},$,$,${LP(s.pl)},${shape([rep(body, 'Body', 'SweptSolid', [extrude(prof, 0, s.h * FT)])])},${S(r.name || 'Room')},.ELEMENT.,.SPACE.,$)`);
     s.spaces.push(ent);
     if (r.finish && r.finish !== 'none') {
-      const pr = E(`IFCPROPERTYSINGLEVALUE('FloorFinish',$,IFCLABEL(${S(r.finish)}),$)`);
-      E(`IFCRELDEFINESBYPROPERTIES(${G()},$,$,$,(${ent}),${E(`IFCPROPERTYSET(${G()},$,'Pset_SpaceCommon',$,(${pr}))`)})`);
+      const pr = E(`IFCPROPERTYSINGLEVALUE('FloorCovering',$,IFCLABEL(${S(r.finish)}),$)`);
+      E(`IFCRELDEFINESBYPROPERTIES(${G()},$,$,$,(${ent}),${E(`IFCPROPERTYSET(${G()},$,'Pset_SpaceCoveringRequirements',$,(${pr}))`)})`);
     }
   }
   // items: one placement at the item's position / rotation, faces back in its local frame
@@ -10484,16 +10548,16 @@ function ifcFromExchange(x, opts = {}) {
     for (const f of it.faces || []) { const k = f.s || 0; if (!groups.has(k)) groups.set(k, { m: f.m || 0, faces: [] }); groups.get(k).faces.push(f.p); }
     const open = it.cat === 'roof';
     for (const g of groups.values()) {
-      const pts = new Map(), pt = p => { const q = loc(p), k = q.map(v => v.toFixed(5)).join(','); if (!pts.has(k)) pts.set(k, P3(q[0], q[1], q[2])); return pts.get(k); };
+      const pts = new Map(), pt = p => { const q = loc(p), k = q.map(v => (Math.abs(v) < 5e-6 ? 0 : v).toFixed(5)).join(','); if (!pts.has(k)) pts.set(k, P3(q[0], q[1], q[2])); return pts.get(k); };
       const faces = [];
       for (const f of g.faces) {
         const ids = []; for (const p of f) { const id = pt(p); if (ids[ids.length - 1] !== id) ids.push(id); }
         if (ids.length > 1 && ids[0] === ids[ids.length - 1]) ids.pop();
-        if (new Set(ids).size >= 3) faces.push(E(`IFCFACE((${E(`IFCFACEOUTERBOUND(${E(`IFCPOLYLOOP(${L(ids)})`)},.T.)`)}))`));
+        if (ids.length >= 3 && new Set(ids).size === ids.length) faces.push(E(`IFCFACE((${E(`IFCFACEOUTERBOUND(${E(`IFCPOLYLOOP(${L(ids)})`)},.T.)`)}))`));
       }
       if (!faces.length) continue;
       const m = (it.mats || [])[g.m] || {};
-      solids.push(styled(open ? E(`IFCSHELLBASEDSURFACEMODEL((${E(`IFCOPENSHELL(${L(faces)})`)}))`) : E(`IFCFACETEDBREP(${E(`IFCCLOSEDSHELL(${L(faces)})`)})`), m.c || it.color, m.glass));
+      solids.push(styled(open || faces.length < 4 ? E(`IFCSHELLBASEDSURFACEMODEL((${E(`IFCOPENSHELL(${L(faces)})`)}))`) : E(`IFCFACETEDBREP(${E(`IFCCLOSEDSHELL(${L(faces)})`)})`), m.c || it.color, m.glass));
     }
     if (!solids.length) continue;
     const ent0 = IFC_EXP_ENT[it.cat] || 'IFCFURNITURE';
@@ -10502,6 +10566,11 @@ function ifcFromExchange(x, opts = {}) {
     const sh = shape([rep(body, 'Body', open ? 'SurfaceModel' : 'Brep', solids)]);
     const ent = E(`${ent0}(${G()},$,${S(it.name || it.en || it.type)},$,${S(it.en || it.type)},${pl},${sh},${S(it.type)}${ent0 === 'IFCFURNISHINGELEMENT' ? '' : ',' + pt0})`); // IfcFurnishingElement has no PredefinedType
     contained[it.level in st ? it.level : levels[0].id].push(ent);
+    if (it.fp && typeof it.fp === 'object') { // Floor Planner'ın kendi ayarları: geri açarken eşya aynen kurulur (başka programlar yok sayar)
+      const js = JSON.stringify(it.fp).replace(/[\u007f-\uffff]/g, ch => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0')); // salt ASCII: STEP \X2\ kaçışı gerekmez
+      const pr = E(`IFCPROPERTYSINGLEVALUE('FloorPlannerItem',$,IFCTEXT(${S(js)}),$)`);
+      E(`IFCRELDEFINESBYPROPERTIES(${G()},$,$,$,(${ent}),${E(`IFCPROPERTYSET(${G()},$,'FloorPlanner',$,(${pr}))`)})`);
+    }
     if (ent0 === 'IFCSTAIR' && it.risers) {
       const pr = E(`IFCPROPERTYSINGLEVALUE('NumberOfRiser',$,IFCCOUNTMEASURE(${it.risers}),$)`);
       E(`IFCRELDEFINESBYPROPERTIES(${G()},$,$,$,(${ent}),${E(`IFCPROPERTYSET(${G()},$,'Pset_StairCommon',$,(${pr}))`)})`);
@@ -10513,7 +10582,7 @@ function ifcFromExchange(x, opts = {}) {
     if (contained[lv.id].length) E(`IFCRELCONTAINEDINSPATIALSTRUCTURE(${G()},$,$,$,${L(contained[lv.id])},${s.ent})`);
   }
   const now = (opts.date || new Date().toISOString()).slice(0, 19), fn = S((x.name || 'plan') + '.ifc');
-  return ['ISO-10303-21;', 'HEADER;', "FILE_DESCRIPTION(('ViewDefinition [ReferenceView]'),'2;1');",
+  return ['ISO-10303-21;', 'HEADER;', "FILE_DESCRIPTION(('ViewDefinition [DesignTransferView]'),'2;1');",
     `FILE_NAME(${fn},'${now}',(''),(''),'Floor Planner','Floor Planner','');`, "FILE_SCHEMA(('IFC4'));", 'ENDSEC;', 'DATA;', ...out, 'ENDSEC;', 'END-ISO-10303-21;', ''].join('\n');
 }
 /* IFC-EXPORT:END */

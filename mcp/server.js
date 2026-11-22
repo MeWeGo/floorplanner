@@ -1709,7 +1709,37 @@ function ifcToProject(text, opts = {}) {
       pts: ft.pts.map(p => { const dx = p.x - rc.cx, dy = p.y - rc.cy; return { x: r1(dx * c + dy * sn), y: r1(-dx * sn + dy * c) }; }) });
   };
   const elevOf = (o, z, st) => { const el = Math.round(z - (st ? st.z : 0)); if (Math.abs(el) >= 3) o.elev = Math.max(-500, Math.min(500, el)); return o; }; // ±500 = FURN_ELEV_MAX (#61); eksi = birleşen alt seviye
+  /* Bu uygulamanın kendi IFC dışa aktarımı: her eşya kendi ayarlarını FloorPlanner.Item (JSON) özelliğinde taşır. Varsa eşya
+     ondan aynen kurulur (tür, ölçü, renk, merdiven / çatı / lamba alanları, parçalar); yer ve yön IFC yerleşiminden gelir, yani
+     başka bir programda taşınan eşya yeni yerinde açılır. Yoksa (Revit, ArchiCAD …) aşağıdaki gövdeden tanıma çalışır.
+     Değerler dosyadan gelir: tırnak / < > / ` atılır, prototip anahtarları düşer, derinlik ve boyut sınırlı. */
+  const fpDone = new Set(), FP_DROP = new Set(['id', 'x', 'y', 'rot', 'elev', 'layer', 'grp', 'lock', '__proto__', 'constructor', 'prototype']);
+  const fpClean = (v, d) => {
+    if (d > 8) return undefined;
+    if (typeof v === 'string') return v.replace(/["<>`]/g, '').slice(0, 4000);
+    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
+    if (typeof v === 'boolean' || v === null) return v;
+    if (Array.isArray(v)) return v.slice(0, 5000).map(x => fpClean(x, d + 1)).filter(x => x !== undefined);
+    if (typeof v !== 'object') return undefined;
+    const o = {}; for (const k of Object.keys(v)) { if (d === 0 ? FP_DROP.has(k) : k === '__proto__' || k === 'constructor' || k === 'prototype') continue; const c = fpClean(v[k], d + 1); if (c !== undefined) o[k.replace(/["<>`]/g, '')] = c; }
+    return o;
+  };
+  for (const id of psets.keys()) {
+    const js = propOf(id, /^FloorPlannerItem$/); if (!js) continue;
+    let o; try { o = fpClean(JSON.parse(js), 0); } catch (e) { continue; }
+    if (!o || Array.isArray(o) || typeof o.type !== 'string' || !o.type || !['w', 'd', 'h'].every(k => +o[k] > 0 && +o[k] <= 1e5)) continue;
+    const M = place(R(A(id)[5])), c = toPlan(M.o), th = Math.atan2(-M.x[1], M.x[0]) * 180 / Math.PI, st = storeyOf(id, c[2]);
+    o.id = uid(); o.x = r1(c[0]); o.y = r1(c[1]); o.rot = r1((((th % 360) + 360) % 360) % 360);
+    const el = Math.round(c[2] - (st ? st.z : 0)); if (el) o.elev = Math.max(-500, Math.min(500, el)); // serbest döşeme payı aşağıda düşülür
+    if (typeof o.name !== 'string' || !o.name) o.name = nameOf(id) || o.type;
+    fl(st).furn.push(o); fpDone.add(id);
+    const k = o.k === 'stairs' ? 'stairs' : o.k === 'ramp' ? 'ramps' : o.k === 'roof' ? 'roofs' : 'components'; stats[k] = (stats[k] || 0) + 1;
+    if (opts.catalog && opts.catalog[o.type]) stats.matched++;
+  }
+  // gövdesi FloorPlanner eşyasının içinde kalan parçalar (montaj çocukları) ayrıca gelmez
+  const fpUnder = id => { for (let p = parent.get(id), k = 0; p && k < 30; p = parent.get(p), k++) if (fpDone.has(p)) return true; return false; };
   for (const id of ids(IFC_COLUMNS)) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     const g = geom(id), ft = g.body.length ? footOf(g) : null; if (!ft || ft.ar < 0.5) { stats.skipped++; continue; }
     const [z0, z1] = zr(g.body), h0 = Math.max(10, Math.min(5000, Math.round(z1 - z0)));
     const rc = ifcRect(ft.pts.map(p => [p.x, p.y])), nm = nameOf(id).slice(0, 80);
@@ -1784,6 +1814,7 @@ function ifcToProject(text, opts = {}) {
   };
   const compIds = ids(IFC_COMPONENTS), compSet = new Set(compIds);
   for (const id of compIds) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     let up = false; for (let p = parent.get(id), k = 0; p && k < 30; p = parent.get(p), k++) if (compSet.has(p)) { up = true; break; }
     if (up || railProxy.has(id) || usedProxy.has(id) || under(id, STAIRISH) || under(id, ROOFISH)) continue; // usedProxy: açıklığın penceresi / kapısı oldu // montajın parçası (montaj tek şekil gelir) ya da korkuluk (duvar olarak geldi)
     let g = geom(id);
@@ -1803,6 +1834,7 @@ function ifcToProject(text, opts = {}) {
   const roofIds = ids(new Set(['IFCROOF'])).filter(id => !under(id, ROOFISH));
   for (const id of ids(IFC_SLABS)) { const a = A(id); if (a[8] && a[8].e === 'ROOF' && !under(id, ROOFISH)) roofIds.push(id); }
   for (const id of roofIds) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     let faces = facesOf(id); if (!faces.length) for (const c of allKids(id)) faces.push(...facesOf(c));
     let g = geom(id); if (!g.body.length) { const body = []; for (const c of allKids(id)) body.push(...geom(c).body); g = { body, foot: [], axis: [] }; }
     const pts = faces.length ? faces.flat() : g.body; if (pts.length < 3) { stats.skipped++; continue; }
@@ -1858,6 +1890,7 @@ function ifcToProject(text, opts = {}) {
   const stairIds = ids(new Set(['IFCSTAIR'])).filter(id => !under(id, STAIRISH));
   for (const id of ids(new Set(['IFCSTAIRFLIGHT']))) if (!under(id, STAIRISH)) stairIds.push(id);
   for (const id of stairIds) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     const parts = [id, ...allKids(id)], body = [];
     for (const c of parts) body.push(...geom(c).body);
     if (body.length < 3) { stats.skipped++; continue; }
@@ -1884,6 +1917,7 @@ function ifcToProject(text, opts = {}) {
   const rampIds = ids(new Set(['IFCRAMP'])).filter(id => !under(id, STAIRISH));
   for (const id of ids(new Set(['IFCRAMPFLIGHT']))) if (!under(id, STAIRISH)) rampIds.push(id);
   for (const id of rampIds) {
+    if (fpDone.has(id) || fpUnder(id)) continue;
     const fls = T(id) === 'IFCRAMP' ? allKids(id).filter(c => T(c) === 'IFCRAMPFLIGHT') : [];
     const runs = fls.length ? fls.map(c => ({ c, body: geom(c).body })) : [{ c: id, body: [id, ...allKids(id)].flatMap(c => geom(c).body) }];
     const nm = nameOf(id);
@@ -1941,6 +1975,29 @@ function ifcToProject(text, opts = {}) {
   });
   // bodrum katlı model: zemin altındaki kat varsa her kat gerçek kotunu alır (Floor.lvl, ±0 = zemin); yoksa eskisi gibi dizilir
   if (floors.some(({ b }) => b.s && b.s.z < -50)) floors.forEach(({ b, f }) => { if (b.s && Number.isFinite(b.s.z)) f.lvl = Math.round(b.s.z); });
+  /* Eşya kotu, altındaki serbest döşemeye göre: IFC'deki kot kata göre mutlaktır, uygulama ise eşyayı (3B, kesit, IFC / Revit
+     dışa aktarımı) merkezinin altındaki son döşemenin off'u kadar zaten yükseltir — 45 cm yükseltilmiş döşemede eşya 90 cm'de
+     yüzüyordu, tavana asılı sarkıt bir üst kata taşıyordu. Aynı kural: dizideki son içeren döşeme. */
+  for (const { f } of floors) for (const o of f.furn) {
+    let off = 0; for (let i = f.slabs.length - 1; i >= 0; i--) if (ifcInPoly([o.x, o.y], f.slabs[i].pts.map(p => [p.x, p.y]))) { off = +f.slabs[i].off || 0; break; }
+    if (!off) continue;
+    const e = r1((+o.elev || 0) - off); if (Math.abs(e) < 1) delete o.elev; else o.elev = Math.max(-500, Math.min(500, e));
+  }
+  /* Kendi döşemesi olan kat (odalarının çoğu IFC döşemesinin üstünde): uygulamanın otomatik döşemesi kapanır (Floor.noSlab),
+     yoksa 3B'de ve dışa aktarımda iki döşeme üst üste biner. Odası yoksa döşeme alanı duvar kutusunun yarısını geçmeli. */
+  for (const { f } of floors) {
+    if (!f.slabs.length) continue;
+    const sp = f.slabs.map(s => s.pts.map(p => [p.x, p.y])), on = q => sp.some(s => ifcInPoly(q, s));
+    const rc = f.rooms.map(r => { let x = 0, y = 0; for (const p of r.pts) { x += p.x; y += p.y; } return [x / r.pts.length, y / r.pts.length]; });
+    let cover;
+    if (rc.length) cover = rc.filter(on).length / rc.length >= 0.6;
+    else {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const w of f.walls) for (const p of [w.a, w.b]) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+      cover = x1 > x0 && sp.reduce((s, q) => s + Math.abs(ifcArea(q)), 0) >= 0.5 * (x1 - x0) * (y1 - y0);
+    }
+    if (cover) f.noSlab = true;
+  }
   stats.floors = floors.length; stats.levelsMerged = merged;
   const pa = proj ? A(proj) : [];
   const nm = String(pa[5] || pa[2] || '').trim();
