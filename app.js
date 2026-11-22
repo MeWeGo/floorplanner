@@ -15541,10 +15541,17 @@ function walkSurfAt(o, x, y) {
 /** Yürüyenin katı ve komşu katları: [{ f, base }] (base = o katın döşemesinin yürüyenin katına göre kotu). */
 function walkLevels(i) {
   const f = P.floors[i]; if (!f) return [];
-  const out = [{ f: visFloor(f), base: 0 }], dn = P.floors[i - 1], up = P.floors[i + 1];
-  if (dn && v3dShown(dn)) out.push({ f: visFloor(dn), base: -floorPitch(i - 1) }); // kat kotları: gerçek kot farkı
-  if (up && v3dShown(up)) out.push({ f: visFloor(up), base: floorPitch(i) });
+  const lv = (f0, base) => { const f = visFloor(f0); return { f, base, sp: () => walkSlabPolys(f0, f) }; };
+  const out = [lv(f, 0)], dn = P.floors[i - 1], up = P.floors[i + 1];
+  if (dn && v3dShown(dn)) out.push(lv(dn, -floorPitch(i - 1))); // kat kotları: gerçek kot farkı
+  if (up && v3dShown(up)) out.push(lv(up, floorPitch(i)));
   return out;
+}
+// otomatik kat döşemesinin izi (slabPolys raster'dır): kat başına bir kez, build3D önbelleği sıfırlar (#162)
+function walkSlabPolys(f0, f) {
+  const c = T3.walkSp || (T3.walkSp = new Map());
+  if (!c.has(f0.id)) c.set(f0.id, slabPolys(f));
+  return c.get(f0.id);
 }
 /** p noktasında, ayak kotu z olan yürüyenin basacağı yüzey: g = adım yüksekliği içindeki en yüksek yüzey;
     block = yandan çarpılan yüksek yüzey (merdivenin yanı, yüksek platform). Döşeme kendi boşluklarında yoktur.
@@ -15553,25 +15560,35 @@ function walkGround(lv, p, z) {
   const k = WALK.r * 0.75, c = walkGroundAt(lv, p, z);
   let g = c.g;
   for (const [dx, dy] of [[k, 0], [-k, 0], [0, k], [0, -k]]) { const q = walkGroundAt(lv, { x: p.x + dx, y: p.y + dy }, z).g; if (q > g) g = q; }
-  return { g: g === -Infinity ? z : g, block: c.block };
+  return { g: g === -Infinity ? z : g, block: c.block, lvl: c.lvl };
 }
 function walkGroundAt(lv, p, z) {
-  let g = -Infinity, block = false;
+  let g = -Infinity, block = false, lvl = 0, li = 0;
   const take = (h, bot) => { // bot: katı gövdenin altı (merdiven / rampa / platform döşemeden yükselir); null = yalnızca yüzey
-    if (h <= z + WALK.stepUp) { if (h > g) g = h; }
+    if (h <= z + WALK.stepUp) { if (h > g) { g = h; lvl = li; } }
     else if (bot !== null && bot < z + WALK.head) block = true;
   };
-  for (const { f, base } of lv) {
+  for (li = 0; li < lv.length; li++) {
+    const L = lv[li], { f, base } = L;
     const vd = (f.voids || []).find(v => v.pts && v.pts.length > 2 && pointInPoly(p, v.pts));
-    if (!vd) take(base, null); else if (+vd.dep > 0) take(base - +vd.dep, null); // çukur boşluğun tabanı
-    for (const s of f.slabs || []) if (s.pts && s.pts.length > 2 && (+s.off || surfSloped(s)) && pointInPoly(p, s.pts)) { const h = +s.off + surfZAt(s, p.x, p.y); take(base + h, h > 0 ? base + h - (+s.t || 20) : null); }
+    // serbest döşemeler: düz olanlar da (boşluğun üstündeki döşeme deliği kapatır, #162); üst yüz = off + eğim
+    const ss = (f.slabs || []).filter(s => s.pts && s.pts.length > 2 && pointInPoly(p, s.pts)).map(s => ({ s, h: (+s.off || 0) + surfZAt(s, p.x, p.y) }));
+    // gömme döşeme (off < 0): otomatik kat döşemesi orayı örtmüyorsa (kapalı / binanın dışı) kat düzlemi yerine o basılır
+    const sunk = !vd && ss.some(q => q.h < 0) && L.sp && !L.sp().some(q => pointInPoly(p, q));
+    if (!vd) { if (!sunk) take(base, null); } else if (+vd.dep > 0) take(base - +vd.dep, null); // çukur boşluğun tabanı
+    for (const { s, h } of ss) take(base + h, h > 0 ? base + h - (+s.t || 20) : null);
     for (const r of f.rooms || []) if (surfSloped(r) && pointInPoly(p, r.pts)) take(base + surfZAt(r, p.x, p.y), null); // eğimli oda zemini
     for (const o of f.furn || []) {
       if (o.k !== 'stairs' && o.k !== 'ramp') continue;
       const h = walkSurfAt(o, p.x, p.y); if (h !== null) take(base + h, base + furnElev(o));
     }
   }
-  return { g, block };
+  return { g, block, lvl };
+}
+// başlangıç kotu: noktadaki en yüksek basılacak yüzey (yükseltilmiş / gömme / eğimli döşeme, merdiven, rampa), üst kat hariç (#162)
+function walkSpawnZ(i, p) {
+  const top = floorPitch(i) - WALK.stepUp - 1, c = walkGroundAt(walkLevels(i), p, top);
+  return c.g === -Infinity ? 0 : c.g;
 }
 // at = { i, x, y }: kullanıcının seçtiği başlangıç noktası (👁 + tık); yoksa kameranın bulunduğu yer (set3DCam('eye'))
 function enterWalk(at) {
@@ -15579,7 +15596,8 @@ function enterWalk(at) {
   const c = T3.cam.position.clone(), t = T3.ctl.target.clone(), i = at ? at.i : walkFloorIdx(); // göz noktası: izdüşüm değişmeden önce
   if (T3.ortho) { T3.orthoAfterWalk = true; setProjection(false); } // yürüme hep perspektif (#74); çıkınca paralele döner
   const p = walkMove(at ? { x: at.x, y: at.y } : { x: c.x, y: c.z }, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); // duvarın içinde başlamasın
-  T3.walk = { fi: i, x: p.x, y: p.y, z: 0, gz: 0, yaw: at ? walkSpawnYaw(c, t, at) : Math.atan2(t.z - c.z, t.x - c.x), pitch: -0.15, drag: null };
+  const z0 = walkSpawnZ(i, p);
+  T3.walk = { fi: i, x: p.x, y: p.y, z: z0, gz: z0, yaw: at ? walkSpawnYaw(c, t, at) : Math.atan2(t.z - c.z, t.x - c.x), pitch: -0.15, drag: null };
   T3.ctl.enabled = false; T3.ctl.maxPolarAngle = Math.PI; // yukarı bakınca render'daki ctl.update() bakışı kırpmasın
   applyWalkCam(); syncWalkUI(); collabSendPresence(true); // canlı odadakiler figürü görsün
 }
@@ -15645,6 +15663,7 @@ function exitWalk(restore) {
 function walkToFloor(i) {
   const w = T3.walk; w.fi = i; w.z = w.gz = 0; w._gOk = false; T3.walkCache = null;
   const p = walkMove(w, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); w.x = p.x; w.y = p.y;
+  w.z = w.gz = walkSpawnZ(i, w);
 }
 // kamera + hedef (render ve 2B dönüşü hedefi okur): hedef 1 m ileride
 function applyWalkCam() {
@@ -15679,13 +15698,13 @@ function walkStep(dt) {
     }
     w.x = p.x; w.y = p.y;
   }
-  w.gz = walkGround(lv, w, w.gz).g; w._gOk = true; // ayak: basılan yüzey; kamera yumuşak izler (basamaklarda sarsılmasın)
+  const gr = walkGround(lv, w, w.gz); w.gz = gr.g; w._gOk = true; // ayak: basılan yüzey; kamera yumuşak izler (basamaklarda sarsılmasın)
   w.z = Math.abs(w.gz - w.z) < 0.5 ? w.gz : w.z + (w.gz - w.z) * Math.min(1, dt * 12);
   // kat geçişi: üst kat kotuna çıkınca / alt kata inince yürüyen o kata geçer (aynı dünya kotu)
   const cur = P.floors[w.fi], up = P.floors[w.fi + 1], dn = P.floors[w.fi - 1], pitch = floorPitch(w.fi);
   let nf = -1, dz = 0;
   if (up && v3dShown(up) && w.gz >= pitch - 0.5) { nf = w.fi + 1; dz = -pitch; }
-  else if (dn && v3dShown(dn) && w.gz <= -0.5) { nf = w.fi - 1; dz = floorPitch(w.fi - 1); }
+  else if (dn && v3dShown(dn) && w.gz <= -0.5 && lv[gr.lvl] && lv[gr.lvl].base < 0) { nf = w.fi - 1; dz = floorPitch(w.fi - 1); } // gömme döşeme kat değiştirmez (#162)
   if (nf >= 0) {
     w.fi = nf; w.gz += dz; w.z += dz; w._gOk = false; T3.walkCache = null;
     if (fi !== nf) { fi = nf; sel = []; refresh(); refreshSel3D(); } // 2B'deki etkin kat yürüyeni izler
@@ -17831,7 +17850,7 @@ function build3D(keepCam = false) {
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); fitOrtho(); }
   T3.mats = extraMats; // önbellekte olmayan malzemeler: sonraki build3D'de (bir kare sonra) dispose edilir
   T3.texs = texs;
-  T3.fixShadowEnts = []; T3.fixReal = new Set(); T3.walkCache = null; if (T3.walk) T3.walk._gOk = false;
+  T3.fixShadowEnts = []; T3.fixReal = new Set(); T3.walkCache = null; T3.walkSp = null; if (T3.walk) T3.walk._gOk = false;
   prune3DCache(T3.cache, S); // bu sahnede kullanılmayan önbellek girdileri bırakılır (canlı görünüm malzemeleri değiştirmeden ÖNCE)
   markScene3D();
   T3.ctl.update();
