@@ -13016,6 +13016,21 @@ const FIX_PTS = 8, FIX_SPOTS = 6;
    (yazılım GPU'da ölçüldü), spot gölgesi sorunsuz. Gölge haritaları her karede değil, yalnızca bir şey değişince çizilir
    (renderer.shadowMap.autoUpdate = false + markShadows()). El feneri gölgesiz son spot yuvasıdır. Büyük planlarda (det kapalı) lamba gölgesi yok. */
 const FIX_SHADOWS = 4, FIX_WIDE = 80;
+/* Gölgeli yuva yalnızca ışığı aşağı veren armatüre: spot, otomatik oda ışığı, tavan / duvar armatürü, en az 1 m yukarıdaki
+   ayaklı / masa lambası (abajur ışığı aşağı verir), ve FIX_SHADOW_MINH üstündeki diğerleri (bollard, mobilya ampul parçası).
+   Yere yakın lamba (saksıdaki top ampul, yere konmuş lamba) 80°'lik aşağı koniye girince ışığı yere gömülür, üstündeki ağaç /
+   tavan kararırdı; yürürken yuvası değiştikçe sahne aydınlanıp kararıyordu. Bunlar her yöne yayan nokta ışık olarak kalır. */
+const FIX_SHADOW_MINH = 140;
+function fixShadowOk(e) {
+  if (e.kind === 'spot' || e.auto || !Number.isFinite(e.fy)) return true;
+  const d = !e.part && e.o && LIGHT_DEFS[e.o.type];
+  if (d && (d.mount === 'ceil' || d.mount === 'wall')) return true;
+  return e.y - e.fy >= (d && e.o.type !== 'bollard' ? 100 : FIX_SHADOW_MINH);
+}
+// armatürün yeniden kurulumlarda değişmeyen anahtarı (build3D girişleri her seferinde yeni nesnedir)
+function fixKey(e) { return e ? (e.o ? e.o.id : (e.id || 'a' + e.fidx)) + '@' + Math.round(e.x) + ',' + Math.round(e.y) + ',' + Math.round(e.z) : ''; }
+// yürürken havuz bir yuvayı başka lambaya verince ışık anında atlamaz: eskisi söner, yenisi yanar (s)
+const FIX_FADE = 0.35;
 function markShadows() { if (T3 && T3.r && T3.r.shadowMap) { T3.r.shadowMap.needsUpdate = true; req3D(); } }
 // gölgeli yuvalar: det açıkken açılır; değişince bir kez derleme (yalnızca detay seviyesi değişince)
 function fixShadowSlots(on, res = 512) {
@@ -13030,13 +13045,13 @@ function fixShadowSlots(on, res = 512) {
   });
 }
 // gölgeli yuvalara gidecek armatürler: türüne bakmadan en etkili n (sıralama fixRank ile aynı skor)
-function fixShadowPick(list, focus, n) { return list.filter(e => e.on).map(e => [fixScore(e, focus), e]).sort((a, b) => b[0] - a[0]).slice(0, n).map(x => x[1]); }
+function fixShadowPick(list, focus, n) { return list.filter(e => e.on && fixShadowOk(e)).map(e => [fixScore(e, focus), e]).sort((a, b) => b[0] - a[0]).slice(0, n).map(x => x[1]); }
 // yapışkan gölge yuvaları: önceki yuvadaki lamba hâlâ en iyi n içindeyse (1.35× histerezis) AYNI yuvada kalır → gereksiz gölge çizimi olmaz
 function fixShadowAssign(list, focus, n, prev = []) {
-  const prevSet = new Set(prev.filter(Boolean));
-  const win = list.filter(e => e.on).map(e => [fixScore(e, focus) * (prevSet.has(e) ? 1.35 : 1), e]).sort((a, b) => b[0] - a[0]).slice(0, n).map(x => x[1]);
-  const winSet = new Set(win), slots = Array(n).fill(null), placed = new Set();
-  for (let i = 0; i < n; i++) if (prev[i] && winSet.has(prev[i])) { slots[i] = prev[i]; placed.add(prev[i]); }
+  const prevSet = new Set(prev.filter(Boolean).map(fixKey)); // anahtarla: yeniden kurulumdan sonra da yapışkan
+  const win = list.filter(e => e.on && fixShadowOk(e)).map(e => [fixScore(e, focus) * (prevSet.has(fixKey(e)) ? 1.35 : 1), e]).sort((a, b) => b[0] - a[0]).slice(0, n).map(x => x[1]);
+  const byKey = new Map(win.map(e => [fixKey(e), e])), slots = Array(n).fill(null), placed = new Set();
+  for (let i = 0; i < n; i++) { const w = prev[i] && byKey.get(fixKey(prev[i])); if (w) { slots[i] = w; placed.add(w); } }
   let wi = 0;
   for (let i = 0; i < n; i++) if (!slots[i]) {
     while (wi < win.length && placed.has(win[wi])) wi++;
@@ -13067,8 +13082,9 @@ function fixDayFactor(alt) {
 }
 // en etkili n armatür (yalnızca açık olanlar, kind filtresiyle): skor = lm / uzaklık², odak katındakiler ×3
 function fixScore(e, focus) { return e.lm / ((e.x - focus.x) ** 2 + 0.5 * (e.y - focus.y) ** 2 + (e.z - focus.z) ** 2 + 40000) * (e.fidx === focus.fi ? 3 : 1); }
-function fixRank(list, focus, n, spot) {
-  return list.filter(e => e.on && (e.kind === 'spot') === !!spot).map(e => [fixScore(e, focus), e]).sort((a, b) => b[0] - a[0]).slice(0, n).map(x => x[1]);
+// prev = şu an gerçek ışığı olan anahtarlar: yerini korur (1.35× histerezis), yürürken komşu lambalar sürekli yer değiştirmez
+function fixRank(list, focus, n, spot, prev) {
+  return list.filter(e => e.on && (e.kind === 'spot') === !!spot).map(e => [fixScore(e, focus) * (prev && prev.has(fixKey(e)) ? 1.35 : 1), e]).sort((a, b) => b[0] - a[0]).slice(0, n).map(x => x[1]);
 }
 function fixFocus() {
   const w = T3.walk;
@@ -13085,54 +13101,91 @@ function fixPool() {
   return T3.fix;
 }
 let _flashDir = null;
-function assignFixLights(alt) {
+// instant = false yalnızca yürürken / gezinirken yeniden sıralamada (fixTick): yuvası değişen ışık söner, yenisi FIX_FADE'de yanar
+function assignFixLights(alt, instant = true) {
   const pool = T3.fix;
   const fc = fixFocus(), k = fixDayFactor(alt), night = alt !== undefined ? +alt < 1 : isNight3D();
   if (!pool || (T3.scene && pool.pts[0].parent !== T3.scene)) {
     for (const e of T3.fixList || []) if (e.patch) e.patch.visible = false;
-    T3.fixReal = new Set(); T3.fixShadowEnts = [];
+    T3.fixReal = new Set(); T3.fixShadowEnts = []; T3.fixRealKeys = new Set();
     return;
   }
   // gece, içinde yanan armatür olmayan odalara yumuşak otomatik tavan ışığı (ui.autoRoomLight, varsayılan açık) (#122)
   const list = night && ui.autoRoomLight !== false ? (T3.fixList || []).concat(T3.autoLights || []) : (T3.fixList || []);
   let moved = false; // gölgeli bir yuvanın ışığı yer / menzil / açı değiştirdiyse gölge haritaları bir kez yenilenir
-  const set = (l, e) => {
-    if (!e || k <= 0) { if (l.castShadow && l.intensity) moved = true; l.intensity = 0; return; }
-    const t = lmToThree(e.lm);
-    if (l.castShadow && (l.position.x !== e.x || l.position.y !== e.y || l.position.z !== e.z || l.distance !== t.d || !l.intensity)) moved = true;
-    l.color.set(e.col); l.intensity = t.i * k; l.distance = t.d; l.position.set(e.x, e.y, e.z);
-  };
-  const aim = (l, e, wide) => {
-    const a = (wide ? FIX_WIDE : clamp((e.beam || 40) / 2, 5, 60)) * Math.PI / 180;
-    if (l.castShadow && Math.abs(l.angle - a) > 1e-6) moved = true;
-    l.angle = a; l.penumbra = wide ? 0.7 : 0.5; l.target.position.set(e.x, e.y - 100, e.z); l.target.updateMatrixWorld();
-    if (l.castShadow) {
-      const far = lmToThree(e.lm).d;
-      if (l.shadow.camera.far !== far) { l.shadow.camera.far = far; l.shadow.camera.updateProjectionMatrix(); moved = true; }
-    }
+  // yuva hedefi: aynı armatür → değerler anında; başka armatür → instant'ta anında, değilse fixFadeTick söndürüp geçirir
+  const set = (l, e, spotAim, wide) => {
+    const fx = l.userData.fx || (l.userData.fx = { cur: '', tgt: null });
+    const tgt = e && k > 0 ? { key: fixKey(e), e, i: lmToThree(e.lm).i * k, spotAim, wide } : null;
+    fx.tgt = tgt;
+    if (instant || (tgt && tgt.key === fx.cur) || (!tgt && !fx.cur)) { if (fixApply(l, tgt)) moved = true; if (tgt) l.intensity = tgt.i; }
+    else if (!l.intensity && tgt) { if (fixApply(l, tgt)) moved = true; l.intensity = 0; T3.fixFading = true; } // boş yuva: yerinde yanar
+    else T3.fixFading = true;
   };
   const real = new Set(), shadowOn = pool.spots[0].castShadow;
   // 1) gölgeli spot yuvaları: yapışkan yuvalar + histerezis ile yer değiştirmedikçe gölge yeniden çizilmez
   const sh = shadowOn && k > 0 ? fixShadowAssign(list, fc, FIX_SHADOWS, T3.fixShadowEnts || []) : [];
   T3.fixShadowEnts = sh;
-  for (let i = 0; i < FIX_SHADOWS; i++) { const e = sh[i], l = pool.spots[i]; set(l, e); if (e && k > 0) { aim(l, e, e.kind !== 'spot'); real.add(e); } }
+  for (let i = 0; i < FIX_SHADOWS; i++) { const e = sh[i], l = pool.spots[i]; set(l, e, true, e && e.kind !== 'spot'); if (e && k > 0) real.add(e); }
   // 2) kalanlar gölgesiz: nokta ışıklar ve kalan spot yuvaları (el feneri son yuvayı alır)
-  const rest = k > 0 ? list.filter(e => !real.has(e)) : [];
-  fixRank(rest, fc, FIX_PTS, false).concat(Array(FIX_PTS)).slice(0, FIX_PTS).forEach((e, i) => { set(pool.pts[i], e); if (e) real.add(e); });
+  const rest = k > 0 ? list.filter(e => !real.has(e)) : [], prevKeys = T3.fixRealKeys;
+  fixSlotKeep(fixRank(rest, fc, FIX_PTS, false, prevKeys), pool.pts).forEach((e, i) => { set(pool.pts[i], e, false, false); if (e) real.add(e); });
   const flash = ui.flash && T3.walk ? 1 : 0, fl = FIX_SPOTS - 1, s0 = shadowOn ? FIX_SHADOWS : 0, ns = FIX_SPOTS - s0 - flash;
   if (flash) { const l = pool.spots[fl], c = T3.cam.position, d = _flashDir || (_flashDir = new THREE.Vector3()); T3.cam.getWorldDirection(d);
     l.color.setHex(0xfff1dc); l.intensity = 1.6; l.distance = 1400; l.angle = 0.42; l.penumbra = 0.6; l.position.copy(c).addScaledVector(d, -10); l.target.position.copy(c).addScaledVector(d, 300); l.target.updateMatrixWorld(); }
-  fixRank(rest, fc, ns, true).concat(Array(ns)).slice(0, ns).forEach((e, j) => { const l = pool.spots[s0 + j]; set(l, e); if (e) { aim(l, e, false); real.add(e); } });
+  fixSlotKeep(fixRank(rest, fc, ns, true, prevKeys), pool.spots.slice(s0, s0 + ns)).forEach((e, j) => { set(pool.spots[s0 + j], e, true, false); if (e) real.add(e); });
   // zemin ışık lekesi yalnızca gerçek ışığı olmayan ve ışıklar açıkkenki armatürlerde (#128)
   for (const e of T3.fixList || []) if (e.patch) e.patch.visible = !!(k > 0 && e.on && !real.has(e));
-  T3.fixReal = real;
+  T3.fixReal = real; T3.fixRealKeys = new Set([...real].map(fixKey));
   if (moved) markShadows();
   markScene3D();
   T3.fixAt = { x: fc.x, y: fc.y, z: fc.z, t: performance.now() };
 }
+// kazanan armatürler, zaten yanan yuvalarında kalır (yuva değiştirirse boşuna söner / yanardı); boş kalanlar sırayla dolar
+function fixSlotKeep(win, lights) {
+  const out = Array(lights.length).fill(null), left = new Set(win), byKey = new Map(win.map(e => [fixKey(e), e]));
+  lights.forEach((l, i) => { const c = l.userData.fx && l.userData.fx.cur, e = c && byKey.get(c); if (e && left.has(e)) { out[i] = e; left.delete(e); } });
+  const rest = [...left]; for (let i = 0; i < out.length && rest.length; i++) if (!out[i]) out[i] = rest.shift();
+  return out;
+}
+// yuvaya armatürün yerini / rengini / menzilini (spotta açısını) yazar; gölgeli yuvanın haritası yenilenmeliyse true
+function fixApply(l, tgt) {
+  const fx = l.userData.fx;
+  if (!tgt) { const had = l.castShadow && l.intensity > 0; l.intensity = 0; fx.cur = ''; return had; }
+  const e = tgt.e, t = lmToThree(e.lm);
+  let moved = l.castShadow && (l.position.x !== e.x || l.position.y !== e.y || l.position.z !== e.z || l.distance !== t.d || !l.intensity);
+  l.color.set(e.col); l.distance = t.d; l.position.set(e.x, e.y, e.z);
+  if (tgt.spotAim) {
+    const a = (tgt.wide ? FIX_WIDE : clamp((e.beam || 40) / 2, 5, 60)) * Math.PI / 180;
+    if (l.castShadow && Math.abs(l.angle - a) > 1e-6) moved = true;
+    l.angle = a; l.penumbra = tgt.wide ? 0.7 : 0.5; l.target.position.set(e.x, e.y - 100, e.z); l.target.updateMatrixWorld();
+    if (l.castShadow && l.shadow.camera.far !== t.d) { l.shadow.camera.far = t.d; l.shadow.camera.updateProjectionMatrix(); moved = true; }
+  }
+  fx.cur = tgt.key; l.updateMatrixWorld();
+  return moved;
+}
+// yuva değişimi: eski ışık FIX_FADE / 2'de söner, yenisi yerine geçip FIX_FADE / 2'de yanar; bitince durur (kare başına ayırma yok)
+function fixFadeTick(now) {
+  const pool = T3.fix, dt = Math.min(0.1, T3.fixFadeT ? (now - T3.fixFadeT) / 1000 : 1 / 60); T3.fixFadeT = now;
+  if (!T3.fixFading) return;
+  let busy = false, moved = false;
+  for (const l of pool.pts.concat(pool.spots)) {
+    const fx = l.userData.fx; if (!fx) continue;
+    const tgt = fx.tgt, step = dt / (FIX_FADE / 2) * Math.max(0.5, tgt ? tgt.i : l.intensity);
+    if ((tgt ? tgt.key : '') !== fx.cur) {
+      l.intensity = Math.max(0, l.intensity - step); busy = true;
+      if (!l.intensity) { if (fixApply(l, tgt)) moved = true; }
+    } else if (tgt && l.intensity !== tgt.i) {
+      l.intensity = l.intensity < tgt.i ? Math.min(tgt.i, l.intensity + step) : Math.max(tgt.i, l.intensity - step); busy = true;
+    }
+  }
+  if (moved) markShadows();
+  T3.fixFading = busy; if (busy) T3.dirty = true;
+}
 // her çizimde: odak 2 m'den fazla kaydıysa en çok 400 ms'de bir yeniden sırala (kare başına ayırma yok)
 function fixTick(now) {
   if (!T3.fix || (T3.scene && T3.fix.pts[0].parent !== T3.scene)) return;
+  fixFadeTick(now);
   if (ui.flash && T3.walk) { const l = T3.fix.spots[FIX_SPOTS - 1], c = T3.cam.position, d = _flashDir || (_flashDir = new THREE.Vector3()); T3.cam.getWorldDirection(d); l.position.copy(c).addScaledVector(d, -10); l.target.position.copy(c).addScaledVector(d, 300); l.updateMatrixWorld(); l.target.updateMatrixWorld(); }
   const night = isNight3D();
   if (!((T3.fixList && T3.fixList.length) || (night && T3.autoLights && T3.autoLights.length))) return;
@@ -13140,7 +13193,7 @@ function fixTick(now) {
   const nOn = (T3.fixList || []).reduce((s, e) => s + (e.on ? 1 : 0), 0) + (night && ui.autoRoomLight !== false ? (T3.autoLights || []).length : 0);
   if (a && T3.fixShadowEnts && nOn <= FIX_SHADOWS) return;
   const fc = fixFocus(); if (a && (fc.x - a.x) ** 2 + (fc.y - a.y) ** 2 + (fc.z - a.z) ** 2 < 40000) return;
-  assignFixLights();
+  assignFixLights(undefined, false); // gezinirken: yumuşak geçiş
 }
 // yumuşak radyal doku (hale + zemin lekesi); tek, kalıcı
 let _glowTex = null;
@@ -17189,7 +17242,7 @@ function build3D(keepCam = false) {
   let patchGeo = null;
   // bir ışık noktası: havuz listesine girer + hale + zemin lekesi. x / z plan, ay dünya kotu; strip = şerit LED (len cm, ang plan açısı °)
   const glowAt = (o, fidx, q, x, z, ay, floorY, strip) => {
-    const ent = { o, fidx, on: q.on, kind: q.kind, lm: q.lm, col: q.col, beam: q.beam, x, y: ay, z, halos: [] }; T3.fixList.push(ent);
+    const ent = { o, fidx, on: q.on, kind: q.kind, lm: q.lm, col: q.col, beam: q.beam, x, y: ay, z, fy: floorY, halos: [] }; T3.fixList.push(ent);
     if (!q.on) return;
     const t = lmToThree(q.lm), len = strip ? strip.len : 0, a = strip ? strip.ang * Math.PI / 180 : 0;
     // şerit: boyunca birkaç küçük hale (en çok 6); diğerleri tek hale (görünürlüğü syncFixVisuals yönetir)
@@ -17205,7 +17258,7 @@ function build3D(keepCam = false) {
   };
   const fixGlow3D = (o, fidx, fy, floorY) => glowAt(o, fidx, lightP(o), o.x, o.y, fy + fixAnchor(o), floorY);
   // mobilya stüdyosunda yapılmış eşyanın ışıklı parçaları (ampul / spot / şerit LED): her biri ayrı bir ışık noktası
-  const partGlow3D = (o, fidx, fy, floorY) => { for (const e of partLightSpots(o)) glowAt(o, fidx, e.q, e.x, e.y, fy + e.z, floorY, e.q.strip ? e : null); };
+  const partGlow3D = (o, fidx, fy, floorY) => { for (const e of partLightSpots(o)) { glowAt(o, fidx, e.q, e.x, e.y, fy + e.z, floorY, e.q.strip ? e : null); T3.fixList[T3.fixList.length - 1].part = true; } };
   let elev = 0;
   P.floors.forEach((f, fidx) => {
     if (!v3dShown(f)) return;
@@ -17307,7 +17360,7 @@ function build3D(keepCam = false) {
     const roomLv = stackLevels(f.rooms, 'room'), furnLv = stackLevels(f.furn, 'furn');
     // gece otomatik oda ışığı adayları (#122): içinde aydınlatma elemanı olmayan oda (≥ 2 m²), tavanın 30 cm altında, 700 lm
     for (const r of f.rooms) if (r.pts && r.pts.length > 2 && polyArea(r.pts) > 20000 && !f.furn.some(o => isLit(o) && litOn(o) && pointInPoly(o, r.pts))) {
-      const c = polyCentroid(r.pts); if (pointInPoly(c, r.pts)) T3.autoLights.push({ auto: true, fidx, on: true, kind: 'point', lm: 700, col: kelvinHex(3000), beam: null, x: c.x, y: elev + floorH(f) - 30, z: c.y });
+      const c = polyCentroid(r.pts); if (pointInPoly(c, r.pts)) T3.autoLights.push({ auto: true, id: 'r' + r.id, fidx, on: true, kind: 'point', lm: 700, col: kelvinHex(3000), beam: null, x: c.x, y: elev + floorH(f) - 30, z: c.y, fy: elev });
     }
     f.rooms.forEach((r, ri) => {
       if (!r.pts || r.pts.length < 3) return;

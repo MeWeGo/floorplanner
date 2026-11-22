@@ -2322,10 +2322,12 @@ check('daytime lights off by default, #b3dLights toggle, Night->Day revert, and 
       T3.ctl.target.x = 260; T3.ctl.update(); T3.fixAt = null; draw3D(performance.now());
       out.smallMovePasses = passes;
       passes = 0;
-      T3.ctl.target.x = 980; T3.ctl.update(); T3.fixAt = null; draw3D(performance.now());
+      // a far move swaps lamps with a short fade: the shadow maps redraw once the slot has moved (run the fade frames)
+      const frames = () => { const t0 = performance.now(); for (let i = 1; i <= 12; i++) draw3D(t0 + i * 60); };
+      T3.ctl.target.x = 980; T3.ctl.update(); T3.fixAt = null; frames();
       out.farMovePasses = passes;
       passes = 0;
-      T3.ctl.target.x = 940; T3.ctl.update(); T3.fixAt = null; draw3D(performance.now());
+      T3.ctl.target.x = 940; T3.ctl.update(); T3.fixAt = null; frames();
       out.settledPasses = passes;
     } finally {
       sm.render = orig;
@@ -2479,6 +2481,57 @@ check('night mode: 🌙 turns on the live view, night sky, moon, auto room light
   if (!r.flash || !r.flashOff) throw new Error('F did not switch the walk flashlight: ' + JSON.stringify(r));
   if (!r.dayAlt || !r.dayExp || !r.daySky || !r.dayBtn) throw new Error('day did not restore sun / exposure / sky: ' + JSON.stringify(r));
   return 'night sky ' + r.sky.toFixed(2) + ', exposure +' + r.exp.toFixed(2) + ', moon ' + r.moonI.toFixed(2) + ', auto room light, flashlight, day restored';
+});
+
+check('lamp pool while walking: low lamps keep lighting upward, slots stay put, swaps fade instead of popping', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject());
+    const f = F();
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) { addRectWalls(i * 400, j * 400, i * 400 + 400, j * 400 + 400); f.rooms.push(mkRoom([{ x: i * 400, y: j * 400 }, { x: i * 400 + 400, y: j * 400 }, { x: i * 400 + 400, y: j * 400 + 400 }, { x: i * 400, y: j * 400 + 400 }])); }
+    for (const x of [120, 200, 280]) { const o = mkFurn(BYID.tableLamp, x, 200, 0); o.elev = 0; f.furn.push(o); } // lamps standing on the floor (e.g. in a planter)
+    commit(); refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(async () => {
+    setNight3D(true); set3DCam('eye');
+    const out = { walk: !!T3.walk, lowInShadow: 0, autos: (T3.autoLights || []).length, fades: 0, settled: 0, swaps: 0 };
+    const lows = new Set(F().furn.map(o => o.id));
+    const spots = [[200, 260], [600, 600], [1400, 1000], [200, 300], [900, 200], [250, 250]];
+    let prev = null;
+    for (const [x, y] of spots) {
+      T3.walk.x = x; T3.walk.y = y; applyWalkCam(); T3.fixAt.t = 0;
+      fixTick(performance.now());
+      for (const e of T3.fixShadowEnts || []) if (e && e.o && lows.has(e.o.id)) out.lowInShadow++;
+      const keys = [...T3.fix.pts, ...T3.fix.spots].map(l => l.userData.fx && l.userData.fx.tgt ? l.userData.fx.tgt.key : '');
+      if (prev) out.swaps += keys.filter((k, i) => k !== prev[i]).length;
+      prev = keys;
+      if (T3.fixFading) out.fades++;
+      for (let t = 0; t < 40 && T3.fixFading; t++) { await new Promise(r => setTimeout(r, 25)); fixFadeTick(performance.now()); }
+      if (!T3.fixFading) out.settled++;
+    }
+    // standing at the lamps: all three light for real (not only their glow)
+    T3.walk.x = 200; T3.walk.y = 230; applyWalkCam(); T3.fixAt.t = 0; fixTick(performance.now());
+    for (let t = 0; t < 40 && T3.fixFading; t++) { await new Promise(r => setTimeout(r, 25)); fixFadeTick(performance.now()); }
+    out.lowReal = [...T3.fixReal].filter(e => e.o && lows.has(e.o.id)).length;
+    // a rebuild while standing still keeps every slot (no flash on edits)
+    const before = [...T3.fix.pts, ...T3.fix.spots].map(l => l.userData.fx && l.userData.fx.cur);
+    build3D(true);
+    const after = [...T3.fix.pts, ...T3.fix.spots].map(l => l.userData.fx && l.userData.fx.cur);
+    out.rebuildSame = before.slice().sort().join() === after.slice().sort().join(); // same lamps lit (slot order may change: instant, invisible)
+    out.rebuildFading = !!T3.fixFading;
+    exitWalk(false); setNight3D(false); setLive3D(false); show3D(false);
+    return out;
+  })()`);
+  if (!r.walk || r.autos < 10) throw new Error('setup failed: ' + JSON.stringify(r));
+  if (r.lowInShadow) throw new Error('a lamp on the floor was put into a downward shadow cone: ' + JSON.stringify(r));
+  if (!(r.fades >= 1) || r.settled !== 6) throw new Error('pool swaps while walking should fade and then settle: ' + JSON.stringify(r));
+  if (r.lowReal !== 3) throw new Error('the lamps next to the walker should all light for real: ' + JSON.stringify(r));
+  if (!r.rebuildSame || r.rebuildFading) throw new Error('a rebuild changed which lamps are lit, or faded them: ' + JSON.stringify(r));
+  return r.swaps + ' slot swaps over 6 spots, all faded; low lamps never in a shadow cone';
 });
 
 check('lamp shadows: a wall blocks the lamp light, shadow maps are drawn only when something changes (#128)', async page => {
