@@ -73,3 +73,59 @@ test('3D wheel zoom is handled before OrbitControls and never stalls', () => {
   assert.match(h, /8 \* -n/, 'a minimum step per notch');
   assert.match(h, /Math\.max\(30,/, 'orbit pivot kept ahead of the camera');
 });
+
+/* #162: slabs at different heights on the same floor. Real walkGroundAt / walkGround / walkSpawnZ, flat slabs (surfZAt = 0). */
+const slabApi = new Function(
+  'const surfZAt = () => 0, surfSloped = () => false;\n' +
+  'let LEVELS = null; const walkLevels = () => LEVELS, floorPitch = () => 290;\n' +
+  line(/const WALK\s*=[^;\n]+;/) + '\n' +
+  line(/function pointInPoly\([^\n]+/) + '\n' +
+  'const furnElev = o => +o.elev || 0, walkSurfAt = () => null;\n' +
+  fnSrc('walkGround') + fnSrc('walkGroundAt') + fnSrc('walkSpawnZ') +
+  'return { walkGround, walkSpawnZ, setLevels: l => { LEVELS = l; } };'
+)();
+const sq = (x0, y0, x1, y1) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+
+test('#162 raised slab: blocks from the side, you stand on its top once there, and spawning on it starts on top', () => {
+  const f = { furn: [], voids: [], rooms: [], slabs: [{ pts: sq(0, 0, 300, 300), off: 150, t: 20 }] };
+  const lv = [{ f, base: 0, sp: () => [sq(-500, -500, 1000, 1000)] }];
+  assert.ok(slabApi.walkGround(lv, { x: 150, y: 150 }, 0).block, 'a 150 cm platform is a wall from the floor');
+  assert.strictEqual(slabApi.walkGround(lv, { x: 150, y: 150 }, 150).g, 150, 'on top of it you stay on it');
+  slabApi.setLevels(lv);
+  assert.strictEqual(slabApi.walkSpawnZ(0, { x: 150, y: 150 }), 150, 'spawn on the platform starts at its top');
+  assert.strictEqual(slabApi.walkSpawnZ(0, { x: 600, y: 600 }), 0, 'spawn beside it starts on the floor');
+  // a low step (≤ stepUp) is walked onto
+  f.slabs[0].off = 30;
+  assert.strictEqual(slabApi.walkGround(lv, { x: 150, y: 150 }, 0).g, 30, '30 cm platform: step up');
+});
+
+test('#162 sunken slab: stands on it where no floor slab covers it; the floor slab wins where it does; stays on this floor', () => {
+  const f = { furn: [], voids: [], rooms: [], slabs: [{ pts: sq(0, 0, 300, 300), off: -40, t: 20 }] };
+  const open = [{ f, base: 0, sp: () => [] }]; // floor slab off (noSlab) / outside the building
+  const g = slabApi.walkGround(open, { x: 150, y: 150 }, 0);
+  assert.strictEqual(g.g, -40, 'steps down onto the sunken slab');
+  assert.strictEqual(g.lvl, 0, 'the surface belongs to this floor, so walkStep does not switch down');
+  const covered = [{ f, base: 0, sp: () => [sq(-500, -500, 1000, 1000)] }];
+  assert.strictEqual(slabApi.walkGround(covered, { x: 150, y: 150 }, 0).g, 0, 'under the automatic floor slab it is hidden: floor level');
+  slabApi.setLevels(open);
+  assert.strictEqual(slabApi.walkSpawnZ(0, { x: 150, y: 150 }), -40, 'spawn on the sunken slab');
+});
+
+test('#162 a flat slab (off 0) over a void is walkable; the void alone is not; a lower floor surface reports its level', () => {
+  const v = { pts: sq(0, 0, 300, 300) };
+  const lower = { furn: [], voids: [], rooms: [], slabs: [] };
+  const withSlab = { furn: [], rooms: [], voids: [v], slabs: [{ pts: sq(0, 0, 300, 300), off: 0, t: 20 }] };
+  const lv = [{ f: withSlab, base: 0, sp: () => [] }, { f: lower, base: -290, sp: () => [] }];
+  assert.strictEqual(slabApi.walkGround(lv, { x: 150, y: 150 }, 0).g, 0, 'the slab fills the void');
+  const hole = [{ f: Object.assign({}, withSlab, { slabs: [] }), base: 0, sp: () => [] }, { f: lower, base: -20, sp: () => [] }];
+  const d = slabApi.walkGround(hole, { x: 150, y: 150 }, 0);
+  assert.strictEqual(d.g, -20); assert.strictEqual(d.lvl, 1, 'surface from the floor below');
+});
+
+test('#162 wiring: spawn and floor selector use walkSpawnZ, a floor switch down needs a lower-floor surface', () => {
+  assert.match(fnSrc('enterWalk'), /walkSpawnZ\(i, p\)[\s\S]*z: z0, gz: z0/);
+  assert.match(fnSrc('walkToFloor'), /walkSpawnZ\(i, w\)/);
+  assert.match(fnSrc('walkStep'), /w\.gz <= -0\.5 && lv\[gr\.lvl\] && lv\[gr\.lvl\]\.base < 0/);
+  assert.match(fnSrc('walkLevels'), /sp: \(\) => walkSlabPolys\(f0, f\)/);
+  assert.match(src, /T3\.walkCache = null; T3\.walkSp = null;/);
+});
