@@ -27,6 +27,7 @@ const {
   belZigzag,
   belSegsCross,
   belRoofPts,
+  belFloorPts,
   belRoofFolds,
   belStart,
   setBelWall,
@@ -53,6 +54,8 @@ const {
   ${fnSrc('belZigzag')}
   ${fnSrc('belSegsCross')}
   ${fnSrc('belRoofPts')}
+  ${fnSrc('belFloorPts')}
+  ${fnSrc('belAreaPts')}
   ${fnSrc('belRoofFolds')}
   ${fnSrc('belStart')}
   ${fnSrc('setBelWall')}
@@ -62,10 +65,11 @@ const {
   return {
     BEL_PITCH, BEL_DEPTH, BEL_T, BEL_ROOF_T,
     isBelWall, belSides, belFolds, belZigzag, belSegsCross, belRibs, belPathZig,
-    belRoofPts, belRoofFolds, belStart, setBelWall, belReset, cleanBel, bellowsSvg,
+    belRoofPts, belFloorPts, belRoofFolds, belStart, setBelWall, belReset, cleanBel, bellowsSvg,
   };
 `)();
 
+const polyAreaT = pts => pts.reduce((s, p, i) => { const q = pts[(i + 1) % pts.length]; return s + p.x * q.y - q.x * p.y; }, 0) / 2;
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-6, `${msg}: ${a} vs ${b}`);
 
 test('(1) belSides: none when unmoved, one side for fan, two sides for parallel move', () => {
@@ -274,4 +278,43 @@ test('(10) slide: parallel folds of the wall length, straight sides like before'
   for (const [p, q] of belRoofFolds(slide)) { near(q.x - p.x, 300, 'rib length'); near(q.y - p.y, 0, 'rib parallel'); }
   const side = belSides(slide)[0];
   assert.deepStrictEqual(belPathZig(side.path).map(p => [+p.x.toFixed(6), +p.y.toFixed(6)]), belZigzag(side.p, side.q).map(p => [+p.x.toFixed(6), +p.y.toFixed(6)]));
+});
+
+test('(11) belFloorPts (#154): floor under slide and fan corridors, on by default, independent of the roof', () => {
+  const slide = { id: 's', a: { x: 0, y: 100 }, b: { x: 120, y: 100 }, bel: { a: { x: 0, y: 0 }, b: { x: 120, y: 0 } } };
+  const fl = belFloorPts(slide);
+  assert.ok(Array.isArray(fl) && fl.length === 4, 'slide gives a quad floor');
+  near(Math.abs(polyAreaT(fl)), 120 * 100, 'floor covers the corridor');
+  assert.deepStrictEqual(fl, belRoofPts(slide), 'floor = roof footprint');
+
+  const fan = { id: 'f', a: { x: 0, y: 0 }, b: { x: 0, y: 100 }, bel: { a: { x: 0, y: 0 }, b: { x: 100, y: 0 } } };
+  const ff = belFloorPts(fan);
+  assert.ok(Array.isArray(ff) && ff.length > 3, 'fan gives a floor');
+  assert.ok(Math.abs(polyAreaT(ff)) > 0.9 * Math.PI / 4 * 100 * 100, 'fan floor covers the quarter circle');
+
+  const noRoof = { ...slide, bel: { ...slide.bel, roof: 0 } };
+  assert.strictEqual(belRoofPts(noRoof), null);
+  assert.ok(belFloorPts(noRoof), 'floor stays without a roof');
+  const noFloor = { ...slide, bel: { ...slide.bel, floor: 0 } };
+  assert.strictEqual(belFloorPts(noFloor), null, 'floor: 0 turns it off');
+  assert.ok(belRoofPts(noFloor), 'roof stays without a floor');
+
+  const unmoved = { id: 'u', a: { x: 0, y: 0 }, b: { x: 120, y: 0 }, bel: { a: { x: 0, y: 0 }, b: { x: 120, y: 0 } } };
+  assert.strictEqual(belFloorPts(unmoved), null, 'no floor when the wall has not moved');
+  const flipped = { id: 'x', a: { x: 120, y: 100 }, b: { x: 0, y: 100 }, bel: { a: { x: 0, y: 0 }, b: { x: 120, y: 0 } } };
+  assert.strictEqual(belFloorPts(flipped), null, 'no floor when the sides cross');
+});
+
+test('(12) floor: 0 survives cleanBel and belReset; 3D builds the floor at the wall base; panel toggle', () => {
+  const w = { id: 'w', a: { x: 0, y: 50 }, b: { x: 100, y: 50 }, bel: { a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, floor: 0, roof: 0 } };
+  cleanBel(w);
+  assert.deepStrictEqual(w.bel, { a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, roof: 0, floor: 0 });
+  belReset(w);
+  assert.deepStrictEqual(w.bel, { a: { x: 0, y: 50 }, b: { x: 100, y: 50 }, roof: 0, floor: 0 });
+  const on = { id: 'v', a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, bel: { a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, floor: 1 } };
+  cleanBel(on);
+  assert.strictEqual('floor' in on.bel, false, 'default (on) is not stored');
+  assert.match(fnSrc('bellows3D'), /belFloorPts\(w\)[\s\S]*?position\.y = y0 \+ 0\.3/);
+  assert.match(fnSrc('applyProp'), /p === 'belFloor'[\s\S]*?o\.bel\.floor = 0/);
+  assert.match(fnSrc('renderProps'), /data-p="belFloor"/);
 });

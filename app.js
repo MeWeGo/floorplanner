@@ -5988,10 +5988,10 @@ function accFan3D(S, w, fan, y0, H, mat, det, lineMat, lt) {
 }
 
 /* ---------- Körük koridor ----------
-   w.bel = { a: {x, y}, b: {x, y}, roof?: 0 } = duvarın ilk konumu. Duvar başka yere gidince (sürükleme, oda / grup düzeni,
+   w.bel = { a: {x, y}, b: {x, y}, roof?: 0, floor?: 0 } = duvarın ilk konumu. Duvar başka yere gidince (sürükleme, oda / grup düzeni,
    menteşe konumu, döndürme) ilk konumla şimdiki konum arası otobüs körüğü gibi kapanır: ilk uçtan son uca körüklü yan yüzler
-   (a → a, b → b; yerinde kalan uçta yan yok = yelpaze) ve üstte körüklü tavan. İlk konum sabittir; 📍 ile yeniden alınır. */
-const BEL_PITCH = 24, BEL_DEPTH = 8, BEL_T = 2, BEL_ROOF_T = 4;
+   (a → a, b → b; yerinde kalan uçta yan yok = yelpaze), üstte körüklü tavan ve altta zemin (floor: 0 = zeminsiz). İlk konum sabittir; 📍 ile yeniden alınır. */
+const BEL_PITCH = 24, BEL_DEPTH = 8, BEL_T = 2, BEL_ROOF_T = 4, BEL_FLOOR_T = 4;
 function isBelWall(w) { return !!(w && w.bel && w.bel.a && w.bel.b); }
 /* Ara konumlar (yelpaze): ilk konumdan şimdiki konuma duvarın kendi hareketi. İki konum arası tek bir döndürme + ölçek
    (spiral benzerlik, merkez = hareketsiz nokta: menteşede pivot) adım adım uygulanır; dönmeyen harekette düz kaydırma.
@@ -6049,8 +6049,11 @@ function belSegsCross(a, b, c, d) {
   return d1 * d2 < -1e-6 && d3 * d4 < -1e-6;
 }
 // tavan: ilk ve şimdiki konum arası dörtgen (çakışan köşe atılır → yelpazede üçgen); kendini keserse (duvar ters döndü) yok
-function belRoofPts(w) {
-  if (!isBelWall(w) || w.bel.roof === 0 || !belSides(w).length) return null;
+function belRoofPts(w) { return isBelWall(w) && w.bel.roof !== 0 ? belAreaPts(w) : null; }
+// zemin: tavanla aynı alan, duvarın tabanında (#154); floor: 0 = kapalı
+function belFloorPts(w) { return isBelWall(w) && w.bel.floor !== 0 ? belAreaPts(w) : null; }
+function belAreaPts(w) {
+  if (!isBelWall(w) || !belSides(w).length) return null;
   if (belSegsCross(w.bel.a, w.a, w.bel.b, w.b) || belSegsCross(w.bel.a, w.bel.b, w.a, w.b)) return null;
   const ribs = belRibs(w), pts = [];
   for (const p of [...ribs.map(r => r.a), ...ribs.map(r => r.b).reverse()]) if (!pts.some(q => dist(p, q) < 1)) pts.push(p);
@@ -6074,13 +6077,13 @@ function belStart(f, w) {
   return { a: { ...w.a }, b: { ...w.b } };
 }
 function setBelWall(f, w, on) { if (on) { if (!isBelWall(w)) w.bel = belStart(f, w); } else delete w.bel; }
-function belReset(w) { const roof = w.bel && w.bel.roof; w.bel = { a: { ...w.a }, b: { ...w.b } }; if (roof === 0) w.bel.roof = 0; }
+function belReset(w) { const o = w.bel || {}; w.bel = { a: { ...w.a }, b: { ...w.b } }; if (o.roof === 0) w.bel.roof = 0; if (o.floor === 0) w.bel.floor = 0; }
 function cleanBel(w) {
   if (w.bel == null) return;
   const pt = p => p && Number.isFinite(+p.x) && Number.isFinite(+p.y) ? { x: +p.x, y: +p.y } : null;
   const a = pt(w.bel.a), b = pt(w.bel.b);
   if (!a || !b) { delete w.bel; return; }
-  const roof = w.bel.roof === 0 ? 0 : undefined; w.bel = { a, b }; if (roof === 0) w.bel.roof = 0;
+  const roof = w.bel.roof === 0, floor = w.bel.floor === 0; w.bel = { a, b }; if (roof) w.bel.roof = 0; if (floor) w.bel.floor = 0;
 }
 // 2B: tavan kesik çizgiyle (kesitin üstünde), yanlar zikzak; yana tıklamak duvarı seçer
 function bellowsSvg(f, live) {
@@ -6108,6 +6111,12 @@ function bellows3D(S, w, y0, H, mat, box, det, lineMat, lt) {
     const geo = new THREE.ExtrudeGeometry(shp, { depth: H, bevelEnabled: false }); geo.rotateX(Math.PI / 2);
     const m = new THREE.Mesh(geo, mat(col)); m.position.y = y0 + H;
     m.castShadow = m.receiveShadow = true; m.userData = { wallId: w.id }; S.add(m);
+  }
+  const fp = belFloorPts(w); // zemin: üstü duvar tabanının 0.3 cm üstünde (döşemeyle z-fighting yok), BEL_FLOOR_T aşağı
+  if (fp) {
+    const fg = new THREE.ExtrudeGeometry(new THREE.Shape(fp.map(p => new THREE.Vector2(p.x, p.y))), { depth: BEL_FLOOR_T, bevelEnabled: false }); fg.rotateX(Math.PI / 2);
+    const fm = new THREE.Mesh(fg, mat(shade(col, 0.18))); fm.position.y = y0 + 0.3; fm.castShadow = fm.receiveShadow = true; fm.userData = { wallId: w.id }; S.add(fm);
+    if (det) fm.add(new THREE.LineSegments(new THREE.EdgesGeometry(fg), lineMat));
   }
   const rp = belRoofPts(w); if (!rp) return;
   const geo = new THREE.ExtrudeGeometry(new THREE.Shape(rp.map(p => new THREE.Vector2(p.x, p.y))), { depth: BEL_ROOF_T, bevelEnabled: false }); geo.rotateX(Math.PI / 2);
@@ -7678,6 +7687,7 @@ function renderProps() {
         const sd = belSides(o);
         h += `<p class="muted" style="margin:0 0 6px">${sd.length ? L(`İlk konumla arası körükle kapalı (${sd.length === 2 ? 'iki yan' : 'yelpaze'})`, `Closed with bellows to the first position (${sd.length === 2 ? 'two sides' : 'fan'})`) : L('Duvarı yeni konuma taşıyın (sürükleyin, düzeni ya da menteşe konumunu değiştirin): ilk konumla arası körükle dolar', 'Move the wall to a new position (drag it, switch the layout or hinge position): the space to its first position fills with bellows')}</p>`;
         h += `<label class="f"><span>${L('Körük tavanı', 'Bellows roof')}</span><input type="checkbox" data-k="wall" data-p="belRoof" ${o.bel.roof !== 0 ? 'checked' : ''}></label>`;
+        h += `<label class="f"><span>${L('Körük zemini', 'Bellows floor')}</span><input type="checkbox" data-k="wall" data-p="belFloor" ${o.bel.floor !== 0 ? 'checked' : ''}></label>`;
         h += `<div class="row"><button class="btn sm" data-act="belhome" title="${L('Şimdiki yeri ilk konum yap (körük kapanır)', 'Make the current place the first position (the bellows closes)')}">📍 ${L('İlk konum = şimdiki yer', 'First position = here')}</button></div>`;
       } }
     if (os.every(x => x.o.wt === 'railing')) h += fld(L('Korkuluk stili', 'Railing style'), 'wall', 'rs', railStyle(o), { sel: Object.fromEntries(Object.entries(RAIL_STYLES).map(([k, v]) => [k, L(...v)])) });
@@ -8125,6 +8135,7 @@ function applyProp(t, final) {
     else if (k === 'wall' && p === 'accFill') { if (o.acc) { if (v === 'fan') o.acc.fill = 'fan'; else delete o.acc.fill; } }
     else if (k === 'wall' && p === 'bel') { if (final) setBelWall(F(), o, !!v); }
     else if (k === 'wall' && p === 'belRoof') { if (final && o.bel) { if (v) delete o.bel.roof; else o.bel.roof = 0; } }
+    else if (k === 'wall' && p === 'belFloor') { if (final && o.bel) { if (v) delete o.bel.floor; else o.bel.floor = 0; } }
     else if (k === 'wall' && (p === 'c1' || p === 'c2')) { o[p] = v; }
     else if (k === 'wall' && (p === 'f1' || p === 'f2')) { if (!v || v === 'none') delete o[p]; else o[p] = v; }
     else if (k === 'wall' && p === 'color') { o.color = v; delete o.c1; delete o.c2; } // duvar boyası iki yüzü birden boyar

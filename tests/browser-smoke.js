@@ -557,7 +557,15 @@ check('bellows corridor: fills between the first and current wall position (layo
     out.zig = document.querySelectorAll('#gWalls path[data-id="' + w.id + '"]').length;
     out.walk = walkSegs(F()).length;
     show3D(true); await new Promise(r => setTimeout(r, 500));
+    const floors3D = () => { let n = 0; T3.scene.traverse(o => { if (o.isMesh && o.userData && o.userData.wallId === w.id && Math.abs(o.position.y - 0.3) < 0.01) n++; }); return n; };
     out.m3 = 0; T3.scene.traverse(o => { if (o.isMesh && o.userData && o.userData.wallId === w.id && !o.parent.userData.wallId) out.m3++; });
+    out.floor = floors3D();                          // #154: a floor at the wall base
+    sel = [w.id]; refresh();
+    const fb = document.querySelector('#props [data-p="belFloor"]');
+    if (fb) { fb.checked = false; fb.dispatchEvent(new Event('change', { bubbles: true })); }
+    build3D(true); out.floorOff = [floors3D(), w.bel.floor];
+    const fb2 = document.querySelector('#props [data-p="belFloor"]');
+    if (fb2) { fb2.checked = true; fb2.dispatchEvent(new Event('change', { bubbles: true })); }
     show3D(false);
     switchGroupVarTo(rec, 0); out.closed = belSides(find(w.id).o).length;
     switchGroupVarTo(rec, 1);
@@ -572,7 +580,8 @@ check('bellows corridor: fills between the first and current wall position (layo
   if (!info.home || info.home[0] !== 0 || info.home[1] !== 0) throw new Error('bellows did not take the other layout as its first position: ' + JSON.stringify(info));
   if (info.sides !== 2 || info.roof !== 4 || info.zig !== 2) throw new Error('bellows corridor not drawn in 2D: ' + JSON.stringify(info));
   if (info.walk < 3) throw new Error('bellows sides do not block walking: ' + JSON.stringify(info));
-  if (info.m3 < 3) throw new Error('bellows not built in 3D: ' + JSON.stringify(info));
+  if (info.m3 < 4) throw new Error('bellows not built in 3D: ' + JSON.stringify(info));
+  if (info.floor !== 1 || info.floorOff[0] !== 0 || info.floorOff[1] !== 0) throw new Error('bellows floor missing or not switchable: ' + JSON.stringify(info));
   if (info.closed !== 0) throw new Error('bellows should close in the first layout: ' + JSON.stringify(info));
   if (info.fan[0] !== 1 || !(info.fan[1] > 3)) throw new Error('moving one end should give a fan with an arc: ' + JSON.stringify(info));
   if (info.undo !== 2 || !info.svg) throw new Error('undo / export failed: ' + JSON.stringify(info));
