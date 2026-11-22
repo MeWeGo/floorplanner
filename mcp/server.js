@@ -163,12 +163,12 @@ function cleanZone(o) {
   if (typeof o.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(o.color)) delete o.color;
   const c = +o.curb; if (Number.isFinite(c) && c > 0 && o.zt !== 'parcel') o.curb = Math.round(Math.min(ZONE_CURB_MAX, c)); else delete o.curb;
   const sb = +o.setback; if (o.zt === 'parcel' && Number.isFinite(sb) && sb > 0) o.setback = Math.round(Math.min(ZONE_SB_MAX, sb)); else delete o.setback;
-  if (o.zt === 'parcel' && Array.isArray(o.sb) && o.sb.length === o.pts.length && o.sb.some(v => +v > 0)) o.sb = o.sb.map(v => Math.round(Math.max(0, Math.min(ZONE_SB_MAX, +v || 0)))); else delete o.sb;
+  if (o.zt === 'parcel' && Array.isArray(o.sb) && o.sb.length === o.pts.length && o.sb.some(v => (+v || 0) !== (+o.setback || 0))) o.sb = o.sb.map(v => Math.round(Math.max(0, Math.min(ZONE_SB_MAX, +v || 0)))); else delete o.sb;
 }
 // çekme hattı: her kenar kendi mesafesi kadar (sb[i], yoksa setback) içeri kayar, komşu kenar çizgileri kesiştirilir (dışbükey / hafif içbükey arsa)
 function zoneSetback(o) {
   const P0 = o.pts || [], n = P0.length; if (n < 3) return null;
-  const d = i => Array.isArray(o.sb) && +o.sb[i] > 0 ? +o.sb[i] : +o.setback || 0; if (![...Array(n).keys()].some(i => d(i) > 0)) return null;
+  const d = i => Array.isArray(o.sb) && o.sb.length === n ? Math.max(0, +o.sb[i] || 0) : +o.setback || 0; if (![...Array(n).keys()].some(i => d(i) > 0)) return null;
   let A = 0; for (let i = 0; i < n; i++) { const a = P0[i], b = P0[(i + 1) % n]; A += a.x * b.y - b.x * a.y; } const sg = A > 0 ? 1 : -1; // plan y aşağı: içe normal işarete göre
   const lines = P0.map((a, i) => { const b = P0[(i + 1) % n], L = Math.hypot(b.x - a.x, b.y - a.y) || 1, nx = -(b.y - a.y) / L * sg, ny = (b.x - a.x) / L * sg; return { x: a.x + nx * d(i), y: a.y + ny * d(i), dx: (b.x - a.x) / L, dy: (b.y - a.y) / L }; });
   const out = [];

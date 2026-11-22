@@ -2290,12 +2290,12 @@ check('3D ground surface (#147): panel picks the surface, undo restores it, hidd
   })()`);
   await page.evaluate(`(() => { setLive3D(false); show3D(false); })()`);
   const lum = c => c[0] + c[1] + c[2];
-  if (r.autoMap) return 'auto ground must stay the old untextured CAD colour: ' + JSON.stringify(r);
-  if (!r.panel || r.kind !== 'sand' || !r.sandMap) return 'the project panel did not switch the ground to sand: ' + JSON.stringify(r);
-  if (!(lum(r.sand) > lum(r.asphalt) + 60)) return 'sand should read much lighter than asphalt from above: ' + JSON.stringify(r);
-  if (r.undoKind !== 'sand') return 'undo did not restore the previous ground: ' + JSON.stringify(r);
-  if (!r.hidden) return 'kind none must hide the ground: ' + JSON.stringify(r);
-  if (!r.live || !r.restored || !r.cadBack) return 'live view / render studio did not use or restore the ground: ' + JSON.stringify(r);
+  if (r.autoMap) throw new Error('auto ground must stay the old untextured CAD colour: ' + JSON.stringify(r));
+  if (!r.panel || r.kind !== 'sand' || !r.sandMap) throw new Error('the project panel did not switch the ground to sand: ' + JSON.stringify(r));
+  if (!(lum(r.sand) > lum(r.asphalt) + 60)) throw new Error('sand should read much lighter than asphalt from above: ' + JSON.stringify(r));
+  if (r.undoKind !== 'sand') throw new Error('undo did not restore the previous ground: ' + JSON.stringify(r));
+  if (!r.hidden) throw new Error('kind none must hide the ground: ' + JSON.stringify(r));
+  if (!r.live || !r.restored || !r.cadBack) throw new Error('live view / render studio did not use or restore the ground: ' + JSON.stringify(r));
   return 'sand ' + r.sand + ' vs asphalt ' + r.asphalt + ', undo ok, hidden ok, live + 2 renders restored, ' + r.progs + ' new programs';
 });
 
@@ -2324,11 +2324,11 @@ check('ground datum (#148): plinth skirt, merged basement excavation with earth 
     out.noGround = (() => { P.ground = {}; cleanGround(P); return !P.ground; })();
     return out;
   })()`);
-  if (r.cuts.length !== 1 || r.cuts[0].bot !== -310 || r.cuts[0].n < 6) return 'the overlapping basement footprints should merge into one L-shaped cut down to -310: ' + JSON.stringify(r);
-  if (r.gy !== r.datum - 101) return 'the ground should lie plinth + 1 cm below ±0.00: ' + JSON.stringify(r);
-  if (r.plinth < 1 || r.earth < 1) return 'missing plinth skirt or earth sides in 3D: ' + JSON.stringify(r);
-  if (r.walkOut !== -101 || r.walkIn !== 0) return 'walking outside should stand on the ground (-101), inside on the floor (0): ' + JSON.stringify(r);
-  if (!r.hatch || !r.noGround) return 'section earth hatch / default ground cleanup failed: ' + JSON.stringify(r);
+  if (r.cuts.length !== 1 || r.cuts[0].bot !== -310 || r.cuts[0].n < 6) throw new Error('the overlapping basement footprints should merge into one L-shaped cut down to -310: ' + JSON.stringify(r));
+  if (r.gy !== r.datum - 101) throw new Error('the ground should lie plinth + 1 cm below ±0.00: ' + JSON.stringify(r));
+  if (r.plinth < 1 || r.earth < 1) throw new Error('missing plinth skirt or earth sides in 3D: ' + JSON.stringify(r));
+  if (r.walkOut !== -101 || r.walkIn !== 0) throw new Error('walking outside should stand on the ground (-101), inside on the floor (0): ' + JSON.stringify(r));
+  if (!r.hatch || !r.noGround) throw new Error('section earth hatch / default ground cleanup failed: ' + JSON.stringify(r));
   return 'one L cut to -310, skirt + earth sides, outside -101 / inside 0, section hatch';
 });
 
@@ -2347,6 +2347,7 @@ check('terrain (#149): hillside preset, contours in the export, point add / drag
     const i = groundP(P).tp.length - 1;
     ev('pointerdown', { x: 300, y: 300 }); ev('pointermove', { x: 420, y: 330 }); ev('pointerup', { x: 420, y: 330 }); out.dragX = Math.round(groundP(P).tp[i].x);
     out.panel = !!document.querySelector('#props [data-k="tp"]');
+    const tpEl = document.querySelector('#props [data-k="tp"][data-i="' + i + '"]'); if (tpEl) { tpEl.value = '300'; tpEl.dispatchEvent(new Event('input', { bubbles: true })); tpEl.dispatchEvent(new Event('change', { bubbles: true })); } out.typed = groundP(P).tp[i].z; // typed height reaches the point
     deleteSel(); out.afterDel = groundP(P).tp.length - n0; undo(); out.undo = groundP(P).tp.length - n0;
     setTool('select'); out.ok3d = false;
     document.getElementById('b3d').click(); await wait(1200);
@@ -2360,11 +2361,11 @@ check('terrain (#149): hillside preset, contours in the export, point add / drag
     out.ifc = /IFCGEOGRAPHICELEMENT\([^;]*\.TERRAIN\.\)/.test(ifcFromExchange(revitExport(P)));
     return out;
   })()`);
-  if (!(r.hill > 300) || !r.svg) return 'hillside preset / 2D contours missing: ' + JSON.stringify(r);
-  if (r.added !== 1 || r.dragX !== 420 || !r.panel || r.afterDel !== 0 || r.undo !== 1) return 'terrain tool add / drag / delete / undo failed: ' + JSON.stringify(r);
-  if (!r.ifc) return 'IFC export has no terrain: ' + JSON.stringify(r);
+  if (!(r.hill > 300) || !r.svg) throw new Error('hillside preset / 2D contours missing: ' + JSON.stringify(r));
+  if (r.added !== 1 || r.dragX !== 420 || !r.panel || r.afterDel !== 0 || r.undo !== 1 || r.typed !== 300) throw new Error('terrain tool add / drag / delete / undo failed: ' + JSON.stringify(r));
+  if (!r.ifc) throw new Error('IFC export has no terrain: ' + JSON.stringify(r));
   if (!r.ok3d) return 'skipped 3D (WebGL unavailable); 2D + tool + IFC ok';
-  if (r.terr !== 1 || Math.abs(r.tree) > 2 || Math.abs(r.walk) > 2) return 'terrain mesh / tree on terrain / walk on hill wrong: ' + JSON.stringify(r);
+  if (r.terr !== 1 || Math.abs(r.tree) > 2 || Math.abs(r.walk) > 2) throw new Error('terrain mesh / tree on terrain / walk on hill wrong: ' + JSON.stringify(r));
   return 'hill ' + r.hill + ' cm, tool add/drag/delete/undo ok, terrain mesh, tree on terrain, walk on hill, IFC terrain';
 });
 
@@ -2386,6 +2387,7 @@ check('site zones (#150): draw a zone with the mouse, panel type + curb, parcel 
     out.svg = exportSvg().svg.includes('Lot 9'); out.rooms = F().rooms.length;
     fi = 1; refresh(); out.ctx = exportSvg().svg.includes('opacity="0.35"'); fi = 0; refresh();
     undo(); out.undo = F().zones.length === 1; redo();
+    sel = [F().zones[1].id]; renderProps(); const e0 = document.querySelector('#props [data-k="zsb"][data-i="0"]'); if (e0) { e0.value = '0'; e0.dispatchEvent(new Event('change', { bubbles: true })); } const sb2 = zoneSetback(F().zones[1]); out.edge0 = !!sb2 && sb2[0].x === -200 && sb2[0].y === -500; sel = []; refresh(); // edge field typed, 0 = on the boundary
     out.ok3d = false; document.getElementById('b3d').click(); await wait(1200);
     if (ui.view3d && T3 && T3.fit) {
       out.ok3d = true; let n = 0; T3.scene.traverse(o => { if (o.userData.zoneId) n++; }); out.z3d = n;
@@ -2394,11 +2396,11 @@ check('site zones (#150): draw a zone with the mouse, panel type + curb, parcel 
     out.ifc = ifcFromExchange(revitExport(P)).split('IFCGEOGRAPHICELEMENT(').length - 1;
     return out;
   })()`);
-  if (!r.drawn || !r.panel) return 'drawing a zone with the mouse / editing it in the panel failed: ' + JSON.stringify(r);
-  if (!r.setback || !r.svg || r.rooms !== 0 || !r.ctx || !r.undo) return 'parcel setback / export / context / undo failed: ' + JSON.stringify(r);
-  if (r.ifc !== 2) return 'IFC should carry the path and the parcel: ' + JSON.stringify(r);
+  if (!r.drawn || !r.panel) throw new Error('drawing a zone with the mouse / editing it in the panel failed: ' + JSON.stringify(r));
+  if (!r.setback || !r.svg || r.rooms !== 0 || !r.ctx || !r.undo || !r.edge0) throw new Error('parcel setback / export / context / undo failed: ' + JSON.stringify(r));
+  if (r.ifc !== 2) throw new Error('IFC should carry the path and the parcel: ' + JSON.stringify(r));
   if (!r.ok3d) return 'skipped 3D (WebGL unavailable); 2D + panel + IFC ok';
-  if (r.z3d !== 2 || r.walk !== -4) return '3D zones / walking on the 15 cm curb (ground −21 + 2 + 15) wrong: ' + JSON.stringify(r);
+  if (r.z3d !== 2 || r.walk !== -4) throw new Error('3D zones / walking on the 15 cm curb (ground −21 + 2 + 15) wrong: ' + JSON.stringify(r));
   return 'mouse-drawn zone, panel path + 15 cm curb, 3 m setback, upper-floor context, not a room, 3D + walk on curb, IFC';
 });
 

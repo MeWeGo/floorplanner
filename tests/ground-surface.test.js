@@ -383,7 +383,8 @@ test('(13) terrainBox, terrainObj, terrainZ in sandbox', () => {
     const contentBounds = () => ({ x0: 0, y0: 0, x1: 1000, y1: 700 });
     ${markerBlock(src, 'GROUND-PARAM')}
     ${markerBlock(src, 'SURF-SLOPE')}
-    let _terr = { key: null, o: null };
+    let _terr = { key: null, o: null }, terrRev = 0;
+    ${fnSrcOf(src, 'terrainRing')}
     ${fnSrcOf(src, 'terrainBox')}
     ${fnSrcOf(src, 'terrainObj')}
     ${fnSrcOf(src, 'terrainZ')}
