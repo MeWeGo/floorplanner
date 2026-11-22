@@ -2258,6 +2258,150 @@ check('light fixtures: placed on the ceiling, panel on / off and brightness, roo
   return 'on the ceiling at ' + r.elev + ' cm, panel + room switch + undo + storey height + export + IFC round trip';
 });
 
+check('3D ground surface (#147): panel picks the surface, undo restores it, hidden ground, live view + render studio use it and restore', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(async () => {
+    const out = {}, wait = ms => new Promise(res => setTimeout(res, ms));
+    const pick = (p, v) => { const el = document.querySelector('#props [data-k="ground"][data-p="' + p + '"]'); if (!el) return false; el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); return true; };
+    out.autoMap = !!T3.ground.material.map;
+    out.panel = pick('kind', 'sand'); await wait(400); build3D(true);
+    out.kind = P.ground && P.ground.kind; out.sandMap = !!T3.ground.material.map;
+    const col = () => { set3DCam('top'); draw3D(performance.now()); const cv = T3.r.domElement, c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0); const d = g.getImageData(4, 4, 1, 1).data; return [d[0], d[1], d[2]]; };
+    out.sand = col();
+    pick('kind', 'asphalt'); await wait(400); build3D(true); out.asphalt = col();
+    undo(); await wait(300); build3D(true); out.undoKind = P.ground && P.ground.kind;
+    pick('kind', 'none'); await wait(300); build3D(true); out.hidden = T3.ground.visible === false;
+    pick('kind', 'grass'); await wait(300); build3D(true);
+    const p0 = T3.r.info.programs.length; setLive3D(true); await wait(400);
+    out.live = T3.ground.material.type === 'MeshPhongMaterial' && !!T3.ground.material.map;
+    const before = T3.ground.material;
+    await render3DHQ({ style: 'realistic', longSide: 480, frames: 1 }); await render3DHQ({ style: 'technical', backdrop: 'studio', longSide: 480, frames: 1 });
+    out.restored = T3.ground.material === before;
+    setLive3D(false); await wait(300); out.cadBack = T3.ground.material.type === 'MeshLambertMaterial';
+    out.progs = T3.r.info.programs.length - p0;
+    return out;
+  })()`);
+  await page.evaluate(`(() => { setLive3D(false); show3D(false); })()`);
+  const lum = c => c[0] + c[1] + c[2];
+  if (r.autoMap) return 'auto ground must stay the old untextured CAD colour: ' + JSON.stringify(r);
+  if (!r.panel || r.kind !== 'sand' || !r.sandMap) return 'the project panel did not switch the ground to sand: ' + JSON.stringify(r);
+  if (!(lum(r.sand) > lum(r.asphalt) + 60)) return 'sand should read much lighter than asphalt from above: ' + JSON.stringify(r);
+  if (r.undoKind !== 'sand') return 'undo did not restore the previous ground: ' + JSON.stringify(r);
+  if (!r.hidden) return 'kind none must hide the ground: ' + JSON.stringify(r);
+  if (!r.live || !r.restored || !r.cadBack) return 'live view / render studio did not use or restore the ground: ' + JSON.stringify(r);
+  return 'sand ' + r.sand + ' vs asphalt ' + r.asphalt + ', undo ok, hidden ok, live + 2 renders restored, ' + r.progs + ' new programs';
+});
+
+check('ground datum (#148): plinth skirt, merged basement excavation with earth sides, section earth hatch, walking outside on the ground', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 1000, 700); commit();
+    addBasement(); fi = 0; addRectWalls(0, 0, 1000, 700); addRectWalls(800, 400, 1300, 900);
+    fi = 1; P.ground = { plinth: 100 }; commit(); refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(() => {
+    const out = {};
+    out.cuts = groundCuts(true).map(c => ({ n: c.pts.length, bot: c.bot }));
+    out.gy = groundY3D(); out.datum = groundDatum3D();
+    let plinth = 0, earth = 0; T3.scene.traverse(o => { if (o.userData.plinth) plinth++; if (o.isMesh && o.userData.fpDecal && o.material && o.material.polygonOffset) earth++; });
+    out.plinth = plinth; out.earth = earth;
+    enterWalk({ i: 1, x: 500, y: -400 }); out.walkOut = T3.walk.gz; exitWalk(false);
+    enterWalk({ i: 1, x: 500, y: 350 }); out.walkIn = T3.walk.gz; exitWalk(false);
+    show3D(false);
+    P.floors[1].sections = [{ id: 'sA', name: 'A', a: { x: -300, y: 300 }, b: { x: 1700, y: 300 }, dir: 1 }];
+    const sv = archSvg(sectionSpec(P.floors[1].sections[0]), 'A'); out.hatch = !!sv && sv.svg.includes('url(#earthH)');
+    out.noGround = (() => { P.ground = {}; cleanGround(P); return !P.ground; })();
+    return out;
+  })()`);
+  if (r.cuts.length !== 1 || r.cuts[0].bot !== -310 || r.cuts[0].n < 6) return 'the overlapping basement footprints should merge into one L-shaped cut down to -310: ' + JSON.stringify(r);
+  if (r.gy !== r.datum - 101) return 'the ground should lie plinth + 1 cm below ±0.00: ' + JSON.stringify(r);
+  if (r.plinth < 1 || r.earth < 1) return 'missing plinth skirt or earth sides in 3D: ' + JSON.stringify(r);
+  if (r.walkOut !== -101 || r.walkIn !== 0) return 'walking outside should stand on the ground (-101), inside on the floor (0): ' + JSON.stringify(r);
+  if (!r.hatch || !r.noGround) return 'section earth hatch / default ground cleanup failed: ' + JSON.stringify(r);
+  return 'one L cut to -310, skirt + earth sides, outside -101 / inside 0, section hatch';
+});
+
+check('terrain (#149): hillside preset, contours in the export, point add / drag / delete with the mouse, 3D terrain, tree on the terrain, walk on the hill, IFC terrain', async page => {
+  const r = await page.evaluate(`(async () => {
+    show3D(false); closeModal();
+    const wait = ms => new Promise(res => setTimeout(res, ms)), out = {};
+    loadProject(newProject()); addRectWalls(0, 0, 1000, 700); commit();
+    terrainPreset('hill'); terrainPad();
+    F().furn.push(mkFurn(BYID.tree, 1500, -600)); P.ground.snap = true; commit(); refresh();
+    out.hill = Math.round(terrainZ(-800, -800)); out.svg = exportSvg().svg.includes('class="terrain"');
+    setTool('terrain'); fit(); render();
+    const n0 = groundP(P).tp.length, cvr = cv.getBoundingClientRect();
+    const ev = (type, w) => { const s = w2s(w); cv.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, isPrimary: true, button: 0, pointerType: 'mouse', clientX: cvr.left + s.x, clientY: cvr.top + s.y })); };
+    ev('pointerdown', { x: 300, y: 300 }); ev('pointerup', { x: 300, y: 300 }); out.added = groundP(P).tp.length - n0;
+    const i = groundP(P).tp.length - 1;
+    ev('pointerdown', { x: 300, y: 300 }); ev('pointermove', { x: 420, y: 330 }); ev('pointerup', { x: 420, y: 330 }); out.dragX = Math.round(groundP(P).tp[i].x);
+    out.panel = !!document.querySelector('#props [data-k="tp"]');
+    deleteSel(); out.afterDel = groundP(P).tp.length - n0; undo(); out.undo = groundP(P).tp.length - n0;
+    setTool('select'); out.ok3d = false;
+    document.getElementById('b3d').click(); await wait(1200);
+    if (ui.view3d && T3 && T3.fit) {
+      out.ok3d = true; let t = 0; T3.scene.traverse(o => { if (o.userData.terrain) t++; }); out.terr = t;
+      let y = null; T3.scene.traverse(o => { if (o.userData.furnId && F().furn.some(x => x.id === o.userData.furnId && x.type === 'tree')) y = Math.round(new THREE.Box3().setFromObject(o).min.y); });
+      out.tree = y - Math.round(groundDatum3D() + terrainZ(1500, -600));
+      enterWalk({ i: fi, x: -800, y: -800 }); out.walk = Math.round(T3.walk.gz) - Math.round(terrainZ(-800, -800) - 1); exitWalk(false);
+      show3D(false);
+    }
+    out.ifc = /IFCGEOGRAPHICELEMENT\([^;]*\.TERRAIN\.\)/.test(ifcFromExchange(revitExport(P)));
+    return out;
+  })()`);
+  if (!(r.hill > 300) || !r.svg) return 'hillside preset / 2D contours missing: ' + JSON.stringify(r);
+  if (r.added !== 1 || r.dragX !== 420 || !r.panel || r.afterDel !== 0 || r.undo !== 1) return 'terrain tool add / drag / delete / undo failed: ' + JSON.stringify(r);
+  if (!r.ifc) return 'IFC export has no terrain: ' + JSON.stringify(r);
+  if (!r.ok3d) return 'skipped 3D (WebGL unavailable); 2D + tool + IFC ok';
+  if (r.terr !== 1 || Math.abs(r.tree) > 2 || Math.abs(r.walk) > 2) return 'terrain mesh / tree on terrain / walk on hill wrong: ' + JSON.stringify(r);
+  return 'hill ' + r.hill + ' cm, tool add/drag/delete/undo ok, terrain mesh, tree on terrain, walk on hill, IFC terrain';
+});
+
+check('site zones (#150): draw a zone with the mouse, panel type + curb, parcel setback, context on other floors, not a room, 3D + walk on the curb, IFC', async page => {
+  const r = await page.evaluate(`(async () => {
+    show3D(false); closeModal();
+    const wait = ms => new Promise(res => setTimeout(res, ms)), out = {};
+    loadProject(newProject()); addRectWalls(0, 0, 1000, 700); commit();
+    P.floors.push(newFloor('1')); commit(); fi = 0; refresh(); fit(); render();
+    setTool('zone');
+    const cvr = cv.getBoundingClientRect(), ev = (type, w) => { const s = w2s(w); cv.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, isPrimary: true, button: 0, pointerType: 'mouse', clientX: cvr.left + s.x, clientY: cvr.top + s.y })); };
+    ev('pointerdown', { x: 1200, y: 0 }); ev('pointermove', { x: 1400, y: 400 }); ev('pointermove', { x: 1600, y: 700 }); ev('pointerup', { x: 1600, y: 700 });
+    const z = F().zones[0]; out.drawn = !!z && z.pts.length === 4 && z.zt === 'lawn';
+    sel = [z.id]; setTool('select'); renderProps();
+    const pick = (p, v) => { const el = document.querySelector('#props [data-k="zone"][data-p="' + p + '"]'); if (!el) return false; el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); return true; };
+    out.panel = pick('zt', 'path') && pick('curb', '15') && z.zt === 'path' && z.curb === 15 && ui.zoneT === 'path';
+    F().zones.push(mkZone([{ x: -500, y: -500 }, { x: 2200, y: -500 }, { x: 2200, y: 1300 }, { x: -500, y: 1300 }], 'parcel')); F().zones[1].setback = 300; F().zones[1].name = 'Lot 9'; commit(); sel = []; refresh();
+    const sb = zoneSetback(F().zones[1]); out.setback = sb && sb[0].x === -200 && sb[0].y === -200;
+    out.svg = exportSvg().svg.includes('Lot 9'); out.rooms = F().rooms.length;
+    fi = 1; refresh(); out.ctx = exportSvg().svg.includes('opacity="0.35"'); fi = 0; refresh();
+    undo(); out.undo = F().zones.length === 1; redo();
+    out.ok3d = false; document.getElementById('b3d').click(); await wait(1200);
+    if (ui.view3d && T3 && T3.fit) {
+      out.ok3d = true; let n = 0; T3.scene.traverse(o => { if (o.userData.zoneId) n++; }); out.z3d = n;
+      enterWalk({ i: 0, x: 1400, y: 350 }); out.walk = Math.round(T3.walk.gz); exitWalk(false); show3D(false);
+    }
+    out.ifc = ifcFromExchange(revitExport(P)).split('IFCGEOGRAPHICELEMENT(').length - 1;
+    return out;
+  })()`);
+  if (!r.drawn || !r.panel) return 'drawing a zone with the mouse / editing it in the panel failed: ' + JSON.stringify(r);
+  if (!r.setback || !r.svg || r.rooms !== 0 || !r.ctx || !r.undo) return 'parcel setback / export / context / undo failed: ' + JSON.stringify(r);
+  if (r.ifc !== 2) return 'IFC should carry the path and the parcel: ' + JSON.stringify(r);
+  if (!r.ok3d) return 'skipped 3D (WebGL unavailable); 2D + panel + IFC ok';
+  if (r.z3d !== 2 || r.walk !== -4) return '3D zones / walking on the 15 cm curb (ground −21 + 2 + 15) wrong: ' + JSON.stringify(r);
+  return 'mouse-drawn zone, panel path + 15 cm curb, 3 m setback, upper-floor context, not a room, 3D + walk on curb, IFC';
+});
+
 check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light pool (no new shaders), 30 lamps build fast (#121)', async page => {
   await page.evaluate(`(() => {
     show3D(false); closeModal();
