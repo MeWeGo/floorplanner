@@ -1616,7 +1616,17 @@ function zoomAt(f, sx, sy) {
     zoomLimT = Date.now();
     toast(f > 1 ? L('En yakın yakınlaştırma (1 mm = 4 px) · 0: sığdır', 'Maximum zoom (1 mm = 4 px) · 0: fit') : L('En uzak görünüm · 0: sığdır', 'Minimum zoom · 0: fit'));
   }
-  view.z = nz; view.x = sx - wx * nz; view.y = sy - wy * nz; scheduleRender();
+  view.z = nz; view.x = sx - wx * nz; view.y = sy - wy * nz; zoomPreview();
+}
+/* Yakınlaştırma önizlemesi: tekerlek / sıkıştırma sürerken katmanlar yeniden kurulmaz (büyük planda her adım tüm SVG'yi
+   ayrıştırıp boyuyordu), yalnızca dönüşüm + ızgara güncellenir (kaydırma gibi); hareket ZOOM_SETTLE ms durunca tek bir tam
+   çizim çizgi kalınlıklarını / yazı boylarını yeni yakınlığa göre keskinleştirir. */
+const ZOOM_SETTLE = 140;
+let zoomSettleT = 0;
+function zoomPreview() {
+  scheduleRender(false);
+  clearTimeout(zoomSettleT);
+  zoomSettleT = setTimeout(() => { zoomSettleT = 0; scheduleRender(true); }, ZOOM_SETTLE);
 }
 function fit() {
   if (typeof collabStopFollow === 'function' && typeof collab !== 'undefined' && !collab.followApplying && !collab.applying) collabStopFollow(false);
@@ -1683,11 +1693,27 @@ function gridStepLabel(cm) {
   if (cm >= 100) { const m = cm / 100; return (Number.isInteger(m) ? m : +m.toFixed(2)) + ' m'; }
   return +(Math.round(cm * 10) / 10) + ' cm';
 }
+/* Izgara karosu (desen ile doğrudan çizim aynı gövdeyi kullanır): kind = 'square' | 'triangle' | 'dots', major = ana ızgara.
+   Döner { w, h, body } (dünya cm'si, karo 0,0'dan döşenir). */
+function gridTile(kind, step, major, C = pal()) {
+  const col = major ? C.gMaj : C.gMin, sw = (major ? 0.95 : 0.65) / view.z;
+  if (kind === 'triangle') {
+    const h = +(step * Math.sqrt(3) / 2).toFixed(4), h2 = +(2 * h).toFixed(4), s = step;
+    return { w: s, h: h2, body: `<path d="M0 0H${s}M0 ${h}H${s}M0 0L${s / 2} ${h}L0 ${h2}M${s / 2} 0L${s} ${h}L${s / 2} ${h2}M${s / 2} 0L0 ${h}L${s / 2} ${h2}M${s} 0L${s / 2} ${h}L${s} ${h2}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-opacity="${major ? 0.75 : 0.8}"/>` };
+  }
+  if (kind === 'dots') {
+    const r = major ? Math.max(1.8, 2.3 / view.z) : Math.max(1.1, 1.5 / view.z);
+    return { w: step, h: step, body: `<circle cx="0" cy="0" r="${r}" fill="${major ? C.dotMaj : C.gMaj}" fill-opacity="${major ? 0.95 : 0.8}"/>` };
+  }
+  return { w: step, h: step, body: `<path d="M${step} 0V${step}H0" fill="none" stroke="${col}" stroke-width="${sw}" stroke-opacity="${major ? 0.85 : 0.8}"/>` };
+}
+/* Ekranda bundan büyük karo desen olarak çizilmez: tarayıcı deseni karo boyunda rasterleştirir; 4 m adımda ana karo 20 m
+   = yakınlaştırınca binlerce px'lik bitmap (zayıf GPU'da kaydırma / yakınlaştırma takılıyordu). Bu kadar seyrek ızgarada
+   ekranda zaten birkaç karo vardır: doğrudan çizilir. */
+const GRID_TILE_MAX = 512;
+function gridPat(id, kind, step, major, C) { const t = gridTile(kind, step, major, C); return `<pattern id="${id}" width="${t.w}" height="${t.h}" patternUnits="userSpaceOnUse">${t.body}</pattern>`; }
 function defsSvg() {
   const C = pal(), G = gridScale(), s = G.minor || Math.max(1, +P.grid || 1), ms = G.major;
-  const h = +(s * Math.sqrt(3) / 2).toFixed(4), h2 = +(2 * h).toFixed(4);
-  const mh = +(ms * Math.sqrt(3) / 2).toFixed(4), mh2 = +(2 * mh).toFixed(4);
-  const swMin = 0.65 / view.z, swMaj = 0.95 / view.z, rDot = Math.max(1.1, 1.5 / view.z), rDotM = Math.max(1.8, 2.3 / view.z);
   return `
   <pattern id="p-wood" width="120" height="24" patternUnits="userSpaceOnUse"><path d="M0 0H120M0 12H120M40 0V12M90 12V24" stroke="${C.wood}" stroke-opacity=".3" fill="none" stroke-width="1"/></pattern>
   <pattern id="p-tile" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M0 0H60V60" stroke="${C.tile}" stroke-opacity=".32" fill="none" stroke-width="1"/></pattern>
@@ -1702,12 +1728,12 @@ function defsSvg() {
   <pattern id="p-deck" width="120" height="15" patternUnits="userSpaceOnUse"><path d="M0 0.5H120M0 2H120M75 2V15" stroke="${C.deck}" stroke-opacity=".45" fill="none" stroke-width="1"/><circle cx="8" cy="8.5" r=".8" fill="${C.deck}" fill-opacity=".5"/><circle cx="68" cy="8.5" r=".8" fill="${C.deck}" fill-opacity=".5"/></pattern>
   <pattern id="p-asphalt" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="20" height="20" fill="${C.asphalt}" fill-opacity=".16"/><g fill="${C.asphalt}" fill-opacity=".5"><circle cx="3" cy="4" r=".7"/><circle cx="11" cy="2" r=".5"/><circle cx="16" cy="9" r=".7"/><circle cx="7" cy="12" r=".5"/><circle cx="14" cy="17" r=".6"/><circle cx="2" cy="17" r=".5"/></g></pattern>
   ${texPatterns()}
-  <pattern id="g-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><path d="M${s} 0V${s}H0" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
-  <pattern id="g-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><path d="M${ms} 0V${ms}H0" fill="none" stroke="${C.gMaj}" stroke-width="${swMaj}" stroke-opacity=".85"/></pattern>
-  <pattern id="g-tri-minor" width="${s}" height="${h2}" patternUnits="userSpaceOnUse"><path d="M0 0H${s}M0 ${h}H${s}M0 0L${s / 2} ${h}L0 ${h2}M${s / 2} 0L${s} ${h}L${s / 2} ${h2}M${s / 2} 0L0 ${h}L${s / 2} ${h2}M${s} 0L${s / 2} ${h}L${s} ${h2}" fill="none" stroke="${C.gMin}" stroke-width="${swMin}" stroke-opacity=".8"/></pattern>
-  <pattern id="g-tri-major" width="${ms}" height="${mh2}" patternUnits="userSpaceOnUse"><path d="M0 0H${ms}M0 ${mh}H${ms}M0 0L${ms / 2} ${mh}L0 ${mh2}M${ms / 2} 0L${ms} ${mh}L${ms / 2} ${mh2}M${ms / 2} 0L0 ${mh}L${ms / 2} ${mh2}M${ms} 0L${ms / 2} ${mh}L${ms} ${mh2}" fill="none" stroke="${C.gMaj}" stroke-width="${swMaj}" stroke-opacity=".75"/></pattern>
-  <pattern id="g-dots-minor" width="${s}" height="${s}" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDot}" fill="${C.gMaj}" fill-opacity=".8"/></pattern>
-  <pattern id="g-dots-major" width="${ms}" height="${ms}" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r="${rDotM}" fill="${C.dotMaj}" fill-opacity=".95"/></pattern>`;
+  ${gridPat('g-minor', 'square', s, false, C)}
+  ${gridPat('g-major', 'square', ms, true, C)}
+  ${gridPat('g-tri-minor', 'triangle', s, false, C)}
+  ${gridPat('g-tri-major', 'triangle', ms, true, C)}
+  ${gridPat('g-dots-minor', 'dots', s, false, C)}
+  ${gridPat('g-dots-major', 'dots', ms, true, C)}`;
 }
 function gridSvg() {
   const gt = P.gridType || 'square';
@@ -1717,9 +1743,19 @@ function gridSvg() {
   let out = '';
   const minId = gt === 'triangle' ? 'g-tri-minor' : gt === 'dots' ? 'g-dots-minor' : 'g-minor';
   const majId = gt === 'triangle' ? 'g-tri-major' : gt === 'dots' ? 'g-dots-major' : 'g-major';
-  if (G.minor) out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${minId})" pointer-events="none"/>`;
+  // karo ekranda GRID_TILE_MAX'tan büyükse desen yerine görünen karolar doğrudan (en çok birkaç düzine)
+  const layer = (id, step, major) => {
+    const t = gridTile(gt, step, major);
+    if (t.w * view.z <= GRID_TILE_MAX && t.h * view.z <= GRID_TILE_MAX) return `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${id})" pointer-events="none"/>`;
+    const i0 = Math.floor(x0 / t.w) - 1, i1 = Math.ceil((x0 + w) / t.w), j0 = Math.floor(y0 / t.h) - 1, j1 = Math.ceil((y0 + h) / t.h);
+    if ((i1 - i0 + 1) * (j1 - j0 + 1) > 400) return `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${id})" pointer-events="none"/>`; // güvenlik
+    let g = '';
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) g += `<g transform="translate(${i * t.w} ${j * t.h})">${t.body}</g>`;
+    return `<g pointer-events="none">${g}</g>`;
+  };
+  if (G.minor) out += layer(minId, G.minor, false);
   // Ana ızgara hiçbir yakınlaştırmada kaybolmaz; aralığı gridScale() büyütür (issue #38)
-  out += `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="url(#${majId})" pointer-events="none"/>`;
+  out += layer(majId, G.major, true);
   return out;
 }
 function bgSvg(live = true) {
@@ -5553,26 +5589,34 @@ function handleSvg() {
 let rq = 0, rqFull = false;
 function scheduleRender(full = true) { rqFull = rqFull || full; if (!rq) rq = requestAnimationFrame(flushRender); }
 function flushRender() { rq = 0; if (rqFull) render(); else renderView(); }
-function renderView() { if (!P) return; applyView(); $('#gGrid').innerHTML = gridSvg(); }
+function renderView() { if (!P) return; applyView(); setLayerHtml('gGrid', gridSvg()); }
+/* Katman yazımı: içerik değişmediyse DOM'a dokunulmaz. SVG metnini üretmek ucuz (büyük planda ~1 ms), tarayıcının onu
+   ayrıştırıp yeniden boyaması pahalı (~15 ms+); bir eşya sürüklenirken duvar / oda / ölçü katmanları her karede aynı metni
+   yeniden ayrıştırıyordu. Bu gruplara render() dışında yazan ya da içindeki öğeyi yerinde değiştiren kod yoktur. */
+function setLayerHtml(id, html) {
+  const el = document.getElementById(id); if (!el) return;
+  if (el._fpHtml === html && el._fpN === el.childNodes.length) return;
+  el.innerHTML = html; el._fpHtml = html; el._fpN = el.childNodes.length;
+}
 function render() {
   if (rq) { cancelAnimationFrame(rq); rq = 0; }
   rqFull = false;
   if (!P) return;
   const f = F();
   syncAccWalls(f); // sürüklerken / döndürürken akordiyon duvar canlı uzar
-  $('#defs').innerHTML = defsSvg();
+  setLayerHtml('defs', defsSvg());
   applyView();
-  $('#gBg').innerHTML = (layersVis.bg ? bgSvg() : '') + underlaySvg();
-  $('#gGrid').innerHTML = gridSvg();
+  setLayerHtml('gBg', (layersVis.bg ? bgSvg() : '') + underlaySvg());
+  setLayerHtml('gGrid', gridSvg());
   const L = layerStrings(f, true);
-  $('#gRooms').innerHTML = layersVis.rooms ? L.rooms : '';
-  $('#gWalls').innerHTML = layersVis.walls ? L.walls : '';
-  $('#gOps').innerHTML = layersVis.walls ? L.ops : '';
-  $('#gFurn').innerHTML = layersVis.furn ? L.furn : '';
-  $('#gDims').innerHTML = layersVis.dims ? L.dims : '';
-  $('#gTexts').innerHTML = (layersVis.rooms ? L.roomLabels : '') + L.texts;
-  $('#gSketch').innerHTML = layersVis.sketch ? L.sketches : '';
-  $('#gSel').innerHTML = handleSvg();
+  setLayerHtml('gRooms', layersVis.rooms ? L.rooms : '');
+  setLayerHtml('gWalls', layersVis.walls ? L.walls : '');
+  setLayerHtml('gOps', layersVis.walls ? L.ops : '');
+  setLayerHtml('gFurn', layersVis.furn ? L.furn : '');
+  setLayerHtml('gDims', layersVis.dims ? L.dims : '');
+  setLayerHtml('gTexts', (layersVis.rooms ? L.roomLabels : '') + L.texts);
+  setLayerHtml('gSketch', layersVis.sketch ? L.sketches : '');
+  setLayerHtml('gSel', handleSvg());
   drawPreview();
 }
 
@@ -7349,7 +7393,7 @@ function cvMove(e) {
         if (typeof collabStopFollow === 'function') collabStopFollow(true);
         const nz = pinch.d0 > 4 && d > 4 ? clamp(pinch.z0 * d / pinch.d0, MIN_ZOOM, MAX_ZOOM) : view.z;
         view.z = nz; view.x = mx - pinch.wx * nz; view.y = my - pinch.wy * nz;
-        scheduleRender();
+        zoomPreview();
       }
       return;
     }

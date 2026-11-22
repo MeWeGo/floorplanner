@@ -94,7 +94,7 @@ test('wiring: glyphs, placement, panel controls and the underlay layer', () => {
   assert.match(gl, /L\('Orta nokta', 'Midpoint'\)/); assert.match(gl, /L\('Merkez', 'Center'\)/);
   assert.match(fnSrc('updateGhost'), /nearCenter\(/, 'furniture placement does not lock to the room centre');
   assert.match(fnSrc('doMove'), /nearCenter\(/, 'moving furniture does not lock to the room centre');
-  assert.match(src, /\$\('#gBg'\)\.innerHTML = [^\n]*underlaySvg\(\)/, 'the underlay is not rendered');
+  assert.match(src, /setLayerHtml\('gBg', [^\n]*underlaySvg\(\)/, 'the underlay is not rendered');
   assert.doesNotMatch(src, /fi > 0 \? `<g opacity="\.18"/, 'the old hard-coded underlay is back');
   const us = fnSrc('underlaySvg');
   assert.match(us, /pointer-events="none"/); assert.match(us, /isStructFurn/); assert.match(us, /uf\.slabs/); assert.match(us, /voidSvg/);
