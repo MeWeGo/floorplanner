@@ -293,3 +293,78 @@ test('2: round-trip via ifcToProject preserves floors, walls, openings, slab+voi
   // Level-1 item lands on floor 2
   assert.strictEqual(f1.furn.length, 1, 'level-1 item lands on floor 2');
 });
+
+test('3: strict-reader fixes: header view, fence ObjectType, floor covering Pset, clean polylines, unit directions, merged -0 vertices', () => {
+  const { exchange } = buildExchange();
+  exchange.walls.push({ id: 'wf', level: 'L0', a: pt(0, 700), b: pt(300, 700), t: ft(8), h: ft(110), base: 0, kind: 'fence' });
+  // a slab loop with a repeated point and an explicit closing point
+  exchange.floors.push({ id: 'dup', level: 'L0', kind: 'free', top: ft(10), t: ft(10), loops: [[pt(600, 0), pt(700, 0), pt(700, 0), pt(700, 100), pt(600, 100), pt(600, 0)]] });
+  // a box straddling the origin of its own frame: coordinates like ±1e-7 must give one vertex, not two
+  const tiny = 1e-7 * 30.48;
+  exchange.items.push({ id: 'it2', level: 'L0', type: 'box', cat: 'furniture', name: 'Box', at: [0, 0], rot: 0, elev: 0, w: 1, d: 1, h: 1, mats: [],
+    faces: M.rvPlace(M.rvPartFaces({ type: 'box', x: 0, y: 0, z: 0, w: 60, d: 60, h: 60 }), { x: tiny, y: -tiny, rot: 0, w: 60, d: 60, h: 60 }, 0).map(q => ({ p: q, m: 0, s: 0 })) });
+  const text = ifcFromExchange(exchange, { random: makeRng(7), date: '2026-01-15T10:30:00.000Z' });
+  assert.match(text, /FILE_DESCRIPTION\(\('ViewDefinition \[DesignTransferView\]'\)/, 'openings + breps are Design Transfer View, not Reference View');
+  assert.match(text, /IFCRAILING\('[^']+',\$,'Fence',\$,'Fence',#\d+,#\d+,\$,\.USERDEFINED\.\)/, 'USERDEFINED fence carries an ObjectType');
+  assert.match(text, /'Pset_SpaceCoveringRequirements'/); assert.match(text, /IFCPROPERTYSINGLEVALUE\('FloorCovering'/);
+  assert.doesNotMatch(text, /'Pset_SpaceCommon'/);
+  // no polyline repeats a point back to back
+  const pts = new Map(); for (const m of text.matchAll(/^#(\d+)=IFCCARTESIANPOINT\(\(([^)]*)\)\);$/gm)) pts.set('#' + m[1], m[2]);
+  for (const m of text.matchAll(/IFCPOLYLINE\(\(([^)]*)\)\)/g)) { const ids = m[1].split(','); for (let i = 1; i < ids.length; i++) assert.notStrictEqual(pts.get(ids[i]), pts.get(ids[i - 1]), 'repeated polyline point ' + m[0]); }
+  // every direction has unit length; no -0 in points; every brep face lists unique vertices
+  for (const m of text.matchAll(/IFCDIRECTION\(\(([^)]*)\)\)/g)) near(Math.hypot(...m[1].split(',').map(Number)), 1, 1e-5, 'unit direction');
+  assert.doesNotMatch(text, /IFCCARTESIANPOINT\(\([^)]*-0\.(,|\))/, 'no negative zero');
+  for (const m of text.matchAll(/IFCPOLYLOOP\(\(([^)]*)\)\)/g)) { const ids = m[1].split(','); assert.strictEqual(new Set(ids).size, ids.length, 'unique loop vertices'); }
+  // every shell uses one vertex entity per distinct coordinate (±1e-7 around the origin must not split a corner,
+  // or the faces stop sharing edges and the shell is no longer watertight)
+  assert.ok(text.split('\n').some(l => /IFCFURNITURE\('[^']+',\$,'Box'/.test(l)), 'box exported');
+  const ent = new Map(); for (const m of text.matchAll(/^#(\d+)=([A-Z0-9]+)\((.*)\);$/gm)) ent.set('#' + m[1], { t: m[2], a: m[3] });
+  for (const [, sh] of [...ent].filter(([, e]) => e.t === 'IFCCLOSEDSHELL')) {
+    const vids = new Set();
+    for (const fid of sh.a.slice(1, -1).split(',')) {
+      const bound = ent.get(ent.get(fid).a.slice(1, -1)), loop = ent.get(bound.a.split(',')[0]);
+      for (const v of loop.a.slice(1, -1).split(',')) vids.add(v);
+    }
+    const coords = new Set([...vids].map(v => ent.get(v).a));
+    assert.strictEqual(vids.size, coords.size, 'one vertex per coordinate in a shell');
+  }
+});
+
+test('4: importing a model with raised slabs: furniture height is relative to the slab under it, no duplicate automatic slab', () => {
+  const { exchange } = buildExchange();
+  // the room sits on a 45 cm raised free slab; the sofa stands on it (absolute height 45 cm above the storey)
+  const outer = [[0, 0], [500, 0], [500, 400], [0, 400]].map(([x, y]) => pt(x, y));
+  exchange.floors = [{ id: 'raised', level: 'L0', kind: 'free', loops: [outer], top: ft(45), t: ft(45), finish: 'wood' }];
+  exchange.items[0].elev = ft(45);
+  exchange.items[0].faces = M.rvPlace(M.rvPartFaces({ type: 'box', x: 0, y: 0, z: 0, w: 210, d: 90, h: 85 }), { x: 250, y: 200, rot: 30, w: 210, d: 90, h: 85 }, 45).map(p => ({ p, m: 0, s: 0 }));
+  const text = ifcFromExchange(exchange, { random: makeRng(9), date: '2026-01-15T10:30:00.000Z' });
+  const { project } = ifcToProject(text, { catalog: CATALOG, align: false });
+  const f0 = project.floors[0], slab = f0.slabs.find(sl => Math.abs((sl.off || 0) - 45) <= 1);
+  assert.ok(slab, 'raised slab imported with its 45 cm offset: ' + JSON.stringify(f0.slabs.map(sl => sl.off)));
+  const sofa = f0.furn.find(o => o.type === 'sofa3');
+  assert.ok(sofa, 'sofa imported');
+  assert.ok(!sofa.elev || Math.abs(sofa.elev) <= 1, 'the sofa stands on the slab (elev ≈ 0, the app adds the slab offset), got ' + sofa.elev);
+  assert.strictEqual(f0.noSlab, true, 'the IFC slab covers the rooms → no automatic floor slab on top of it');
+  const f1 = project.floors[1];
+  if (f1 && !f1.slabs.length) assert.ok(!f1.noSlab, 'a storey without IFC slabs keeps its automatic slab');
+});
+
+test('5: the app\'s own item settings (FloorPlanner.Item) come back exactly; position and turn follow the IFC placement; hostile values are defused', () => {
+  const { exchange } = buildExchange();
+  // the mesh is a plain box (so body-based matching would guess other sizes); the stored settings must win
+  exchange.items[0].fp = { type: 'sofa3', name: 'Koltuk ★', icon: '', k: 'sofa', w: 210, d: 90, h: 85, color: '#123456', label: '', custom: [1, 2, 3], evil: 'x"><img src=x onerror=1>', __proto__x: 1 };
+  exchange.items[0].elev = ft(30);
+  exchange.items[0].faces = M.rvPlace(M.rvPartFaces({ type: 'box', x: 0, y: 0, z: 0, w: 150, d: 150, h: 150 }), { x: 250, y: 200, rot: 30, w: 150, d: 150, h: 150 }, 30).map(p => ({ p, m: 0, s: 0 }));
+  const text = ifcFromExchange(exchange, { random: makeRng(11), date: '2026-01-15T10:30:00.000Z' });
+  assert.match(text, /IFCPROPERTYSET\('[^']+',\$,'FloorPlanner'/);
+  assert.match(text, /IFCPROPERTYSINGLEVALUE\('FloorPlannerItem',\$,IFCTEXT\('[\x20-\x7e]*'\)/, 'the JSON is plain ASCII');
+  const { project } = ifcToProject(text, { catalog: CATALOG, align: false });
+  const f0 = project.floors[0], sofa = f0.furn.find(o => o.type === 'sofa3');
+  assert.ok(sofa, 'sofa restored');
+  assert.deepStrictEqual([sofa.w, sofa.d, sofa.h, sofa.color, sofa.name, sofa.k], [210, 90, 85, '#123456', 'Koltuk ★', 'sofa']);
+  assert.deepStrictEqual(sofa.custom, [1, 2, 3], 'other item fields survive');
+  near(((sofa.rot % 360) + 360) % 360, 30, 0.5, 'turn from the placement');
+  near(sofa.elev, 30, 1, 'height above the floor');
+  assert.ok(!/["<>]/.test(sofa.evil), 'quotes and angle brackets are stripped: ' + sofa.evil);
+  assert.strictEqual(f0.furn.filter(o => o.type === 'sofa3' || o.type === 'shape').length, 1, 'imported once, not also as a shape');
+});
