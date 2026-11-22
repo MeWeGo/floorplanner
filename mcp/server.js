@@ -113,19 +113,21 @@ const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
 // height above the floor (cm) that wall-mounted catalogue items get by default — mirror of app.js CAT_ELEV (#61)
 const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110, sconce: 170, wallOut: 220, tableLamp: 75 };
 /* GROUND-PARAM:BEGIN — proje zemini (#147): saf JS, mcp/server.js ile birebir aynı (tests/ground-surface.test.js karşılaştırır).
-   P.ground = { kind?, color?, scale? } isteğe bağlı; yok = 'auto' (CAD'de tema rengi, gerçekçi görünümde çim: eski görünüm).
+   P.ground = { kind?, color?, scale?, plinth? } isteğe bağlı; yok = 'auto' (CAD'de tema rengi, gerçekçi görünümde çim: eski görünüm).
    kind: hazır yüzeyler, 'studio' (nötr açık zemin), 'none' (zemin gizli) ya da proje dokusu 'tex:<id>'. color = ton (#rrggbb),
    scale = dokunun bir tekrarı (cm). groundP() tek okuyucu, cleanGround() normalizeProject'te geçersizleri ve varsayılanları siler. */
 const GROUND_KINDS = ['auto', 'grass', 'soil', 'sand', 'gravel', 'asphalt', 'concrete', 'stone', 'snow', 'water', 'studio', 'none'];
 const GROUND_COL = { grass: '#78b84a', soil: '#8a6748', sand: '#e2cfa3', gravel: '#b3ada3', asphalt: '#5a5e64', concrete: '#c9c5bd', stone: '#a29b90', snow: '#f4f7fa', water: '#3f86ae', studio: '#ece9e2' };
 const GROUND_TILE = { grass: 240, soil: 320, sand: 360, gravel: 140, asphalt: 420, concrete: 300, stone: 240, snow: 480, water: 600, studio: 400 }; // cm / tekrar
 const GROUND_SCALE_MIN = 20, GROUND_SCALE_MAX = 5000;
+const GROUND_PLINTH_DEF = 20, GROUND_PLINTH_MAX = 300; // subasman (#148): ±0.00'ın toprağın üstündeki yüksekliği (cm); 20 = eski görünüm
 function groundP(P) {
   const g = P && P.ground && typeof P.ground === 'object' ? P.ground : {}, k = typeof g.kind === 'string' ? g.kind : '';
   const kind = GROUND_KINDS.includes(k) || /^tex:[\w-]{1,32}$/.test(k) ? k : 'auto';
   const color = typeof g.color === 'string' && /^#[0-9a-f]{6}$/i.test(g.color) ? g.color.toLowerCase() : null;
   const sc = +g.scale, scale = Number.isFinite(sc) && sc > 0 ? Math.round(Math.max(GROUND_SCALE_MIN, Math.min(GROUND_SCALE_MAX, sc))) : null;
-  return { kind, color, scale };
+  const pl = +g.plinth, plinth = Number.isFinite(pl) && g.plinth !== null && g.plinth !== '' ? Math.round(Math.max(0, Math.min(GROUND_PLINTH_MAX, pl))) : GROUND_PLINTH_DEF;
+  return { kind, color, scale, plinth };
 }
 function cleanGround(P) {
   if (!P || P.ground == null) return;
@@ -133,6 +135,7 @@ function cleanGround(P) {
   if (g.kind !== 'auto') o.kind = g.kind;
   if (g.color && g.kind !== 'none') o.color = g.color;
   if (g.scale && g.kind !== 'none' && g.scale !== GROUND_TILE[g.kind]) o.scale = g.scale;
+  if (g.plinth !== GROUND_PLINTH_DEF) o.plinth = g.plinth;
   if (Object.keys(o).length) P.ground = o; else delete P.ground;
 }
 /* GROUND-PARAM:END */
@@ -3296,7 +3299,7 @@ function mkVoid(f, a) {
 function summarize() {
   const p = proj();
   const out = [];
-  const gr = groundP(p); if (gr.kind !== 'auto' || gr.color || gr.scale) out.push('3D ground: ' + gr.kind + (gr.color ? ', tint ' + gr.color : '') + (gr.scale ? ', texture ' + gr.scale + ' cm' : ''));
+  const gr = groundP(p); if (gr.kind !== 'auto' || gr.color || gr.scale || gr.plinth !== GROUND_PLINTH_DEF) out.push('3D ground: ' + gr.kind + (gr.color ? ', tint ' + gr.color : '') + (gr.scale ? ', texture ' + gr.scale + ' cm' : '') + ', plinth ' + gr.plinth + ' cm (ground below ±0.00)');
   out.push('Project "' + p.name + '" — schema v' + p.v + ', grid ' + p.grid + ' cm (' + p.gridType + '), default wall ' + p.wallT + ' cm × ' + p.wallH + ' cm high, ' + p.floors.length + ' floor(s)');
   if ((p.textures || []).length) out.push('Custom textures: ' + p.textures.map(t => 'tex:' + t.id + ' "' + t.name + '" ' + t.w + '×' + t.h + ' cm').join(', '));
   p.floors.forEach((f, i) => {
@@ -3569,11 +3572,12 @@ tool('ack_user_requests',
   });
 
 tool('set_ground',
-  'Set the 3D ground around the building (project-wide): surface kind (auto = theme colour in the CAD view and grass in the realistic view; ' + GROUND_KINDS.filter(k => k !== 'auto').join(', ') + '; or a project texture "tex:<id>"), optional tint colour and texture scale. Pass kind "auto" with no other field to reset.',
+  'Set the 3D ground around the building (project-wide): plinth height, surface kind (auto = theme colour in the CAD view and grass in the realistic view; ' + GROUND_KINDS.filter(k => k !== 'auto').join(', ') + '; or a project texture "tex:<id>"), optional tint colour and texture scale. Pass kind "auto" with no other field to reset.',
   {
     kind: { type: 'string', description: 'auto | ' + GROUND_KINDS.filter(k => k !== 'auto').join(' | ') + ' | tex:<id>' },
     color: { type: ['string', 'null'], description: 'Tint #rrggbb (null = the surface default).' },
     scale: { type: ['number', 'null'], description: 'Texture repeat in cm, ' + GROUND_SCALE_MIN + '–' + GROUND_SCALE_MAX + ' (null = default).' },
+    plinth: { type: ['number', 'null'], description: 'Plinth (subasman): how far the ground lies below ±0.00, 0–' + GROUND_PLINTH_MAX + ' cm (null = default ' + GROUND_PLINTH_DEF + '). Above 20 cm a foundation skirt fills the gap under the ground floor in 3D and sections.' },
   },
   [],
   a => {
@@ -3582,8 +3586,9 @@ tool('set_ground',
     if (typeof a.kind === 'string' && a.kind.startsWith('tex:') && !(P.textures || []).some(t => 'tex:' + t.id === a.kind)) throw new Error('No project texture "' + a.kind + '"');
     if (a.color !== undefined) { if (a.color !== null && !/^#[0-9a-f]{6}$/i.test(a.color)) throw new Error('color must be #rrggbb'); g.color = a.color || undefined; }
     if (a.scale !== undefined) g.scale = a.scale === null ? undefined : num(a.scale, undefined, 'scale');
+    if (a.plinth !== undefined) g.plinth = a.plinth === null ? undefined : num(a.plinth, undefined, 'plinth');
     P.ground = g; cleanGround(P);
-    const r = groundP(P); return '3D ground: ' + r.kind + (r.color ? ', tint ' + r.color : '') + (r.scale ? ', texture ' + r.scale + ' cm' : '');
+    const r = groundP(P); return '3D ground: ' + r.kind + (r.color ? ', tint ' + r.color : '') + (r.scale ? ', texture ' + r.scale + ' cm' : '') + ', plinth ' + r.plinth + ' cm';
   });
 
 tool('set_lights',

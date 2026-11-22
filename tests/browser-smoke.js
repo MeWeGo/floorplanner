@@ -2299,6 +2299,39 @@ check('3D ground surface (#147): panel picks the surface, undo restores it, hidd
   return 'sand ' + r.sand + ' vs asphalt ' + r.asphalt + ', undo ok, hidden ok, live + 2 renders restored, ' + r.progs + ' new programs';
 });
 
+check('ground datum (#148): plinth skirt, merged basement excavation with earth sides, section earth hatch, walking outside on the ground', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 1000, 700); commit();
+    addBasement(); fi = 0; addRectWalls(0, 0, 1000, 700); addRectWalls(800, 400, 1300, 900);
+    fi = 1; P.ground = { plinth: 100 }; commit(); refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(() => {
+    const out = {};
+    out.cuts = groundCuts(true).map(c => ({ n: c.pts.length, bot: c.bot }));
+    out.gy = groundY3D(); out.datum = groundDatum3D();
+    let plinth = 0, earth = 0; T3.scene.traverse(o => { if (o.userData.plinth) plinth++; if (o.isMesh && o.userData.fpDecal && o.material && o.material.polygonOffset) earth++; });
+    out.plinth = plinth; out.earth = earth;
+    enterWalk({ i: 1, x: 500, y: -400 }); out.walkOut = T3.walk.gz; exitWalk(false);
+    enterWalk({ i: 1, x: 500, y: 350 }); out.walkIn = T3.walk.gz; exitWalk(false);
+    show3D(false);
+    P.floors[1].sections = [{ id: 'sA', name: 'A', a: { x: -300, y: 300 }, b: { x: 1700, y: 300 }, dir: 1 }];
+    const sv = archSvg(sectionSpec(P.floors[1].sections[0]), 'A'); out.hatch = !!sv && sv.svg.includes('url(#earthH)');
+    out.noGround = (() => { P.ground = {}; cleanGround(P); return !P.ground; })();
+    return out;
+  })()`);
+  if (r.cuts.length !== 1 || r.cuts[0].bot !== -310 || r.cuts[0].n < 6) return 'the overlapping basement footprints should merge into one L-shaped cut down to -310: ' + JSON.stringify(r);
+  if (r.gy !== r.datum - 101) return 'the ground should lie plinth + 1 cm below ±0.00: ' + JSON.stringify(r);
+  if (r.plinth < 1 || r.earth < 1) return 'missing plinth skirt or earth sides in 3D: ' + JSON.stringify(r);
+  if (r.walkOut !== -101 || r.walkIn !== 0) return 'walking outside should stand on the ground (-101), inside on the floor (0): ' + JSON.stringify(r);
+  if (!r.hatch || !r.noGround) return 'section earth hatch / default ground cleanup failed: ' + JSON.stringify(r);
+  return 'one L cut to -310, skirt + earth sides, outside -101 / inside 0, section hatch';
+});
+
 check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light pool (no new shaders), 30 lamps build fast (#121)', async page => {
   await page.evaluate(`(() => {
     show3D(false); closeModal();

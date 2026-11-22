@@ -107,19 +107,21 @@ const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
 // yerden yükseklik (#61): duvara asılan eşyalar bu yükseklikte gelir; alan isteğe bağlı, yoksa 0 (yerde)
 const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110, sconce: 170, wallOut: 220, tableLamp: 75 };
 /* GROUND-PARAM:BEGIN — proje zemini (#147): saf JS, mcp/server.js ile birebir aynı (tests/ground-surface.test.js karşılaştırır).
-   P.ground = { kind?, color?, scale? } isteğe bağlı; yok = 'auto' (CAD'de tema rengi, gerçekçi görünümde çim: eski görünüm).
+   P.ground = { kind?, color?, scale?, plinth? } isteğe bağlı; yok = 'auto' (CAD'de tema rengi, gerçekçi görünümde çim: eski görünüm).
    kind: hazır yüzeyler, 'studio' (nötr açık zemin), 'none' (zemin gizli) ya da proje dokusu 'tex:<id>'. color = ton (#rrggbb),
    scale = dokunun bir tekrarı (cm). groundP() tek okuyucu, cleanGround() normalizeProject'te geçersizleri ve varsayılanları siler. */
 const GROUND_KINDS = ['auto', 'grass', 'soil', 'sand', 'gravel', 'asphalt', 'concrete', 'stone', 'snow', 'water', 'studio', 'none'];
 const GROUND_COL = { grass: '#78b84a', soil: '#8a6748', sand: '#e2cfa3', gravel: '#b3ada3', asphalt: '#5a5e64', concrete: '#c9c5bd', stone: '#a29b90', snow: '#f4f7fa', water: '#3f86ae', studio: '#ece9e2' };
 const GROUND_TILE = { grass: 240, soil: 320, sand: 360, gravel: 140, asphalt: 420, concrete: 300, stone: 240, snow: 480, water: 600, studio: 400 }; // cm / tekrar
 const GROUND_SCALE_MIN = 20, GROUND_SCALE_MAX = 5000;
+const GROUND_PLINTH_DEF = 20, GROUND_PLINTH_MAX = 300; // subasman (#148): ±0.00'ın toprağın üstündeki yüksekliği (cm); 20 = eski görünüm
 function groundP(P) {
   const g = P && P.ground && typeof P.ground === 'object' ? P.ground : {}, k = typeof g.kind === 'string' ? g.kind : '';
   const kind = GROUND_KINDS.includes(k) || /^tex:[\w-]{1,32}$/.test(k) ? k : 'auto';
   const color = typeof g.color === 'string' && /^#[0-9a-f]{6}$/i.test(g.color) ? g.color.toLowerCase() : null;
   const sc = +g.scale, scale = Number.isFinite(sc) && sc > 0 ? Math.round(Math.max(GROUND_SCALE_MIN, Math.min(GROUND_SCALE_MAX, sc))) : null;
-  return { kind, color, scale };
+  const pl = +g.plinth, plinth = Number.isFinite(pl) && g.plinth !== null && g.plinth !== '' ? Math.round(Math.max(0, Math.min(GROUND_PLINTH_MAX, pl))) : GROUND_PLINTH_DEF;
+  return { kind, color, scale, plinth };
 }
 function cleanGround(P) {
   if (!P || P.ground == null) return;
@@ -127,6 +129,7 @@ function cleanGround(P) {
   if (g.kind !== 'auto') o.kind = g.kind;
   if (g.color && g.kind !== 'none') o.color = g.color;
   if (g.scale && g.kind !== 'none' && g.scale !== GROUND_TILE[g.kind]) o.scale = g.scale;
+  if (g.plinth !== GROUND_PLINTH_DEF) o.plinth = g.plinth;
   if (Object.keys(o).length) P.ground = o; else delete P.ground;
 }
 /* GROUND-PARAM:END */
@@ -5586,6 +5589,7 @@ function groundPanelHtml() {
       + fld(L('Doku ölçeği (cm)', 'Texture scale (cm)'), 'ground', 'scale', g.scale || tile, { min: GROUND_SCALE_MIN, max: GROUND_SCALE_MAX });
     if (g.color || g.scale) h += `<div class="row"><button class="btn sm" data-act="groundreset">${L('↺ Varsayılan ton / ölçek', '↺ Default tint / scale')}</button></div>`;
   }
+  h += fld(L('Subasman: toprak ±0.00’ın altında (cm)', 'Plinth: ground below ±0.00 (cm)'), 'ground', 'plinth', g.plinth, { min: 0, max: GROUND_PLINTH_MAX });
   h += `<p class="muted" style="margin:0 0 6px">${L('Binanın çevresindeki 3B zemin: CAD görünümü, canlı gerçekçi görünüm (gündüz / akşam / gece) ve render stüdyosu bu yüzeyi kullanır; uzak kenar ufukta sise karışır.', 'The 3D ground around the building: the CAD view, the live realistic view (day / evening / night) and the render studio use this surface; its far edge fades into the horizon.')}</p>`;
   return h;
 }
@@ -8209,7 +8213,7 @@ function applyProp(t, final) {
   }
   if (k === 'ground') { // 3B zemin (#147)
     const g = P.ground = Object.assign({}, P.ground);
-    if (p === 'kind') g.kind = v; else if (p === 'color') g.color = v; else if (p === 'scale') g.scale = +v;
+    if (p === 'kind') g.kind = v; else if (p === 'color') g.color = v; else if (p === 'scale') g.scale = +v; else if (p === 'plinth') g.plinth = +v;
     cleanGround(P); if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
   }
   if (k === 'lw') { // çizgi kalınlığı (proje)
@@ -12739,7 +12743,8 @@ function archPrims(spec) {
     const E = floorElev(i); levels.push({ z: E, name: f.name });
     f = visFloor(f, true);
     // döşemeler
-    const plates = [...slabPolys(f).map(pts => ({ pts, z0: E - 20, z1: E })), ...(f.slabs || []).filter(s => s.pts && s.pts.length > 2).map(s => ({ pts: s.pts, z0: E + (+s.off || 0) - (+s.t || 20), z1: E + (+s.off || 0) }))];
+    const pl0 = groundP(P).plinth, skirt = pl0 > 20 && i === groundFloorIdx() ? slabPolys(f).map(pts => ({ pts, z0: E - pl0, z1: E - 20 })) : []; // subasman eteği (#148)
+    const plates = [...skirt, ...slabPolys(f).map(pts => ({ pts, z0: E - 20, z1: E })), ...(f.slabs || []).filter(s => s.pts && s.pts.length > 2).map(s => ({ pts: s.pts, z0: E + (+s.off || 0) - (+s.t || 20), z1: E + (+s.off || 0) }))];
     const voidIv = cut ? (f.voids || []).flatMap(v => lineCutIntervals(v.pts, O, u)) : [];
     for (const pl of plates) {
       if (cut) {
@@ -12821,10 +12826,22 @@ function archSvg(spec, title) {
   const geo = prims.filter(p => p.t !== 'label');
   if (!geo.length) return null;
   let s0 = Math.min(...geo.map(p => p.s0)), s1 = Math.max(...geo.map(p => p.s1));
-  const zTop = Math.max(...geo.map(p => p.z1)), zBot = -20, zLow = Math.min(zBot, ...geo.map(p => p.z0)); // zLow: bodrum katlar toprak çizgisinin altına iner
+  const zTop = Math.max(...geo.map(p => p.z1)), zBot = -groundP(P).plinth, zLow = Math.min(zBot - 60, ...geo.map(p => p.z0) .map(z => z - 40)); // zLow: bodrum katlar ve toprak taraması (#148) toprak çizgisinin altına iner
   const M = 90, LM = 170, w = Math.round(s1 - s0 + LM + M), h = Math.round(zTop - zLow + M * 2 + 70);
   const X = s => s - s0 + LM, Y = z => zTop - z + M;
   let out = '';
+  /* toprak (#148): toprak çizgisinin altı beyaz zemin + tarama; görünüşte ve kesitte arkadaki yüzlerin üstüne, kesilen bantların
+     altına çizilir (toprağın arkası görünmez). Kesitte kazıların (bodrum / çukur) içi açık kalır, tabanlarının altı taranır. */
+  let earth = `<defs><pattern id="earthH" width="22" height="22" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="22" stroke="${C.sub}" stroke-width="1"/><circle cx="11" cy="6" r="1.1" fill="${C.sub}"/><circle cx="15" cy="16" r="0.8" fill="${C.sub}"/></pattern></defs>`;
+  const eL = s0 - 40, eR = s0 + w - 20 - LM; // solda kot yazıları açık kalır // çizim alanının sol / sağ ucu (s)
+  const iv = []; // [s0, s1, taban]
+  if (spec.cut) { const u = { x: -spec.n.y, y: spec.n.x }; for (const c of groundCuts(true)) if (c.bot < zBot) for (const [a, b] of lineCutIntervals(c.pts, spec.O, u)) if (b - a > 0.5) iv.push([a, b, c.bot]); }
+  const marks = [...new Set([eL, eR, ...iv.flatMap(q => [q[0], q[1]])])].filter(x => x >= eL && x <= eR).sort((a, b) => a - b);
+  for (let k = 0; k + 1 < marks.length; k++) {
+    const a = marks[k], b = marks[k + 1], m = (a + b) / 2, top = Math.min(zBot, ...iv.filter(q => q[0] <= m && q[1] >= m).map(q => q[2]));
+    if (top <= zLow || b - a < 0.2) continue;
+    earth += `<rect x="${X(a)}" y="${Y(top)}" width="${b - a}" height="${Y(zLow) - Y(top)}" fill="#fff"/><rect x="${X(a)}" y="${Y(top)}" width="${b - a}" height="${Y(zLow) - Y(top)}" fill="url(#earthH)"/>`;
+  }
   // kat kotları: kesikli seviye çizgisi + ▼ işareti + ±0.00
   for (const lv of levels) {
     if (lv.z > zTop + 1) continue;
@@ -12849,6 +12866,7 @@ function archSvg(spec, title) {
       else if (hh.type !== 'arch') out += `<rect x="${x + ww * 0.12}" y="${y + hgt * 0.08}" width="${ww * 0.76}" height="${hgt * 0.84}" fill="none" stroke="${C.sub}" stroke-width="0.8"/><circle cx="${x + ww * 0.8}" cy="${y + hgt * 0.52}" r="2.5" fill="${st}"/>`;
     }
   }
+  out += earth; // toprak: arkadaki yüzlerin üstünde, kesilen bantların altında
   for (const p of prims.filter(p => p.t === 'cut')) out += `<rect x="${X(p.s0)}" y="${Y(p.z1)}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="${p.curtain ? C.glass : C.wall}" stroke="${C.wall}" stroke-width="1"/>`;
   for (const p of prims.filter(p => p.t === 'glass')) out += `<rect x="${X(p.s0) + (p.s1 - p.s0) * 0.4}" y="${Y(p.z1)}" width="${(p.s1 - p.s0) * 0.2}" height="${p.z1 - p.z0}" fill="${C.glass}" stroke="${st}" stroke-width="0.8"/>`;
   for (const p of prims.filter(p => p.t === 'label')) out += `<text x="${X(p.s)}" y="${Y(p.z)}" text-anchor="middle" font-size="20" font-weight="600" fill="${C.text}" stroke="${C.halo}" stroke-width="4" paint-order="stroke" font-family="Segoe UI,sans-serif">${esc(p.text)}</text>`;
@@ -14923,19 +14941,64 @@ function v3dBase() { const i = P.floors.findIndex(v3dShown); return i < 0 ? 0 : 
 function v3dElev(i) { return floorElev(i) - floorElev(v3dBase()); }
 /* Toprak (zemin düzlemi): gerçek ±0.00 kotunda; yalnızca toprak üstü katlar görünüyorsa eskisi gibi en alttaki görünen katın altında.
    Görünen bodrum katların (kot < 0) ve toprağın altına inen çukur boşlukların izdüşümü delik olarak açılır: içleri yukarıdan görülür. */
-function groundY3D() { return Math.max(0, -floorElev(v3dBase())) - 21; }
-function groundHoles3D() {
-  const gy = groundY3D() + 21, cand = [];
+function groundDatum3D() { return Math.max(0, -floorElev(v3dBase())); } // 3B'de gerçek ±0.00 (yalnız üst katlar görünüyorsa en alttaki görünen kat)
+function groundY3D() { return groundDatum3D() - groundP(P).plinth - 1; } // toprak: ±0.00 − subasman (#148); varsayılan 20 → eski −21
+// ±0.00'daki (ya da hemen üstündeki) zemin kat: subasman eteği onun izinde, yürürken onun dışı topraktır
+function groundFloorIdx() { let k = -1, best = Infinity; P.floors.forEach((f, i) => { const e = floorElev(i); if (e > -1 && e < best) { best = e; k = i; } }); return k < 0 ? 0 : k; }
+/* Kazılar (#148): toprağın altına inen katların (bodrum) döşeme izleri ve çukur boşluklar → { pts, bot } (bot = kazı tabanı,
+   döşemenin altı). world: gerçek kotlar (kesitler), değilse 3B kotları ve yalnızca görünen katlar. Çakışan / iç içe izler tek
+   delikte birleşir (çakışma yoksa izler aynen kalır; varsa raster birleşim, dış sınırlar), taban en derin olanın. */
+function groundCuts(world) {
+  const datum = world ? 0 : groundDatum3D(), cand = [];
   P.floors.forEach((f0, i) => {
-    if (!v3dShown(f0)) return;
-    const f = visFloor(f0), e = v3dElev(i);
-    if (e < gy - 0.5) for (const pts of slabPolys(f)) cand.push(pts);
-    else for (const v of f.voids || []) if (+v.dep > 0 && v.pts && v.pts.length > 2 && e - v.dep < gy - 0.5) cand.push(v.pts);
+    if (!world && !v3dShown(f0)) return;
+    const f = visFloor(f0, world), e = world ? floorElev(i) : v3dElev(i);
+    if (e < datum - 0.5) for (const pts of slabPolys(f)) cand.push({ pts, bot: e - 20 });
+    else for (const v of f.voids || []) if (+v.dep > 0 && v.pts && v.pts.length > 2 && e - v.dep < datum - 0.5) cand.push({ pts: v.pts, bot: e - v.dep - 20 });
   });
-  // en büyükten küçüğe; çakışan delik üçgenlemeyi bozar, iç içe / kesişenler atlanır
-  const kept = [];
-  for (const pts of cand.sort((a, b) => polyArea(b) - polyArea(a))) if (!kept.some(k => pts.some(p => pointInPoly(p, k)) || k.some(p => pointInPoly(p, pts)))) kept.push(pts);
-  return kept;
+  const touch = (a, b) => a.pts.some(p => pointInPoly(p, b.pts)) || b.pts.some(p => pointInPoly(p, a.pts)) || a.pts.some((p, i) => { const q = a.pts[(i + 1) % a.pts.length]; return b.pts.some((r, j) => segX(p, q, r, b.pts[(j + 1) % b.pts.length])); });
+  const groups = [];
+  for (const c of cand) { const hit = groups.filter(g => g.some(d => touch(c, d))); const g = hit.length ? hit[0] : []; if (!hit.length) groups.push(g); g.push(c); for (const h of hit.slice(1)) { g.push(...h); groups.splice(groups.indexOf(h), 1); } }
+  const out = [];
+  for (const g of groups) {
+    const bot = Math.min(...g.map(c => c.bot));
+    if (g.length === 1) { out.push({ pts: g[0].pts, bot }); continue; }
+    for (const pts of polyUnion(g.map(c => c.pts))) out.push({ pts, bot });
+  }
+  return out;
+}
+function segX(p, q, r, s) { // iki kapalı parçanın kesişmesi
+  const d = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  const d1 = d(r, s, p), d2 = d(r, s, q), d3 = d(p, q, r), d4 = d(p, q, s);
+  return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+}
+// çokgenlerin birleşimi (raster, ≤ ~1500 px): yalnızca dış sınırlar (birleşimin içindeki ada delik sayılmaz)
+function polyUnion(polys) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const ps of polys) for (const p of ps) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  const res = Math.max(1, Math.max(x1 - x0, y1 - y0) / 1500), M = 3, cw = Math.ceil((x1 - x0) / res) + 2 * M, ch = Math.ceil((y1 - y0) / res) + 2 * M;
+  const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+  const g = cv.getContext('2d', { willReadFrequently: true }); g.fillStyle = '#fff';
+  for (const ps of polys) { g.beginPath(); ps.forEach((p, i) => g[i ? 'lineTo' : 'moveTo']((p.x - x0) / res + M, (p.y - y0) / res + M)); g.closePath(); g.fill(); }
+  const d = g.getImageData(0, 0, cw, ch).data, mask = new Uint8Array(cw * ch); for (let i = 0; i < mask.length; i++) mask[i] = d[i * 4] > 127 ? 1 : 0;
+  const loops = traceMaskLoops(mask, cw, ch, x0 - M * res, y0 - M * res, res).map(l => simplifyLoop(l, res * 1.5)).filter(l => l.length >= 3 && Math.abs(polyArea(l)) > 100);
+  return loops.filter(l => !loops.some(o => o !== l && Math.abs(polyArea(o)) > Math.abs(polyArea(l)) && pointInPoly(l[0], o))).map(l => l.map(q => ({ x: Math.round(q.x * 10) / 10, y: Math.round(q.y * 10) / 10 })));
+}
+function groundHoles3D() { return groundCuts(false).map(c => c.pts); }
+// kazı yanları: delik kenarı boyunca topraktan kazı tabanına dik toprak yüzleri (iki yüzlü; polygonOffset ile bodrum duvarının
+// dış yüzüyle çakışınca duvar kazanır — titreme yok). Yüzey yok sayılan süs (fpDecal): seçilmez, gerçekçi görünüm malzemesini bırakır.
+function earthSides3D(cuts, gy, material) {
+  const pos = [];
+  for (const c of cuts) {
+    if (!(gy - c.bot > 1)) continue;
+    for (let i = 0; i < c.pts.length; i++) {
+      const a = c.pts[i], b = c.pts[(i + 1) % c.pts.length];
+      pos.push(a.x, gy, a.y, b.x, gy, b.y, b.x, c.bot, b.y, a.x, gy, a.y, b.x, c.bot, b.y, a.x, c.bot, a.y);
+    }
+  }
+  if (!pos.length) return null;
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, material); m.userData.fpDecal = true; m.raycast = () => {}; m.receiveShadow = true; return m;
 }
 function groundMesh3D(material) {
   const holes = groundHoles3D(), R = 20000;
@@ -15541,10 +15604,11 @@ function walkSurfAt(o, x, y) {
 /** Yürüyenin katı ve komşu katları: [{ f, base }] (base = o katın döşemesinin yürüyenin katına göre kotu). */
 function walkLevels(i) {
   const f = P.floors[i]; if (!f) return [];
-  const lv = (f0, base) => { const f = visFloor(f0); return { f, base, sp: () => walkSlabPolys(f0, f) }; };
-  const out = [lv(f, 0)], dn = P.floors[i - 1], up = P.floors[i + 1];
-  if (dn && v3dShown(dn)) out.push(lv(dn, -floorPitch(i - 1))); // kat kotları: gerçek kot farkı
-  if (up && v3dShown(up)) out.push(lv(up, floorPitch(i)));
+  const gi = groundFloorIdx(), pl = groundP(P).plinth;
+  const lv = (f0, base, j) => { const f = visFloor(f0), L = { f, base, sp: () => walkSlabPolys(f0, f) }; if (j === gi) L.gnd = base - floorElev(j) - pl - 1; return L; }; // zemin katın dışı toprak (#148)
+  const out = [lv(f, 0, i)], dn = P.floors[i - 1], up = P.floors[i + 1];
+  if (dn && v3dShown(dn)) out.push(lv(dn, -floorPitch(i - 1), i - 1)); // kat kotları: gerçek kot farkı
+  if (up && v3dShown(up)) out.push(lv(up, floorPitch(i), i + 1));
   return out;
 }
 // otomatik kat döşemesinin izi (slabPolys raster'dır): kat başına bir kez, build3D önbelleği sıfırlar (#162)
@@ -15575,7 +15639,10 @@ function walkGroundAt(lv, p, z) {
     const ss = (f.slabs || []).filter(s => s.pts && s.pts.length > 2 && pointInPoly(p, s.pts)).map(s => ({ s, h: (+s.off || 0) + surfZAt(s, p.x, p.y) }));
     // gömme döşeme (off < 0): otomatik kat döşemesi orayı örtmüyorsa (kapalı / binanın dışı) kat düzlemi yerine o basılır
     const sunk = !vd && ss.some(q => q.h < 0) && L.sp && !L.sp().some(q => pointInPoly(p, q));
-    if (!vd) { if (!sunk) take(base, null); } else if (+vd.dep > 0) take(base - +vd.dep, null); // çukur boşluğun tabanı
+    // zemin kat (#148): yapı izinin (otomatik döşeme, oda, serbest döşeme) dışı toprak; içinde kat düzlemi topraktan yükselir (subasman)
+    const outdoor = L.gnd !== undefined && !vd && L.sp && !ss.length && !L.sp().some(q => pointInPoly(p, q)) && !(f.rooms || []).some(r => r.pts && r.pts.length > 2 && pointInPoly(p, r.pts));
+    if (outdoor) take(L.gnd, null);
+    else if (!vd) { if (!sunk) take(base, L.gnd !== undefined ? L.gnd : null); } else if (+vd.dep > 0) take(base - +vd.dep, null); // çukur boşluğun tabanı
     for (const { s, h } of ss) take(base + h, h > 0 ? base + h - (+s.t || 20) : null);
     for (const r of f.rooms || []) if (surfSloped(r) && pointInPoly(p, r.pts)) take(base + surfZAt(r, p.x, p.y), null); // eğimli oda zemini
     for (const o of f.furn || []) {
@@ -17845,6 +17912,20 @@ function build3D(keepCam = false) {
   const gMat = groundMat('cad'); if (gMat) extraMats.push(gMat); // proje zemini (#147); auto = eski tema rengi
   const ground = groundMesh3D(gMat || mat(lt ? 0xd8d2c5 : 0x11161e)); S.add(ground); // ±0.00'da; bodrum katların ve çukurların üstü açık
   ground.visible = groundP(P).kind !== 'none';
+  { // subasman eteği ve kazı yanları (#148)
+    const gp = groundP(P), gy = groundY3D(), gi = groundFloorIdx();
+    if (gp.plinth > 20 && P.floors[gi] && v3dShown(P.floors[gi])) {
+      const e = v3dElev(gi), dep = e - 20 - gy;
+      if (dep > 0.5) for (const pts of slabPolys(visFloor(P.floors[gi]))) {
+        const geo = new THREE.ExtrudeGeometry(new THREE.Shape(pts.map(p => new THREE.Vector2(p.x, p.y))), { depth: dep, bevelEnabled: false }); geo.rotateX(Math.PI / 2);
+        const m = new THREE.Mesh(geo, mat(lt ? 0xb7b1a6 : 0x4a515d)); m.position.y = e - 20; m.castShadow = m.receiveShadow = true; m.userData.plinth = true; S.add(m);
+      }
+    }
+    if (ground.visible) {
+      const em = new THREE.MeshLambertMaterial({ color: lt ? 0x8d7259 : 0x4d3e31, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 }); extraMats.push(em);
+      const es = earthSides3D(groundCuts(false), gy, em); if (es) S.add(es);
+    }
+  }
   T3.ground = ground;                                 // the render swaps its material for a studio backdrop
   T3.fit = { cx, cz, sz, elev, x0: all.x0, x1: all.x1, z0: all.y0, z1: all.y1 };
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); fitOrtho(); }
