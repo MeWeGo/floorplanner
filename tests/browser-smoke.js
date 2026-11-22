@@ -587,6 +587,54 @@ check('bellows corridor: fills between the first and current wall position (layo
   if (info.undo !== 2 || !info.svg) throw new Error('undo / export failed: ' + JSON.stringify(info));
 });
 
+check('live room walkers: walk mode sends the walker position, peers see a person figure in 3D and a marker in 2D', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    addRectWalls(0, 0, 600, 400); sel = []; commit(); refresh();
+    const sent = [], fl = F();
+    collab.room = 'smoketest'; collab.peerId = 'me';
+    collab.ws = { readyState: 1, send: m => sent.push(JSON.parse(m)), close() {} };
+    collab.peers.set('p2', { id: 'p2', name: 'Ayşe', color: '#e11d48', sel: [], walk: { floorId: fl.id, x: 300, y: 200, z: 0, yaw: Math.PI / 2 } });
+    const out = {};
+    out.svg = collabOverlaySvg(pal(), view.z).includes('👁 Ayşe');
+    show3D(true); await new Promise(r => setTimeout(r, 300));
+    const av = () => T3.avatars && T3.avatars.get('p2');
+    const a = av(); out.has = !!a && a.g.parent === T3.scene;
+    if (a) { out.pos = [a.g.position.x, a.g.position.y, a.g.position.z]; out.rot = a.g.rotation.y; }
+    // the figure never blocks picking: a ray through it hits the wall behind / the floor, not the figure
+    const rc = new THREE.Raycaster(new THREE.Vector3(300, 150, -500), new THREE.Vector3(0, 0, 1));
+    out.pick = rc.intersectObjects(T3.scene.children, true).some(h => { let o = h.object; while (o) { if (o.userData && o.userData.avatar) return true; o = o.parent; } return false; });
+    build3D(true); out.kept = av() === a && a.g.parent === T3.scene;      // survives a rebuild, not disposed
+    // the peer moves: the figure glides to the new place
+    collab.peers.get('p2').walk = { floorId: fl.id, x: 100, y: 100, z: 0, yaw: 0 }; collabAvatars3D();
+    await new Promise(r => setTimeout(r, 1500));
+    out.moved = [Math.round(a.g.position.x), Math.round(a.g.position.z)];
+    // this window walks: its position goes out with presence, and walking away clears it
+    sent.length = 0; set3DCam('eye'); await new Promise(r => setTimeout(r, 200));
+    out.enter = sent.filter(m => m.type === 'presence').map(m => m.walk).pop() || null;
+    sent.length = 0; T3.walk.x += 120; await new Promise(r => setTimeout(r, 250));
+    const mv = sent.filter(m => m.type === 'presence' && m.walk).pop();
+    out.walkSent = mv ? Math.round(mv.walk.x - out.enter.x) : null;
+    sent.length = 0; exitWalk(true);
+    out.exit = sent.filter(m => m.type === 'presence').map(m => m.walk);
+    // the peer leaves the walk mode: the figure goes away
+    collab.peers.get('p2').walk = null; collabAvatars3D(); out.gone = !av() && !a.g.parent;
+    show3D(false);
+    collab.ws = null; collabLeave(true);
+    return out;
+  })()`);
+  if (!info.svg) throw new Error('2D overlay has no walker marker: ' + JSON.stringify(info));
+  if (!info.has) throw new Error('no person figure for the walking peer in 3D: ' + JSON.stringify(info));
+  if (info.pos[0] !== 300 || info.pos[2] !== 200 || Math.abs(info.pos[1]) > 0.01 || Math.abs(info.rot + Math.PI / 2) > 1e-6) throw new Error('figure in the wrong place: ' + JSON.stringify(info));
+  if (info.pick) throw new Error('the figure blocks 3D picking: ' + JSON.stringify(info));
+  if (!info.kept) throw new Error('the figure did not survive build3D: ' + JSON.stringify(info));
+  if (Math.abs(info.moved[0] - 100) > 15 || Math.abs(info.moved[1] - 100) > 15) throw new Error('the figure did not glide to the new place: ' + JSON.stringify(info));
+  if (!info.enter || info.enter.floorId == null || !Number.isFinite(info.enter.yaw)) throw new Error('entering walk mode sent no walk position: ' + JSON.stringify(info));
+  if (info.walkSent !== 120) throw new Error('walking did not send the new position: ' + JSON.stringify(info));
+  if (!info.exit.length || info.exit[info.exit.length - 1] !== null) throw new Error('leaving walk mode did not clear the position: ' + JSON.stringify(info));
+  if (!info.gone) throw new Error('the figure stayed after the peer stopped walking: ' + JSON.stringify(info));
+});
+
 check('overlapping objects: Ctrl+click cycles, right-click lists, layers reorder, 3D lifts', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());

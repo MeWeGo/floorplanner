@@ -525,3 +525,69 @@ test('Bugfix: joiner connecting before seed triggers seed_request to host and re
   assert.strictEqual(joinerState.type, 'state');
   assert.strictEqual(joinerState.state.name, 'Delayed Host Plan');
 });
+
+test('Walk avatars: CollabRoom initializes walk: null and validates/clamps/broadcasts presence.walk', async () => {
+  const { worker, env, roomFor } = makeCollabWorkerEnv();
+  const url = 'https://x.example/collab/room_walk01';
+  const headers = { Upgrade: 'websocket', Origin: 'https://mewego.github.io' };
+
+  const r1 = await worker.fetch(new Request(url, { headers }), env);
+  assert.strictEqual(r1.status, 101);
+  const r2 = await worker.fetch(new Request(url, { headers }), env);
+  assert.strictEqual(r2.status, 101);
+
+  const { room, sockets } = roomFor('room_walk01');
+  const w2 = JSON.parse(sockets[1].sent[0]);
+  assert.strictEqual(w2.type, 'welcome');
+  assert.strictEqual(w2.peers[0].walk, null);
+
+  const join1 = sockets[0].sent.map(s => JSON.parse(s)).find(m => m.type === 'peer_join');
+  assert.ok(join1);
+  assert.strictEqual(join1.peer.walk, null);
+
+  // Valid walk: floorId trimmed to 64 chars, z clamped to +-5000
+  const longFloorId = 'f'.repeat(80);
+  await room.webSocketMessage(sockets[0], JSON.stringify({
+    type: 'presence',
+    walk: { floorId: longFloorId, x: 100, y: 200, z: 9999, yaw: 0.5 },
+  }));
+  let msg = JSON.parse(sockets[1].sent.at(-1));
+  assert.strictEqual(msg.type, 'presence');
+  assert.deepStrictEqual(msg.peer.walk, {
+    floorId: 'f'.repeat(64),
+    x: 100,
+    y: 200,
+    z: 5000,
+    yaw: 0.5,
+  });
+
+  await room.webSocketMessage(sockets[0], JSON.stringify({
+    type: 'presence',
+    walk: { floorId: 'f0', x: 10, y: 20, z: -9999, yaw: -1 },
+  }));
+  msg = JSON.parse(sockets[1].sent.at(-1));
+  assert.strictEqual(msg.peer.walk.z, -5000);
+
+  // Invalid walk (missing yaw) -> peer.walk === null
+  await room.webSocketMessage(sockets[0], JSON.stringify({
+    type: 'presence',
+    walk: { floorId: 'f0', x: 10, y: 20 },
+  }));
+  assert.strictEqual(JSON.parse(sockets[1].sent.at(-1)).peer.walk, null);
+
+  // Invalid walk (non-string floorId) -> peer.walk === null
+  await room.webSocketMessage(sockets[0], JSON.stringify({
+    type: 'presence',
+    walk: { floorId: 123, x: 10, y: 20, yaw: 0 },
+  }));
+  assert.strictEqual(JSON.parse(sockets[1].sent.at(-1)).peer.walk, null);
+
+  // Explicit walk: null -> peer.walk === null
+  await room.webSocketMessage(sockets[0], JSON.stringify({
+    type: 'presence',
+    walk: { floorId: 'f0', x: 10, y: 20, yaw: 0 },
+  }));
+  assert.ok(JSON.parse(sockets[1].sent.at(-1)).peer.walk !== null);
+  await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'presence', walk: null }));
+  assert.strictEqual(JSON.parse(sockets[1].sent.at(-1)).peer.walk, null);
+});
