@@ -113,13 +113,14 @@ const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
 // height above the floor (cm) that wall-mounted catalogue items get by default — mirror of app.js CAT_ELEV (#61)
 const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110, sconce: 170, wallOut: 220, tableLamp: 75 };
 /* GROUND-PARAM:BEGIN — proje zemini (#147): saf JS, mcp/server.js ile birebir aynı (tests/ground-surface.test.js karşılaştırır).
-   P.ground = { kind?, color?, scale?, plinth? } isteğe bağlı; yok = 'auto' (CAD'de tema rengi, gerçekçi görünümde çim: eski görünüm).
+   P.ground = { kind?, color?, scale?, plinth?, tp?, ci?, snap? } isteğe bağlı; yok = 'auto' (CAD'de tema rengi, gerçekçi görünümde çim: eski görünüm).
    kind: hazır yüzeyler, 'studio' (nötr açık zemin), 'none' (zemin gizli) ya da proje dokusu 'tex:<id>'. color = ton (#rrggbb),
    scale = dokunun bir tekrarı (cm). groundP() tek okuyucu, cleanGround() normalizeProject'te geçersizleri ve varsayılanları siler. */
 const GROUND_KINDS = ['auto', 'grass', 'soil', 'sand', 'gravel', 'asphalt', 'concrete', 'stone', 'snow', 'water', 'studio', 'none'];
 const GROUND_COL = { grass: '#78b84a', soil: '#8a6748', sand: '#e2cfa3', gravel: '#b3ada3', asphalt: '#5a5e64', concrete: '#c9c5bd', stone: '#a29b90', snow: '#f4f7fa', water: '#3f86ae', studio: '#ece9e2' };
 const GROUND_TILE = { grass: 240, soil: 320, sand: 360, gravel: 140, asphalt: 420, concrete: 300, stone: 240, snow: 480, water: 600, studio: 400 }; // cm / tekrar
 const GROUND_SCALE_MIN = 20, GROUND_SCALE_MAX = 5000;
+const GROUND_TP_MAX = 200, GROUND_TZ_MAX = 5000, GROUND_CI = [10, 20, 25, 50, 100, 200, 250, 500], GROUND_CI_DEF = 50; // arazi (#149): kot noktaları, eş yükselti aralığı
 const GROUND_PLINTH_DEF = 20, GROUND_PLINTH_MAX = 300; // subasman (#148): ±0.00'ın toprağın üstündeki yüksekliği (cm); 20 = eski görünüm
 function groundP(P) {
   const g = P && P.ground && typeof P.ground === 'object' ? P.ground : {}, k = typeof g.kind === 'string' ? g.kind : '';
@@ -127,7 +128,10 @@ function groundP(P) {
   const color = typeof g.color === 'string' && /^#[0-9a-f]{6}$/i.test(g.color) ? g.color.toLowerCase() : null;
   const sc = +g.scale, scale = Number.isFinite(sc) && sc > 0 ? Math.round(Math.max(GROUND_SCALE_MIN, Math.min(GROUND_SCALE_MAX, sc))) : null;
   const pl = +g.plinth, plinth = Number.isFinite(pl) && g.plinth !== null && g.plinth !== '' ? Math.round(Math.max(0, Math.min(GROUND_PLINTH_MAX, pl))) : GROUND_PLINTH_DEF;
-  return { kind, color, scale, plinth };
+  const tp = Array.isArray(g.tp) ? g.tp.filter(q => q && Number.isFinite(+q.x) && Number.isFinite(+q.y) && Number.isFinite(+q.z)).slice(0, GROUND_TP_MAX)
+    .map(q => ({ x: Math.round(+q.x * 10) / 10, y: Math.round(+q.y * 10) / 10, z: Math.round(Math.max(-GROUND_TZ_MAX, Math.min(GROUND_TZ_MAX, +q.z)) * 10) / 10 })) : [];
+  const ci = GROUND_CI.includes(+g.ci) ? +g.ci : GROUND_CI_DEF, snap = g.snap === true;
+  return { kind, color, scale, plinth, tp, ci, snap };
 }
 function cleanGround(P) {
   if (!P || P.ground == null) return;
@@ -136,6 +140,9 @@ function cleanGround(P) {
   if (g.color && g.kind !== 'none') o.color = g.color;
   if (g.scale && g.kind !== 'none' && g.scale !== GROUND_TILE[g.kind]) o.scale = g.scale;
   if (g.plinth !== GROUND_PLINTH_DEF) o.plinth = g.plinth;
+  if (g.tp.length) o.tp = g.tp; // arazi kot noktaları: plan cm, z = ±0.00'a göre cm
+  if (g.ci !== GROUND_CI_DEF) o.ci = g.ci;
+  if (g.snap) o.snap = true; // dış mekân eşyası araziye oturur
   if (Object.keys(o).length) P.ground = o; else delete P.ground;
 }
 /* GROUND-PARAM:END */
@@ -3299,6 +3306,7 @@ function mkVoid(f, a) {
 function summarize() {
   const p = proj();
   const out = [];
+  if (groundP(p).tp.length) { const tp = groundP(p).tp, zs = tp.map(q => q.z); out.push('Terrain: ' + tp.length + ' height point(s), ' + Math.min(...zs) + ' … ' + Math.max(...zs) + ' cm relative to ±0.00, contours every ' + groundP(p).ci + ' cm' + (groundP(p).snap ? ', outdoor items stand on it' : '')); }
   const gr = groundP(p); if (gr.kind !== 'auto' || gr.color || gr.scale || gr.plinth !== GROUND_PLINTH_DEF) out.push('3D ground: ' + gr.kind + (gr.color ? ', tint ' + gr.color : '') + (gr.scale ? ', texture ' + gr.scale + ' cm' : '') + ', plinth ' + gr.plinth + ' cm (ground below ±0.00)');
   out.push('Project "' + p.name + '" — schema v' + p.v + ', grid ' + p.grid + ' cm (' + p.gridType + '), default wall ' + p.wallT + ' cm × ' + p.wallH + ' cm high, ' + p.floors.length + ' floor(s)');
   if ((p.textures || []).length) out.push('Custom textures: ' + p.textures.map(t => 'tex:' + t.id + ' "' + t.name + '" ' + t.w + '×' + t.h + ' cm').join(', '));
@@ -3589,6 +3597,31 @@ tool('set_ground',
     if (a.plinth !== undefined) g.plinth = a.plinth === null ? undefined : num(a.plinth, undefined, 'plinth');
     P.ground = g; cleanGround(P);
     const r = groundP(P); return '3D ground: ' + r.kind + (r.color ? ', tint ' + r.color : '') + (r.scale ? ', texture ' + r.scale + ' cm' : '') + ', plinth ' + r.plinth + ' cm';
+  });
+
+tool('set_terrain',
+  'Sculpt the site terrain (project-wide): sparse height points {x, y, z} in plan cm with z in cm relative to ±0.00 (the natural ground lies at -plinth). The app triangulates them into a 3D terrain, draws contours and spot heights in 2D and sloped ground in sections. points replaces all points, add appends, clear: true makes the terrain flat again.',
+  {
+    points: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, required: ['x', 'y', 'z'] }, description: 'Replace every height point (max ' + GROUND_TP_MAX + ').' },
+    add: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, required: ['x', 'y', 'z'] }, description: 'Append height points.' },
+    clear: { type: 'boolean', description: 'true = remove every point (flat terrain).' },
+    interval: { type: 'number', description: 'Contour interval in cm: ' + GROUND_CI.join(', ') + ' (default ' + GROUND_CI_DEF + ').' },
+    snap: { type: 'boolean', description: 'true = items outside the ground-floor footprint stand on the terrain in 3D.' },
+  },
+  [],
+  a => {
+    const g = Object.assign({}, P.ground), cur = groundP(P).tp;
+    const chk = arr => arr.map((q, i) => { if (!q || ![q.x, q.y, q.z].every(v => typeof v === 'number' && isFinite(v))) throw new Error('point ' + i + ' needs numeric x, y, z'); return { x: q.x, y: q.y, z: q.z }; });
+    let tp = a.clear ? [] : cur;
+    if (Array.isArray(a.points)) tp = chk(a.points);
+    if (Array.isArray(a.add)) tp = tp.concat(chk(a.add));
+    if (tp.length > GROUND_TP_MAX) throw new Error('At most ' + GROUND_TP_MAX + ' terrain points');
+    g.tp = tp;
+    if (a.interval !== undefined) { if (!GROUND_CI.includes(+a.interval)) throw new Error('interval must be one of ' + GROUND_CI.join(', ')); g.ci = +a.interval; }
+    if (a.snap !== undefined) g.snap = !!a.snap;
+    P.ground = g; cleanGround(P);
+    const r = groundP(P); if (!r.tp.length) return 'Terrain is flat (no height points).';
+    const zs = r.tp.map(q => q.z); return 'Terrain: ' + r.tp.length + ' point(s), ' + Math.min(...zs) + ' … ' + Math.max(...zs) + ' cm, contours every ' + r.ci + ' cm.';
   });
 
 tool('set_lights',

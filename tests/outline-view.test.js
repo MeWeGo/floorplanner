@@ -107,6 +107,7 @@ const env = new Function(`
   const layersVis = { furnLabel: true, furnIcon: true }; // label / icon toggles (#84)
   ${fnSrc('furnSvg')}
   const slopeSvg = () => ''; // slope points: surface-slope.test.js
+  const terrainLayerSvg = () => ''; // terrain contours: ground-surface.test.js
   ${fnSrc('layerStrings')}
   return {
     setMode(o) { Object.assign(ui, o); },

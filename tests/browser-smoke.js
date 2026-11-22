@@ -2332,6 +2332,42 @@ check('ground datum (#148): plinth skirt, merged basement excavation with earth 
   return 'one L cut to -310, skirt + earth sides, outside -101 / inside 0, section hatch';
 });
 
+check('terrain (#149): hillside preset, contours in the export, point add / drag / delete with the mouse, 3D terrain, tree on the terrain, walk on the hill, IFC terrain', async page => {
+  const r = await page.evaluate(`(async () => {
+    show3D(false); closeModal();
+    const wait = ms => new Promise(res => setTimeout(res, ms)), out = {};
+    loadProject(newProject()); addRectWalls(0, 0, 1000, 700); commit();
+    terrainPreset('hill'); terrainPad();
+    F().furn.push(mkFurn(BYID.tree, 1500, -600)); P.ground.snap = true; commit(); refresh();
+    out.hill = Math.round(terrainZ(-800, -800)); out.svg = exportSvg().svg.includes('class="terrain"');
+    setTool('terrain'); fit(); render();
+    const n0 = groundP(P).tp.length, cvr = cv.getBoundingClientRect();
+    const ev = (type, w) => { const s = w2s(w); cv.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, isPrimary: true, button: 0, pointerType: 'mouse', clientX: cvr.left + s.x, clientY: cvr.top + s.y })); };
+    ev('pointerdown', { x: 300, y: 300 }); ev('pointerup', { x: 300, y: 300 }); out.added = groundP(P).tp.length - n0;
+    const i = groundP(P).tp.length - 1;
+    ev('pointerdown', { x: 300, y: 300 }); ev('pointermove', { x: 420, y: 330 }); ev('pointerup', { x: 420, y: 330 }); out.dragX = Math.round(groundP(P).tp[i].x);
+    out.panel = !!document.querySelector('#props [data-k="tp"]');
+    deleteSel(); out.afterDel = groundP(P).tp.length - n0; undo(); out.undo = groundP(P).tp.length - n0;
+    setTool('select'); out.ok3d = false;
+    document.getElementById('b3d').click(); await wait(1200);
+    if (ui.view3d && T3 && T3.fit) {
+      out.ok3d = true; let t = 0; T3.scene.traverse(o => { if (o.userData.terrain) t++; }); out.terr = t;
+      let y = null; T3.scene.traverse(o => { if (o.userData.furnId && F().furn.some(x => x.id === o.userData.furnId && x.type === 'tree')) y = Math.round(new THREE.Box3().setFromObject(o).min.y); });
+      out.tree = y - Math.round(groundDatum3D() + terrainZ(1500, -600));
+      enterWalk({ i: fi, x: -800, y: -800 }); out.walk = Math.round(T3.walk.gz) - Math.round(terrainZ(-800, -800) - 1); exitWalk(false);
+      show3D(false);
+    }
+    out.ifc = /IFCGEOGRAPHICELEMENT\([^;]*\.TERRAIN\.\)/.test(ifcFromExchange(revitExport(P)));
+    return out;
+  })()`);
+  if (!(r.hill > 300) || !r.svg) return 'hillside preset / 2D contours missing: ' + JSON.stringify(r);
+  if (r.added !== 1 || r.dragX !== 420 || !r.panel || r.afterDel !== 0 || r.undo !== 1) return 'terrain tool add / drag / delete / undo failed: ' + JSON.stringify(r);
+  if (!r.ifc) return 'IFC export has no terrain: ' + JSON.stringify(r);
+  if (!r.ok3d) return 'skipped 3D (WebGL unavailable); 2D + tool + IFC ok';
+  if (r.terr !== 1 || Math.abs(r.tree) > 2 || Math.abs(r.walk) > 2) return 'terrain mesh / tree on terrain / walk on hill wrong: ' + JSON.stringify(r);
+  return 'hill ' + r.hill + ' cm, tool add/drag/delete/undo ok, terrain mesh, tree on terrain, walk on hill, IFC terrain';
+});
+
 check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light pool (no new shaders), 30 lamps build fast (#121)', async page => {
   await page.evaluate(`(() => {
     show3D(false); closeModal();
