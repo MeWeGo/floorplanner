@@ -106,6 +106,30 @@ const CATALOG = CAT_DEFS.map(a => ({ id: a[0], cat: a[1], name: a[2], w: a[3], d
 const BYID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
 // yerden yükseklik (#61): duvara asılan eşyalar bu yükseklikte gelir; alan isteğe bağlı, yoksa 0 (yerde)
 const CAT_ELEV = { tvw: 80, art: 120, shelfW: 150, ac: 220, cabU: 145, wmirror: 110, sconce: 170, wallOut: 220, tableLamp: 75 };
+/* GROUND-PARAM:BEGIN — proje zemini (#147): saf JS, mcp/server.js ile birebir aynı (tests/ground-surface.test.js karşılaştırır).
+   P.ground = { kind?, color?, scale? } isteğe bağlı; yok = 'auto' (CAD'de tema rengi, gerçekçi görünümde çim: eski görünüm).
+   kind: hazır yüzeyler, 'studio' (nötr açık zemin), 'none' (zemin gizli) ya da proje dokusu 'tex:<id>'. color = ton (#rrggbb),
+   scale = dokunun bir tekrarı (cm). groundP() tek okuyucu, cleanGround() normalizeProject'te geçersizleri ve varsayılanları siler. */
+const GROUND_KINDS = ['auto', 'grass', 'soil', 'sand', 'gravel', 'asphalt', 'concrete', 'stone', 'snow', 'water', 'studio', 'none'];
+const GROUND_COL = { grass: '#78b84a', soil: '#8a6748', sand: '#e2cfa3', gravel: '#b3ada3', asphalt: '#5a5e64', concrete: '#c9c5bd', stone: '#a29b90', snow: '#f4f7fa', water: '#3f86ae', studio: '#ece9e2' };
+const GROUND_TILE = { grass: 240, soil: 320, sand: 360, gravel: 140, asphalt: 420, concrete: 300, stone: 240, snow: 480, water: 600, studio: 400 }; // cm / tekrar
+const GROUND_SCALE_MIN = 20, GROUND_SCALE_MAX = 5000;
+function groundP(P) {
+  const g = P && P.ground && typeof P.ground === 'object' ? P.ground : {}, k = typeof g.kind === 'string' ? g.kind : '';
+  const kind = GROUND_KINDS.includes(k) || /^tex:[\w-]{1,32}$/.test(k) ? k : 'auto';
+  const color = typeof g.color === 'string' && /^#[0-9a-f]{6}$/i.test(g.color) ? g.color.toLowerCase() : null;
+  const sc = +g.scale, scale = Number.isFinite(sc) && sc > 0 ? Math.round(Math.max(GROUND_SCALE_MIN, Math.min(GROUND_SCALE_MAX, sc))) : null;
+  return { kind, color, scale };
+}
+function cleanGround(P) {
+  if (!P || P.ground == null) return;
+  const g = groundP(P), o = {};
+  if (g.kind !== 'auto') o.kind = g.kind;
+  if (g.color && g.kind !== 'none') o.color = g.color;
+  if (g.scale && g.kind !== 'none' && g.scale !== GROUND_TILE[g.kind]) o.scale = g.scale;
+  if (Object.keys(o).length) P.ground = o; else delete P.ground;
+}
+/* GROUND-PARAM:END */
 /* LIGHT-PARAM:BEGIN — aydınlatma elemanları (#120): saf JS, mcp/server.js ile birebir aynı (tests/lights.test.js karşılaştırır).
    Alanların hepsi isteğe bağlı, eski projeler değişmez: lon (0 = kapalı; yoksa açık), lm (lümen), lk (Kelvin) ya da lcol (özel renk),
    beam (spot açısı). Tek okuyucu lightP(o); temizleyici cleanLight(o). Tavan montajı mount: 'ceil' (kat yüksekliğini izler) ayrı bir alan. */
@@ -1434,6 +1458,7 @@ function normalizeProject(P) {
   if (!P.layers.some(l => l.id === P.activeLayer)) P.activeLayer = '0';
   if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
   cleanLw(P); // çizgi kalınlıkları
+  cleanGround(P); // 3B zemin (#147)
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); cleanWallFaces(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; cleanSurfHp(s); }
     for (const r of f.rooms) cleanSurfHp(r);
@@ -5548,6 +5573,22 @@ function cleanLw(P) {
   const out = {}; if (P.lw && typeof P.lw === 'object') for (const [c] of LW_CATS) { const v = +P.lw[c]; if (LW_STEPS.includes(v) && v !== 1) out[c] = v; }
   if (Object.keys(out).length) P.lw = out; else delete P.lw;
 }
+// 🌍 3B çevre zemini (#147): yüzey türü, ton, doku ölçeği
+const GROUND_NAMES = { auto: ['Otomatik (tema; gerçekçide çim)', 'Automatic (theme; grass when realistic)'], grass: ['Çim', 'Grass'], soil: ['Toprak', 'Soil / earth'], sand: ['Kum', 'Sand'], gravel: ['Çakıl', 'Gravel'],
+  asphalt: ['Asfalt', 'Asphalt'], concrete: ['Beton', 'Concrete'], stone: ['Taş döşeme', 'Stone paving'], snow: ['Kar', 'Snow'], water: ['Su', 'Water'], studio: ['Nötr (stüdyo)', 'Neutral (studio)'], none: ['Gizli (zemin yok)', 'Hidden (no ground)'] };
+function groundPanelHtml() {
+  const g = groundP(P), sel = Object.fromEntries(GROUND_KINDS.map(k => [k, L(...GROUND_NAMES[k])]));
+  for (const t of P.textures || []) sel['tex:' + t.id] = '🖼 ' + t.name;
+  let h = `<h4>🌍 ${L('3B zemin (çevre)', '3D ground (surroundings)')}</h4>` + fld(L('Yüzey', 'Surface'), 'ground', 'kind', g.kind, { sel });
+  if (g.kind !== 'auto' && g.kind !== 'none') {
+    const def = g.kind.startsWith('tex:') ? '#ffffff' : GROUND_COL[g.kind], tile = g.kind.startsWith('tex:') ? (texMeta(g.kind.slice(4)) || {}).w || 100 : GROUND_TILE[g.kind];
+    h += fld(L('Ton rengi', 'Tint colour'), 'ground', 'color', g.color || def, { type: 'color' })
+      + fld(L('Doku ölçeği (cm)', 'Texture scale (cm)'), 'ground', 'scale', g.scale || tile, { min: GROUND_SCALE_MIN, max: GROUND_SCALE_MAX });
+    if (g.color || g.scale) h += `<div class="row"><button class="btn sm" data-act="groundreset">${L('↺ Varsayılan ton / ölçek', '↺ Default tint / scale')}</button></div>`;
+  }
+  h += `<p class="muted" style="margin:0 0 6px">${L('Binanın çevresindeki 3B zemin: CAD görünümü, canlı gerçekçi görünüm (gündüz / akşam / gece) ve render stüdyosu bu yüzeyi kullanır; uzak kenar ufukta sise karışır.', 'The 3D ground around the building: the CAD view, the live realistic view (day / evening / night) and the render studio use this surface; its far edge fades into the horizon.')}</p>`;
+  return h;
+}
 function lwPanelHtml() {
   const lbl = { 0.5: L('Çok ince', 'Very thin'), 0.75: L('İnce', 'Thin'), 1: L('Normal', 'Normal'), 1.5: L('Kalın', 'Thick'), 2: L('Çok kalın', 'Very thick'), 3: L('En kalın', 'Heaviest') };
   const sel = Object.fromEntries(LW_STEPS.map(v => [String(v), `${lbl[v]} ×${v}`]));
@@ -8085,6 +8126,7 @@ function projectPanel() {
   if (f.slabColor && !f.noSlab) h += `<div class="row"><button class="btn sm" data-act="slabreset">${L('↺ Varsayılan renk', '↺ Default colour')}</button></div>`;
   if (!f.noSlab) h += `<p class="muted" style="margin:0 0 6px">${L('3B görünümde odası olmayan alanlar (balkon, antre, teras) da bu malzemeyle kaplanır.', 'In 3D, areas without a room (balcony, hallway, terrace) are finished with this material too.')}</p>`;
   h += texturesPanelHtml();
+  h += groundPanelHtml();
   const rooms = f.rooms; let tot = 0;
   h += `<h4>${L('Odalar', 'Rooms')} – ${esc(f.name)}</h4>`;
   if (!rooms.length) h += `<p class="muted" style="margin:0">${L('Henüz oda yok. “Oda algıla” aracı ile kapalı alanlara tıkla.', 'No rooms yet. Click inside enclosed areas with the “Auto Room” tool.')}</p>`;
@@ -8164,6 +8206,11 @@ function applyProp(t, final) {
     const o = selObjs()[0]?.o, q = o && o.hp && o.hp[+t.dataset.i]; if (!q) return;
     q.z = Math.round(clamp(+v || 0, -SURF_Z_MAX, SURF_Z_MAX) * 10) / 10;
     render(); if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
+  }
+  if (k === 'ground') { // 3B zemin (#147)
+    const g = P.ground = Object.assign({}, P.ground);
+    if (p === 'kind') g.kind = v; else if (p === 'color') g.color = v; else if (p === 'scale') g.scale = +v;
+    cleanGround(P); if (ui.view3d && T3) schedBuild3D(); if (final) { commit(); renderProps(); } return;
   }
   if (k === 'lw') { // çizgi kalınlığı (proje)
     const n = +v; P.lw = P.lw || {}; if (LW_STEPS.includes(n) && n !== 1) P.lw[p] = n; else delete P.lw[p]; cleanLw(P);
@@ -8360,6 +8407,7 @@ $('#props').addEventListener('click', e => {
     for (const c of cuts) { const nw = splitWallAt(cur, c - base); base = c; cur = nw; }
     commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
   }
+  if (a === 'groundreset') { if (P.ground) { delete P.ground.color; delete P.ground.scale; cleanGround(P); } commit(); if (ui.view3d && T3) schedBuild3D(); return refresh(); }
   if (a === 'slabreset') { f.slabColor = null; commit(); if (ui.view3d && T3) schedBuild3D(); return refresh(); }
   if (a === 'wallfaceswap' || a === 'wallfacereset') {
     const ws = os.filter(x => x.kind === 'wall'); if (!ws.length) return;
@@ -13394,7 +13442,7 @@ async function render3DHQ(opts) {
     } else scene.background = new THREE.Color(0xffffff);
     if (T3.ground) {
       oldGroundMat = T3.ground.material;
-      studioGround = backdrop === 'sky' ? grassGroundMat() : new THREE.MeshLambertMaterial({ color: 0xf3f1ec, side: THREE.DoubleSide });
+      studioGround = groundMat(backdrop === 'sky' ? 'real' : 'paper'); // proje zemini (#147); auto + beyaz fon = eski kâğıt
       T3.ground.material = studioGround;
     }
     scene.traverse(o => {
@@ -13699,14 +13747,14 @@ function makeSky(sv, cam, fit) {
   const alt = Math.asin(clamp(sv.y, -1, 1)) * 180 / Math.PI, c = skyColors(alt);
   const mat = new THREE.ShaderMaterial({
     uniforms: { zen: { value: c.zen }, hor: { value: c.hor }, gnd: { value: c.gnd }, glow: { value: c.glow }, sun: { value: new THREE.Vector3(sv.x, sv.y, sv.z).normalize() },
-      night: { value: Math.pow(nightOf(alt), 1.5) }, moon: { value: new THREE.Vector3(-sv.x, 0.57, -sv.z).normalize() } },
+      night: { value: Math.pow(nightOf(alt), 1.5) }, under: { value: T3 && T3.ground && T3.ground.visible ? 0 : 1 }, moon: { value: new THREE.Vector3(-sv.x, 0.57, -sv.z).normalize() } },
     vertexShader: 'varying vec3 vDir;\nvoid main() { vDir = position; vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = vec4(p.xy, p.w * 0.999995, p.w); }',
     fragmentShader: [
-      'uniform vec3 zen; uniform vec3 hor; uniform vec3 gnd; uniform vec3 glow; uniform vec3 sun; uniform float night; uniform vec3 moon; varying vec3 vDir;',
+      'uniform vec3 zen; uniform vec3 hor; uniform vec3 gnd; uniform vec3 glow; uniform vec3 sun; uniform float night; uniform float under; uniform vec3 moon; varying vec3 vDir;',
       'float rnd(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }',
       'void main() {',
       '  vec3 d = normalize(vDir); float h = d.y;',
-      '  vec3 c = h > 0.0 ? mix(hor, zen, pow(h, 0.55)) : mix(hor, gnd, min(1.0, -h * 5.0));',
+      '  vec3 c = h > 0.0 ? mix(hor, zen, pow(h, 0.55)) : mix(hor, gnd, under * min(1.0, -h * 5.0));',   // zemin görünürken ufkun altı sis rengi: zemin kenarı çizgi vermez (#147)
       '  float s = max(dot(d, sun), 0.0);',
       '  c += glow * (pow(s, 600.0) * 2.0 + pow(s, 24.0) * 0.45 + pow(s, 4.0) * 0.12);',
       '  if (night > 0.0 && h > 0.0) {   // gece (#122): yıldızlar + ay',
@@ -15757,15 +15805,120 @@ function liveSkyFollow() {
   lv.sky.position.copy(c); // gökyüzü kamerayla gezer; sis binanın ötesinde başlar
   lv.fog.near = near; lv.fog.far = Math.max(near + 1000, Math.min(17000, near + Math.max(5000, sz * 6)));
 }
-let _grassGroundTex = null;
-function grassGroundMat() {
-  if (!_grassGroundTex) {
-    _grassGroundTex = floorTexture('grass', '#6fb33b', true, { floorTex: {}, texs: [] });
-    _grassGroundTex.anisotropy = 8;
-    _grassGroundTex.repeat.set(40000 / 240, 40000 / 240);
-  }
-  return new THREE.MeshPhongMaterial({ map: _grassGroundTex, bumpMap: _grassGroundTex, bumpScale: 1.4, shininess: 4, specular: 0x142008, side: THREE.DoubleSide });
+/* ---------- 3B çevre zemini (#147) ----------
+   groundCanvas(kind): kind başına bir kez çizilen, kenarları saran 512 px gri desen (çim sapları, toprak topakları, kum dalgası,
+   çakıl taşları, asfalt agregası, beton derzleri, taş döşeme, kar, su dalgası); malzeme rengi (tür rengi ya da ton) onu boyar.
+   groundAntiTile(m): harita iki ölçekte okunur ve düşük frekanslı lekelerle karışır, ayrıca çok geniş ölçekli açık / koyu bölgeler
+   eklenir — 400 m'lik düzlemde kuşbakışı döşeme ızgarası görünmez. Doku modül önbelleğinde kalır (tür başına bir tane), malzeme
+   her çağrıda yenidir ve çağıran dispose eder. mode: 'cad' (tema; auto → null = eski düz renk), 'real' (canlı görünüm, gökyüzü
+   renderı; auto → çim), 'paper' (beyaz fonlu render; auto → kâğıt rengi). */
+const GROUND_BUMP = { grass: 1.4, soil: 1.6, sand: 0.7, gravel: 2.2, asphalt: 0.6, concrete: 0.5, stone: 1.8, snow: 0.5, water: 0.25, studio: 0 };
+const _groundCv = {}, _groundTex = {};
+function groundCanvas(kind) {
+  if (_groundCv[kind]) return _groundCv[kind];
+  const N = 512, cv = document.createElement('canvas'); cv.width = cv.height = N;
+  const g = cv.getContext('2d');
+  let sd = 4049 + kind.length * 7919 + kind.charCodeAt(0) * 131;
+  const rn = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+  const lat = new Float32Array(128 * 128); for (let i = 0; i < lat.length; i++) lat[i] = rn();
+  const vn = (x, y, X) => { // döşenebilir değer gürültüsü, X × X hücre (≤ 128)
+    const fx = x / N * X, fy = y / N * X, i = Math.floor(fx), j = Math.floor(fy), u = fx - i, v = fy - j;
+    const at = (a, b) => lat[(((b % X) + X) % X) * 128 + (((a % X) + X) % X)], su = u * u * (3 - 2 * u), sv = v * v * (3 - 2 * v);
+    const a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), e = at(i + 1, j + 1);
+    return (a + (b - a) * su) * (1 - sv) + (c + (e - c) * su) * sv;
+  };
+  const fbm = (x, y, o0, n) => { let s = 0, a = 0.5, t = 0; for (let k = 0; k < n; k++) { s += vn(x, y, o0 << k) * a; t += a; a *= 0.5; } return s / t; };
+  const im = g.createImageData(N, N), D = im.data;
+  const put = f => { for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const v = Math.max(0, Math.min(255, Math.round(f(x, y)))), k = (y * N + x) * 4; D[k] = D[k + 1] = D[k + 2] = v; D[k + 3] = 255; } g.putImageData(im, 0, 0); };
+  const wrap = (x, y, r, fn) => { for (const ox of [0, -N, N]) for (const oy of [0, -N, N]) if (x + ox > -r && x + ox < N + r && y + oy > -r && y + oy < N + r) fn(x + ox, y + oy); };
+  const grey = v => { v = Math.max(0, Math.min(255, Math.round(v))); return `rgb(${v},${v},${v})`; };
+  if (kind === 'grass') {
+    put((x, y) => 168 + 36 * fbm(x, y, 16, 3) + 40 * (vn(x, y, 128) - 0.5));
+    for (let i = 0; i < 2600; i++) { const x = rn() * N, y = rn() * N, l = 3 + rn() * 7, a = -Math.PI / 2 + (rn() - 0.5) * 1.2; g.strokeStyle = grey(rn() < 0.5 ? 120 + rn() * 50 : 215 + rn() * 40); g.lineWidth = 1; wrap(x, y, 12, (px, py) => { g.beginPath(); g.moveTo(px, py); g.lineTo(px + Math.cos(a) * l, py + Math.sin(a) * l); g.stroke(); }); }
+  } else if (kind === 'soil') {
+    put((x, y) => 150 + 60 * fbm(x, y, 16, 3) + 30 * (vn(x, y, 128) - 0.5));
+    for (let i = 0; i < 900; i++) { const x = rn() * N, y = rn() * N, r = 0.6 + rn() * 2.2; g.fillStyle = grey(rn() < 0.6 ? 95 + rn() * 40 : 220); wrap(x, y, 4, (px, py) => { g.beginPath(); g.arc(px, py, r, 0, 7); g.fill(); }); }
+  } else if (kind === 'sand') {
+    put((x, y) => 205 + 28 * fbm(x, y, 4, 3) + 9 * Math.sin((y + 70 * fbm(x, y, 2, 3) + 25 * vn(x, y, 8)) / N * Math.PI * 2 * 7) + 26 * (vn(x, y, 128) - 0.5)); // dalga hafif ve kıvrık: tekrar çizgisi vermez
+  } else if (kind === 'gravel') {
+    put((x, y) => 120 + 40 * fbm(x, y, 16, 3));
+    for (let i = 0; i < 2200; i++) { const x = rn() * N, y = rn() * N, r = 2 + rn() * 5, c = 150 + rn() * 100; wrap(x, y, 8, (px, py) => { g.fillStyle = grey(c * 0.6); g.beginPath(); g.ellipse(px + 0.8, py + 0.8, r, r * (0.6 + rn() * 0.3), rn() * 3, 0, 7); g.fill(); g.fillStyle = grey(c); g.beginPath(); g.ellipse(px, py, r * 0.92, r * 0.58, rn() * 3, 0, 7); g.fill(); }); }
+  } else if (kind === 'asphalt') {
+    put((x, y) => 175 + 40 * fbm(x, y, 8, 3) + 60 * (vn(x, y, 128) - 0.5));
+    for (let i = 0; i < 3000; i++) { const x = rn() * N, y = rn() * N; g.fillStyle = grey(rn() < 0.5 ? 120 : 245); g.fillRect(x, y, 1 + rn() * 1.6, 1 + rn() * 1.6); }
+  } else if (kind === 'concrete') {
+    put((x, y) => 212 + 22 * (fbm(x, y, 16, 3) - 0.5) + 14 * (vn(x, y, 128) - 0.5));
+    g.fillStyle = grey(150); g.fillRect(0, 0, N, 2); g.fillRect(0, 0, 2, N); // derz: her tekrar bir plak
+  } else if (kind === 'stone') {
+    put((x, y) => 120);
+    const n = 4, s = N / n;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const off = j % 2 ? s / 2 : 0, x0 = i * s + off + 3, y0 = j * s + 3, w = s - 6, c = 170 + rn() * 60;
+      wrap(x0 + w / 2, y0 + w / 2, s, (cx, cy) => { g.fillStyle = grey(c); g.fillRect(cx - w / 2, cy - w / 2, w, w); });
+    }
+    const st = g.getImageData(0, 0, N, N); for (let k = 0, y = 0; y < N; y++) for (let x = 0; x < N; x++, k += 4) { const d = (fbm(x, y, 16, 2) - 0.5) * 40; st.data[k] = st.data[k + 1] = st.data[k + 2] = Math.max(0, Math.min(255, st.data[k] + d)); } g.putImageData(st, 0, 0);
+  } else if (kind === 'snow') {
+    put((x, y) => 236 + 12 * (fbm(x, y, 16, 3) - 0.5) + 8 * (vn(x, y, 128) - 0.5));
+  } else if (kind === 'water') {
+    put((x, y) => 200 + 45 * Math.sin((x + y * 0.3 + 40 * fbm(x, y, 4, 3)) / N * Math.PI * 2 * 6) * 0.5 + 20 * (fbm(x, y, 8, 2) - 0.5));
+  } else put(() => 240); // studio
+  // alfa kanalı: desenden bağımsız, döşenebilir iri gürültü (160–255; düşük alfa premultiply ile rengi bozar). Gölgelendirici
+  // onu çok düşük ölçeklerde okur: karışım maskesi + geniş açık / koyu bölgeler. Malzeme saydam değil, alfa görünmez.
+  const ad = g.getImageData(0, 0, N, N); for (let k = 3, y = 0; y < N; y++) for (let x = 0; x < N; x++, k += 4) ad.data[k] = 160 + Math.round(95 * fbm(x, y, 4, 4)); g.putImageData(ad, 0, 0);
+  return (_groundCv[kind] = cv);
 }
+// harita iki ölçekte + düşük frekanslı karışım maskesi + çok geniş açık / koyu lekeler: kuşbakışı tekrar ızgarası kaybolur
+function groundAntiTile(m, custom) {
+  if (!custom) m.defines = Object.assign({}, m.defines, { GROUND_MACRO_A: '' }); // yordamsal doku: iri gürültü alfa kanalında
+  m.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', [
+      '#ifdef USE_MAP',
+      '  vec4 gT1 = texture2D( map, vUv );',
+      '  vec4 gT2 = texture2D( map, vUv * 0.3711 + vec2( 0.123, 0.587 ) );',
+      '#ifdef GROUND_MACRO_A',
+      '  float gN1 = ( texture2D( map, vUv * 0.0417 + vec2( 0.31, 0.77 ) ).a - 0.63 ) * 2.7 + 0.5;',
+      '  float gN2 = ( texture2D( map, vUv * 0.0093 + vec2( 0.53, 0.11 ) ).a - 0.63 ) * 2.7 + 0.5;',
+      '  float gN3 = ( texture2D( map, vUv * 0.0021 + vec2( 0.17, 0.41 ) ).a - 0.63 ) * 2.7 + 0.5;',
+      '#else',
+      '  float gN1 = texture2D( map, vUv * 0.0417 + vec2( 0.31, 0.77 ) ).g;',
+      '  float gN2 = texture2D( map, vUv * 0.0093 + vec2( 0.53, 0.11 ) ).g;',
+      '  float gN3 = gN2;',
+      '#endif',
+      '  vec4 texelColor = mix( gT1, gT2, smoothstep( 0.35, 0.65, gN1 ) );',
+      '  texelColor.rgb *= 0.8 + 0.22 * gN2 + 0.18 * gN3;',
+      '  texelColor.a = 1.0;',
+      '  texelColor = mapTexelToLinear( texelColor );',
+      '  diffuseColor *= texelColor;',
+      '#endif'].join('\n'));
+  };
+  return m;
+}
+function groundTex(kind, scale) {
+  const R2 = 40000; let t;
+  if (kind.startsWith('tex:')) {
+    const id = kind.slice(4), meta = texMeta(id), e = TEX.get(id);
+    if (!meta || !e || !e.img) return null;
+    t = _groundTex[kind]; if (!t || t.image !== e.img) { t = new THREE.Texture(e.img); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.encoding = THREE.sRGBEncoding; t.anisotropy = 8; t.needsUpdate = true; _groundTex[kind] = t; }
+    t.repeat.set(R2 / (scale || meta.w), R2 / (scale || meta.h)); return t;
+  }
+  t = _groundTex[kind];
+  if (!t) { t = new THREE.CanvasTexture(groundCanvas(kind)); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; t.encoding = THREE.sRGBEncoding; _groundTex[kind] = t; }
+  const s = scale || GROUND_TILE[kind] || 300; t.repeat.set(R2 / s, R2 / s); return t;
+}
+function groundMat(mode) {
+  const g = groundP(P); let kind = g.kind;
+  if (kind === 'auto') { if (mode === 'cad') return null; if (mode === 'paper') return new THREE.MeshLambertMaterial({ color: 0xf3f1ec, side: THREE.DoubleSide }); kind = 'grass'; }
+  if (kind === 'none') return mode === 'cad' ? null : new THREE.MeshLambertMaterial({ color: 0xf3f1ec, side: THREE.DoubleSide }); // görünmez zemin: malzeme önemsiz
+  const custom = kind.startsWith('tex:'), map = groundTex(kind, g.scale);
+  const col = new THREE.Color(g.color || (custom ? '#ffffff' : GROUND_COL[kind]));
+  if (!map) return mode === 'cad' ? null : new THREE.MeshLambertMaterial({ color: col, side: THREE.DoubleSide }); // doku henüz yüklenmedi
+  if (mode === 'cad') { if (!isLight()) col.multiplyScalar(0.55); return groundAntiTile(new THREE.MeshLambertMaterial({ color: col, map, side: THREE.DoubleSide }), custom); }
+  const water = kind === 'water', bump = custom ? 0.6 : GROUND_BUMP[kind] || 0;
+  return groundAntiTile(new THREE.MeshPhongMaterial(Object.assign({ color: col, map, shininess: water ? 70 : kind === 'snow' ? 12 : 4, specular: water ? 0x557788 : kind === 'snow' ? 0x222222 : 0x111111, side: THREE.DoubleSide },
+    bump ? { bumpMap: map, bumpScale: bump } : {})), custom);
+}
+// eski ad (gökyüzü renderı / canlı görünüm testleri): proje zemini, auto = çim
+function grassGroundMat() { return groundMat('real'); }
 /* ---------- Gerçekçi görünüm katmanı (#87) ----------
    CAD görünümü ucuz Lambert malzemelerle kalır. Gerçekçi render ve canlı gerçekçi görünüm (#81) sahneyi bu katmandan
    geçirir: her malzemenin fiziksel tabanlı (MeshStandardMaterial) karşılığı yüzey türüne göre pürüzlülük / metal değeri
@@ -15927,8 +16080,8 @@ function applyLive3D() {
     markScene3D(); return;
   }
   const st = ui.studio, sv = sunVector(st.az, st.alt), sky = makeSky(sv, T3.cam, T3.fit);
-  const ground = grassGroundMat(), slab = new THREE.MeshLambertMaterial({ color: 0xded8cc, side: THREE.DoubleSide });
-  const nt0 = nightOf(st.alt); if (nt0) { ground.color.setScalar(1 - 0.7 * nt0); slab.color.multiplyScalar(1 - 0.5 * nt0); } // gece (#122): çim karanlıkta; iç mekân ışığının duvardan sızması belirgin olmasın
+  const ground = groundMat('real'), slab = new THREE.MeshLambertMaterial({ color: 0xded8cc, side: THREE.DoubleSide });
+  const nt0 = nightOf(st.alt); if (nt0) { ground.color.multiplyScalar(1 - 0.7 * nt0); slab.color.multiplyScalar(1 - 0.5 * nt0); } // gece (#122): çim karanlıkta; iç mekân ışığının duvardan sızması belirgin olmasın
   S.traverse(o => {
     if (o.isLineSegments) { if (o.type !== 'BoxHelper') o.visible = false; } // seçim kutusu görünür kalır
     else if (o.userData && o.userData.slab) o.material = slab;
@@ -17670,7 +17823,9 @@ function build3D(keepCam = false) {
       S.add(new THREE.Line(geo, mat(col))); // malzeme matCache ile T3.mats'te dispose edilir
     });
   });
-  const ground = groundMesh3D(mat(lt ? 0xd8d2c5 : 0x11161e)); S.add(ground); // ±0.00'da; bodrum katların ve çukurların üstü açık
+  const gMat = groundMat('cad'); if (gMat) extraMats.push(gMat); // proje zemini (#147); auto = eski tema rengi
+  const ground = groundMesh3D(gMat || mat(lt ? 0xd8d2c5 : 0x11161e)); S.add(ground); // ±0.00'da; bodrum katların ve çukurların üstü açık
+  ground.visible = groundP(P).kind !== 'none';
   T3.ground = ground;                                 // the render swaps its material for a studio backdrop
   T3.fit = { cx, cz, sz, elev, x0: all.x0, x1: all.x1, z0: all.y0, z1: all.y1 };
   if (!keepCam) { T3.cam.position.set(cx + sz * 0.7, sz * 0.9 + elev * .3, cz + sz * 1.0); T3.ctl.target.set(cx, 80, cz); fitOrtho(); }

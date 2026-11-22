@@ -2258,6 +2258,47 @@ check('light fixtures: placed on the ceiling, panel on / off and brightness, roo
   return 'on the ceiling at ' + r.elev + ' cm, panel + room switch + undo + storey height + export + IFC round trip';
 });
 
+check('3D ground surface (#147): panel picks the surface, undo restores it, hidden ground, live view + render studio use it and restore', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(async () => {
+    const out = {}, wait = ms => new Promise(res => setTimeout(res, ms));
+    const pick = (p, v) => { const el = document.querySelector('#props [data-k="ground"][data-p="' + p + '"]'); if (!el) return false; el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); return true; };
+    out.autoMap = !!T3.ground.material.map;
+    out.panel = pick('kind', 'sand'); await wait(400); build3D(true);
+    out.kind = P.ground && P.ground.kind; out.sandMap = !!T3.ground.material.map;
+    const col = () => { set3DCam('top'); draw3D(performance.now()); const cv = T3.r.domElement, c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0); const d = g.getImageData(4, 4, 1, 1).data; return [d[0], d[1], d[2]]; };
+    out.sand = col();
+    pick('kind', 'asphalt'); await wait(400); build3D(true); out.asphalt = col();
+    undo(); await wait(300); build3D(true); out.undoKind = P.ground && P.ground.kind;
+    pick('kind', 'none'); await wait(300); build3D(true); out.hidden = T3.ground.visible === false;
+    pick('kind', 'grass'); await wait(300); build3D(true);
+    const p0 = T3.r.info.programs.length; setLive3D(true); await wait(400);
+    out.live = T3.ground.material.type === 'MeshPhongMaterial' && !!T3.ground.material.map;
+    const before = T3.ground.material;
+    await render3DHQ({ style: 'realistic', longSide: 480, frames: 1 }); await render3DHQ({ style: 'technical', backdrop: 'studio', longSide: 480, frames: 1 });
+    out.restored = T3.ground.material === before;
+    setLive3D(false); await wait(300); out.cadBack = T3.ground.material.type === 'MeshLambertMaterial';
+    out.progs = T3.r.info.programs.length - p0;
+    return out;
+  })()`);
+  await page.evaluate(`(() => { setLive3D(false); show3D(false); })()`);
+  const lum = c => c[0] + c[1] + c[2];
+  if (r.autoMap) return 'auto ground must stay the old untextured CAD colour: ' + JSON.stringify(r);
+  if (!r.panel || r.kind !== 'sand' || !r.sandMap) return 'the project panel did not switch the ground to sand: ' + JSON.stringify(r);
+  if (!(lum(r.sand) > lum(r.asphalt) + 60)) return 'sand should read much lighter than asphalt from above: ' + JSON.stringify(r);
+  if (r.undoKind !== 'sand') return 'undo did not restore the previous ground: ' + JSON.stringify(r);
+  if (!r.hidden) return 'kind none must hide the ground: ' + JSON.stringify(r);
+  if (!r.live || !r.restored || !r.cadBack) return 'live view / render studio did not use or restore the ground: ' + JSON.stringify(r);
+  return 'sand ' + r.sand + ' vs asphalt ' + r.asphalt + ', undo ok, hidden ok, live + 2 renders restored, ' + r.progs + ' new programs';
+});
+
 check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light pool (no new shaders), 30 lamps build fast (#121)', async page => {
   await page.evaluate(`(() => {
     show3D(false); closeModal();
