@@ -2368,6 +2368,40 @@ check('terrain (#149): hillside preset, contours in the export, point add / drag
   return 'hill ' + r.hill + ' cm, tool add/drag/delete/undo ok, terrain mesh, tree on terrain, walk on hill, IFC terrain';
 });
 
+check('site zones (#150): draw a zone with the mouse, panel type + curb, parcel setback, context on other floors, not a room, 3D + walk on the curb, IFC', async page => {
+  const r = await page.evaluate(`(async () => {
+    show3D(false); closeModal();
+    const wait = ms => new Promise(res => setTimeout(res, ms)), out = {};
+    loadProject(newProject()); addRectWalls(0, 0, 1000, 700); commit();
+    P.floors.push(newFloor('1')); commit(); fi = 0; refresh(); fit(); render();
+    setTool('zone');
+    const cvr = cv.getBoundingClientRect(), ev = (type, w) => { const s = w2s(w); cv.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, isPrimary: true, button: 0, pointerType: 'mouse', clientX: cvr.left + s.x, clientY: cvr.top + s.y })); };
+    ev('pointerdown', { x: 1200, y: 0 }); ev('pointermove', { x: 1400, y: 400 }); ev('pointermove', { x: 1600, y: 700 }); ev('pointerup', { x: 1600, y: 700 });
+    const z = F().zones[0]; out.drawn = !!z && z.pts.length === 4 && z.zt === 'lawn';
+    sel = [z.id]; setTool('select'); renderProps();
+    const pick = (p, v) => { const el = document.querySelector('#props [data-k="zone"][data-p="' + p + '"]'); if (!el) return false; el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); return true; };
+    out.panel = pick('zt', 'path') && pick('curb', '15') && z.zt === 'path' && z.curb === 15 && ui.zoneT === 'path';
+    F().zones.push(mkZone([{ x: -500, y: -500 }, { x: 2200, y: -500 }, { x: 2200, y: 1300 }, { x: -500, y: 1300 }], 'parcel')); F().zones[1].setback = 300; F().zones[1].name = 'Lot 9'; commit(); sel = []; refresh();
+    const sb = zoneSetback(F().zones[1]); out.setback = sb && sb[0].x === -200 && sb[0].y === -200;
+    out.svg = exportSvg().svg.includes('Lot 9'); out.rooms = F().rooms.length;
+    fi = 1; refresh(); out.ctx = exportSvg().svg.includes('opacity="0.35"'); fi = 0; refresh();
+    undo(); out.undo = F().zones.length === 1; redo();
+    out.ok3d = false; document.getElementById('b3d').click(); await wait(1200);
+    if (ui.view3d && T3 && T3.fit) {
+      out.ok3d = true; let n = 0; T3.scene.traverse(o => { if (o.userData.zoneId) n++; }); out.z3d = n;
+      enterWalk({ i: 0, x: 1400, y: 350 }); out.walk = Math.round(T3.walk.gz); exitWalk(false); show3D(false);
+    }
+    out.ifc = ifcFromExchange(revitExport(P)).split('IFCGEOGRAPHICELEMENT(').length - 1;
+    return out;
+  })()`);
+  if (!r.drawn || !r.panel) return 'drawing a zone with the mouse / editing it in the panel failed: ' + JSON.stringify(r);
+  if (!r.setback || !r.svg || r.rooms !== 0 || !r.ctx || !r.undo) return 'parcel setback / export / context / undo failed: ' + JSON.stringify(r);
+  if (r.ifc !== 2) return 'IFC should carry the path and the parcel: ' + JSON.stringify(r);
+  if (!r.ok3d) return 'skipped 3D (WebGL unavailable); 2D + panel + IFC ok';
+  if (r.z3d !== 2 || r.walk !== -4) return '3D zones / walking on the 15 cm curb (ground −21 + 2 + 15) wrong: ' + JSON.stringify(r);
+  return 'mouse-drawn zone, panel path + 15 cm curb, 3 m setback, upper-floor context, not a room, 3D + walk on curb, IFC';
+});
+
 check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light pool (no new shaders), 30 lamps build fast (#121)', async page => {
   await page.evaluate(`(() => {
     show3D(false); closeModal();

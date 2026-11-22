@@ -146,6 +146,40 @@ function cleanGround(P) {
   if (Object.keys(o).length) P.ground = o; else delete P.ground;
 }
 /* GROUND-PARAM:END */
+/* ZONE-PARAM:BEGIN — arsa sınırı ve dış mekân zeminleri (#150): saf JS, mcp/server.js ile birebir aynı (tests/site-zones.test.js karşılaştırır).
+   Floor.zones = [{ id, zt, name?, pts, floor?, color?, curb?, setback?, sb? }] — sıradan bir tür (KINDS.zones = 'zone'), yani seçme,
+   taşıma, döndürme, aynalama, kopyalama, geri alma, katman hazır gelir. zt: 'parcel' (arsa: sınır + çekme mesafesi, yüzeyi yok) ya da
+   bir dış zemin (yol, yaya yolu, araç yolu, çim / bahçe, avlu, çakıl, su). Oda değildir: oda sayısına ve iç alan toplamına girmez. */
+const ZONE_TYPES = { parcel: ['Arsa sınırı', 'Site parcel', 'none'], road: ['Yol', 'Road', 'asphalt'], path: ['Yaya yolu / kaldırım', 'Path / sidewalk', 'stone'], drive: ['Araç yolu', 'Driveway', 'concrete'],
+  lawn: ['Çim / bahçe', 'Lawn / garden', 'grass'], patio: ['Avlu / teras', 'Courtyard / patio', 'deck'], gravel: ['Çakıl alan', 'Gravel yard', 'gravel'], water: ['Havuz / gölet', 'Pond / water', 'water'] };
+const ZONE_CURB_MAX = 50, ZONE_SB_MAX = 5000;
+const zoneFinish = o => o.floor || (ZONE_TYPES[o.zt] || ZONE_TYPES.lawn)[2]; // kaplama: kendi seçimi, yoksa türünün varsayılanı
+function cleanZone(o) {
+  if (!o || typeof o !== 'object') return;
+  if (!ZONE_TYPES[o.zt]) o.zt = 'lawn';
+  o.pts = Array.isArray(o.pts) ? o.pts.filter(p => p && Number.isFinite(+p.x) && Number.isFinite(+p.y)).map(p => ({ x: Math.round(+p.x * 10) / 10, y: Math.round(+p.y * 10) / 10 })) : [];
+  if (typeof o.name !== 'string' || !o.name.trim()) delete o.name; else o.name = o.name.slice(0, 60);
+  if (typeof o.floor !== 'string' || !o.floor || o.floor === (ZONE_TYPES[o.zt] || [])[2]) delete o.floor;
+  if (typeof o.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(o.color)) delete o.color;
+  const c = +o.curb; if (Number.isFinite(c) && c > 0 && o.zt !== 'parcel') o.curb = Math.round(Math.min(ZONE_CURB_MAX, c)); else delete o.curb;
+  const sb = +o.setback; if (o.zt === 'parcel' && Number.isFinite(sb) && sb > 0) o.setback = Math.round(Math.min(ZONE_SB_MAX, sb)); else delete o.setback;
+  if (o.zt === 'parcel' && Array.isArray(o.sb) && o.sb.length === o.pts.length && o.sb.some(v => +v > 0)) o.sb = o.sb.map(v => Math.round(Math.max(0, Math.min(ZONE_SB_MAX, +v || 0)))); else delete o.sb;
+}
+// çekme hattı: her kenar kendi mesafesi kadar (sb[i], yoksa setback) içeri kayar, komşu kenar çizgileri kesiştirilir (dışbükey / hafif içbükey arsa)
+function zoneSetback(o) {
+  const P0 = o.pts || [], n = P0.length; if (n < 3) return null;
+  const d = i => Array.isArray(o.sb) && +o.sb[i] > 0 ? +o.sb[i] : +o.setback || 0; if (![...Array(n).keys()].some(i => d(i) > 0)) return null;
+  let A = 0; for (let i = 0; i < n; i++) { const a = P0[i], b = P0[(i + 1) % n]; A += a.x * b.y - b.x * a.y; } const sg = A > 0 ? 1 : -1; // plan y aşağı: içe normal işarete göre
+  const lines = P0.map((a, i) => { const b = P0[(i + 1) % n], L = Math.hypot(b.x - a.x, b.y - a.y) || 1, nx = -(b.y - a.y) / L * sg, ny = (b.x - a.x) / L * sg; return { x: a.x + nx * d(i), y: a.y + ny * d(i), dx: (b.x - a.x) / L, dy: (b.y - a.y) / L }; });
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const l1 = lines[(i - 1 + n) % n], l2 = lines[i], den = l1.dx * l2.dy - l1.dy * l2.dx;
+    if (Math.abs(den) < 1e-9) { out.push({ x: l2.x, y: l2.y }); continue; }
+    const t = ((l2.x - l1.x) * l2.dy - (l2.y - l1.y) * l2.dx) / den; out.push({ x: Math.round((l1.x + l1.dx * t) * 10) / 10, y: Math.round((l1.y + l1.dy * t) * 10) / 10 });
+  }
+  return out;
+}
+/* ZONE-PARAM:END */
 /* LIGHT-PARAM:BEGIN — aydınlatma elemanları (#120): saf JS, mcp/server.js ile birebir aynı (tests/lights.test.js karşılaştırır).
    Alanların hepsi isteğe bağlı, eski projeler değişmez: lon (0 = kapalı; yoksa açık), lm (lümen), lk (Kelvin) ya da lcol (özel renk),
    beam (spot açısı). Tek okuyucu lightP(o); temizleyici cleanLight(o). Tavan montajı mount: 'ceil' (kat yüksekliğini izler) ayrı bir alan. */
@@ -322,7 +356,7 @@ const texGenUrl = svg => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponen
 const FINISH_DOC = FLOORPATS.join(' | ') + ' | "tex:<id>" (a custom texture from project.textures)';
 // door material / colours (#41), mirrors DOOR_MATS in app.js
 const DOOR_MATS = ['wood', 'glass', 'paneled', 'metal'];
-const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', sections: 'section', axes: 'axis', dims: 'dim', texts: 'text', sketches: 'sketch', drafts: 'draft' };
+const KINDS = { walls: 'wall', ops: 'op', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', zones: 'zone', sections: 'section', axes: 'axis', dims: 'dim', texts: 'text', sketches: 'sketch', drafts: 'draft' };
 
 /* ---------- Small helpers (mirror app.js) ---------- */
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -3005,7 +3039,7 @@ const CAT_PARTS = { billiard: billiardParts }; // mirror of CAT_PARTS in app.js
 /* ---------- Project state ---------- */
 let P = null; // working project (same schema the app saves/loads)
 
-function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], axes: [], dims: [], texts: [], sketches: [], drafts: [], groups: [], slabFloor: 'none', slabColor: null }; }
+function newFloor(name) { return { id: uid(), name: name || 'Zemin Kat', walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], zones: [], sections: [], axes: [], dims: [], texts: [], sketches: [], drafts: [], groups: [], slabFloor: 'none', slabColor: null }; }
 function newProject(a) {
   a = a || {};
   return {
@@ -3052,6 +3086,7 @@ function normalizeProject(obj) {
     f.id = f.id || uid();
     f.name = f.name || ('Floor ' + (i + 1));
     for (const k in KINDS) f[k] = Array.isArray(f[k]) ? f[k] : [];
+    for (const z of f.zones) cleanZone(z); // site parcel / outdoor zones (#150)
     f.groups = Array.isArray(f.groups) ? f.groups : [];
     for (const o of f.ops) if (o.open == null) o.open = 0;
     for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
@@ -3322,6 +3357,7 @@ function summarize() {
       out.push('  room ' + r.id + ': "' + r.name + '" ' + fmtArea(polyArea(r.pts)) + ', pattern=' + r.floor + ', ' + r.pts.length + ' corners');
     for (const sl of f.slabs || [])
       out.push('  slab ' + sl.id + ': "' + sl.name + '" ' + fmtArea(polyArea(sl.pts)) + ', t=' + sl.t + ' cm, offset=' + sl.off + ' cm, finish=' + sl.floor);
+    for (const z of f.zones || []) out.push('  ' + (z.zt === 'parcel' ? 'site parcel' : 'outdoor zone (' + z.zt + ')') + ' ' + z.id + (z.name ? ' "' + z.name + '"' : '') + ': ' + fmtArea(Math.abs(polyArea(z.pts))) + (z.zt === 'parcel' ? (z.setback ? ', setback ' + z.setback + ' cm' : '') + (z.sb ? ', per-edge setbacks ' + z.sb.join('/') + ' cm' : '') : ', finish ' + zoneFinish(z) + (z.curb ? ', curb ' + z.curb + ' cm' : '')) + ' (not a room)');
     for (const v of f.voids || [])
       out.push('  void ' + v.id + ': ' + v.type + (v.name ? ' "' + v.name + '"' : '') + ' ' + fmtArea(polyArea(v.pts)));
     for (const t of f.furn)
@@ -3597,6 +3633,30 @@ tool('set_ground',
     if (a.plinth !== undefined) g.plinth = a.plinth === null ? undefined : num(a.plinth, undefined, 'plinth');
     P.ground = g; cleanGround(P);
     const r = groundP(P); return '3D ground: ' + r.kind + (r.color ? ', tint ' + r.color : '') + (r.scale ? ', texture ' + r.scale + ' cm' : '') + ', plinth ' + r.plinth + ' cm';
+  });
+
+tool('add_zone',
+  'Draw a site parcel boundary or an outdoor ground zone (not a room: it never counts in room areas). type: ' + Object.keys(ZONE_TYPES).join(', ') + '. pts = closed polygon in plan cm. A parcel can carry a uniform setback (cm) or one setback per edge (setbacks[i] = edge pts[i] → pts[i+1]); a zone gets the default finish of its type unless finish is given (an outdoor finish or tex:<id>), and an optional curb height (cm). Zones show on every floor as site context; draw them on the ground floor (default).',
+  {
+    type: { type: 'string', description: Object.keys(ZONE_TYPES).join(' | ') },
+    pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: 'Polygon corners (≥ 3).' },
+    name: { type: 'string' }, finish: { type: 'string' }, color: { type: 'string', description: '#rrggbb tint' },
+    curb: { type: 'number', description: 'Curb / edging height in cm, 0–' + ZONE_CURB_MAX + '.' },
+    setback: { type: 'number', description: 'Parcel only: uniform setback in cm.' },
+    setbacks: { type: 'array', items: { type: 'number' }, description: 'Parcel only: one setback per edge in cm.' },
+    floorIndex: floorArg,
+  },
+  ['type', 'pts'],
+  a => {
+    if (!ZONE_TYPES[a.type]) throw new Error('Unknown zone type "' + a.type + '" (' + Object.keys(ZONE_TYPES).join(', ') + ')');
+    if (!Array.isArray(a.pts) || a.pts.length < 3) throw new Error('pts needs at least 3 corners');
+    const f = a.floorIndex == null ? P.floors[Math.max(0, P.floors.findIndex((x, i) => floorElevOf(P, i) > -1))] : floorOf(a);
+    const o = { id: uid(), zt: a.type, pts: a.pts.map(p => ({ x: num(p.x, undefined, 'x'), y: num(p.y, undefined, 'y') })) };
+    if (a.name) o.name = String(a.name); if (a.finish) o.floor = String(a.finish); if (a.color) o.color = String(a.color);
+    if (a.curb != null) o.curb = +a.curb; if (a.setback != null) o.setback = +a.setback;
+    if (Array.isArray(a.setbacks)) { if (a.setbacks.length !== o.pts.length) throw new Error('setbacks needs one value per edge (' + o.pts.length + ')'); o.sb = a.setbacks.map(Number); }
+    cleanZone(o); (f.zones = f.zones || []).push(o);
+    return 'Added ' + (o.zt === 'parcel' ? 'site parcel' : 'outdoor zone ' + o.zt) + ' ' + o.id + ' (' + fmtArea(Math.abs(polyArea(o.pts))) + ').';
   });
 
 tool('set_terrain',
