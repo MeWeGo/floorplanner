@@ -11925,6 +11925,7 @@ function collabSendPresence(force = false) {
       px: Math.round(T3.cam.position.x * 10) / 10, py: Math.round(T3.cam.position.y * 10) / 10, pz: Math.round(T3.cam.position.z * 10) / 10,
       tx: Math.round(T3.ctl.target.x * 10) / 10, ty: Math.round(T3.ctl.target.y * 10) / 10, tz: Math.round(T3.ctl.target.z * 10) / 10,
     } : null,
+    walk: ui.view3d && T3 && T3.walk ? collabWalkPayload(T3.walk, P.floors) : null,
   };
   collabSend(payload);
 }
@@ -11969,8 +11970,95 @@ function collabOverlaySvg(C, z) {
         out += `<text x="${x + 13 * s}" y="${y + 15 * s}" font-size="${11 * s}" font-weight="600" fill="${col}" stroke="${C.halo}" stroke-width="${3 * s}" paint-order="stroke" pointer-events="none">${label}</text>`;
       }
     }
+    const wk = peer.walk; // 👁 yürüyen: plandaki yeri + bakış yönü
+    if (wk && wk.floorId === fid && [wk.x, wk.y, wk.yaw].every(Number.isFinite)) {
+      const r = WALK.r, len = 110, sp = 0.45, a = wk.yaw, p = (t, d) => `${wk.x + Math.cos(t) * d} ${wk.y + Math.sin(t) * d}`;
+      out += `<path d="M${wk.x} ${wk.y} L${p(a - sp, len)} L${p(a + sp, len)} Z" fill="${col}" fill-opacity=".16" stroke="none" pointer-events="none"/>`;
+      out += `<circle cx="${wk.x}" cy="${wk.y}" r="${r}" fill="${col}" stroke="${C.halo}" stroke-width="${2 / z}" pointer-events="none"/>`;
+      out += `<text x="${wk.x + r + 4 / z}" y="${wk.y - r}" font-size="${11 / z}" font-weight="600" fill="${col}" stroke="${C.halo}" stroke-width="${3 / z}" paint-order="stroke" pointer-events="none">👁 ${esc(peer.name || L('Misafir', 'Guest'))}</text>`;
+    }
   }
   return out;
+}
+
+/* ---------- Canlı odada yürüyenler: 3B'de insan figürü ----------
+   Yürüme modundaki (👁) editör presence'ta planda nerede durduğunu gönderir: walk = { floorId, x, y, z, yaw }
+   (plan cm; z = kat zemininden ayak yüksekliği, merdivende > 0). Sahne yüksekliği gönderilmez: her izleyici farklı
+   katları gizleyebilir (v3dElev), figürü kendi sahnesinde yerleştirir. Figürler kalıcıdır (build3D'de atılmaz),
+   tıklamayı / yürümeyi engellemez, render stüdyosu çıktısına girmez; gelen konuma her karede yumuşakça kayar. */
+function collabWalkPayload(w, floors) {
+  if (!w || !floors || !floors[w.fi] || ![w.x, w.y, w.yaw].every(Number.isFinite)) return null;
+  const r1 = v => Math.round(v * 10) / 10;
+  return { floorId: floors[w.fi].id, x: r1(w.x), y: r1(w.y), z: r1(Number.isFinite(w.z) ? w.z : 0), yaw: Math.round(w.yaw * 1000) / 1000 };
+}
+// figürün sahnedeki yeri (ayaklar); kat yok / gizliyse null. Figür yerel +x'e bakar → rotY = −yaw
+function collabAvatarPose(walk, floors, elevOf, shown) {
+  if (!walk || typeof walk !== 'object' || ![walk.x, walk.y, walk.yaw].every(Number.isFinite)) return null;
+  const i = (floors || []).findIndex(f => f && f.id === walk.floorId);
+  if (i < 0 || (shown && !shown(floors[i]))) return null;
+  return { i, x: walk.x, y: elevOf(i) + (Number.isFinite(walk.z) ? walk.z : 0), z: walk.y, rotY: -walk.yaw };
+}
+// yürüyen kendi konumunu değişince gönderir (presence zaten 65 ms'ye kısılı); her karede çağrılır, nesne üretmez
+function collabWalkTick() {
+  if (!collab.room || !collab.peers.size || !T3 || !T3.walk) return;
+  const w = T3.walk, l = collab.walkLast || (collab.walkLast = { fi: -1, x: 0, y: 0, z: 0, yaw: 0 }), z = +w.z || 0;
+  if (l.fi === w.fi && Math.abs(l.x - w.x) < 2 && Math.abs(l.y - w.y) < 2 && Math.abs(l.z - z) < 2 && Math.abs(l.yaw - w.yaw) < 0.02) return;
+  l.fi = w.fi; l.x = w.x; l.y = w.y; l.z = z; l.yaw = w.yaw;
+  collabSendPresence(false);
+}
+let _avGeo = null;
+function collabAvatarMesh(peer) {
+  const geo = _avGeo || (_avGeo = { cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 14), sph: new THREE.SphereGeometry(0.5, 16, 12), box: new THREE.BoxGeometry(1, 1, 1) });
+  const col = /^#[0-9a-f]{6}$/i.test(peer.color || '') ? peer.color : '#2563eb';
+  const mats = [new THREE.MeshLambertMaterial({ color: col }), new THREE.MeshLambertMaterial({ color: shade(col, -0.45) }), new THREE.MeshLambertMaterial({ color: shade(col, 0.55) })];
+  const g = new THREE.Group(); g.userData = { avatar: peer.id, mats };
+  const part = (gm, m, sx, sy, sz, x, y, z) => { const o = new THREE.Mesh(gm, m); o.scale.set(sx, sy, sz); o.position.set(x, y, z); o.raycast = () => {}; o.userData.fpDecal = true; g.add(o); };
+  for (const k of [-1, 1]) { part(geo.cyl, mats[1], 15, 84, 15, 0, 42, k * 10); part(geo.cyl, mats[0], 10, 58, 10, 0, 112, k * 25); } // bacaklar, kollar
+  part(geo.cyl, mats[0], 28, 62, 42, 0, 114, 0); // gövde (omuzlar yanlara geniş)
+  part(geo.sph, mats[2], 23, 26, 23, 0, 159, 0); // baş
+  part(geo.box, mats[1], 8, 6, 16, 11, 162, 0); // yüzün baktığı yön (gözlük şeridi)
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
+  const cx = cv.getContext('2d'), nm = '👁 ' + (peer.name || L('Misafir', 'Guest'));
+  cx.font = '600 30px system-ui, sans-serif'; const tw = Math.min(244, cx.measureText(nm).width + 28);
+  cx.fillStyle = col; cx.beginPath(); if (cx.roundRect) cx.roundRect((256 - tw) / 2, 8, tw, 48, 24); else cx.rect((256 - tw) / 2, 8, tw, 48); cx.fill();
+  cx.fillStyle = '#fff'; cx.textAlign = 'center'; cx.textBaseline = 'middle'; cx.fillText(nm, 128, 33, 230);
+  const tex = new THREE.CanvasTexture(cv), sm = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true });
+  const sp = new THREE.Sprite(sm); sp.scale.set(100, 25, 1); sp.position.set(0, 200, 0); sp.renderOrder = 998; sp.raycast = () => {}; sp.userData.fpDecal = true; g.add(sp);
+  mats.push(sm); g.userData.tex = tex;
+  return g;
+}
+function collabAvatarDispose(g) {
+  if (g.parent) g.parent.remove(g);
+  for (const m of g.userData.mats || []) m.dispose();
+  if (g.userData.tex) g.userData.tex.dispose();
+}
+// figürleri eşler: yürüyen her eşe bir figür; yürümeyi bırakan / ayrılan / gizli kattakinin figürü atılır
+function collabAvatars3D() {
+  if (typeof T3 === 'undefined' || !T3 || !T3.scene) return;
+  const m = T3.avatars || (T3.avatars = new Map()), seen = new Set();
+  if (collab.room && ui.view3d) for (const peer of collab.peers.values()) {
+    const pose = collabAvatarPose(peer.walk, P.floors, v3dElev, v3dShown); if (!pose) continue;
+    const key = (peer.color || '') + '|' + (peer.name || '');
+    let a = m.get(peer.id);
+    if (a && a.key !== key) { collabAvatarDispose(a.g); a = null; }
+    if (!a) { a = { key, g: collabAvatarMesh(peer), t: pose }; a.g.position.set(pose.x, pose.y, pose.z); a.g.rotation.set(0, pose.rotY, 0); m.set(peer.id, a); }
+    a.t = pose; seen.add(peer.id);
+    if (a.g.parent !== T3.scene) T3.scene.add(a.g);
+  }
+  for (const [id, a] of m) if (!seen.has(id)) { collabAvatarDispose(a.g); m.delete(id); }
+  markScene3D(); req3D();
+}
+// her karede: figür gelen konuma kayar (presence ~15 Hz); hâlâ yoldaysa bir sonraki kare de çizilir
+function collabAvatarsTick(dt) {
+  const k = 1 - Math.exp(-dt * 14);
+  for (const a of T3.avatars.values()) {
+    const g = a.g, t = a.t, p = g.position;
+    let dr = t.rotY - g.rotation.y; dr = Math.atan2(Math.sin(dr), Math.cos(dr));
+    const far = Math.abs(t.x - p.x) + Math.abs(t.y - p.y) + Math.abs(t.z - p.z);
+    if (far < 0.3 && Math.abs(dr) < 0.005) continue;
+    if (far > 600) p.set(t.x, t.y, t.z); else p.set(p.x + (t.x - p.x) * k, p.y + (t.y - p.y) * k, p.z + (t.z - p.z) * k); // kat değişimi: sıçrar
+    g.rotation.y += dr * k; T3.dirty = true; T3.sceneDirty = true;
+  }
 }
 
 function collabStart() {
@@ -12050,6 +12138,7 @@ function collabConnect(url, opts = {}) {
       collab.rev = msg.rev || 0;
       collab.peers.clear();
       for (const p of msg.peers || []) if (p && p.id && p.id !== collab.peerId) collab.peers.set(p.id, p);
+      if (ui.view3d) collabAvatars3D();
       if (msg.state) {
         collabApplyRemoteState(msg.state, wasReconnecting);
         if (wasReconnecting) collabFlushPending();
@@ -12155,6 +12244,8 @@ function collabConnect(url, opts = {}) {
     }
     if (msg.type === 'peer_join' && msg.peer && msg.peer.id !== collab.peerId) {
       collab.peers.set(msg.peer.id, msg.peer);
+      if (ui.view3d) collabAvatars3D();
+      if (T3 && T3.walk) collabSendPresence(true); // yeni gelen yürüyenin şimdiki yerini hemen görsün
       collabRenderUI();
       if (ui.modal === 'collab') collabModal();
       else if (!ui.view3d) drawPreview();
@@ -12166,12 +12257,13 @@ function collabConnect(url, opts = {}) {
       collab.peers.set(msg.peer.id, msg.peer);
       if (collab.followId === msg.peer.id) collabApplyFollow(msg.peer);
       if (ui.modal === 'collab') collabRefreshPeersDom();
-      if (!ui.view3d) drawPreview();
+      if (!ui.view3d) drawPreview(); else collabAvatars3D();
       return;
     }
     if (msg.type === 'peer_leave' && msg.peerId) {
       collab.peers.delete(msg.peerId);
       if (collab.followId === msg.peerId) collab.followId = '';
+      if (ui.view3d) collabAvatars3D();
       collabRenderUI();
       if (ui.modal === 'collab') collabModal();
       else if (!ui.view3d) drawPreview();
@@ -12207,7 +12299,8 @@ function collabLeave(silent = false) {
   collab.room = ''; collab.url = ''; collab.viewToken = ''; collab.role = 'editor'; collab.persist = false; collab.isHost = false; collab.connectErrShown = false; collab.peerId = '';
   collab.rev = 0; collab.status = ''; collab.reconnecting = false; collab.followId = ''; collab.followApplying = false; collab.peers.clear();
   collab.remoteQueue = []; collab.pendingPatches = []; collab.sentTexIds.clear(); collab.lastBgKey = '';
-  collab.undoStack = []; collab.redoStack = []; collab.lastSnap = null;
+  collab.undoStack = []; collab.redoStack = []; collab.lastSnap = null; collab.walkLast = null;
+  collabAvatars3D();
   if (P) { hist = [JSON.stringify(P)]; hi = 0; updateUndo(); }
   collabRenderUI();
   if (!ui.view3d && P) drawPreview();
@@ -13114,6 +13207,7 @@ async function render3DHQ(opts) {
   // edge helpers (LineSegments) are hidden for the passes and restored after.
   const edges = [];
   if (opts.outlines !== true && !inkStyle) scene.traverse(o => { if (o.isLineSegments && o.visible) { edges.push(o); o.visible = false; } });
+  const avHid = []; if (T3.avatars) for (const a of T3.avatars.values()) if (a.g.visible) { a.g.visible = false; avHid.push(a.g); } // canlı odadaki figürler render'a girmez
 
   // Studio backdrop: a white sweep + a neutral ground, so the output reads as a
   // presentation render instead of a screenshot of the dark viewport. In dark
@@ -13272,6 +13366,7 @@ async function render3DHQ(opts) {
     if (boost) boost.restore();
     if (r.shadowMap) { r.shadowMap.autoUpdate = false; r.shadowMap.needsUpdate = true; } // canlı görünüm de durağan gölge kullanır (#128)
     for (const e of edges) e.visible = true;
+    for (const g of avHid) g.visible = true;
     if (real) { real.restore(); real.dispose(); }
     for (const [o, m] of litSaved.mats) o.material = m;
     for (const [o, v] of litSaved.halos) o.visible = v;
@@ -15272,7 +15367,7 @@ function enterWalk(at) {
   const p = walkMove(at ? { x: at.x, y: at.y } : { x: c.x, y: c.z }, { x: 0, y: 0 }, walkSegsAt(i), WALK.r); // duvarın içinde başlamasın
   T3.walk = { fi: i, x: p.x, y: p.y, z: 0, gz: 0, yaw: at ? walkSpawnYaw(c, t, at) : Math.atan2(t.z - c.z, t.x - c.x), pitch: -0.15, drag: null };
   T3.ctl.enabled = false; T3.ctl.maxPolarAngle = Math.PI; // yukarı bakınca render'daki ctl.update() bakışı kırpmasın
-  applyWalkCam(); syncWalkUI();
+  applyWalkCam(); syncWalkUI(); collabSendPresence(true); // canlı odadakiler figürü görsün
 }
 /* --- Yürüme başlangıç noktası: 👁 önce "nerede duracaksın?" diye sorar; 3B'de tıklanan nokta (kat imlecin altındaki kat)
    başlangıç olur ve bakış kameranın o noktaya baktığı yöndür. 👁 tekrar / Enter: en büyük oda (set3DCam('eye')); Esc: vazgeç. */
@@ -15330,7 +15425,7 @@ function exitWalk(restore) {
   if (!T3 || !T3.walk) return;
   T3.walk = null; T3.ctl.enabled = true; T3.ctl.maxPolarAngle = ORBIT_MAX_POLAR; if (ui.flash) { ui.flash = false; assignFixLights(); }
   if (restore && T3.walkSaved) { T3.cam.position.copy(T3.walkSaved.pos); T3.ctl.target.copy(T3.walkSaved.target); }
-  T3.walkSaved = null; T3.ctl.update(); syncWalkUI();
+  T3.walkSaved = null; T3.ctl.update(); syncWalkUI(); collabSendPresence(true); // figür diğerlerinde kalkar
   if (T3.orthoAfterWalk) { T3.orthoAfterWalk = false; setProjection(true); fitOrtho(); }
 }
 function walkToFloor(i) {
@@ -15447,9 +15542,10 @@ function loop3D() {
   cancelAnimationFrame(T3.raf); T3.raf = requestAnimationFrame(loop3D); // tek döngü: yeniden başlatmalar çoğaltmaz
   // kare süresi (s): hız her makinede aynı olsun; sekme arkadayken büyük sıçrama olmasın
   const now = performance.now(), dt = Math.min(0.1, T3.lastT ? (now - T3.lastT) / 1000 : 1 / 60); T3.lastT = now;
+  if (T3.avatars && T3.avatars.size) collabAvatarsTick(dt); // canlı odada yürüyenlerin figürleri
   // Boşta çizim yok (#perf): girdi, yeniden kurma, boyut değişimi ya da tuş varken çizilir; güvenlik için saniyede bir.
   const due = T3.dirty || keys3D.size > 0 || now - (T3.drawT || 0) > 1000;
-  if (T3.walk) { walkStep(dt); if (due) draw3D(now); return; } // OrbitControls.update() bakışı ezmesin
+  if (T3.walk) { walkStep(dt); collabWalkTick(); if (due) draw3D(now); return; } // OrbitControls.update() bakışı ezmesin
   if (keys3D.size) {
     noteNav3D();
     const spd = (keys3D.has('shift') ? 1320 : 540) * dt; // eskiden 60 fps'de kare başına 22 / 9 cm
@@ -17011,6 +17107,7 @@ function build3D(keepCam = false) {
   const lt = isLight(), S = T3.scene;
   if (T3.fpPrev) S.remove(T3.fpPrev); // 3B araç önizlemesi de kalıcıdır
   if (T3.ghost) S.remove(T3.ghost); // 3B yerleştirme hayaleti kalıcıdır: sahne temizliğinde dispose edilmesin
+  if (T3.avatars) for (const a of T3.avatars.values()) S.remove(a.g); // canlı odadaki yürüyen figürleri de
   // sahne sınırları (ışık gölge kamerası ve kamera sığdırma için) — çizimden ÖNCE hesaplanır
   let all = null;
   P.floors.forEach(f => {
@@ -17422,7 +17519,7 @@ function build3D(keepCam = false) {
   syncFixPool();
   if (T3.fix && T3.fix.pts[0].parent === S) assignFixLights();
   markShadows(); // sahne yeniden kuruldu: durağan gölgeler bir kez çizilir (#128)
-  refreshSel3D(); applySecClip(); applyLive3D(); place3DSync(); fp3DPreview();
+  refreshSel3D(); applySecClip(); applyLive3D(); place3DSync(); fp3DPreview(); collabAvatars3D();
   markScene3D();
 }
 
