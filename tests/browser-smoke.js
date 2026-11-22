@@ -635,6 +635,42 @@ check('live room walkers: walk mode sends the walker position, peers see a perso
   if (!info.gone) throw new Error('the figure stayed after the peer stopped walking: ' + JSON.stringify(info));
 });
 
+check('2D speed: zoom previews by transform and sharpens once it stops, unchanged layers are not re-parsed, a sparse grid has no giant tiles', async page => {
+  const r = await page.evaluate(`(async () => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400);
+    const o = mkFurn(BYID.sofa3, 300, 200, 0); F().furn.push(o); commit(); refresh(); fit();
+    const raf = () => new Promise(r => requestAnimationFrame(r)), out = {};
+    await new Promise(r => setTimeout(r, 200)); await raf(); await raf(); // let redraws queued by the setup land first
+    const wall0 = document.querySelector('#gWalls').firstElementChild, furn0 = document.querySelector('#gFurn').firstElementChild, defs0 = document.getElementById('defs').innerHTML;
+    // zoom: the next frame only moves the drawing; the layers are rebuilt once the wheel stops
+    const z0 = view.z; zoomAt(1.5, 400, 300); await raf();
+    out.zoomed = view.z > z0;
+    out.previewKept = document.querySelector('#gFurn').firstElementChild === furn0 && document.getElementById('defs').innerHTML === defs0;
+    out.transform = document.getElementById('world').getAttribute('transform').includes('scale(' + view.z + ')');
+    await new Promise(r => setTimeout(r, 600)); await raf();
+    out.settled = document.getElementById('defs').innerHTML !== defs0; // stroke widths follow the new zoom
+    // a furniture drag frame re-writes only the furniture layer
+    const w1 = document.querySelector('#gWalls').firstElementChild, f1 = document.querySelector('#gFurn').firstElementChild;
+    o.x += 40; render();
+    out.wallsKept = document.querySelector('#gWalls').firstElementChild === w1;
+    out.furnRebuilt = document.querySelector('#gFurn').firstElementChild !== f1;
+    out.furnMoved = document.querySelector('#gFurn').innerHTML.includes('340');
+    o.x -= 40; commit();
+    // grid 4 m zoomed in: no pattern tile wider than GRID_TILE_MAX
+    P.grid = 400; syncGridUI(); view.z = 4; render();
+    const g = document.getElementById('gGrid');
+    out.gridPatterns = g.querySelectorAll('rect').length; out.gridTiles = g.querySelectorAll('g > g').length;
+    P.grid = 10; syncGridUI(); fit();
+    return out;
+  })()`);
+  if (!r.zoomed || !r.transform) throw new Error('zoom did not move the view: ' + JSON.stringify(r));
+  if (!r.previewKept) throw new Error('a wheel step rebuilt the layers instead of previewing: ' + JSON.stringify(r));
+  if (!r.settled) throw new Error('the drawing was not sharpened after the zoom stopped: ' + JSON.stringify(r));
+  if (!r.wallsKept || !r.furnRebuilt || !r.furnMoved) throw new Error('a furniture drag re-parsed unchanged layers or missed the move: ' + JSON.stringify(r));
+  if (r.gridPatterns !== 0 || !(r.gridTiles > 0 && r.gridTiles < 60)) throw new Error('a 4 m grid zoomed in still used giant pattern tiles: ' + JSON.stringify(r));
+});
+
 check('overlapping objects: Ctrl+click cycles, right-click lists, layers reorder, 3D lifts', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());

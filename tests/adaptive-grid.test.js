@@ -129,7 +129,7 @@ test('the source keeps the adaptive grid, the zoom range and P.grid snapping', (
   const gridSrc = sliceFunc('gridSvg');
   assert.doesNotMatch(gridSrc, /view\.z > 0\.12/, 'the major grid must not vanish at low zoom');
   assert.match(gridSrc, /gridScale\(\)/, 'gridSvg must ask gridScale() for the drawn interval');
-  assert.match(gridSrc, /\$\{majId\}/, 'gridSvg must draw the major grid');
+  assert.match(gridSrc, /layer\(majId, G\.major, true\)/, 'gridSvg must draw the major grid');
 
   assert.match(sliceFunc('defsSvg'), /gridScale\(\)/, 'the pattern tiles must follow the adaptive interval');
   assert.match(sliceFunc('applyView'), /gridlbl/, 'the footer must show the active grid interval');
@@ -138,4 +138,33 @@ test('the source keeps the adaptive grid, the zoom range and P.grid snapping', (
   const snapSrc = sliceFunc('snapToGrid');
   assert.match(snapSrc, /P\.grid/);
   assert.doesNotMatch(snapSrc, /gridScale|GRID_MAJOR_PX/);
+});
+
+test('a sparse grid is drawn directly instead of as a huge pattern tile (4 m step zoomed in)', () => {
+  const src = read('app.js');
+  const { gridSvg, view, P } = new Function(`
+    const view = { x: 0, y: 0, z: 1 }, P = { grid: 10, gridType: 'square' };
+    const svgSize = () => ({ w: 1600, h: 1000 });
+    const pal = () => ({ gMin: '#111', gMaj: '#222', dotMaj: '#333' });
+    const GRID_MINOR_PX = 6, GRID_MAJOR_PX = 46, GRID_TILE_MAX = 512;
+    ${fnSrcOf(src, 'gridFactor')}
+    ${fnSrcOf(src, 'gridScale')}
+    ${fnSrcOf(src, 'gridTile')}
+    ${fnSrcOf(src, 'gridSvg')}
+    return { gridSvg, view, P };`)();
+  // default 10 cm step: small tiles stay patterns
+  let out = gridSvg();
+  assert.match(out, /url\(#g-major\)/); assert.match(out, /url\(#g-minor\)/);
+  assert.doesNotMatch(out, /translate\(/);
+  // 4 m step at z = 4: the 20 m major tile would be 8000 px and the 4 m minor tile 1600 px → drawn as a few tiles
+  P.grid = 400; view.z = 4;
+  out = gridSvg();
+  assert.doesNotMatch(out, /url\(#g-(major|minor)\)/, 'no giant pattern tiles');
+  const tiles = (out.match(/translate\(/g) || []).length;
+  assert.ok(tiles > 0 && tiles < 40, 'a handful of directly drawn tiles: ' + tiles);
+  // the tiles land on multiples of the step (the same lines the pattern would draw)
+  for (const m of out.matchAll(/translate\((-?[\d.]+) (-?[\d.]+)\)/g)) assert.ok(+m[1] % 400 === 0 && +m[2] % 400 === 0, m[0]);
+  // dots and triangles go the same way
+  P.gridType = 'dots'; assert.match(gridSvg(), /<circle/); assert.doesNotMatch(gridSvg(), /url\(#g-dots/);
+  P.gridType = 'triangle'; assert.doesNotMatch(gridSvg(), /url\(#g-tri/);
 });
