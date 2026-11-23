@@ -274,7 +274,7 @@ const view = { x: 0, y: 0, z: 0.5 };
    planları, parsel sınırları ve çok binalı yerleşimler bütünüyle görülebilir. */
 const MIN_ZOOM = 0.002, MAX_ZOOM = 40; // 40 px/cm: 1 mm = 4 px (detay çizimi); sınırda kısa bir uyarı çıkar
 let tool = 'select', sel = [], placing = null;
-const ui = { snap: true, angle: true, dims: true, outline: false, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, viewElev: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
+const ui = { snap: true, angle: true, dims: true, outline: false, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, viewElev: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, oneSidedResize: false, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
 const layersVis = { site: true, terrain: true, bg: true, rooms: true, walls: true, furn: true, furnLabel: true, furnIcon: true, lightArea: false, dims: true, sketch: true, underlay: true }; // furnLabel / furnIcon (#84): yalnızca görünüm, veriye dokunmaz
 // Kat izdüşümü (issue #26): hangi kat altlık olarak gösterilir ('prev' = bir alt kat) ve opaklığı — görünüm ayarı, projeye kaydedilmez
 const underlay = { floor: 'prev', op: 0.2 };
@@ -305,7 +305,13 @@ function find(id, f = F()) {
   for (const arr in KINDS) { const o = f[arr].find(x => x.id === id); if (o) return { kind: KINDS[arr], arr, o }; }
   return null;
 }
-const selObjs = () => sel.map(id => find(id)).filter(Boolean);
+const selObjs = () => sel.map(id => find(id) || (ui.view3d ? findAnyFloor(id) : null)).filter(Boolean);
+function toggleSel3D(cur, ids, add) {
+  const uniq = [...new Set(ids)];
+  if (!add) return uniq;
+  if (uniq.length && uniq.every(id => cur.includes(id))) return cur.filter(id => !uniq.includes(id));
+  return [...cur, ...uniq.filter(id => !cur.includes(id))];
+}
 function findAnyFloor(id) {
   // 3B tüm katları çizer; kimlikler katlar arası zaten benzersizdir
   if (id === 'bg' && P && P.bg) { P.bg.id = 'bg'; return { kind: 'bg', arr: null, o: P.bg, floor: F(), floorIdx: fi }; }
@@ -324,7 +330,9 @@ function followSelFloor(fd) {
 // 3B'de seçim hangi katta: panelde küçük rozet (tek katlı projede gereksiz)
 function floorBadgeHtml() {
   if (!ui.view3d || P.floors.length < 2) return '';
-  return `<p class="muted flbadge">📍 ${L('Kat', 'Floor')}: <b>${esc(F().name)}</b></p>`;
+  const fls = new Set(selObjs().map(x => x.floorIdx).filter(v => v != null));
+  const txt = fls.size > 1 ? L('Birden fazla kat', 'Multiple floors') : esc(F().name);
+  return `<p class="muted flbadge">📍 ${L('Kat', 'Floor')}: <b>${txt}</b></p>`;
 }
 function groupMemberIdsAny(grp) {
   const ids = [];
@@ -662,11 +670,12 @@ function mirrorObjs(os, o, u, opsOf = w => F().ops.filter(op => op.wall === w.id
         if (Array.isArray(m.angles) && m.angles.length) m.angles = m.angles.map(a => normDeg(2 * ax - a));
         for (const op of opsOf(m)) op.side = -(op.side || 1);
         if (wallFaced(m)) wallFaceSwap(m); // yansıma yüzleri yer değiştirir: boya / kaplama aynı tarafta kalsın
+        if (Array.isArray(m.top)) m.top = m.top.map(p => p.length >= 3 ? [p[0], p[2], p[1]] : p); // +n / -n eğimli üst yüzleri yer değiştirir (#178)
       }
     } else if (PTS_KINDS.has(kind)) { m.pts = kind === 'draft' && m.shape === 'circle' ? m.pts.map(R) : m.pts.map(R).reverse(); xfHp(m, m, R); } // daire: [merkez, çember noktası] sırası korunur
     else if (kind === 'furn') {
       const p = R(m); m.x = p.x; m.y = p.y; m.rot = normDeg(2 * ax - (m.rot || 0) + 180);
-      if (m.k === 'poly' && Array.isArray(m.pts)) m.pts = m.pts.map(q => ({ x: -q.x, y: q.y })).reverse();
+      if ((m.k === 'poly' || m.k === 'roof') && Array.isArray(m.pts)) m.pts = m.pts.map(q => ({ x: -q.x, y: q.y })).reverse();
       if (m.k === 'roof' && Array.isArray(m.faces)) m.faces = m.faces.map(f => f.map(q => [-q[0], q[1], q[2]]).reverse());
       if (isParamRoof(m) && m.ridgeDir === 'd') m.rot = normDeg(m.rot + 180); // mahya d boyunca: kaçıklık / tek eğim yerel x'te, yerel y'ye göre simetrik → 180° = x aynası
       if (m.ry) m.ry = (360 - m.ry) % 360; // yerel x aynası: Y eğimi ters döner, X eğimi aynı kalır
@@ -708,7 +717,8 @@ function scaleObjs(os, orig, tx, ty, sx, sy, scaleT = false) {
       const rot = ((g.rot || 0) % 180 + 180) % 180, swap = rot >= 45 && rot < 135;
       mo.w = Math.max(10, Math.round(g.w * (swap ? sy : sx)));
       mo.d = Math.max(10, Math.round(g.d * (swap ? sx : sy)));
-      if (g.k === 'poly' && g.pts) mo.pts = g.pts.map(p => ({ x: Math.round(p.x * (mo.w / g.w) * 10) / 10, y: Math.round(p.y * (mo.d / g.d) * 10) / 10 }));
+      if ((g.k === 'poly' || g.k === 'roof') && g.pts) mo.pts = g.pts.map(p => ({ x: Math.round(p.x * (mo.w / g.w) * 10) / 10, y: Math.round(p.y * (mo.d / g.d) * 10) / 10 }));
+      if (isParamRoof(mo)) mo.h = roofHeight(mo);
     } else if (kind === 'text') { mo.x = tx(g.x); mo.y = ty(g.y); }
     else if (kind === 'bg') { mo.x = tx(g.x); mo.y = ty(g.y); mo.w = Math.max(20, Math.round(g.w * sx)); mo.h = Math.max(20, Math.round(g.h * sy)); }
   }
@@ -1110,17 +1120,20 @@ function updateUndo() {
 const LAYER_COLS = ['#64748b', '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777'];
 const defaultLayer = () => ({ id: '0', name: L('Varsayılan', 'Default'), color: '#64748b', vis: true, lock: false, print: true });
 const layerById = id => (P.layers || []).find(l => l.id === (id || '0'));
-// Gizli (veya baskıda çıkmayan) katmanlardaki nesneler olmadan katın sığ kopyası; hepsi görünürse kat aynen döner
+// Gizli tekil ögeler (#174) veya gizli (ya da baskıda çıkmayan) katmanlardaki nesneler olmadan katın sığ kopyası; hepsi görünürse kat aynen döner
 function visFloor(f, print = false, lift = false) {
   if (lift) return liftLayers(visFloor(f, print));
   if (f.walls && f.walls.some(w => w.acc && (wLen(w) < 1 || w.acc.fill === 'fan'))) { // kapanmış akordiyon duvar (boşluk yok) çizilmez; yelpazede kapı / pencere yok
     const g = Object.assign({}, f); g.walls = f.walls.filter(w => !(w.acc && wLen(w) < 1));
     const wl = new Set(g.walls.filter(w => !isAccFan(w)).map(w => w.id)); g.ops = f.ops.filter(o => wl.has(o.wall)); f = g;
   }
-  if (!P.layers || P.layers.length < 2) return f;
-  const hide = new Set(P.layers.filter(l => !l.vis || (print && l.print === false)).map(l => l.id));
-  if (!hide.size) return f;
-  const ok = o => !hide.has(o.layer || '0'), g = Object.assign({}, f);
+  const hide = P.layers && P.layers.length > 1 ? new Set(P.layers.filter(l => !l.vis || (print && l.print === false)).map(l => l.id)) : null;
+  if (!(hide && hide.size)) {
+    let hasHidden = false;
+    for (const k in KINDS) if ((f[k] || []).some(o => o && o.hidden)) { hasHidden = true; break; }
+    if (!hasHidden) return f;
+  }
+  const ok = o => o && !o.hidden && (!(hide && hide.size) || !hide.has(o.layer || '0')), g = Object.assign({}, f);
   for (const k in KINDS) g[k] = (f[k] || []).filter(ok);
   const wl = new Set(g.walls.map(w => w.id)); g.ops = g.ops.filter(o => wl.has(o.wall));
   return g;
@@ -1145,10 +1158,71 @@ function liftLayers(f) {
   });
   return g;
 }
-// Seçilebilir mi: gizli ve kilitli katmanlardaki nesneler tıklanamaz, kutuyla seçilemez, silinemez
+// Seçilebilir mi: gizli ögeler (#174) ile gizli ve kilitli katmanlardaki nesneler tıklanamaz, kutuyla seçilemez, silinemez
 function pickable(id) {
   const fd = find(id) || findAnyFloor(id); if (!fd) return true; // 3B: başka kattaki nesne de katman kilidine uyar (#82)
+  if (fd.o.hidden) return false;
+  if (fd.kind === 'op' && fd.o.wall) {
+    const fl = fd.floor || (P && P.floors && P.floors.find(x => (x.ops || []).some(o => o.id === id)));
+    if (fl && (fl.walls || []).some(w => w.id === fd.o.wall && w.hidden)) return false;
+  }
   const l = layerById(fd.o.layer); return !l || (l.vis && !l.lock);
+}
+// Tekil öge gizleme & Gizli ögeler paneli (#174)
+function hiddenItems() {
+  const out = [];
+  if (!P || !Array.isArray(P.floors)) return out;
+  P.floors.forEach((f, floorIdx) => {
+    for (const arr in KINDS) for (const o of f[arr] || []) if (o && o.hidden) {
+      out.push({ id: o.id, kind: KINDS[arr], arr, o, floor: f, floorIdx, label: objLabel(o.id) });
+    }
+  });
+  return out;
+}
+function hideIds(ids) {
+  const hideSet = new Set(); let n = 0;
+  for (const id of ids || []) {
+    if (!id || id === 'bg') continue;
+    const fd = find(id) || findAnyFloor(id);
+    if (!fd || fd.kind === 'bg') continue;
+    if (!fd.o.hidden) { fd.o.hidden = true; n++; }
+    hideSet.add(id);
+    if (fd.kind === 'wall') for (const op of (fd.floor || F()).ops || []) if (op.wall === id) hideSet.add(op.id);
+  }
+  if (!n) return 0;
+  sel = sel.filter(id => !hideSet.has(id));
+  commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+  toast(L(`🙈 ${n} öge gizlendi`, `🙈 Hid ${n} item(s)`));
+  return n;
+}
+function hideSel() { return hideIds(sel); }
+function unhideId(id, select = false) {
+  const fd = find(id) || findAnyFloor(id); if (!fd || !fd.o.hidden) return false;
+  delete fd.o.hidden;
+  if (select && (find(id) || ui.view3d) && pickable(id)) sel = [id];
+  commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+  return true;
+}
+function unhideAll() {
+  let n = 0;
+  for (const f of P.floors) for (const arr in KINDS) for (const o of f[arr] || []) if (o && o.hidden) { delete o.hidden; n++; }
+  if (!n) return 0;
+  commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+  toast(L(`👁 ${n} gizli öge tekrar açıldı`, `👁 Showed ${n} hidden item(s)`));
+  return n;
+}
+function hiddenPanelHtml(compact = false) {
+  const items = hiddenItems();
+  if (!items.length) return '';
+  const multi = P.floors.length > 1;
+  const body = items.map(it =>
+    `<div class="row" style="align-items:center;gap:6px;margin:2px 0;justify-content:space-between">`
+    + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.label)}">${esc(it.label)}${multi ? ` <small class="muted">(${esc(it.floor.name)})</small>` : ''}</span>`
+    + `<button class="btn sm" data-act="unhide" data-hid="${esc(it.id)}" title="${L('Tekrar göster', 'Show item')}">👁 ${L('Göster', 'Show')}</button>`
+    + `</div>`
+  ).join('') + `<div class="row" style="margin-top:4px"><button class="btn sm primary" data-act="unhideall">👁 ${L('Gizli ögeleri aç', 'Show hidden items')}</button></div>`;
+  if (compact) return `<details class="hidden-items"><summary>🙈 ${L('Gizli ögeler', 'Hidden items')} (${items.length})</summary>${body}</details>`;
+  return `<h4>🙈 ${L('Gizli ögeler', 'Hidden items')} (${items.length})</h4>` + body;
 }
 function stampLayers(all = false) {
   const act = all ? '0' : (P.activeLayer || '0'); if (act === '0' && !all) return;
@@ -1529,7 +1603,7 @@ function normalizeProject(P) {
   if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
   cleanLw(P); // çizgi kalınlıkları
   cleanGround(P); // 3B zemin (#147)
-  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); cleanWallFaces(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
+  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; for (const k in KINDS) for (const o of f[k]) if (o) { if (o.hidden) o.hidden = true; else delete o.hidden; } f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); cleanWallFaces(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; cleanSurfHp(s); }
     for (const r of f.rooms) cleanSurfHp(r);
     for (const z of f.zones || []) cleanZone(z); // arsa / dış zemin (#150)
@@ -2180,15 +2254,113 @@ function opSvg(op, live) {
   if (live) s += `<rect data-id="${op.id}" x="${-hw}" y="${-Math.max(ht, 8 / view.z) - 4}" width="${w}" height="${2 * Math.max(ht, 8 / view.z) + 8}" fill="transparent" style="cursor:pointer"/>`;
   return s + '</g>';
 }
-/* ROOF-PARAM:BEGIN — parametrik çatı (#115). Saf JS: app.js ve mcp/server.js'te birebir aynı (tests/parametric-roof.test.js denetler).
+/* ROOF-PARAM:BEGIN — parametrik çatı (#115, #175). Saf JS: app.js ve mcp/server.js'te birebir aynı (tests/parametric-roof.test.js denetler).
    Öğe: { k: 'roof', roofType: flat|gable|hip|shed, pitch°, ridge (mahya kaçıklığı, derinliğin oranı −0.45..0.45),
    ridgeDir: 'w' (mahya genişlik boyunca) | 'd', hip (kırma ucu, yarı genişliğin oranı; yoksa eşit eğim), over (saçak cm), th (kalınlık cm),
-   rmat (kaplama) }. w × d = duvar hattındaki ayak izi; saçak bunun dışına taşar ve eğimle aşağı iner. z = 0 öğenin tabanı (elev = duvar üstü)
+   rmat (kaplama), pts?: [{x, y}, …] }. w × d = duvar hattındaki ayak izi; saçak bunun dışına taşar ve eğimle aşağı iner. z = 0 öğenin tabanı (elev = duvar üstü)
    = çatının alt yüzü duvar hattında. Yüzler yerel cm (merkez 0,0), dışa bakar; IFC çatılarının faces / fbase alanlarına dokunulmaz. */
 const ROOF_TYPES = { flat: ['Düz', 'Flat'], gable: ['Beşik', 'Gable'], hip: ['Kırma', 'Hip'], shed: ['Tek eğimli', 'Shed'] };
 const ROOF_MATS = { tile: ['Kiremit', 'Clay tile'], shingle: ['Şıngıl', 'Shingle'], metal: ['Kenet metal', 'Standing-seam metal'], slate: ['Arduvaz', 'Slate'], concrete: ['Beton / teras', 'Concrete / terrace'], none: ['Düz renk', 'Plain colour'] };
 const ROOF_PITCH_MAX = 75, ROOF_OVER_MAX = 300;
 const isParamRoof = o => !!o && o.k === 'roof' && Object.prototype.hasOwnProperty.call(ROOF_TYPES, o.roofType);
+const hasRoofPts = o => !!o && Array.isArray(o.pts) && o.pts.length >= 3;
+function roofPolyArea(poly) { let A = 0; for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; A += a[0] * b[1] - b[0] * a[1]; } return A / 2; }
+function cleanRoofPts(pts) {
+  if (!Array.isArray(pts) || pts.length < 3 || pts.length > 64) return null;
+  const out = [];
+  for (const p of pts) {
+    if (!p || !isFinite(p.x) || !isFinite(p.y)) return null;
+    const x = Math.round(+p.x * 10) / 10, y = Math.round(+p.y * 10) / 10;
+    if (!out.length || Math.hypot(x - out[out.length - 1].x, y - out[out.length - 1].y) >= 0.5) out.push({ x, y });
+  }
+  if (out.length > 1 && Math.hypot(out[0].x - out[out.length - 1].x, out[0].y - out[out.length - 1].y) < 0.5) out.pop();
+  if (out.length < 3 || Math.abs(roofPolyArea(out.map(p => [p.x, p.y]))) < 25) return null;
+  return out;
+}
+function roofPolyConvex(poly) {
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length], c = poly[(i + 2) % poly.length];
+    if ((b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]) < -1e-5) return false;
+  }
+  return true;
+}
+function roofPolySelfHit(poly) {
+  const n = poly.length, ccw = (a, b, c) => (c[1] - a[1]) * (b[0] - a[0]) - (b[1] - a[1]) * (c[0] - a[0]);
+  for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
+    if (i === 0 && j === n - 1) continue;
+    const a = poly[i], b = poly[(i + 1) % n], c = poly[j], d = poly[(j + 1) % n];
+    const d1 = ccw(a, b, c), d2 = ccw(a, b, d), d3 = ccw(c, d, a), d4 = ccw(c, d, b);
+    if (((d1 > 1e-6 && d2 < -1e-6) || (d1 < -1e-6 && d2 > 1e-6)) && ((d3 > 1e-6 && d4 < -1e-6) || (d3 < -1e-6 && d4 > 1e-6))) return true;
+  }
+  return false;
+}
+function roofOffsetPoly(poly, over) {
+  if (!(over > 0) || poly.length < 3) return poly.map(p => [p[0], p[1]]);
+  const lines = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length], dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    if (L < 1e-4) continue;
+    const nx = dy / L, ny = -dx / L;
+    lines.push({ nx, ny, c: nx * a[0] + ny * a[1] + over, a, b });
+  }
+  if (lines.length < 3) return poly.map(p => [p[0], p[1]]);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const e0 = lines[i], e1 = lines[(i + 1) % lines.length], v = e0.b, det = e0.nx * e1.ny - e0.ny * e1.nx;
+    if (Math.abs(det) > 1e-6) {
+      const ix = (e0.c * e1.ny - e0.ny * e1.c) / det, iy = (e0.nx * e1.c - e0.c * e1.nx) / det;
+      if (Math.hypot(ix - v[0], iy - v[1]) <= Math.max(over * 2.5, 1)) { out.push([ix, iy]); continue; }
+    }
+    out.push([v[0] + e0.nx * over, v[1] + e0.ny * over]);
+    if (e0.nx * e1.nx + e0.ny * e1.ny < 0.99) out.push([v[0] + e1.nx * over, v[1] + e1.ny * over]);
+  }
+  return out;
+}
+function roofSplitHoriz(poly, yr) {
+  const ps = poly.map(p => [p[0], Math.abs(p[1] - yr) < 1e-4 ? yr + 1e-3 : p[1]]);
+  const V = [], xs = [];
+  for (let i = 0; i < ps.length; i++) {
+    const a = ps[i], b = ps[(i + 1) % ps.length];
+    V.push({ p: a, cr: false });
+    if ((a[1] < yr) !== (b[1] < yr)) {
+      const ix = a[0] + (b[0] - a[0]) * (yr - a[1]) / (b[1] - a[1]);
+      const vi = V.length; V.push({ p: [ix, yr], cr: true }); xs.push(vi);
+    }
+  }
+  if (!xs.length) return ps[0][1] < yr ? { n: [poly], s: [] } : { n: [], s: [poly] };
+  const byX = xs.slice().sort((i, j) => V[i].p[0] - V[j].p[0]), partner = new Map();
+  for (let k = 0; k + 1 < byX.length; k += 2) { partner.set(byX[k], byX[k + 1]); partner.set(byX[k + 1], byX[k]); }
+  const out = { n: [], s: [] };
+  for (const [key, isN] of [['n', true], ['s', false]]) {
+    const used = new Set();
+    for (const start of xs) {
+      if (used.has(start) || (V[(start + 1) % V.length].p[1] < yr) !== isN) continue;
+      const loop = []; let cur = start, guard = 0;
+      while (guard++ <= V.length * 2 + 4) {
+        used.add(cur); loop.push(V[cur].p);
+        cur = (cur + 1) % V.length;
+        while (!V[cur].cr && guard++ <= V.length * 2 + 4) { loop.push(V[cur].p); cur = (cur + 1) % V.length; }
+        used.add(cur); loop.push(V[cur].p);
+        cur = partner.get(cur);
+        if (cur == null || cur === start) break;
+      }
+      if (loop.length >= 3 && Math.abs(roofPolyArea(loop)) >= 1) out[key].push(roofPolyArea(loop) < 0 ? loop.slice().reverse() : loop);
+    }
+  }
+  return out;
+}
+function roofOnOuterEdge(a, b, P1) {
+  for (let i = 0; i < P1.length; i++) {
+    const u = P1[i], v = P1[(i + 1) % P1.length], dx = v[0] - u[0], dy = v[1] - u[1], l2 = dx * dx + dy * dy;
+    if (l2 < 1e-6) continue;
+    const l = Math.sqrt(l2);
+    const da = Math.abs((a[0] - u[0]) * dy - (a[1] - u[1]) * dx) / l, db = Math.abs((b[0] - u[0]) * dy - (b[1] - u[1]) * dx) / l;
+    if (da > 1e-2 || db > 1e-2) continue;
+    const ta = ((a[0] - u[0]) * dx + (a[1] - u[1]) * dy) / l2, tb = ((b[0] - u[0]) * dx + (b[1] - u[1]) * dy) / l2;
+    if (ta >= -1e-3 && ta <= 1 + 1e-3 && tb >= -1e-3 && tb <= 1 + 1e-3) return true;
+  }
+  return false;
+}
 // tek okuyucu: eksik / geçersiz alanlar varsayılana düşer
 function roofP(o) {
   o = o || {};
@@ -2215,6 +2387,7 @@ function cleanRoof(o) {
   if (o.hip != null) { if (q.hip == null) delete o.hip; else o.hip = q.hip; }
   if (o.ridgeDir != null && o.ridgeDir !== 'd') delete o.ridgeDir;
   if (o.rmat != null && !ROOF_MATS[o.rmat]) delete o.rmat;
+  if (o.pts != null) { const cp = cleanRoofPts(o.pts); if (cp) o.pts = cp; else delete o.pts; }
   o.h = roofHeight(o);
   return o;
 }
@@ -2230,7 +2403,21 @@ function roofPlanes(q, W, D) {
   return out;
 }
 // mahya yüksekliği (duvar hattından) ve toplam yükseklik (o.h): mahya + kalınlık
-function roofRise(o) { const q = roofP(o), sw = q.dir === 'd', D = sw ? +o.w || 0 : +o.d || 0; return q.flat ? 0 : Math.tan(q.pitch * Math.PI / 180) * (q.type === 'shed' ? D : D / 2); }
+function roofRise(o) {
+  const q = roofP(o), sw = q.dir === 'd';
+  if (q.flat) return 0;
+  if (hasRoofPts(o)) {
+    if (q.type === 'hip') {
+      const fs = roofParamFaces(Object.assign({}, o, { over: 0, th: 0 }));
+      let mz = 0; for (const f of fs) for (const p of f) if (p[2] > mz) mz = p[2];
+      return mz;
+    }
+    const ys = o.pts.map(p => sw ? -p.x : p.y), span = Math.max(...ys) - Math.min(...ys);
+    return Math.tan(q.pitch * Math.PI / 180) * (q.type === 'shed' ? span : span / 2);
+  }
+  const D = sw ? +o.w || 0 : +o.d || 0;
+  return Math.tan(q.pitch * Math.PI / 180) * (q.type === 'shed' ? D : D / 2);
+}
 function roofHeight(o) { return Math.round((roofRise(o) + roofP(o).th) * 10) / 10; }
 // dışbükey çokgeni a·x + b·y + c ≤ 0 yarı düzlemiyle kırp (Sutherland–Hodgman)
 function roofClip(poly, a, b, c) {
@@ -2244,9 +2431,85 @@ function roofClip(poly, a, b, c) {
 }
 // yüzler: her düzlemin en alçak olduğu bölge (min-düzlem yükseklik alanı) üst (+th) ve alt yüz olarak; dış kenarlarda yan yüzler
 function roofParamFaces(o) {
-  const q = roofP(o), sw = q.dir === 'd', W = Math.max(1, sw ? +o.d || 0 : +o.w || 0), D = Math.max(1, sw ? +o.w || 0 : +o.d || 0);
+  const q = roofP(o), sw = q.dir === 'd', z = (P, x, y) => P[0] * x + P[1] * y + P[2];
+  if (hasRoofPts(o)) {
+    let P0 = o.pts.map(p => sw ? [p.y, -p.x] : [p.x, p.y]);
+    if (roofPolyArea(P0) < 0) P0 = P0.slice().reverse();
+    if (P0.length >= 3 && roofPolyArea(P0) >= 10 && !roofPolySelfHit(P0)) {
+      let P1 = q.over > 0 ? roofOffsetPoly(P0, q.over) : P0.map(p => [p[0], p[1]]);
+      if (!P1 || P1.length < 3 || roofPolyArea(P1) < 10 || roofPolySelfHit(P1)) P1 = P0.map(p => [p[0], p[1]]);
+      const faces = [], emit = (poly, P, checkOuter) => {
+        if (poly.length < 3 || Math.abs(roofPolyArea(poly)) < 1) return;
+        const pl = roofPolyArea(poly) < 0 ? poly.slice().reverse() : poly;
+        faces.push(pl.map(p => [p[0], p[1], z(P, p[0], p[1]) + q.th]));
+        faces.push(pl.map(p => [p[0], p[1], z(P, p[0], p[1])]).reverse());
+        for (let k = 0; k < pl.length; k++) {
+          const a = pl[k], b = pl[(k + 1) % pl.length];
+          if (checkOuter && !roofOnOuterEdge(a, b, P1)) continue;
+          const za = z(P, a[0], a[1]), zb = z(P, b[0], b[1]);
+          faces.push([[a[0], a[1], za], [b[0], b[1], zb], [b[0], b[1], zb + q.th], [a[0], a[1], za + q.th]]);
+        }
+      };
+      const t = Math.tan(q.pitch * Math.PI / 180);
+      if (q.flat) emit(P1, [0, 0, 0], false);
+      else if (q.type === 'shed') {
+        const yMax0 = Math.max(...P0.map(p => p[1]));
+        emit(P1, [0, -t, yMax0 * t], false);
+      } else if (q.type === 'gable') {
+        const ys0 = P0.map(p => p[1]), yMin0 = Math.min(...ys0), yMax0 = Math.max(...ys0), span = Math.max(1, yMax0 - yMin0);
+        const yr = (yMin0 + yMax0) / 2 + q.ridge * span, H = (span / 2) * t;
+        const sN = H / Math.max(1, yr - yMin0), sS = H / Math.max(1, yMax0 - yr);
+        const pN = [0, sN, -sN * yMin0], pS = [0, -sS, sS * yMax0];
+        if (roofPolyConvex(P1)) {
+          emit(roofClip(P1, 0, 1, -yr), pN, true);
+          emit(roofClip(P1, 0, -1, yr), pS, true);
+        } else {
+          const sp = roofSplitHoriz(P1, yr);
+          for (const pn of sp.n) emit(pn, pN, true);
+          for (const ps of sp.s) emit(ps, pS, true);
+        }
+      } else if (q.type === 'hip') {
+        if (roofPolyConvex(P0) && roofPolyConvex(P1)) {
+          const pl = [];
+          for (let i = 0; i < P0.length; i++) {
+            const a = P0[i], b = P0[(i + 1) % P0.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+            if (L < 1e-4) continue;
+            const nx = (b[1] - a[1]) / L, ny = -(b[0] - a[0]) / L;
+            pl.push([-t * nx, -t * ny, t * (nx * a[0] + ny * a[1])]);
+          }
+          pl.forEach((P, i) => {
+            let poly = P1;
+            pl.forEach((Q, j) => { if (j !== i && poly.length) poly = roofClip(poly, P[0] - Q[0], P[1] - Q[1], P[2] - Q[2] - (j < i ? 1e-7 : 0)); });
+            emit(poly, P, true);
+          });
+        } else {
+          let sx = 0, sy = 0, sA = 0;
+          for (let i = 0; i < P0.length; i++) { const a = P0[i], b = P0[(i + 1) % P0.length], c = a[0] * b[1] - b[0] * a[1]; sA += c; sx += (a[0] + b[0]) * c; sy += (a[1] + b[1]) * c; }
+          const cx = Math.abs(sA) > 1e-4 ? sx / (3 * sA) : 0, cy = Math.abs(sA) > 1e-4 ? sy / (3 * sA) : 0;
+          const triA = (a, b) => (a[0] - cx) * (b[1] - cy) - (a[1] - cy) * (b[0] - cx);
+          const star = P0.every((a, i) => triA(a, P0[(i + 1) % P0.length]) > 1) && P1.every((a, i) => triA(a, P1[(i + 1) % P1.length]) > 1);
+          if (star) {
+            const dMin = Math.min(...P0.map((a, i) => { const b = P0[(i + 1) % P0.length]; return triA(a, b) / Math.hypot(b[0] - a[0], b[1] - a[1]); }));
+            const H = Math.max(1, dMin) * t, ze = -q.over * t;
+            for (let i = 0; i < P1.length; i++) {
+              const a = P1[i], b = P1[(i + 1) % P1.length];
+              faces.push([[a[0], a[1], ze + q.th], [b[0], b[1], ze + q.th], [cx, cy, H + q.th]]);
+              faces.push([[b[0], b[1], ze], [a[0], a[1], ze], [cx, cy, H]]);
+              faces.push([[a[0], a[1], ze], [b[0], b[1], ze], [b[0], b[1], ze + q.th], [a[0], a[1], ze + q.th]]);
+            }
+          } else emit(P1, [0, 0, 0], false);
+        }
+      }
+      if (faces.length) {
+        const rot = sw ? faces.map(f => f.map(p => [-p[1], p[0], p[2]])) : faces;
+        let V = 0;
+        for (const f of rot) for (let k = 1; k + 1 < f.length; k++) { const a = f[0], b = f[k], c = f[k + 1], ay = -a[1], by = -b[1], cy = -c[1]; V += a[0] * (by * c[2] - b[2] * cy) - ay * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * cy - by * c[0]); }
+        return V < 0 ? rot.map(f => f.slice().reverse()) : rot;
+      }
+    }
+  }
+  const W = Math.max(1, sw ? +o.d || 0 : +o.w || 0), D = Math.max(1, sw ? +o.w || 0 : +o.d || 0);
   const X = W / 2 + q.over, Y = D / 2 + q.over, R = [[-X, -Y], [X, -Y], [X, Y], [-X, Y]], pl = roofPlanes(q, W, D), faces = [];
-  const z = (P, x, y) => P[0] * x + P[1] * y + P[2];
   const edge = (p, k) => (k === 'x' && (Math.abs(p[0] + X) < 1e-6 || Math.abs(p[0] - X) < 1e-6)) || (k === 'y' && (Math.abs(p[1] + Y) < 1e-6 || Math.abs(p[1] - Y) < 1e-6));
   pl.forEach((P, i) => {
     let poly = R;
@@ -2277,30 +2540,49 @@ function roofFaces(o) {
   const fb = o.fbase || { w: o.w, d: o.d, h: o.h }, sx = o.w / (fb.w || 1), sy = o.d / (fb.d || 1), sz = o.h / (fb.h || 1);
   return (Array.isArray(o.faces) ? o.faces : []).filter(f => Array.isArray(f) && f.length >= 3).map(f => f.map(p => [(+p[0] || 0) * sx, (+p[1] || 0) * sy, (+p[2] || 0) * sz]));
 }
-// eğimli duvar üstü (#96): [[t, h], …] t 0 → 1 artan, h 10..2000 cm; geçersizse null
+// eğimli duvar üstü (#96) (#178): [[t, h], …] veya [[t, hP, hM], …] t 0 → 1 artan, h 10..2000 cm; geçersizse null
 function cleanWallTop(v) {
   if (!Array.isArray(v) || v.length < 2 || v.length > 500) return null;
-  const out = v.map(p => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1]) ? [Math.round(+p[0] * 10000) / 10000, Math.round(+p[1] * 10) / 10] : null);
+  const out = v.map(p => {
+    if (!Array.isArray(p) || !isFinite(p[0]) || !isFinite(p[1])) return null;
+    const t = Math.round(+p[0] * 10000) / 10000, h1 = Math.round(+p[1] * 10) / 10;
+    if (p.length >= 3 && p[2] != null) {
+      if (!isFinite(p[2])) return null;
+      const h2 = Math.round(+p[2] * 10) / 10;
+      return Math.abs(h1 - h2) < 0.1 ? [t, h1] : [t, h1, h2];
+    }
+    return [t, h1];
+  });
   if (!out.every(Boolean) || out[0][0] !== 0 || out[out.length - 1][0] !== 1) return null;
-  for (let i = 0; i < out.length; i++) if (out[i][1] < 10 || out[i][1] > 2000 || (i && out[i][0] < out[i - 1][0])) return null;
+  for (let i = 0; i < out.length; i++) {
+    if (out[i][1] < 10 || out[i][1] > 2000 || (out[i].length >= 3 && (out[i][2] < 10 || out[i][2] > 2000)) || (i && out[i][0] < out[i - 1][0])) return null;
+  }
   return out;
 }
-/* ---------- Eğimli duvar üstü (#96) ----------
-   w.top = [[t, h], …]: duvarın üst profili (t: a → b boyunca 0..1, h: duvar tabanından cm), t 0 ile başlar 1 ile biter.
-   Yoksa (ya da duvar dolu değilse) üst düz w.h; w.h her zaman profilin en yüksek noktasıdır, böylece kesitler / panel / açıklık sığdırma bozulmaz. */
-const wallTopOn = w => !!w && isSolidWall(w) && Array.isArray(w.top) && w.top.length >= 2;
-function wallTopAt(w, d) { // d: a ucundan cm → o noktadaki üst yükseklik (duvar tabanından)
+/* ---------- Eğimli duvar üstü (#96, #176, #178) ----------
+   w.top = [[t, h], …] veya [[t, hP, hM], …]: duvarın üst profili (t: a → b boyunca 0..1, hP: +n yüzü, hM: −n yüzü, cm),
+   t 0 ile başlar 1 ile biter. Dolu ve cam cephe duvarlarında çalışır; w.h her zaman profilin en yüksek noktasıdır. */
+const canAttachWall = w => !!w && (isSolidWall(w) || w.wt === 'curtain');
+const wallTopOn = w => !!w && canAttachWall(w) && Array.isArray(w.top) && w.top.length >= 2;
+const wallTopH = (p, side = 0) => p.length >= 3 ? (side === 2 ? Math.max(p[1], p[2]) : side > 0 ? p[1] : side < 0 ? p[2] : Math.min(p[1], p[2])) : p[1];
+const wallTopMax = w => wallTopOn(w) ? Math.max(...w.top.map(p => wallTopH(p, 2))) : (+w.h || 0);
+const wallTopHasBevel = w => wallTopOn(w) && w.top.some(p => p.length >= 3 && Math.abs(p[1] - p[2]) >= 0.5);
+function wallTopFaceAt(w, d, side = 0) { // d: a ucundan cm, side: 0=min, 1=+n, -1=-n, 2=max
   if (!wallTopOn(w)) return +w.h || 0;
   const T = w.top, t = clamp(d / (wLen(w) || 1), 0, 1);
-  for (let i = 1; i < T.length; i++) if (t <= T[i][0] || i === T.length - 1) { const [t0, h0] = T[i - 1], [t1, h1] = T[i]; return t1 > t0 ? h0 + (h1 - h0) * clamp((t - t0) / (t1 - t0), 0, 1) : h1; }
+  for (let i = 1; i < T.length; i++) if (t <= T[i][0] || i === T.length - 1) {
+    const t0 = T[i - 1][0], t1 = T[i][0], h0 = wallTopH(T[i - 1], side), h1 = wallTopH(T[i], side);
+    return t1 > t0 ? h0 + (h1 - h0) * clamp((t - t0) / (t1 - t0), 0, 1) : h1;
+  }
   return +w.h || 0;
 }
-function wallTopPts(w, d0, d1) { // [d0, d1] arasındaki profil köşeleri [[d, h]] (iki uç dahil)
-  const L = wLen(w) || 1, out = [[d0, wallTopAt(w, d0)]];
-  if (wallTopOn(w)) for (const [t] of w.top) { const d = t * L; if (d > d0 + 0.01 && d < d1 - 0.01) out.push([d, wallTopAt(w, d)]); }
-  out.push([d1, wallTopAt(w, d1)]); return out;
+function wallTopAt(w, d) { return wallTopFaceAt(w, d, 0); } // d: a ucundan cm → açıklık / güvenli alt yükseklik
+function wallTopPts(w, d0, d1, side = 0) { // [d0, d1] arasındaki profil köşeleri [[d, h]] (iki uç dahil)
+  const L = wLen(w) || 1, out = [[d0, wallTopFaceAt(w, d0, side)]];
+  if (wallTopOn(w)) for (const p of w.top) { const d = p[0] * L; if (d > d0 + 0.01 && d < d1 - 0.01) out.push([d, wallTopFaceAt(w, d, side)]); }
+  out.push([d1, wallTopFaceAt(w, d1, side)]); return out;
 }
-const wallTopMin = (w, d0, d1) => Math.min(...wallTopPts(w, d0, d1).map(p => p[1]));
+const wallTopMin = (w, d0, d1) => Math.min(...wallTopPts(w, d0, d1, 0).map(p => p[1]));
 // referans yüzey: öğenin yüzleri kat koordinatında [[x, y, z], …] (z kat döşemesinden); çatı yüzleri, değilse (eğik) kutunun 6 yüzü
 function surfFaces(o) {
   if (!o || o.k === 'stairs' || o.k === 'ramp') return [];
@@ -2333,47 +2615,78 @@ function surfHits(faces, x, y) {
   return out;
 }
 // duvarın yüzeye göre üst profili: eksen + iki yüz boyunca örnekler, her noktada tabanın 20 cm üstündeki en alçak yüzey (çatının alt yüzü);
-// duvar yüzeyden dışarı taşmasın diye üç çizginin en alçağı alınır; yüzeyin altında olmayan noktalar mevcut yüksekliği korur. Yüzey hiç yoksa null.
+// duvar kalınlığı boyunca eğimli çatıda boşluk kalmasın diye +n ve −n yüzleri ayrı profilde tutulur (#178). Yüzey hiç yoksa null.
 function wallSurfProfile(w, faces) {
   const L = wLen(w); if (L < 1 || !faces.length) return null;
   const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, nx = -uy * w.t / 2, ny = ux * w.t / 2, base = wallElev(w);
   const n = clamp(Math.ceil(L / 5), 2, 400), pts = []; let any = false;
+  const minHit = (x, y) => { const zs = surfHits(faces, x, y).filter(z => z > base + 20); return zs.length ? Math.min(...zs) : Infinity; };
   for (let i = 0; i <= n; i++) {
-    const d = L * i / n, px = w.a.x + ux * d, py = w.a.y + uy * d; let best = Infinity;
-    for (const k of [0, 1, -1]) { const zs = surfHits(faces, px + nx * k, py + ny * k).filter(z => z > base + 20); if (zs.length) best = Math.min(best, ...zs); }
-    if (best < Infinity) any = true;
-    pts.push([d, best < Infinity ? Math.max(10, best - base) : wallTopAt(w, d)]);
+    const d = L * i / n, px = w.a.x + ux * d, py = w.a.y + uy * d;
+    const z0 = minHit(px, py), zP = minHit(px + nx, py + ny), zM = minHit(px - nx, py - ny);
+    if (z0 < Infinity || zP < Infinity || zM < Infinity) {
+      any = true;
+      let hp = zP < Infinity ? zP : (z0 < Infinity ? z0 : zM);
+      let hm = zM < Infinity ? zM : (z0 < Infinity ? z0 : zP);
+      if (z0 < Infinity && z0 < (hp + hm) / 2 - 0.2) { // içbükey vadi kırılması: kesit ekseninden yukarı taşmasın
+        if (hp > z0 && hm > z0) { hp = z0; hm = z0; }
+        else if (hp > hm) hp = Math.max(hm, 2 * z0 - hm);
+        else hm = Math.max(hp, 2 * z0 - hp);
+      }
+      pts.push([d, Math.max(10, hp - base), Math.max(10, hm - base)]);
+    } else {
+      pts.push([d, wallTopFaceAt(w, d, 1), wallTopFaceAt(w, d, -1)]);
+    }
   }
   if (!any) return null;
-  // Douglas-Peucker (0.5 cm): mahya / kırık noktaları kalır, düz parçalar iki noktaya iner
+  // Douglas-Peucker (0.5 cm): iki yüz için ortak kırık noktaları kalır, düz parçalar iki noktaya iner
   const keep = new Array(pts.length).fill(false); keep[0] = keep[pts.length - 1] = true;
   const dp = (i0, i1) => {
     let mi = -1, md = 0.5;
-    for (let i = i0 + 1; i < i1; i++) { const [d0, h0] = pts[i0], [d1, h1] = pts[i1], hh = h0 + (h1 - h0) * (pts[i][0] - d0) / (d1 - d0), dd = Math.abs(pts[i][1] - hh); if (dd > md) { md = dd; mi = i; } }
+    for (let i = i0 + 1; i < i1; i++) {
+      const [d0, p0, m0] = pts[i0], [d1, p1, m1] = pts[i1], t = (pts[i][0] - d0) / (d1 - d0);
+      const dd = Math.max(Math.abs(pts[i][1] - (p0 + (p1 - p0) * t)), Math.abs(pts[i][2] - (m0 + (m1 - m0) * t)));
+      if (dd > md) { md = dd; mi = i; }
+    }
     if (mi > 0) { keep[mi] = true; dp(i0, mi); dp(mi, i1); }
   };
   dp(0, pts.length - 1);
-  return pts.filter((_, i) => keep[i]).map(([d, h]) => [partR(d / L), Math.round(h * 10) / 10]);
+  return pts.filter((_, i) => keep[i]).map(([d, hp, hm]) => {
+    const rP = Math.round(hp * 10) / 10, rM = Math.round(hm * 10) / 10;
+    return Math.abs(rP - rM) >= 0.5 ? [partR(d / L), rP, rM] : [partR(d / L), rP];
+  });
 }
 // duvarı yüzeye bağla: profil yazılır (düz çıktıysa yalnızca w.h), açıklıklar yerel yüksekliğe sığdırılır. true = değişti
 function attachWallTop(w, faces, f = F()) {
-  if (!isSolidWall(w)) return false;
+  if (!canAttachWall(w)) return false;
   const prof = wallSurfProfile(w, faces); if (!prof) return false;
-  const hs = prof.map(p => p[1]), hi = Math.max(...hs);
-  if (hi - Math.min(...hs) < 0.5) { delete w.top; w.h = Math.round(hi); } else { w.top = prof; w.h = hi; }
+  const hs = prof.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]]), hi = Math.max(...hs), lo = Math.min(...hs);
+  if (hi - lo < 0.5) { delete w.top; w.h = Math.round(hi); } else { w.top = prof; w.h = hi; }
   fitOpsToWall(f, w);
   return true;
 }
 // [d0, d1] parçasının profili (kırpma / bölme): null = düz duvar
-function wallTopSub(w, d0, d1) { return wallTopOn(w) && d1 - d0 > 0.5 ? wallTopPts(w, d0, d1).map(([d, h]) => [partR((d - d0) / (d1 - d0)), h]) : null; }
-function setWallTop(w, tp) { if (!tp) return; const hs = tp.map(p => p[1]), hi = Math.max(...hs); if (hi - Math.min(...hs) < 0.5) delete w.top; else w.top = tp; w.h = hi; }
+function wallTopSub(w, d0, d1) {
+  if (!wallTopOn(w) || d1 - d0 <= 0.5) return null;
+  const tpP = wallTopPts(w, d0, d1, 1), tpM = wallTopPts(w, d0, d1, -1);
+  return tpP.map(([d, hP], i) => {
+    const hM = tpM[i][1], rP = Math.round(hP * 10) / 10, rM = Math.round(hM * 10) / 10;
+    return Math.abs(rP - rM) >= 0.5 ? [partR((d - d0) / (d1 - d0)), rP, rM] : [partR((d - d0) / (d1 - d0)), rP];
+  });
+}
+function setWallTop(w, tp) {
+  if (!tp) return;
+  const hs = tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]]), hi = Math.max(...hs), lo = Math.min(...hs);
+  if (hi - lo < 0.5) delete w.top; else w.top = tp;
+  w.h = hi;
+}
 function detachWallTop(w) { if (!w.top) return false; delete w.top; return true; } // düz üst: w.h (profilin en yüksek noktası) kalır
 
 // yukarıdan görünen yüzler: düşey olmayan ve merkezinin üstünde daha yüksek bir yüz bulunmayanlar (alt / saçak altı yüzleri elenir)
 const roofTopCache = new WeakMap();
 function roofTopFaces(f) {
   const pr = isParamRoof(f), ck = pr ? f : f.faces; // parametrik çatı: önbellek öğenin kendisine, anahtar parametreleri de içerir
-  const key = [f.w, f.d, f.h, f.fbase && f.fbase.w, f.fbase && f.fbase.d, f.fbase && f.fbase.h, pr ? JSON.stringify(roofP(f)) : ''].join('|'), hit = ck && typeof ck === 'object' && roofTopCache.get(ck);
+  const key = [f.w, f.d, f.h, f.fbase && f.fbase.w, f.fbase && f.fbase.d, f.fbase && f.fbase.h, pr ? JSON.stringify(roofP(f)) : '', f.pts ? JSON.stringify(f.pts) : ''].join('|'), hit = ck && typeof ck === 'object' && roofTopCache.get(ck);
   if (hit && hit.key === key) return hit.out;
   const fl = roofFaces(f).map(q => {
     let nx = 0, ny = 0, nz = 0, cx = 0, cy = 0, cz = 0;
@@ -2392,10 +2705,12 @@ const ROOF_COURSE = { tile: 32, shingle: 25, slate: 24, metal: 45, concrete: 60 
 function roofCourseSvg(f, fs, sk) {
   const m = roofP(f).mat, sp = ROOF_COURSE[m]; if (!sp) return '';
   let d = '';
-  const cut = (poly, nx, ny, s) => { // nx·x + ny·y = s doğrusunun dışbükey çokgendeki parçası
+  const cut = (poly, nx, ny, s) => { // nx·x + ny·y = s doğrusunun çokgendeki parçası (dışbükey & içbükey)
     const hit = [];
     for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length], fa = nx * a.x + ny * a.y - s, fb = nx * b.x + ny * b.y - s; if ((fa <= 0) !== (fb <= 0)) { const t = fa / (fa - fb); hit.push([a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t]); } }
-    const r = v => Math.round(v * 10) / 10; if (hit.length >= 2) d += `M${r(hit[0][0])} ${r(hit[0][1])}L${r(hit[1][0])} ${r(hit[1][1])}`;
+    if (hit.length > 2) hit.sort((p, q) => (-ny * p[0] + nx * p[1]) - (-ny * q[0] + nx * q[1]));
+    const r = v => Math.round(v * 10) / 10;
+    for (let i = 0; i + 1 < hit.length; i += 2) d += `M${r(hit[i][0])} ${r(hit[i][1])}L${r(hit[i + 1][0])} ${r(hit[i + 1][1])}`;
   };
   for (const q of fs) {
     const poly = q.map(p => ({ x: p[0], y: p[1] })), [a, b, c] = q;
@@ -6198,7 +6513,14 @@ function handleSvg() {
       s += hnd(o.a.x, o.a.y, 'da', 'move') + hnd(o.b.x, o.b.y, 'db', 'move') + hnd((o.a.x + o.b.x) / 2 + nx * off, (o.a.y + o.b.y) / 2 + ny * off, 'doff', 'move', 'circle');
     }
     if (kind === 'furn') {
-      if (!furnTilted(o)) { const c = furnCorners(o); c.forEach((p, i) => s += hnd(p.x, p.y, 'c' + i, 'nwse-resize')); } // eğik eşya: ölçü panelden (köşeler yerel w × d değil)
+      if (!furnTilted(o)) {
+        const c = furnCorners(o); c.forEach((p, i) => s += hnd(p.x, p.y, 'c' + i, 'nwse-resize'));
+        if (o.k === 'roof' && hasRoofPts(o)) {
+          const wp = roofWorldPts(o);
+          s += `<polygon points="${wp.map(p => p.x + ',' + p.y).join(' ')}" fill="#f59e0b" fill-opacity=".08" stroke="#f59e0b" stroke-width="${1.6 / z}" pointer-events="none"/>`;
+          wp.forEach((p, i) => s += hnd(p.x, p.y, 'rv' + i, 'move', 'circle'));
+        }
+      } // eğik eşya: ölçü panelden (köşeler yerel w × d değil)
       const r = o.rot * Math.PI / 180, dd = o.d / 2 + 30 / z;
       const rx = o.x + Math.sin(r) * dd, ry = o.y - Math.cos(r) * dd, tx = o.x + Math.sin(r) * o.d / 2, ty = o.y - Math.cos(r) * o.d / 2;
       s += `<line x1="${tx}" y1="${ty}" x2="${rx}" y2="${ry}" stroke="#f59e0b" stroke-width="${1.5 / z}" pointer-events="none"/>` + hnd(rx, ry, 'rot', 'grab', 'circle');
@@ -6305,7 +6627,7 @@ function underlayPts() {
 function snapMids(f, ignore) {
   const out = [];
   for (const arr of ['walls', 'dims']) for (const o of f[arr] || []) {
-    if (ignore && (ignore.has(o.id) || ignore.has(o.a) || ignore.has(o.b))) continue;
+    if (o.hidden || (ignore && (ignore.has(o.id) || ignore.has(o.a) || ignore.has(o.b)))) continue;
     out.push({ x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 });
   }
   return out;
@@ -6314,11 +6636,11 @@ function snapMids(f, ignore) {
 function snapCenters(f, ignore) {
   const out = [], bbs = new Map();
   for (const arr of ['rooms', 'slabs', 'voids']) for (const o of f[arr] || []) {
-    if (!o.pts || o.pts.length < 3 || (ignore && o.pts.some(q => ignore.has(q)))) continue;
+    if (o.hidden || !o.pts || o.pts.length < 3 || (ignore && o.pts.some(q => ignore.has(q)))) continue;
     const c = polyCentroid(o.pts); out.push({ x: c.x, y: c.y });
   }
   for (const k in KINDS) for (const o of f[k] || []) {
-    if (!o.grp) continue;
+    if (o.hidden || !o.grp) continue;
     if (ignore && ignore.has(o.id)) { bbs.set(o.grp, null); continue; } // sürüklenen üyenin grubu kayar — atla
     const b = bboxOf(KINDS[k], o), g = bbs.get(o.grp);
     if (!b || g === null) continue;
@@ -6336,15 +6658,15 @@ function nearCenter(p, r) {
 // Nokta takibi (issue #16) için referans noktaları: duvar uçları, oda köşeleri, çizilmekte olan oda köşeleri
 function trackRefs(ignore, from) {
   const f = F(), out = [], skip = q => (ignore && ignore.has(q)) || (from && dist(q, from) < 0.5);
-  for (const w of f.walls) { if (ignore && ignore.has(w.id)) continue; for (const q of [w.a, w.b]) if (!skip(q)) out.push(q); }
-  for (const arr of ['rooms', 'slabs', 'voids', 'drafts']) for (const rm of f[arr] || []) for (const q of rm.pts) if (!skip(q)) out.push(q);
+  for (const w of f.walls) { if (w.hidden || (ignore && ignore.has(w.id))) continue; for (const q of [w.a, w.b]) if (!skip(q)) out.push(q); }
+  for (const arr of ['rooms', 'slabs', 'voids', 'drafts']) for (const rm of f[arr] || []) { if (rm.hidden) continue; for (const q of rm.pts) if (!skip(q)) out.push(q); }
   if (ui.polyPts) for (const q of ui.polyPts) if (!skip(q)) out.push(q);
   for (const q of underlayPts()) if (!skip(q)) out.push(q);
   return out;
 }
 // aks kesişimleri + uçları (duvar ucu yakalama için)
 function axisSnapPts(f) {
-  const ax = (f.axes || []).filter(x => x.a && x.b && dist(x.a, x.b) >= 1), out = [];
+  const ax = (f.axes || []).filter(x => !x.hidden && x.a && x.b && dist(x.a, x.b) >= 1), out = [];
   for (const x of ax) out.push(x.a, x.b);
   for (let i = 0; i < ax.length; i++) for (let j = i + 1; j < ax.length; j++) {
     const p = ax[i], q = ax[j], d1x = p.b.x - p.a.x, d1y = p.b.y - p.a.y, d2x = q.b.x - q.a.x, d2y = q.b.y - q.a.y, den = d1x * d2y - d1y * d2x;
@@ -6360,11 +6682,11 @@ function snapPt(p, from, e, ignore) {
   // ignore: duvar kimlikleri (string) ve/veya atlanacak nokta nesneleri; duvar kimliği varsa oda köşeleri uç yakalamaya girmez (eski davranış)
   const skipRooms = ignore && [...ignore].some(v => typeof v === 'string');
   for (const w of f.walls) {
-    if (ignore && ignore.has(w.id)) continue;
+    if (w.hidden || (ignore && ignore.has(w.id))) continue;
     for (const q of [w.a, w.b]) { const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
   }
   for (const q of axisSnapPts(f)) { if (ignore && ignore.has(q)) continue; const d = dist(p, q); if (d < bd) { bd = d; best = q; } } // aks kesişimi / ucu
-  if (!skipRooms) for (const arr of ['rooms', 'slabs', 'voids', 'drafts']) for (const rm of f[arr] || []) for (const q of rm.pts) { if (ignore && ignore.has(q)) continue; const d = dist(p, q); if (d < bd) { bd = d; best = q; } }
+  if (!skipRooms) for (const arr of ['rooms', 'slabs', 'voids', 'drafts']) for (const rm of f[arr] || []) { if (rm.hidden) continue; for (const q of rm.pts) { if (ignore && ignore.has(q)) continue; const d = dist(p, q); if (d < bd) { bd = d; best = q; } } }
   if (best) return { x: best.x, y: best.y, hit: 'end' };
   // alt kat izdüşümü (#26), orta nokta ve merkez (#25): uç noktadan sonra, aynı yarıçapta en yakını
   let hit = null;
@@ -6405,13 +6727,14 @@ function snapPt(p, from, e, ignore) {
 }
 function wallNear(p, maxD = 40) {
   let best = null;
-  for (const w of F().walls) { const pr = segProj(p, w.a, w.b); if (pr.d < maxD && (!best || pr.d < best.pr.d)) best = { w, pr }; }
+  for (const w of F().walls) { if (w.hidden) continue; const pr = segProj(p, w.a, w.b); if (pr.d < maxD && (!best || pr.d < best.pr.d)) best = { w, pr }; }
   return best;
 }
 function magnet(f) {
   if (!ui.snap || f.k === 'roof' || f.mount === 'ceil') return; // çatı duvara yapışıp dönmez (#115); tavan armatürü de (oda ortasına yerleşir)
   let best = null;
   for (const w of F().walls) {
+    if (w.hidden) continue;
     const pr = segProj({ x: f.x, y: f.y }, w.a, w.b), lim = w.t / 2 + f.d / 2 + 18;
     if (pr.d < lim && (!best || pr.d < best.pr.d)) best = { w, pr };
   }
@@ -6821,6 +7144,7 @@ function setWallType(w, v) {
   }
   else if (was) { if (w.h < 150) w.h = curFloorH(); if (w.t < 10) w.t = v === 'curtain' ? 10 : P.wallT; }
   if (v !== 'curtain') { delete w.mul; delete w.mulN; }
+  if (isLowWall(w)) delete w.top;
   if (v !== 'railing') delete w.rs;
 }
 // çizim aracından yeni duvar: korkuluk aracında korkuluk (son seçilen stil korunur)
@@ -6837,7 +7161,7 @@ function mkFurn(def, x, y, rot = 0) { const o = { id: uid(), type: def.id, name:
 // yeni parametrik çatı (#115): beşik, 30°, kiremit; duvarların üstünde (kat yüksekliği); hazır ayarın kendi alanları korunur
 // çatıyı bu kattaki dolu duvarların dış hattına oturt (#115): çatının kendi açısında sınır kutusu (duvar kalınlığı dahil), yükseklik = en yüksek duvar üstü
 function roofFitWalls(o, f = F(), dz = 0) {
-  const ws = f.walls.filter(w => isSolidWall(w) && pickable(w.id)); if (!ws.length) return false;
+  const ws = f.walls.filter(w => canAttachWall(w) && pickable(w.id)); if (!ws.length) return false;
   const r = (+o.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, top = 0;
   for (const w of ws) {
@@ -6846,23 +7170,27 @@ function roofFitWalls(o, f = F(), dz = 0) {
     top = Math.max(top, wallElev(w) + (+w.h || 0));
   }
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  delete o.pts;
   o.w = Math.round(x1 - x0); o.d = Math.round(y1 - y0); o.x = Math.round(cx * c - cy * sn); o.y = Math.round(cx * sn + cy * c);
   o.elev = clamp(Math.round(top + dz), -FURN_ELEV_MAX, FURN_ELEV_MAX); o.h = roofHeight(o);
   return true;
 }
 // Bu katta duvar yoksa bir alt kattaki duvarlar (çatı katı): { f, i, dz } — dz = alt kattan bu kata kot farkı (çatı yüksekliği bu kata göre)
 function roofWallFloor() {
-  const has = g => g && g.walls.some(w => isSolidWall(w) && pickable(w.id));
+  const has = g => g && g.walls.some(w => canAttachWall(w) && pickable(w.id));
   if (has(F())) return { f: F(), i: fi, dz: 0 };
   return fi > 0 && has(P.floors[fi - 1]) ? { f: P.floors[fi - 1], i: fi - 1, dz: floorElev(fi - 1) - floorElev(fi) } : null;
 }
-/* Elle çatı çizimi (araç 'roofd'): sürükle = dikdörtgen, tıkla = köşeler; çizilen şeklin en küçük dönük dikdörtgeni çatının
-   ayak izi olur (duvar şartı yok: pergola, teras, sundurma…). Mahya uzun kenar boyunca; yükseklik = ayak izinin altındaki
-   en yüksek dolu duvarın üstü (bu kat, yoksa alt kat), hiç duvar yoksa üst katlarda kat düzlemi, zemin katta kat yüksekliği.
-   Yükseklik ve ölçüler sonra panelden serbestçe değişir. */
+function roofWorldPts(o) {
+  if (!hasRoofPts(o)) return furnCorners(o);
+  const r = (+o.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+  return o.pts.map(p => ({ x: o.x + p.x * c - p.y * sn, y: o.y + p.x * sn + p.y * c }));
+}
+/* Elle çatı çizimi (araç 'roofd'): sürükle = dikdörtgen, tıkla = köşeler; dikdörtgen dışı çokgenler (altıgen, sekizgen, L-şekli)
+   özgün köşelerini (o.pts) korur; dikdörtgenlerde ise en küçük dönük dikdörtgeni alır (duvar şartı yok: pergola, teras, sundurma…). */
 function roofDrawElev(o, f = F()) {
-  const cs = furnCorners(o), inside = p => pointInPoly(p, cs), top = (g, dz) => {
-    let t = null; for (const w of g.walls) if (isSolidWall(w) && pickable(w.id) && (inside(w.a) || inside(w.b) || inside({ x: (w.a.x + w.b.x) / 2, y: (w.a.y + w.b.y) / 2 }))) t = Math.max(t == null ? -Infinity : t, wallElev(w) + (+w.h || 0) + dz);
+  const cs = roofWorldPts(o), inside = p => pointInPoly(p, cs), top = (g, dz) => {
+    let t = null; for (const w of g.walls) if (canAttachWall(w) && pickable(w.id) && (inside(w.a) || inside(w.b) || inside({ x: (w.a.x + w.b.x) / 2, y: (w.a.y + w.b.y) / 2 }))) t = Math.max(t == null ? -Infinity : t, wallElev(w) + (+w.h || 0) + dz);
     return t;
   };
   let t = top(f, 0);
@@ -6870,11 +7198,30 @@ function roofDrawElev(o, f = F()) {
   if (t == null) t = fi > 0 ? 0 : curFloorH();
   return clamp(Math.round(t), -FURN_ELEV_MAX, FURN_ELEV_MAX);
 }
+function isRectRoofPts(pts, r) {
+  if (!r || pts.length !== 4) return false;
+  const th = r.rot * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th), hw = r.w / 2, hd = r.d / 2;
+  const corners = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([x, y]) => ({ x: r.cx + x * c - y * sn, y: r.cy + x * sn + y * c }));
+  return pts.every(p => corners.some(q => Math.hypot(p.x - q.x, p.y - q.y) < 2));
+}
 function roofFromPts(pts) {
-  const r = ifcRect(pts.map(p => [p.x, p.y])); if (!r || r.w < 50 || r.d < 50) return null;
-  const o = mkFurn(BYID.roof, Math.round(r.cx), Math.round(r.cy), Math.round(r.rot * 10) / 10);
-  o.w = Math.round(r.w); o.d = Math.round(r.d);
-  if (o.d > o.w) o.ridgeDir = 'd'; // mahya uzun kenar boyunca
+  if (!Array.isArray(pts) || pts.length < 3) return null;
+  const r = ifcRect(pts.map(p => [p.x, p.y]));
+  if (r && isRectRoofPts(pts, r)) {
+    if (r.w < 50 || r.d < 50) return null;
+    const o = mkFurn(BYID.roof, Math.round(r.cx), Math.round(r.cy), Math.round(r.rot * 10) / 10);
+    o.w = Math.round(r.w); o.d = Math.round(r.d);
+    if (o.d > o.w) o.ridgeDir = 'd'; // mahya uzun kenar boyunca
+    o.elev = roofDrawElev(o); o.h = roofHeight(o);
+    return o;
+  }
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const w = Math.round(x1 - x0), d = Math.round(y1 - y0);
+  if (w < 50 || d < 50 || Math.abs(roofPolyArea(pts.map(p => [p.x, p.y]))) < 1500) return null;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, cp = cleanRoofPts(pts.map(p => ({ x: p.x - cx, y: p.y - cy })));
+  if (!cp) return null;
+  const o = mkFurn(BYID.roof, Math.round(cx), Math.round(cy), 0);
+  o.w = w; o.d = d; o.pts = cp; o.roofType = 'hip';
   o.elev = roofDrawElev(o); o.h = roofHeight(o);
   return o;
 }
@@ -6894,21 +7241,23 @@ function addRectWalls(x0, y0, x1, y1) {
   f.walls.push(...ws); return ws;
 }
 function deleteIds(ids) {
-  const f = F(), s = new Set(ids);
+  const s = new Set(ids);
   if (s.has('bg')) P.bg = null;
-  f.walls = f.walls.filter(w => !s.has(w.id));
-  const wl = new Set(f.walls.map(w => w.id));
-  f.ops = f.ops.filter(o => !s.has(o.id) && wl.has(o.wall));
-  for (const k of ['furn', 'rooms', 'slabs', 'voids', 'sections', 'axes', 'dims', 'texts', 'sketches', 'drafts']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
-  dropPoseOrphans(ids, true); // silinen nesnelerin (grup + oda) düzen kayıtlarındaki eski pozları temizlensin
-  pruneGroups();
+  for (const f of P.floors) {
+    f.walls = f.walls.filter(w => !s.has(w.id));
+    const wl = new Set(f.walls.map(w => w.id));
+    f.ops = f.ops.filter(o => !s.has(o.id) && wl.has(o.wall));
+    for (const k of ['furn', 'rooms', 'slabs', 'voids', 'sections', 'axes', 'dims', 'texts', 'sketches', 'drafts']) f[k] = (f[k] || []).filter(o => !s.has(o.id));
+    dropPoseOrphans(ids, true, f); // silinen nesnelerin (grup + oda) düzen kayıtlarındaki eski pozları temizlensin
+    pruneGroups(f);
+  }
   sel = sel.filter(id => !s.has(id));
 }
 function deleteSel() {
   if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; }
   if (tool === 'terrain' && ui.tpSel != null) { terrainDelPoint(ui.tpSel); return; } // arazi noktası (#149)
   if (!sel.length) return;
-  const ids = sel.filter(pickable), del = ids.filter(id => !isLocked(find(id)?.o));
+  const ids = sel.filter(pickable), del = ids.filter(id => !isLocked((find(id) || findAnyFloor(id))?.o));
   if (del.length < ids.length) lockToast(ids.length - del.length);
   if (!del.length) return;
   deleteIds(del); commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
@@ -7297,7 +7646,7 @@ function updateTools() {
   document.querySelectorAll('.tool').forEach(b => b.classList.toggle('on', b.dataset.tool === ui.btn));
   $('#hud').textContent = ui.view3d
     ? (tool === 'place' && placing ? L('3B yerleştirme: Tık: yerleştir • R: döndür • Shift: serbest • Sürükle: döndür / bak • Esc: bitir • ', '3D placing: Click: place • R: rotate • Shift: free • Drag: orbit / look • Esc: done • ')
-      : fp3DOn() ? ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '') + L(' • Sağ sürükle: kaydır • Esc: aracı bitir • ', ' • Right-drag: pan • Esc: end tool • ') : '') + L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Ctrl+Z: Geri al • Del: Sil • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Ctrl+Z: Undo • Del: Delete • Esc: 2D')
+      : fp3DOn() ? ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '') + L(' • Sağ sürükle: kaydır • Esc: aracı bitir • ', ' • Right-drag: pan • Esc: end tool • ') : '') + L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Ctrl+Z: Geri al • Del: Sil • Esc: Seçimi temizle', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Ctrl+Z: Undo • Del: Delete • Esc: Deselect')
     : ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '');
   $('#hud').style.display = ui.viewElev ? 'none' : '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
@@ -7465,6 +7814,11 @@ function drawPreview() {
       s += `<g opacity=".7" pointer-events="none">${opSvg(ui.ghost, false)}</g>`;
     }
   }
+  if (d && d.type === 'handle' && d.h && d.h[0] === 'c' && d.anchor) {
+    const ax = d.anchor.x, ay = d.anchor.y, ar = 6 / z, cr = 10 / z, ac2 = d.oneSided ? '#10b981' : '#f59e0b';
+    s += `<circle cx="${ax}" cy="${ay}" r="${ar}" fill="${ac2}" fill-opacity=".25" stroke="${ac2}" stroke-width="${2 / z}" pointer-events="none"/>`
+      + `<path d="M${ax - cr} ${ay}H${ax + cr}M${ax} ${ay - cr}V${ay + cr}" stroke="${ac2}" stroke-width="${1.5 / z}" pointer-events="none"/>`;
+  }
   if (typeof collabOverlaySvg === 'function') s += collabOverlaySvg(C, z);
   g.innerHTML = s;
 }
@@ -7575,7 +7929,7 @@ function idsAt(clientX, clientY) {
   return out;
 }
 function objLabel(id) {
-  const fd = find(id); if (!fd) return id;
+  const fd = find(id) || findAnyFloor(id); if (!fd) return id;
   const o = fd.o, k = (isEN() ? KIND_EN : KIND_TR)[fd.kind] || fd.kind;
   const nm = fd.kind === 'furn' ? (o.label || (BYID[o.type] ? itemName(BYID[o.type]) : o.name))
     : fd.kind === 'room' || fd.kind === 'slab' || fd.kind === 'void' || fd.kind === 'section' || fd.kind === 'axis' ? o.name : fd.kind === 'text' ? o.text
@@ -7700,7 +8054,7 @@ function openCtxMenu(e) {
       + (sel.length ? `<button data-cmed="copy">📋 ${L('Kopyala', 'Copy')} <kbd>Ctrl+C</kbd></button>` : '')
       + (ui.clip && ui.clip.length ? `<button data-cmed="paste">📥 ${L('Yapıştır', 'Paste')} <kbd>Ctrl+V</kbd></button>` : '')
       + (sel.length ? `<button data-cmed="dup">⧉ ${L('Çoğalt', 'Duplicate')} <kbd>Ctrl+D</kbd></button><button data-cmed="del">🗑 ${L('Sil', 'Delete')} <kbd>Del</kbd></button>` : '')
-      + (sel.some(id => id !== 'bg') ? `<button data-cmed="lock">${selObjs().filter(x => x.kind !== 'bg').every(x => isLocked(x.o)) ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button>` : '');
+      + (sel.some(id => id !== 'bg') ? `<button data-cmed="lock">${selObjs().filter(x => x.kind !== 'bg').every(x => isLocked(x.o)) ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button><button data-cmed="hide">🙈 ${L('Gizle', 'Hide')}</button>` : '');
   }
   if (!h) return;
   m.innerHTML = h; document.body.appendChild(m);
@@ -7738,6 +8092,7 @@ function cancelTouchSingle() {
       if (d.origAll) for (const { o: mo } of selObjs()) { const g = d.origAll.get(mo.id); if (g) Object.assign(mo, JSON.parse(JSON.stringify(g))); }
     }
     ui.drag = null;
+    if (typeof showSizeTip === 'function') showSizeTip(null);
     if (typeof collabSendDrag === 'function') collabSendDrag([], 0, 0, true);
   }
   ui.pen = null;
@@ -7921,7 +8276,7 @@ function cvDown(e) {
       const ref = ui.attRef && findAnyFloor(ui.attRef); // referans başka katta olabilir (çatı katı → alt kattaki duvarlar)
       if (hit && hit.kind === 'wall') {
         if (!ref) { toast(step1); return; }
-        if (!isSolidWall(hit.o)) { toast(L('Yalnızca dolu duvarlar bağlanabilir', 'Only solid walls can be attached')); return; }
+        if (!canAttachWall(hit.o)) { toast(L('Korkuluk ve çitler yüzeye bağlanamaz', 'Railings and fences cannot be attached')); return; }
         if (!attachWallTop(hit.o, surfFacesOn(ref, fi), f)) { toast(L('Duvar bu yüzeyin altında değil', 'This wall is not under that surface')); return; }
         commit(); render(); renderProps(); if (ui.view3d && T3) schedBuild3D();
         toast(wallTopOn(hit.o) ? L(`Duvar yüzeye bağlandı: üst ${Math.round(wallTopMin(hit.o, 0, wLen(hit.o)))}–${Math.round(hit.o.h)} cm`, `Wall attached: top ${Math.round(wallTopMin(hit.o, 0, wLen(hit.o)))}–${Math.round(hit.o.h)} cm`) : L(`Duvar yüzeye bağlandı: ${hit.o.h} cm (düz)`, `Wall attached: ${hit.o.h} cm (flat)`));
@@ -8157,6 +8512,7 @@ function cvUp(e) {
     refresh(); return;
   }
   if (d.type === 'move' || d.type === 'handle') {
+    if (typeof showSizeTip === 'function') showSizeTip(null);
     if (typeof collabSendDrag === 'function') collabSendDrag([], 0, 0, true);
     if (!d.moved && d.type === 'move' && d.clickedId && !e.shiftKey && !e.altKey) { // Alt: tek üye seçimi, düzen geçişi yapma
       const fd = find(d.clickedId);
@@ -8335,11 +8691,27 @@ function doHandle(raw, e) {
   } else if (h === 'rot') {
     let a = Math.atan2(raw.y - o.y, raw.x - o.x) * 180 / Math.PI + 90;
     if (ui.snap && !sh) a = rnd(a, 15); o.rot = (Math.round(a) + 360) % 360;
+  } else if (h.startsWith('rv') && Array.isArray(o.pts)) {
+    const i = +h.slice(2); if (i < 0 || i >= o.pts.length) return;
+    const wp = roofWorldPts(d.orig), p = snapPt(raw, null, e, new Set([wp[i]]));
+    wp[i] = { x: p.x, y: p.y }; ui.cur = p;
+    const r = -(+o.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+    const lp = wp.map(q => { const dx = q.x - d.orig.x, dy = q.y - d.orig.y; return { x: dx * c - dy * sn, y: dx * sn + dy * c }; });
+    const xs = lp.map(q => q.x), ys = lp.map(q => q.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const lx = (x0 + x1) / 2, ly = (y0 + y1) / 2;
+    o.w = Math.max(10, Math.round(x1 - x0)); o.d = Math.max(10, Math.round(y1 - y0));
+    o.x = Math.round((d.orig.x + lx * c + ly * sn) * 10) / 10;
+    o.y = Math.round((d.orig.y - lx * sn + ly * c) * 10) / 10;
+    o.pts = lp.map(q => ({ x: Math.round((q.x - lx) * 10) / 10, y: Math.round((q.y - ly) * 10) / 10 }));
+    if (isParamRoof(o)) o.h = roofHeight(o);
   } else if (h[0] === 'c') {
-    const r = -o.rot * Math.PI / 180, dx = raw.x - o.x, dy = raw.y - o.y;
-    const lx = dx * Math.cos(r) - dy * Math.sin(r), ly = dx * Math.sin(r) + dy * Math.cos(r), st = ui.snap && !sh ? 5 : 1;
-    o.w = Math.max(10, rnd(Math.abs(lx) * 2, st)); o.d = Math.max(10, rnd(Math.abs(ly) * 2, st));
-    if (o.k === 'poly' && d.orig && d.orig.pts && d.orig.w && d.orig.d) o.pts = d.orig.pts.map(p => ({ x: Math.round(p.x * (o.w / d.orig.w) * 10) / 10, y: Math.round(p.y * (o.d / d.orig.d) * 10) / 10 }));
+    const oneSided = e && e.altKey ? !ui.oneSidedResize : !!ui.oneSidedResize;
+    const sp = ui.snap && !sh ? snapPt(raw, null, e) : null;
+    const pt = sp && sp.hit ? sp : raw, st = sp && sp.hit ? 1 : (ui.snap && !sh ? 5 : 1);
+    ui.cur = sp && (sp.hit || (sp.guides && sp.guides.length)) ? sp : null;
+    d.anchor = furnResizeCorner(o, d.orig, +h.slice(1), pt, st, oneSided); d.oneSided = oneSided;
+    showSizeTip(e, o, oneSided ? '1' : 'c');
   } else if (h.startsWith('bg')) {
     const g = d.orig, p = ui.snap && !sh ? snapToGrid(raw) : raw, asp = (g.h || 1) / (g.w || 1);
     const x0 = g.x, y0 = g.y, x1 = g.x + g.w, y1 = g.y + g.h;
@@ -8399,13 +8771,14 @@ function renderProps() {
   const xf = os.some(x => XFORM_KINDS.has(x.kind)) ? `<div class="row"><button class="btn sm" data-act="flipH" title="Shift+H">${L('⇋ Yatay aynala', '⇋ Flip H')}</button><button class="btn sm" data-act="flipV" title="Shift+V">${L('⇵ Dikey aynala', '⇵ Flip V')}</button><button class="btn sm" data-act="mirror" title="I">${L('🪞 Eksene göre…', '🪞 Mirror…')}</button><button class="btn sm" data-act="scale">${L('⤢ Ölçekle…', '⤢ Scale…')}</button></div>` : '';
   const lockable = os.filter(x => x.kind !== 'bg'), allLk = lockable.length && lockable.every(x => isLocked(x.o));
   const lockBtn = lockable.length ? `<button class="btn sm${allLk ? ' on' : ''}" data-act="lock" title="${L('Kilitli nesne fareyle / klavyeyle taşınmaz, boyutlanmaz, silinmez', 'A locked object cannot be moved, resized or deleted by mouse or keys')}">${allLk ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button>` : '';
+  const hideBtn = lockable.length ? `<button class="btn sm" data-act="hide" title="${L('Bu ögeyi gizle (Gizli ögeler panelinden geri açılabilir)', 'Hide this item (restore later from Hidden items)')}">🙈 ${L('Gizle', 'Hide')}</button>` : '';
   const lockNote = allLk ? `<p class="muted lockline">🔒 ${L('Kilitli: sürüklenmez, boyutlanmaz, silinmez. Alanlar yine düzenlenebilir.', 'Locked: no dragging, resizing or deleting. The fields below still edit it.')}</p>` : '';
-  const acts = (extra = '') => floorBadgeHtml() + lockNote + selLayerHtml(os) + xf + `<div class="row">${extra}${lockBtn}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+  const acts = (extra = '') => floorBadgeHtml() + lockNote + selLayerHtml(os) + xf + `<div class="row">${extra}${lockBtn}${hideBtn}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
   if (kinds.length > 1) {
     const gs = os.filter(x => GROUPABLE[x.kind]);
     const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
     const ungrp = gs.some(x => x.o.grp) ? `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>` : '';
-    el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><p class="muted">${L('Taşımak için sürükle, silmek için Del.', 'Drag to move, press Del to delete.')}</p>${grp}${ungrp}${variantUIHtml()}${acts()}`; return;
+    el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><p class="muted">${L('Taşımak için sürükle, silmek için Del.', 'Drag to move, press Del to delete.')}</p>${grp}${ungrp}${variantUIHtml()}${acts()}${hiddenPanelHtml(true)}`; return;
   }
   const k = kinds[0], o = os[0].o, n = os.length;
   let h = `<h3>${(isEN() ? KIND_EN : KIND_TR)[k]}${n > 1 ? ` <span class="muted">(${n})</span>` : ''}</h3>`;
@@ -8494,6 +8867,7 @@ function renderProps() {
   } else if (k === 'furn') {
     h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' });
     h += fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 }) + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 }) + (isParamRoof(o) ? '' : fld(L('Yükseklik 3B (cm)', '3D Height (cm)'), 'furn', 'h', o.h, { min: 1 })) + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 }) + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
+    if (!furnTilted(o)) h += `<label class="f" title="${L('Açıkken köşeden boyutlandırma karşı köşeyi sabit tutar (sürüklerken Alt tuşu geçici olarak tersini seçer)', 'When on, corner resizing keeps the opposite corner fixed (hold Alt while dragging to toggle temporarily)')}"><span>${L('Tek taraflı boyutlandır (Alt)', 'One-sided resize (Alt)')}</span><input type="checkbox" data-k="ui" data-p="oneSidedResize" ${ui.oneSidedResize ? 'checked' : ''}></label>`;
     h += fld(o.k === 'stairs' || o.k === 'ramp' ? L('Başlangıç kotu (cm)', 'Start level (cm)') : L('Yerden yükseklik (cm)', 'Height above floor (cm)'), 'furn', 'elev', furnElev(o), { min: -FURN_ELEV_MAX, max: FURN_ELEV_MAX, step: 5 }); // duvara asılan eşya (#61); merdiven / rampa: kattan yukarı (+) veya aşağı (−) başlar (#137)
     if (o.k !== 'stairs' && o.k !== 'ramp' && o.k !== 'roof') h += `<label class="f"><span>${L('Tavana sabit', 'On the ceiling')}</span><input type="checkbox" data-k="furn" data-p="mount" ${o.mount === 'ceil' ? 'checked' : ''} title="${L('Kat yüksekliği değişince tavanda kalır', 'Stays on the ceiling when the storey height changes')}"></label>`;
     if (isLightFix(o)) h += lightPanelHtml(o, n);
@@ -8648,6 +9022,7 @@ function renderProps() {
   if (gsAll.length >= 2) h += `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>`;
   if (gsAll.some(x => x.o.grp)) h += `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>`;
   h += variantUIHtml();
+  h += hiddenPanelHtml(true);
   el.innerHTML = h;
 }
 // cam döşeme (#57): şeffaf / buzlu seçimi yalnızca zemin 'glass' iken görünür
@@ -8707,6 +9082,7 @@ function projectPanel() {
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
   h += `<div class="row"><button class="btn sm" data-act="wallhall" title="${L('Tüm katlardaki mevcut duvarları bu yüksekliğe getirir; kat bazlı yükseklikler sıfırlanır', 'Sets every existing wall on every floor to this height; per-floor heights are cleared')}">⬆ ${L('Mevcut tüm duvarlara uygula', 'Apply to all existing walls')}</button></div>`;
   h += layersPanelHtml();
+  h += hiddenPanelHtml(false);
   h += lwPanelHtml();
   h += `<h4>${L('Katmanlar', 'Layers')}</h4>` + [['bg', L('Arka plan görseli', 'Background image')], ['rooms', L('Odalar', 'Rooms')], ['walls', L('Duvarlar & açıklıklar', 'Walls & openings')], ['furn', L('Mobilya', 'Furniture')], ['furnLabel', L('　↳ Mobilya yazıları', '　↳ Furniture labels')], ['furnIcon', L('　↳ Mobilya simgeleri (emoji)', '　↳ Furniture icons (emoji)')], ['lightArea', L('　↳ Işık alanları', '　↳ Light areas')], ['dims', L('Ölçüler', 'Dimensions')], ['sketch', L('Çizimler (kalem & 2B çizim)', 'Sketches & 2D drafting')], ['site', L('Arsa & dış zeminler', 'Site parcel & outdoor zones')], ...(groundP(P).tp.length ? [['terrain', L('Arazi: eş yükselti eğrileri & kotlar', 'Terrain: contours & spot heights')]] : [])].map(([k, l]) => `<label class="f"><span>${l}</span><input type="checkbox" data-k="layer" data-p="${k}" ${layersVis[k] ? 'checked' : ''}></label>`).join('');
   if (P.floors.length > 1) {
@@ -8790,7 +9166,7 @@ function affects3D(k, p) {
   return false; // dim/text/bg/layer 3B'yi etkilemez
 }
 function applyProp(t, final) {
-  if (t && t.dataset && t.dataset.k !== 'layer' && t.dataset.k !== 'ul' && typeof collabReadOnly === 'function' && collabReadOnly()) {
+  if (t && t.dataset && t.dataset.k !== 'layer' && t.dataset.k !== 'ul' && t.dataset.k !== 'ui' && typeof collabReadOnly === 'function' && collabReadOnly()) {
     collabViewerToast();
     if (final) renderProps();
     return;
@@ -8812,6 +9188,7 @@ function applyProp(t, final) {
     for (const { o } of selObjs()) o.layer = v;
     sel = sel.filter(pickable); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
   }
+  if (k === 'ui' && p === 'oneSidedResize') { ui.oneSidedResize = !!v; return; }
   if (k === 'layer') { layersVis[p] = v; render(); if (p === 'underlay') renderProps(); return; }
   if (k === 'ul') { if (p === 'op') underlay.op = clamp(v / 100, 0.1, 0.5); else { underlay.floor = v; renderProps(); } render(); return; }
   if (k === 'hp') { // eğim noktasının kotu (cm)
@@ -8876,7 +9253,7 @@ function applyProp(t, final) {
   const os = selObjs().filter(x => x.kind === k); if (!os.length) return;
   for (const { o } of os) {
     if (k === 'wall' && p === 'len') {
-      if (final) applyWallLength(o, v); // yazarken her tuşta değil: ara değerler kapıları sıkıştırmasın
+      if (final) applyWallLength(o, v, wallFree(o), ui.connWalls, os.find(x => x.o === o)?.floor || F()); // yazarken her tuşta değil: ara değerler kapıları sıkıştırmasın
     } else if (k === 'wall' && p === 'deg') {
       setWallDeg(o, v, true);
     } else if (k === 'wall' && p === 'pivot') {
@@ -8924,6 +9301,7 @@ function applyProp(t, final) {
     else if (k === 'draft' && p === 'w') { o.w = clamp(v, 0.5, 60); }
     else if (k === 'op' && p === 'open') { o.open = v ? 90 : 0; }
     else if (k === 'op' && p === 'type') { o[p] = v; if (v === 'window' && o.sill === 0) { o.sill = 90; o.h = 120; } if (v !== 'window' && o.sill > 0) { o.sill = 0; o.h = 210; } }
+    else if (k === 'furn' && (p === 'w' || p === 'd')) { const v0 = Math.max(5, v), old = +o[p] || v0; o[p] = v0; if ((o.k === 'poly' || o.k === 'roof') && Array.isArray(o.pts) && old > 0) o.pts = o.pts.map(q => p === 'w' ? ({ x: Math.round(q.x * (v0 / old) * 10) / 10, y: q.y }) : ({ x: q.x, y: Math.round(q.y * (v0 / old) * 10) / 10 })); }
     else o[p] = v;
     if (k === 'furn' && isParamRoof(o)) cleanRoof(o); // sınırlar + yükseklik (#115)
   }
@@ -8955,6 +9333,9 @@ function onPropsClick(e) {
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
   if (a === 'lock') return toggleLockSel();
+  if (a === 'hide') return hideSel();
+  if (a === 'unhide') return unhideId(b.dataset.hid, true);
+  if (a === 'unhideall') return unhideAll();
   if (a === 'copy') { copySel(); return renderProps(); }
   if (a === 'paste') return paste(false);
   if (a === 'flipH' || a === 'flipV') return flipSel(a === 'flipH' ? 'h' : 'v');
@@ -8978,7 +9359,7 @@ function onPropsClick(e) {
   if (a === 'rooffit') { // ayak izi + yükseklik duvarlara, sonra alttaki duvarlar çatıya bağlanır (#96): beşik alınları kapanır
     const wf = roofWallFloor(); // bu katta duvar yoksa alt kattakiler (çatı katına konmuş çatı)
     if (!wf) { toast(L('Altında dolu duvar yok — çatıyı 🛖 Çatı çiz aracıyla istediğin yere çiz, ölçü ve yüksekliğini panelden yaz', 'No solid walls below — draw the roof anywhere with the 🛖 Draw roof tool and type its size and height in the panel')); return; }
-    let n = 0, nw = 0; for (const { o } of os) if (isParamRoof(o) && roofFitWalls(o, wf.f, wf.dz)) { n++; const fs = surfFacesOn({ o, floorIdx: fi }, wf.i); for (const w of wf.f.walls) if (isSolidWall(w) && !isLocked(w) && pickable(w.id) && attachWallTop(w, fs, wf.f) && wallTopOn(w)) nw++; }
+    let n = 0, nw = 0; for (const { o } of os) if (isParamRoof(o) && roofFitWalls(o, wf.f, wf.dz)) { n++; const fs = surfFacesOn({ o, floorIdx: fi }, wf.i); for (const w of wf.f.walls) if (canAttachWall(w) && !isLocked(w) && pickable(w.id) && attachWallTop(w, fs, wf.f) && wallTopOn(w)) nw++; }
     if (!n) return;
     commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L('Çatı duvarlara oturtuldu', 'Roof fitted to the walls') + (nw ? L(` · ${nw} duvar çatıya uzatıldı`, ` · ${nw} wall(s) extended up to the roof`) : '')); return; }
   if (a === 'rampfit') { for (const { o } of os) if (o.k === 'ramp' && o.h > 0) o.d = Math.ceil(o.h / 0.08); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
@@ -9100,7 +9481,7 @@ function onPropsClick(e) {
     if (a === 'rot90' && kind === 'furn') o.rot = (o.rot + 90) % 360;
     if ((a === 'tiltx' || a === 'tilty') && kind === 'furn' && !NO_TILT_K.has(o.k)) { const k = a === 'tiltx' ? 'rx' : 'ry', v = ((+o[k] || 0) + 90) % 360; if (v) o[k] = v; else delete o[k]; if (ui.view3d && T3) schedBuild3D(); }
     if (a === 'upright' && kind === 'furn') { delete o.rx; delete o.ry; if (ui.view3d && T3) schedBuild3D(); }
-    if (a === 'swapwd' && kind === 'furn') { [o.w, o.d] = [o.d, o.w]; if (o.k === 'poly' && o.pts) o.pts = o.pts.map(p => ({ x: p.y, y: p.x }));
+    if (a === 'swapwd' && kind === 'furn') { [o.w, o.d] = [o.d, o.w]; if ((o.k === 'poly' || o.k === 'roof') && o.pts) o.pts = o.pts.map(p => ({ x: p.y, y: p.x }));
       if (isParamRoof(o)) { if (o.ridgeDir === 'd') delete o.ridgeDir; else o.ridgeDir = 'd'; } // mahya ayak iziyle birlikte döner
       if (o.k === 'roof' && Array.isArray(o.faces)) { o.faces = o.faces.map(f => f.map(q => [q[1], q[0], q[2]]).reverse()); if (o.fbase) o.fbase = { w: o.fbase.d, d: o.fbase.w, h: o.fbase.h }; }
       if (Array.isArray(o.parts)) { o.parts = o.parts.map(q => Object.assign({}, q, { x: -q.y, y: q.x, rot: ((q.rot || 0) + 90) % 360 })); if (o.pbase) o.pbase = { w: o.pbase.d, d: o.pbase.w, h: o.pbase.h }; } }
@@ -9263,6 +9644,7 @@ const GROUPABLE = { wall: 1, room: 1, furn: 1, dim: 1, text: 1, slab: 1 }; // d�
 function groupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind]);
   if (gs.length < 2) { toast(L('Gruplamak için en az 2 nesne seçin', 'Select at least 2 objects to group')); return; }
+  if (new Set(gs.map(x => x.floorIdx ?? fi)).size > 1) { toast(L('Gruplamak için aynı kattaki nesneleri seçin (katlar arası için 🔗 bağla)', 'Select objects on the same floor to group (use 🔗 link across floors)')); return; }
   const grps = [...new Set(gs.map(x => x.o.grp).filter(Boolean))];
   const g = grps.length === 1 ? grps[0] : uid(); // tek grup seçiliyse onu genişlet (düzenler korunur)
   const f = F(); f.groups = f.groups || [];
@@ -9330,16 +9712,16 @@ function ungroupSel() {
   if (ui.view3d && T3) schedBuild3D();
   toast(L('Grup çözüldü', 'Group dissolved'));
 }
-function dropPoseOrphans(ids, alsoRooms = false) {
+function dropPoseOrphans(ids, alsoRooms = false, f = F()) {
   // grup çözme / yeniden gruplama / silme sonrası: kayıtlarda üyesi olmayan poz kalmasın
-  const f = F(); if (!f) return;
+  if (!f) return;
   const s = new Set(ids);
   const clean = recs => { for (const g of recs) for (const v of g.vars || []) if (v.poses) for (const id in v.poses) if (s.has(id)) delete v.poses[id]; };
   clean(f.groups || []);
   if (alsoRooms) clean(f.rooms || []);
 }
-function pruneGroups() {
-  const f = F(); if (!f.groups) return;
+function pruneGroups(f = F()) {
+  if (!f || !f.groups) return;
   const alive = gid => { for (const k in KINDS) if (f[k].some(o => o.grp === gid)) return true; return false; };
   f.groups = f.groups.filter(g => alive(g.id));
 }
@@ -9793,6 +10175,7 @@ function touchAct(a) {
   if (a === 'dup') return paste(true);
   if (a === 'del') return deleteSel();
   if (a === 'lock') return toggleLockSel();
+  if (a === 'hide') return hideSel();
   if (a === 'all') { sel = allPickableIds(); return refresh(); }
   if (a === 'none') { sel = []; refresh(); if (ui.view3d && T3) refreshSel3D(); return; }
   if (a === 'multi') { ui.multiSel = !ui.multiSel; toast(ui.multiSel ? L('Çoklu seçim açık: dokunduğun her nesne eklenir / çıkarılır', 'Multi-select on: each tap adds or removes an object') : L('Çoklu seçim kapalı', 'Multi-select off')); return syncTouchBar(); }
@@ -9938,7 +10321,7 @@ function cmdList() {
   return tools.concat([
     act('undo', '↶', 'Geri al', 'Undo', 'Ctrl+Z', undo, true),
     act('redo', '↷', 'Yinele', 'Redo', 'Ctrl+Y', redo, true),
-    act('2d', '▭', '2B katı görünüm', '2D solid view', 'Esc (3B)', () => { ui.outline = false; show3D(false); syncViewSwitch(); render(); }, true, 'plan'),
+    act('2d', '▭', '2B katı görünüm', '2D solid view', '', () => { ui.outline = false; show3D(false); syncViewSwitch(); render(); }, true, 'plan'),
     act('outline', '⌗', '2B çizgisel / CAD görünümü', '2D outline / CAD view', 'J', () => setOutline(!ui.outline), true, 'cad wireframe çizgi outline'),
     act('3d', '🧊', '3B görünüm', '3D view', '', () => show3D(true), true, 'model'),
     act('roof', '🏠', 'Çatı ekle', 'Add a roof', '', () => startPlace('furn', BYID.roof), true, 'roof çatı gable hip shed flat beşik kırma tek eğim düz'),
@@ -9975,6 +10358,8 @@ function cmdList() {
     act('selall', '⬚', 'Tümünü seç', 'Select all', 'Ctrl+A', () => { const f = F(); sel = []; for (const a in KINDS) f[a].forEach(o => { if (pickable(o.id)) sel.push(o.id); }); refresh(); }, false),
     act('del', '🗑', 'Seçileni sil', 'Delete selection', 'Del', deleteSel, true),
     act('dup', '⧉', 'Çoğalt', 'Duplicate', 'Ctrl+D', () => paste(true), false, 'copy kopyala'),
+    act('hide', '🙈', 'Seçili ögeleri gizle', 'Hide selected items', '', () => hideSel(), true, 'gizle hide visibility'),
+    act('unhideall', '👁', 'Gizli ögeleri aç', 'Show hidden items', '', () => unhideAll(), true, 'göster unhide restore hidden items gizli'),
     act('group', '⛓', 'Grupla', 'Group', 'Ctrl+G', groupSel, false),
     act('ungroup', '⛓', 'Grubu çöz', 'Ungroup', 'Ctrl+Shift+G', ungroupSel, false),
     act('axgrid', '⊞', 'Aks ızgarası oluştur', 'Create an axis grid', '', () => axisGridPrompt(), false, 'grid ızgara aks axis column kolon structure yapı'),
@@ -10048,6 +10433,7 @@ window.addEventListener('keydown', e => {
   if (ui.modal === 'tex' && ui.txStudio) { if (e.key === 'Escape') closeModal(); return; } // stüdyonun üstündeki doku penceresi: tuşlar plana düşmez, Esc stüdyoya döner
   if (ui.modal === 'parts') { fsKey(e); return; } // mobilya stüdyosu açıkken tuşlar stüdyonun: Delete / Ctrl+Z arkadaki plana gitmez
   if (ui.modal === 'arch') { archKey(e); return; } // kesit / görünüş penceresi açıkken tuşlar pencerenin
+  if (e.key === 'Escape' && $('#modalbg').style.display === 'flex') { closeModal(); return; }
   // komut satırı (#43): ":" — 2B'de de 3B'de de; açık bir pencere (modal) varken değil
   if (e.key === ':' && !ctrl && !e.altKey && $('#modalbg').style.display !== 'flex') { e.preventDefault(); keys3D.clear(); openCmdPalette(); return; }
   if (ui.viewElev && $('#modalbg').style.display !== 'flex') { archKey(e); return; } // ana tuval görünüşü açıkken tuşlar görünüşün
@@ -10057,7 +10443,12 @@ window.addEventListener('keydown', e => {
     if (!ctrl && fp3DOn() && fp3DTypedKey(e, k)) { /* Enter ve yazılan ölçü aşağıdaki 2B tuş yoluna düşer */ } else {
     if (e.key === 'Escape' && tool === 'place') { setTool('select'); return; } // 3B yerleştirmeyi bitir, 3B'de kal
     if (ui.walkPick && (e.key === 'Escape' || e.key === 'Enter')) { e.preventDefault(); if (e.key === 'Enter') startWalkPick(); else stopWalkPick(); return; } // 👁 başlangıç seçimi: Enter = en büyük oda
-    if (e.key === 'Escape') { if (T3 && T3.walk) exitWalk(true); else show3D(false); return; }
+    if (e.key === 'Escape') {
+      if (T3 && T3.walk) { exitWalk(true); return; }
+      if (ui.grpEdit) { stopGrpEdit(); refresh(); refreshSel3D(); return; }
+      if (sel.length) { sel = []; refresh(); refreshSel3D(); return; }
+      return;
+    }
     if (tool === 'place' && placing && !ctrl && k === 'r') { // 3B yerleştirme: R = döndür (mobilya) / menteşe yönü (kapı)
       if (placing.type === 'furn') placing.rot = ((placing.rot || 0) + 90) % 360; else placing.flip = placing.flip ? 0 : 1;
       updateGhost(); place3DSync(); return;
@@ -10072,8 +10463,7 @@ window.addEventListener('keydown', e => {
       if (k === 'y') { e.preventDefault(); redo(); return; }
       if (k === 's') { e.preventDefault(); saveBrowser(); return; }
       if (k === 'a') {
-        e.preventDefault(); const f = F(); sel = [];
-        for (const a in KINDS) f[a].forEach(o => sel.push(o.id));
+        e.preventDefault(); sel = allPickableIds();
         refresh(); refreshSel3D(); return;
       }
       if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
@@ -13472,13 +13862,13 @@ function archPrims(spec) {
             color: o.color || null, frameCol: o.frameCol || null, mat: o.mat || null, flip: o.flip || 0, open: o.open || 0
           };
         }).filter(hh => hh.s1 - hh.s0 > 1);
-        const top = wallTopOn(w) ? wallTopPts(w, t0 * L, t1 * L).map(([d, hh]) => ({ s: pr(at(d / L)).s, z: WE + hh })) : null; // eğimli üst (#96)
+        const top = wallTopOn(w) ? wallTopPts(w, t0 * L, t1 * L, 2).map(([d, hh]) => ({ s: pr(at(d / L)).s, z: WE + hh })) : null; // eğimli üst (#96, #176, #178)
         const baseMeta = { id: w.id, kind: 'wall', floorIdx: i, color: faceCol, t0, t1, sA: A.s, sB: B.s, uProj, L };
         face(corners, WE, WE + H, rail ? { ...baseMeta, rail, rs: railStyle(w) } : { ...baseMeta, holes, curtain, mulN, top });
       };
       if (cut && (A.d > 0) !== (B.d > 0)) {
         const t = A.d / (A.d - B.d), sc = A.s + (B.s - A.s) * t, sin = Math.abs(B.d - A.d) / L, cw = w.t / Math.max(sin, 0.2);
-        const pos = t * L, op = ops.find(o => Math.abs(pos - o.d) < o.w / 2), Hc = wallTopOn(w) ? wallTopAt(w, pos) : H; // eğimli üst (#96): kesitteki yükseklik
+        const pos = t * L, op = ops.find(o => Math.abs(pos - o.d) < o.w / 2), Hc = wallTopOn(w) ? wallTopFaceAt(w, pos, 2) : H; // eğimli üst (#96): kesitteki yükseklik
         const [c0, c1] = inCrop(sc - cw / 2, sc + cw / 2);
         if (c1 - c0 > 0.2) {
           const bands = op ? [[WE, WE + (+op.sill || 0)], [WE + (+op.sill || 0) + (+op.h || 0), WE + Hc]] : [[WE, WE + Hc]];
@@ -13624,7 +14014,14 @@ function archSvg(spec, title, opts) {
     }
     if (p.curtain && p.mulN > 1) {
       let md = ''; const span = p.s1 - p.s0;
-      for (let m = 1; m < p.mulN; m++) { const mx = X(p.s0 + span * m / p.mulN); md += `M${mx} ${Y(p.z1)}V${Y(p.z0)}`; }
+      const topAt = s => {
+        if (!p.top || !p.top.length) return p.z1;
+        const tp = p.top.slice().sort((a, b) => a.s - b.s);
+        if (s <= tp[0].s) return tp[0].z;
+        for (let i = 1; i < tp.length; i++) if (s <= tp[i].s) { const a = tp[i - 1], b = tp[i]; return b.s > a.s ? a.z + (b.z - a.z) * (s - a.s) / (b.s - a.s) : b.z; }
+        return tp[tp.length - 1].z;
+      };
+      for (let m = 1; m < p.mulN; m++) { const ms = p.s0 + span * m / p.mulN, mx = X(ms); md += `M${mx} ${Y(topAt(ms))}V${Y(p.z0)}`; }
       if (md) out += `<path d="${md}" stroke="${st}" stroke-width="${mode === 'cad' ? 0.9 : 1.1}" fill="none" pointer-events="none"/>`;
     }
     for (const hh of p.holes || []) {
@@ -14017,17 +14414,18 @@ function archRenderProps() {
     h += `<h4>${L('Kat yüksekliği', 'Floor height')}</h4>` + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'floor', 'wallH', floorH(f), { min: FLOOR_H_MIN, max: FLOOR_H_MAX })
       + `<div class="row"><button class="btn sm" data-act="wallhfloor">⬆ ${L('Bu kattaki duvarlara uygula', 'Apply to walls on this floor')}</button>${f.wallH ? `<button class="btn sm" data-act="floorhreset">↺ ${P.wallH} cm</button>` : ''}</div>`;
     h += `<h4>${L('Görünüm ipuçları', 'View shortcuts')}</h4><p class="muted">${L('J: 2B / CAD · 0: Sığdır · Del: Sil · Ctrl+Z/Y: Geri/İleri · Ok tuşları: Kaydır · Boşluk+sürükle: Kaydır', 'J: 2D / CAD · 0: Fit · Del: Delete · Ctrl+Z/Y: Undo/Redo · Arrows: Nudge · Space+drag: Pan')}</p>`;
+    h += hiddenPanelHtml(false);
     el.innerHTML = h; return;
   }
   const kinds = [...new Set(os.map(x => x.kind))];
   if (kinds.length > 1) {
-    el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><div class="row"><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+    el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><div class="row"><button class="btn sm" data-act="hide">🙈 ${L('Gizle', 'Hide')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>${hiddenPanelHtml(true)}`;
     return;
   }
   const k = kinds[0], o = os[0].o, n = os.length, lk = os.every(x => isLocked(x.o));
   const acts = (extra = '') => `<p class="muted flbadge">📍 ${L('Kat', 'Floor')}: <b>${esc(F().name)}</b></p>`
     + (lk ? `<p class="muted lockline">🔒 ${L('Kilitli: sürüklenmez. Alanlar düzenlenebilir.', 'Locked: dragging disabled. Fields still edit it.')}</p>` : '')
-    + `<div class="row">${extra}<button class="btn sm${lk ? ' on' : ''}" data-act="lock">${lk ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+    + `<div class="row">${extra}<button class="btn sm${lk ? ' on' : ''}" data-act="lock">${lk ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button><button class="btn sm" data-act="hide">🙈 ${L('Gizle', 'Hide')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
   let h = `<h3>${(isEN() ? KIND_EN : KIND_TR)[k]}${n > 1 ? ` <span class="muted">(${n})</span>` : ''}</h3>`;
   if (k === 'wall') {
     if (n === 1) h += fld(L('Uzunluk (cm)', 'Length (cm)'), 'wall', 'len', wLen(o), { step: 1, min: 1 });
@@ -14088,6 +14486,7 @@ function archRenderProps() {
   } else {
     h += acts();
   }
+  h += hiddenPanelHtml(true);
   el.innerHTML = h;
 }
 function archStartDrag(e, handle = null, id = null) {
@@ -16762,10 +17161,15 @@ function init3D() {
     if (!cur) return;
     if (!pickable(cur.userData.opId || cur.userData.furnId)) return; // kilitli katman (#32): yörünge serbest
     if (cur.userData.opId) {
-      // kapı/pencere (#29): tık = seç (kapıda aç/kapa), sürükle = duvar boyunca kaydır
+      // kapı/pencere (#29, #181): Shift+tık = çoklu seçime ekle/çıkar; tık = seç (kapıda aç/kapa), sürükle = duvar boyunca kaydır
       const fo = findAnyFloor(cur.userData.opId), wd = fo && fo.kind === 'op' && fo.floor.walls.find(w => w.id === fo.o.wall);
       if (!wd) return;
       e.stopImmediatePropagation(); // orbit başlamasın
+      if (e.shiftKey) {
+        if (!sel.length) followSelFloor(fo);
+        sel = toggleSel3D(sel, [fo.o.id], true); refresh(); refreshSel3D();
+        return;
+      }
       sel = [fo.o.id]; followSelFloor(fo);
       const p0 = opDragHit(rc.ray, wd, cur.userData.elev || 0);
       d3 = { op: true, id: fo.o.id, wallId: wd.id, elev: cur.userData.elev || 0, sx: e.clientX, sy: e.clientY, moved: false, alt: e.altKey, d0: fo.o.d, t0: p0 ? p0.t : null, locked: isLocked(fo.o) };
@@ -16777,6 +17181,12 @@ function init3D() {
     const o = fd.o, elev = cur.userData.elev || 0, p0 = new THREE.Vector3();
     if (!rc.ray.intersectPlane(floorPlane(elev), p0)) return;
     e.stopImmediatePropagation(); // orbit başlamasın
+    if (e.shiftKey) {
+      const tids = o.grp && !e.altKey && !grpEditing(o) ? groupMemberIdsAny(o.grp) : [o.id];
+      if (!sel.length) followSelFloor(fd);
+      sel = toggleSel3D(sel, tids, true); refresh(); refreshSel3D();
+      return;
+    }
     sel = o.grp && !grpEditing(o) ? groupMemberIdsAny(o.grp) : [o.id]; followSelFloor(fd);
     d3 = { id: o.id, elev, sx: e.clientX, sy: e.clientY, moved: false, alt: e.altKey, offX: p0.x - o.x, offZ: p0.z - o.y,
       orig: new Map(sel.map(sid => { const fo = findAnyFloor(sid)?.o; return [sid, fo ? JSON.parse(JSON.stringify(fo)) : null]; })),
@@ -16871,7 +17281,7 @@ function init3D() {
       }
       commit(); refresh();
       schedBuild3D(); // tutkal/rotasyon/pin değişimi olabilir -> sahne tazelensin
-    } else { if (!alt && isLit(fd.o) && sel.length === 1) { toggleLight3D(fd.o); return; } if (fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // ışık: tık = aç / kapa (#121), Alt = yalnızca seç // düz tık: pointerdown'daki seçim (grup/tek) korunur
+    } else { if (!alt && isLit(fd.o) && sel.length === 1) { toggleLight3D(fd.o); return; } if (!alt && fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) return; refresh(); refreshSel3D(); } // ışık: tık = aç / kapa (#121), Alt = yalnızca seç // düz tık: pointerdown'daki seçim (grup/tek) korunur
   });
   // Tekerlek (perspektif): imlecin altındaki yüzeye doğru yaklaş. OrbitControls hedefe uzaklığı oranla küçültür; yakında
   // adım sıfıra yaklaşır ve "sonsuz yakınlaştırma"da takılır. Burada adım imleçteki yüzeye uzaklıktan gelir, dönüş merkezi
@@ -16954,34 +17364,58 @@ function init3D() {
     const rc = camRay(mouse);
     const hits = rc.intersectObjects(scene.children, true).filter(h => h.object.isMesh); // kenar çizgileri (LineSegments) tık çalmasın
     if (T3.walk) { walkClick(hits.length ? hits[0].object : null, e.altKey); return; }
-    if (!hits.length) return;
+    if (!hits.length) {
+      if (!e.shiftKey && sel.length) { sel = []; render(); refreshSel3D(); renderProps(); }
+      return;
+    }
     // en yakın mesh kazanır: örtücünün arkasındaki kapı/duvar tıklanamaz
     let cur = hits[0].object;
-    while (cur && !cur.userData?.wallId && !cur.userData?.opId && !cur.userData?.roomId && !cur.userData?.slabId) cur = cur.parent;
+    while (cur && !cur.userData?.wallId && !cur.userData?.opId && !cur.userData?.roomId && !cur.userData?.slabId && !cur.userData?.furnId) cur = cur.parent;
     let hit3 = false;
-    if (cur && cur.userData?.opId) hit3 = true; // açıklıklar pointerdown/pointerup (d3) yolunda işlenir
+    if (cur && (cur.userData?.opId || cur.userData?.furnId)) hit3 = true; // açıklıklar ve eşyalar pointerdown/pointerup (d3) yolunda işlenir
     else if (cur && cur.userData?.roomId) {
-      // oda zemini (#66): düzeni olan oda / grup tıkla → sıradaki düzen; Alt+tık → odayı seç; düzensiz oda boş zemin gibi davranır
+      // oda zemini (#66, #181): Shift+tık → çoklu seçim; Alt+tık / düz tık (düzensiz oda) → seç; düzen varsa çevir
       const fd = findAnyFloor(cur.userData.roomId);
-      if (fd && fd.kind === 'room' && pickable(fd.o.id) && (e.altKey || fd.floorIdx === fi)) {
-        if (e.altKey) { followSelFloor(fd); sel = [fd.o.id]; refresh(); refreshSel3D(); hit3 = true; } // Alt: her kattaki oda seçilir (#82)
-        else if (fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) { sel = groupMemberIds(fd.o.grp); build3D(true); hit3 = true; }
-        else if (cycleRoomVars(fd.o)) { sel = [fd.o.id]; build3D(true); hit3 = true; }
+      if (fd && fd.kind === 'room' && pickable(fd.o.id)) {
+        if (e.shiftKey) {
+          if (!sel.length) followSelFloor(fd);
+          sel = toggleSel3D(sel, [fd.o.id], true); refresh(); refreshSel3D();
+        } else if (e.altKey) {
+          followSelFloor(fd); sel = [fd.o.id]; refresh(); refreshSel3D();
+        } else if (fd.floorIdx === fi && fd.o.grp && !grpEditing(fd.o) && cycleGroupVars(fd.o.grp)) {
+          sel = groupMemberIds(fd.o.grp); build3D(true);
+        } else if (fd.floorIdx === fi && cycleRoomVars(fd.o)) {
+          sel = [fd.o.id]; build3D(true);
+        } else {
+          followSelFloor(fd); sel = [fd.o.id]; refresh(); refreshSel3D();
+        }
+        hit3 = true;
       }
     }
     else if (cur && cur.userData?.slabId) {
-      // serbest döşeme (#82): tıkla → seç; alan, kaplama, kalınlık ve kot farkı yan panelde
+      // serbest döşeme (#82, #181): tıkla / Shift+tık → seç; alan, kaplama, kalınlık ve kot farkı yan panelde
       const fd = findAnyFloor(cur.userData.slabId);
       if (fd && fd.kind === 'slab' && pickable(fd.o.id)) {
-        followSelFloor(fd);
-        if (fd.o.grp && !e.altKey && !grpEditing(fd.o)) { if (cycleGroupVars(fd.o.grp)) { sel = groupMemberIdsAny(fd.o.grp); build3D(true); hit3 = true; return; } sel = groupMemberIdsAny(fd.o.grp); } // gruplu döşeme: grup seçilir / düzen değişir, Alt = tek döşeme
-        else sel = [fd.o.id];
-        refresh(); refreshSel3D(); hit3 = true;
+        if (e.shiftKey) {
+          const tids = fd.o.grp && !e.altKey && !grpEditing(fd.o) ? groupMemberIdsAny(fd.o.grp) : [fd.o.id];
+          if (!sel.length) followSelFloor(fd);
+          sel = toggleSel3D(sel, tids, true); refresh(); refreshSel3D();
+        } else {
+          followSelFloor(fd);
+          if (fd.o.grp && !e.altKey && !grpEditing(fd.o)) { if (cycleGroupVars(fd.o.grp)) { sel = groupMemberIdsAny(fd.o.grp); build3D(true); hit3 = true; return; } sel = groupMemberIdsAny(fd.o.grp); } // gruplu döşeme: grup seçilir / düzen değişir, Alt = tek döşeme
+          else sel = [fd.o.id];
+          refresh(); refreshSel3D();
+        }
+        hit3 = true;
       }
     }
-    else if (cur && cur.userData?.wallId && findAnyFloor(cur.userData.wallId) && (() => { const l = layerById(findAnyFloor(cur.userData.wallId).o.layer); return !l || !l.lock; })()) {
+    else if (cur && cur.userData?.wallId && findAnyFloor(cur.userData.wallId) && pickable(cur.userData.wallId)) {
       const fd = findAnyFloor(cur.userData.wallId);
-      if (fd && fd.kind === 'wall' && (e.altKey || grpEditing(fd.o) || (!fd.o.grp && !(Array.isArray(fd.o.angles) && fd.o.angles.length >= 2)))) {
+      if (fd && fd.kind === 'wall' && e.shiftKey) {
+        const tids = fd.o.grp && !e.altKey && !grpEditing(fd.o) ? groupMemberIdsAny(fd.o.grp) : [fd.o.id];
+        if (!sel.length) followSelFloor(fd);
+        sel = toggleSel3D(sel, tids, true); refresh(); refreshSel3D();
+      } else if (fd && fd.kind === 'wall' && (e.altKey || grpEditing(fd.o) || (!fd.o.grp && !(Array.isArray(fd.o.angles) && fd.o.angles.length >= 2)))) {
         followSelFloor(fd); sel = [fd.o.id]; refresh(); refreshSel3D(); // düz duvar (veya Alt+tık): seç → yan panelde yükseklik/kalınlık/tür/boya (#29)
       } else if (fd && fd.kind === 'wall' && fd.o.grp) {
         followSelFloor(fd); if (cycleGroupVars(fd.o.grp)) { sel = groupMemberIdsAny(fd.o.grp); build3D(true); }
@@ -16991,7 +17425,7 @@ function init3D() {
       }
       hit3 = true;
     }
-    if (!hit3 && sel.length) { sel = []; render(); refreshSel3D(); renderProps(); } // boşluğa tıkla -> seçimi bırak
+    if (!hit3 && !e.shiftKey && sel.length) { sel = []; render(); refreshSel3D(); renderProps(); } // boşluğa tıkla -> seçimi bırak
   });
   T3 = { r, scene, cam, ctl, pcam: cam, ocam, ortho: false, run: false }; resize3D(); window.addEventListener('resize', () => { if (T3 && ui.view3d) resize3D(); });
 }
@@ -19086,6 +19520,30 @@ function lights3D() {
   if (!T3.lights) T3.lights = { hemi: new THREE.HemisphereLight(0xffffff, 0x667788, 0.4), dl: new THREE.DirectionalLight(0xfff6e8, 0.5), fill: new THREE.DirectionalLight(0xdbeafe, 0.2) };
   return T3.lights;
 }
+function slopedWallPrismGeo(tpP, tpM, botP, botM, L, t) {
+  const pos = [], hz = t / 2, bP = i => Array.isArray(botP) ? botP[i] : botP, bM = i => Array.isArray(botM) ? botM[i] : botM;
+  const tri = (a, b, c) => pos.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+  const quad = (a, b, c, d) => { tri(a, b, c); tri(a, c, d); };
+  for (let i = 0; i + 1 < tpP.length; i++) {
+    const x0 = tpP[i][0] - L / 2, x1 = tpP[i + 1][0] - L / 2;
+    if (x1 - x0 < 1e-4) continue;
+    const bp0 = bP(i), bp1 = bP(i + 1), bm0 = bM(i), bm1 = bM(i + 1);
+    const p0 = Math.max(bp0, tpP[i][1]), p1 = Math.max(bp1, tpP[i + 1][1]);
+    const m0 = Math.max(bm0, tpM[i][1]), m1 = Math.max(bm1, tpM[i + 1][1]);
+    if (p0 > bp0 + 0.01 || p1 > bp1 + 0.01) quad([x0, bp0, hz], [x1, bp1, hz], [x1, p1, hz], [x0, p0, hz]);
+    if (m0 > bm0 + 0.01 || m1 > bm1 + 0.01) quad([x1, bm1, -hz], [x0, bm0, -hz], [x0, m0, -hz], [x1, m1, -hz]);
+    quad([x0, p0, hz], [x1, p1, hz], [x1, m1, -hz], [x0, m0, -hz]);
+    quad([x0, bm0, -hz], [x1, bm1, -hz], [x1, bp1, hz], [x0, bp0, hz]);
+  }
+  const n = tpP.length - 1, xs = tpP[0][0] - L / 2, xe = tpP[n][0] - L / 2;
+  const ps = Math.max(bP(0), tpP[0][1]), ms = Math.max(bM(0), tpM[0][1]), pe = Math.max(bP(n), tpP[n][1]), me = Math.max(bM(n), tpM[n][1]);
+  if (ps > bP(0) + 0.01 || ms > bM(0) + 0.01) quad([xs, bM(0), -hz], [xs, bP(0), hz], [xs, ps, hz], [xs, ms, -hz]);
+  if (pe > bP(n) + 0.01 || me > bM(n) + 0.01) quad([xe, bP(n), hz], [xe, bM(n), -hz], [xe, me, -hz], [xe, pe, hz]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
 function build3D(keepCam = false) {
   req3D();
   sync3DFloors();
@@ -19335,8 +19793,18 @@ function build3D(keepCam = false) {
       const curt = w.wt === 'curtain', rail = 5, frameCol = lt ? 0x8fa3b8 : 0x7c8a9c;
       const pin3 = () => { if (!hasPos) return; const pv = w[wallPivot(w)], pin = new THREE.Mesh(new THREE.CylinderGeometry(w.t * 0.55, w.t * 0.55, H + 4, 20), mat(lt ? 0x1d4ed8 : 0xd99b26)); pin.position.set(pv.x, we + H / 2, pv.y); pin.userData = { wallId: w.id }; S.add(pin); };
       if (isLowWall(w)) { lowWall3D(g, w, L, H, f.ops.filter(o => o.wall === w.id), box, det, lt, mat, unitBox); pin3(); return; } // korkuluk / çit (#73)
-      if (curt) { box(g, L, rail, w.t, frameCol, 0, rail / 2, 0); box(g, L, rail, w.t, frameCol, 0, H - rail / 2, 0); } // alt & üst kuşak
       const sloped = wallTopOn(w); // eğimli üst (#96): en üst parça profili izleyen prizma
+      if (curt) {
+        box(g, L, rail, w.t, frameCol, 0, rail / 2, 0);
+        if (!sloped) box(g, L, rail, w.t, frameCol, 0, H - rail / 2, 0);
+        else {
+          const tpP = wallTopPts(w, 0, L, 1), tpM = wallTopPts(w, 0, L, -1);
+          const botP = tpP.map(p => Math.max(rail, p[1] - rail)), botM = tpM.map(p => Math.max(rail, p[1] - rail));
+          const rGeo = slopedWallPrismGeo(tpP, tpM, botP, botM, L, w.t);
+          const rm = new THREE.Mesh(rGeo, mat(frameCol)); rm.castShadow = rm.receiveShadow = true; g.add(rm);
+          if (det) g.add(new THREE.LineSegments(new THREE.EdgesGeometry(rGeo), lineMat));
+        }
+      } // alt & üst kuşak
       // ayrı boyanan / kaplanan yüzler: her duvar parçasının iki yanına ince bir "kaplama" yüzeyi (UV = cm, doku gerçek boyda)
       const skins = curt ? [] : [1, 2].map(i => {
         const fc = wallFace(w, i), fk = det ? finishKind(fc.fin) : null; if (!w['c' + i] && !fk) return null;
@@ -19344,17 +19812,29 @@ function build3D(keepCam = false) {
         if (fk) { m = floorMat(fk, col, lt, { floorTex, texs }); extraMats.push(m); } else m = mat(col);
         return { m, z: (i === 1 ? 1 : -1) * (w.t / 2 + 0.15), flipV: !!texIdOf(fk) };
       }).filter(Boolean);
-      const skin = shp => { for (const k of skins) {
-        const geo = new THREE.ShapeGeometry(shp); if (k.flipV) { const uv = geo.attributes.uv; for (let j = 0; j < uv.count; j++) uv.setY(j, -uv.getY(j)); }
+      const skin = (shp, shpM = shp) => { for (const k of skins) {
+        const geo = new THREE.ShapeGeometry(k.z < 0 ? shpM : shp); if (k.flipV) { const uv = geo.attributes.uv; for (let j = 0; j < uv.count; j++) uv.setY(j, -uv.getY(j)); }
         const m = new THREE.Mesh(geo, k.m); m.position.z = k.z; m.receiveShadow = true; g.add(m);
       } };
       const V2 = (x, y) => new THREE.Vector2(x, y);
       const seg = (s, e, y0, y1) => {
         if (sloped && y1 >= H - 0.01) {
           const tp = wallTopPts(w, s, e); if (e - s < 0.5 || tp.every(p => p[1] - y0 < 0.5)) return;
-          const shp = new THREE.Shape([new THREE.Vector2(s - L / 2, y0), new THREE.Vector2(e - L / 2, y0), ...tp.reverse().map(([d, hh]) => new THREE.Vector2(d - L / 2, Math.max(hh, y0)))]);
-          const geo = new THREE.ExtrudeGeometry(shp, { depth: w.t, bevelEnabled: false }); geo.translate(0, 0, -w.t / 2);
-          const m = new THREE.Mesh(geo, mat(wCol)); m.castShadow = m.receiveShadow = true; g.add(m); skin(shp);
+          if (curt) {
+            const yb = Math.max(y0, rail);
+            if (tp.every(p => p[1] - rail <= yb + 0.5)) return;
+            const shp = new THREE.Shape([V2(s - L / 2, yb), V2(e - L / 2, yb), ...tp.slice().reverse().map(([d, hh]) => V2(d - L / 2, Math.max(yb, hh - rail)))]);
+            const geo = new THREE.ExtrudeGeometry(shp, { depth: w.t * 0.3, bevelEnabled: false }); geo.translate(0, 0, -w.t * 0.15);
+            const m = new THREE.Mesh(geo, mat(0x9fd3ee, lt ? 0.38 : 0.30)); m.receiveShadow = true; g.add(m);
+            return;
+          }
+          const tpP = wallTopPts(w, s, e, 1), tpM = wallTopPts(w, s, e, -1), bev = wallTopHasBevel(w);
+          const shp = new THREE.Shape([V2(s - L / 2, y0), V2(e - L / 2, y0), ...tpP.slice().reverse().map(([d, hh]) => V2(d - L / 2, Math.max(hh, y0)))]);
+          const shpM = bev ? new THREE.Shape([V2(s - L / 2, y0), V2(e - L / 2, y0), ...tpM.slice().reverse().map(([d, hh]) => V2(d - L / 2, Math.max(hh, y0)))]) : shp;
+          let geo;
+          if (bev) geo = slopedWallPrismGeo(tpP, tpM, y0, y0, L, w.t);
+          else { geo = new THREE.ExtrudeGeometry(shp, { depth: w.t, bevelEnabled: false }); geo.translate(0, 0, -w.t / 2); }
+          const m = new THREE.Mesh(geo, mat(wCol)); m.castShadow = m.receiveShadow = true; g.add(m); if (bev) skin(shp, shpM); else skin(shp);
           if (det) g.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), lineMat));
           return;
         }
@@ -19456,25 +19936,56 @@ function build3D(keepCam = false) {
         if (!sloped) box(g, L, 3.5, w.t * 1.02, shade(wCol, -0.08), 0, H - 1.75, 0, 0, 0, false, false); // üst kapak (eğimli üstte yok)
       }
       if (curt) {
-        // dikmeler: açıklıkların üstüne binmesin
+        // dikmeler: açıklıkların üstüne binmesin, eğimli duvar üstünde profile göre kısalır (#176)
         const nM = curtainBays(w); // modül / ara dikme adedi (#71)
         for (let i = 0; i <= nM; i++) {
           const x = (i * L) / nM;
           if (ops.some(o => o.d - o.w / 2 < x + 4 && o.d + o.w / 2 > x - 4)) continue;
-          box(g, 6, H - 2 * rail, w.t * 0.55, frameCol, x - L / 2, rail + (H - 2 * rail) / 2, 0, 0, 0, false);
+          const hx = sloped ? Math.min(wallTopAt(w, x), wallTopAt(w, clamp(x - 3, 0, L)), wallTopAt(w, clamp(x + 3, 0, L))) : H;
+          const mh = hx - 2 * rail;
+          if (mh > 1) box(g, 6, mh, w.t * 0.55, frameCol, x - L / 2, rail + mh / 2, 0, 0, 0, false);
         }
       }
       pin3();
     });
-    // köşe birleşim dolgusu (issue #14): duvar kutuları birleşimde düz biter, dış köşe yarığını bu prizma kapatır
+    // köşe birleşim dolgusu (issue #14, #178): duvar kutuları birleşimde düz biter, dış köşe yarığını bu prizma kapatır
     for (const j of wallJoints(f)) {
       const solid = j.walls.filter(isSolidWall); if (!solid.length) continue;
-      const w0 = solid[0], jb = Math.max(...solid.map(wallElev)), H = Math.min(...solid.map(w => wallElev(w) + wallTopAt(w, dist(w.a, j) <= dist(w.b, j) ? 0 : wLen(w)))) - jb, hasPos = Array.isArray(w0.angles) && w0.angles.length > 0;
+      const w0 = solid[0], jb = Math.max(...solid.map(wallElev)), hasPos = Array.isArray(w0.angles) && w0.angles.length > 0;
       const jCol = w0.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
+      const bev = solid.some(wallTopHasBevel);
+      const zOf = p => Math.min(...solid.map(w => {
+        const L = wLen(w) || 1, ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L;
+        const d = clamp((p.x - w.a.x) * ux + (p.y - w.a.y) * uy, 0, L);
+        const s = clamp(((p.x - w.a.x) * (-uy) + (p.y - w.a.y) * ux) / ((w.t || 20) / 2), -1.5, 1.5);
+        const hP = wallTopFaceAt(w, d, 1), hM = wallTopFaceAt(w, d, -1);
+        return wallElev(w) + (hP + hM) / 2 + (hP - hM) / 2 * s;
+      }));
+      const zs = bev ? j.poly.map(zOf) : null;
+      const H = zs ? Math.max(...zs) - jb : Math.min(...solid.map(w => wallElev(w) + wallTopAt(w, dist(w.a, j) <= dist(w.b, j) ? 0 : wLen(w)))) - jb;
+      if (H < 1) continue;
+      if (zs && Math.max(...zs) - Math.min(...zs) >= 0.5) {
+        const pos = [], tris = THREE.ShapeUtils.triangulateShape(j.poly.map(p => new THREE.Vector2(p.x, p.y)), []);
+        const tri = (a, b, c) => pos.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+        for (const t of tris) {
+          const p0 = j.poly[t[0]], p1 = j.poly[t[1]], p2 = j.poly[t[2]];
+          tri([p0.x, zs[t[0]], p0.y], [p2.x, zs[t[2]], p2.y], [p1.x, zs[t[1]], p1.y]);
+          tri([p0.x, jb, p0.y], [p1.x, jb, p1.y], [p2.x, jb, p2.y]);
+        }
+        const area = j.poly.reduce((a, p, i) => { const q = j.poly[(i + 1) % j.poly.length]; return a + p.x * q.y - q.x * p.y; }, 0);
+        for (let k = 0; k < j.poly.length; k++) {
+          const k2 = (k + 1) % j.poly.length, a = j.poly[k], b = j.poly[k2], za = zs[k], zb = zs[k2];
+          if (area >= 0) { tri([a.x, jb, a.y], [a.x, za, a.y], [b.x, zb, b.y]); tri([a.x, jb, a.y], [b.x, zb, b.y], [b.x, jb, b.y]); }
+          else { tri([b.x, jb, b.y], [b.x, zb, b.y], [a.x, za, a.y]); tri([b.x, jb, b.y], [a.x, za, a.y], [a.x, jb, a.y]); }
+        }
+        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.computeVertexNormals();
+        const m = new THREE.Mesh(geo, mat(jCol)); m.position.y = elev; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
+        S.add(m); continue;
+      }
       const geo = new THREE.ExtrudeGeometry(new THREE.Shape(j.poly.map(p => new THREE.Vector2(p.x, p.y))), { depth: H, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
       const m = new THREE.Mesh(geo, mat(jCol));
-      if (H < 1) { geo.dispose(); continue; } m.position.y = elev + jb + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
+      m.position.y = elev + jb + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
       S.add(m);
     }
     f.furn.forEach((o, fi3) => {
@@ -19547,7 +20058,7 @@ function refreshSel3D() {
   if (!T3 || !T3.scene) return;
   for (const h of h3) { T3.scene.remove(h); h.geometry.dispose(); h.material.dispose(); }
   h3 = [];
-  if (!ui.view3d || !sel.length) { markScene3D(); return; }
+  if (!ui.view3d || !sel.length) { arrows3D(); markScene3D(); return; }
   if (T3.sceneDirty) { T3.scene.updateMatrixWorld(true); T3.sceneDirty = false; }
   // tekil veya gruplu seçimde mobilya, duvar ve kapı/pencere üyeleri turuncu kutuyla vurgulanır (#29)
   const ids = new Set(sel), col = isLight() ? 0xd97706 : 0xfbbf24;
@@ -19563,6 +20074,27 @@ function refreshSel3D() {
 /* ---------- 3B boyut okları: tek seçili eşyanın dört yanında genişlik / uzunluk okları ----------
    Ok sürüklenince o kenar taşınır, karşı kenar yerinde kalır (furnResizeSide). Oklar her zaman görünür (derinlik testi yok),
    T3.arr = { meshes, geo, mat } her refreshSel3D'de yeniden kurulur ve atılır. */
+// 2B köşeden boyutlandırma (#179): oneSided = karşı köşeyi sabit tut, değilse merkezden iki yana; sabit kalan noktayı döner
+function furnResizeCorner(o, o0, idx, raw, st = 1, oneSided = false) {
+  const sx = (idx === 1 || idx === 2) ? 1 : -1, sy = (idx === 2 || idx === 3) ? 1 : -1;
+  const r = (+o0.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+  const dx = raw.x - o0.x, dy = raw.y - o0.y, lx = dx * c + dy * sn, ly = -dx * sn + dy * c;
+  if (!oneSided) {
+    o.w = Math.max(10, rnd(Math.abs(lx) * 2, st)); o.d = Math.max(10, rnd(Math.abs(ly) * 2, st));
+    o.x = o0.x; o.y = o0.y;
+  } else {
+    const nw = Math.max(10, rnd(sx * lx + o0.w / 2, st)), nd = Math.max(10, rnd(sy * ly + o0.d / 2, st));
+    const shx = (nw - o0.w) / 2 * sx, shy = (nd - o0.d) / 2 * sy;
+    o.w = nw; o.d = nd;
+    o.x = Math.round((o0.x + c * shx - sn * shy) * 100) / 100;
+    o.y = Math.round((o0.y + sn * shx + c * shy) * 100) / 100;
+  }
+  if ((o.k === 'poly' || o.k === 'roof') && Array.isArray(o0.pts) && o0.w && o0.d) o.pts = o0.pts.map(p => ({ x: Math.round(p.x * (o.w / o0.w) * 10) / 10, y: Math.round(p.y * (o.d / o0.d) * 10) / 10 }));
+  if (typeof isParamRoof === 'function' && isParamRoof(o)) o.h = roofHeight(o);
+  if (!oneSided) return { x: o0.x, y: o0.y };
+  const ax = -sx * o0.w / 2, ay = -sy * o0.d / 2;
+  return { x: o0.x + c * ax - sn * ay, y: o0.y + sn * ax + c * ay };
+}
 // tek kenardan boyutlandır; key 'w+' | 'w-' | 'd+' | 'd-', v = yeni kenarın merkezden (o0) uzaklığı (yerel eksende, ok yönünde)
 function furnResizeSide(o, o0, key, v, st = 1) {
   const ax = key[0], sg = key[1] === '+' ? 1 : -1, s0 = +o0[ax] || 10;
@@ -19570,7 +20102,8 @@ function furnResizeSide(o, o0, key, v, st = 1) {
   const r = (+o0.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
   o[ax] = size;
   if (ax === 'w') { o.x = o0.x + c * sh; o.y = o0.y + sn * sh; } else { o.x = o0.x - sn * sh; o.y = o0.y + c * sh; }
-  if (o.k === 'poly' && o0.pts && o0.w && o0.d) o.pts = o0.pts.map(p => ({ x: Math.round(p.x * (o.w / o0.w) * 10) / 10, y: Math.round(p.y * (o.d / o0.d) * 10) / 10 }));
+  if ((o.k === 'poly' || o.k === 'roof') && o0.pts && o0.w && o0.d) o.pts = o0.pts.map(p => ({ x: Math.round(p.x * (o.w / o0.w) * 10) / 10, y: Math.round(p.y * (o.d / o0.d) * 10) / 10 }));
+  if (typeof isParamRoof === 'function' && isParamRoof(o)) o.h = roofHeight(o);
   return o;
 }
 // p (plan) → o0'ın yerel ekseninde, key okunun yönünde konum
@@ -19583,7 +20116,7 @@ function showSizeTip(e, o, key) {
   let t = document.getElementById('sizeTip');
   if (!e) { if (t) t.style.display = 'none'; return; }
   if (!t) { t = document.createElement('div'); t.id = 'sizeTip'; t.className = 'sizetip'; document.body.appendChild(t); }
-  t.textContent = (key[0] === 'w' ? '↔ ' : '↕ ') + fmtLen(o.w) + ' × ' + fmtLen(o.d);
+  t.textContent = (key === '1' ? '◱ ' : key === 'c' ? '⊕ ' : key[0] === 'w' ? '↔ ' : '↕ ') + fmtLen(o.w) + ' × ' + fmtLen(o.d) + (key === '1' ? ` (${L('Tek taraflı', 'One-sided')})` : key === 'c' ? ` (${L('Merkezden', 'From centre')})` : '');
   t.style.left = (e.clientX + 14) + 'px'; t.style.top = (e.clientY + 14) + 'px'; t.style.display = '';
 }
 // ok yerleri (plan): [{ key, x, y, ux, uy }] — kenarın ortasından biraz dışarıda, dışarı bakan

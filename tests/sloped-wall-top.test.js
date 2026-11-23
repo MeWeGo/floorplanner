@@ -24,7 +24,7 @@ function load(floor = { walls: [], ops: [] }) {
     ${fnSrcOf(src, 'fitOpsToWall')}
     ${wallTopSrc(src)}
     return {
-      cleanWallTop, wallTopOn, wallTopAt, wallTopPts, wallTopMin,
+      cleanWallTop, wallTopOn, wallTopAt, wallTopFaceAt, wallTopHasBevel, wallTopPts, wallTopMin,
       surfFaces, surfHits, wallSurfProfile, attachWallTop,
       wallTopSub, setWallTop, detachWallTop, fitOpsToWall
     };
@@ -76,13 +76,28 @@ test('(1) gable roof attaches sloped profile with ridge at center', () => {
   approx(wallTopAt(w, 100), 351.8, 0.2, 'quarter-span h: ');
 });
 
-test('(2) wall along eave direction attaches flat without w.top', () => {
+test('(2) flat roof attaches flat without w.top; sloped eave-parallel wall gets transverse bevel matching roof', () => {
+  const flatRoof = {
+    id: 'rflat', k: 'roof', w: 800, d: 600, h: 20, x: 300, y: 0, rot: 0, elev: 290,
+    fbase: { w: 800, d: 600, h: 20 },
+    faces: [[[-400, -300, 0], [400, -300, 0], [400, 300, 0], [-400, 300, 0]]],
+  };
+  const wFlat = mkW('w2f', 0, 0, 600, 0);
+  const envFlat = load({ walls: [wFlat], ops: [] });
+  assert.strictEqual(envFlat.attachWallTop(wFlat, envFlat.surfFaces(flatRoof), envFlat.f), true);
+  assert.strictEqual(wFlat.top, undefined);
+  assert.strictEqual(wFlat.h, 290);
+
   const w = mkW('w2', 0, 0, 600, 0);
-  const { f, surfFaces, attachWallTop } = load({ walls: [w], ops: [] });
+  const { f, surfFaces, attachWallTop, wallTopFaceAt } = load({ walls: [w], ops: [] });
   const faces = surfFaces(makeGableRoof());
   assert.strictEqual(attachWallTop(w, faces, f), true);
-  assert.strictEqual(w.top, undefined);
-  approx(w.h, 277, 1, 'eave flat h: ');
+  assert.strictEqual(w.top.length, 2, 'sloped eave-parallel wall keeps bevel profile across wall thickness');
+  approx(w.top[0][1], 290.5, 0.2, '+n face h: ');
+  approx(w.top[0][2], 276.8, 0.2, '-n face h: ');
+  approx(w.h, 290.5, 0.2, 'max wall h: ');
+  approx(wallTopFaceAt(w, 300, 1), 290.5, 0.2);
+  approx(wallTopFaceAt(w, 300, -1), 276.8, 0.2);
 });
 
 test('(3) shed roof (single sloped face) gives a two-point profile', () => {
@@ -216,4 +231,55 @@ test('(10) source and MCP wiring guards', () => {
     fnSrcOf(src.replace(/\r\n/g, '\n'), 'cleanWallTop'),
     'cleanWallTop in mcp/server.js must match app.js'
   );
+});
+
+test('(11) angled wall under sloped roof gets transverse [t, hP, hM] bevel with zero gap at both wall faces (#178)', () => {
+  // 45° angled wall crossing ridge of makeGableRoof (y < 200 north slope, y > 200 south slope)
+  const w = mkW('w_ang', 100, 100, 300, 300); // t = 20, L = 200*sqrt(2)
+  const { f, surfFaces, surfHits, attachWallTop, wallTopFaceAt, wallTopHasBevel, wallTopSub, cleanWallTop } = load({ walls: [w], ops: [] });
+  const faces = surfFaces(makeGableRoof());
+  assert.strictEqual(attachWallTop(w, faces, f), true);
+  assert.strictEqual(wallTopHasBevel(w), true, 'angled wall has transverse bevel');
+
+  const L = Math.hypot(200, 200), ux = 200 / L, uy = 200 / L, nx = -uy * (w.t / 2), ny = ux * (w.t / 2);
+  for (const d of [20, 70, 210, 260]) { // sample away from ridge kink
+    const px = w.a.x + ux * d, py = w.a.y + uy * d;
+    const zP = Math.min(...surfHits(faces, px + nx, py + ny));
+    const zM = Math.min(...surfHits(faces, px - nx, py - ny));
+    approx(wallTopFaceAt(w, d, 1), zP, 0.8, `+n face at d=${d}: `);
+    approx(wallTopFaceAt(w, d, -1), zM, 0.8, `-n face at d=${d}: `);
+  }
+
+  // wallTopSub preserves transverse bevel on split segments
+  const sub = wallTopSub(w, 20, 100);
+  assert.ok(sub && sub.some(p => p.length === 3), 'split segment retains [t, hP, hM]');
+  assert.ok(cleanWallTop(sub), 'split profile passes cleanWallTop');
+
+  // mirrorObjs swaps +n / -n face heights on walls
+  assert.match(fnSrcOf(src, 'mirrorObjs'), /\[p\[0\],\s*p\[2\],\s*p\[1\]\]/);
+  assert.match(fnSrcOf(src, 'build3D'), /slopedWallPrismGeo/);
+});
+
+test('(12) curtain wall attach & mullions follow sloped roof (#176)', () => {
+  const cw = mkW('cw1', 0, 0, 0, 400, { wt: 'curtain', mul: 100 });
+  const rail = mkW('rl1', 0, 0, 0, 400, { wt: 'railing', h: 100 });
+  const fence = mkW('fn1', 0, 0, 0, 400, { wt: 'fence', h: 110 });
+  const { f, surfFaces, attachWallTop, detachWallTop, wallTopOn, wallTopAt, wallTopFaceAt } = load({ walls: [cw, rail, fence], ops: [] });
+  const faces = surfFaces(makeGableRoof());
+
+  assert.strictEqual(attachWallTop(cw, faces, f), true, 'curtain wall attaches to sloped roof');
+  assert.strictEqual(wallTopOn(cw), true);
+  assert.strictEqual(cw.h, 420);
+  approx(wallTopAt(cw, 0), 283.6, 0.2, 'curtain start h: ');
+  approx(wallTopFaceAt(cw, 200, 2), 420, 0.2, 'curtain peak at ridge mullion: ');
+  approx(wallTopAt(cw, 100), 351.8, 0.2, 'curtain mullion at 100 cm: ');
+  approx(wallTopAt(cw, 300), 351.8, 0.2, 'curtain mullion at 300 cm: ');
+
+  assert.strictEqual(attachWallTop(rail, faces, f), false, 'railing cannot attach');
+  assert.strictEqual(attachWallTop(fence, faces, f), false, 'fence cannot attach');
+  assert.strictEqual(detachWallTop(cw), true, 'curtain wall can detach back to flat');
+  assert.strictEqual(wallTopOn(cw), false);
+
+  assert.match(fnSrcOf(src, 'build3D'), /curtainBays\(w\)[\s\S]{0,260}wallTopAt\(w,\s*x\)/);
+  assert.match(fnSrcOf(src, 'archSvg'), /if\s*\(p\.curtain\s*&&\s*p\.mulN\s*>\s*1\)[\s\S]{0,800}topAt\(ms\)/);
 });

@@ -38,12 +38,38 @@ test('(f) click handler resets downPt before checking distance and selects plain
   assert.ok(clickBlock.includes('const dp = downPt; downPt = null;'), 'must reset downPt before checking distance');
   assert.ok(clickBlock.includes('sel = [fd.o.id]'), 'must select plain wall with sel = [fd.o.id]');
   assert.match(clickBlock, /e\.altKey\s*\|\|\s*(grpEditing\(fd\.o\)\s*\|\|\s*)?\(!fd\.o\.grp\s*&&\s*!\(Array\.isArray\(fd\.o\.angles\)\s*&&\s*fd\.o\.angles\.length\s*>=\s*2\)\)/, 'must select wall if altKey or wall is not grouped and not hinged');
+  assert.match(clickBlock, /cur\.userData\?\.furnId/, 'pointerup must recognize hits on furniture meshes');
+  assert.match(clickBlock, /!hits\.length[\s\S]{0,80}!e\.shiftKey\s*&&\s*sel\.length[\s\S]{0,80}refreshSel3D\(\)/, 'clicking empty space deselects unless Shift is held');
+  const roomIdx = clickBlock.indexOf('else if (cur && cur.userData?.roomId)');
+  const slabIdx = clickBlock.indexOf('else if (cur && cur.userData?.slabId)');
+  const wallIdx = clickBlock.indexOf('else if (cur && cur.userData?.wallId');
+  assert.ok(roomIdx > 0 && slabIdx > roomIdx && wallIdx > slabIdx, 'roomId, slabId and wallId branches missing');
+  assert.match(clickBlock.slice(roomIdx, slabIdx), /toggleSel3D/, 'rooms support Shift+click multi-selection');
+  assert.match(clickBlock.slice(slabIdx, wallIdx), /toggleSel3D/, 'slabs support Shift+click multi-selection');
+  assert.match(clickBlock.slice(wallIdx), /toggleSel3D/, 'walls support Shift+click multi-selection');
+
+  const pdStart = init.indexOf("r.domElement.addEventListener('pointerdown'");
+  const pdEnd = init.indexOf("window.addEventListener('pointermove'", pdStart);
+  assert.ok(pdStart > 0 && pdEnd > pdStart, 'pointerdown handler not found');
+  const pdBlock = init.slice(pdStart, pdEnd);
+  assert.match(pdBlock, /opId[\s\S]{0,350}e\.shiftKey[\s\S]{0,120}toggleSel3D/, 'openings support Shift+click multi-selection in 3D');
+  assert.match(pdBlock, /furnId[\s\S]{0,450}e\.shiftKey[\s\S]{0,120}toggleSel3D/, 'furniture supports Shift+click multi-selection in 3D');
 });
 
-test('(g) refreshSel3D highlights furnId, wallId groups (not meshes) and opId children with BoxHelper', () => {
+test('(g) refreshSel3D highlights furnId, wallId, slabId, roomId and opId children, and clears arrows on deselect', () => {
   const rSel = fnSrc('refreshSel3D');
-  assert.match(rSel, /ids\.has\(u\.furnId\)\s*\|\|\s*\(ids\.has\(u\.wallId\)\s*&&\s*!c\.isMesh\)/, 'must highlight furnId or wallId group (not mesh)');
+  assert.match(rSel, /ids\.has\(u\.furnId\)\s*\|\|\s*\(ids\.has\(u\.wallId\)\s*&&\s*!c\.isMesh\)\s*\|\|\s*ids\.has\(u\.slabId\)\s*\|\|\s*ids\.has\(u\.roomId\)/, 'must highlight furnId, wallId group, slabId and roomId');
   assert.match(rSel, /for\s*\(const og of c\.children\)\s*if\s*\(og\.userData\s*&&\s*ids\.has\(og\.userData\.opId\)\)\s*h3\.push\(new THREE\.BoxHelper\(og,\s*col\)\)/, 'must highlight opId children with BoxHelper');
+  assert.match(rSel, /if\s*\(!ui\.view3d\s*\|\|\s*!sel\.length\)\s*\{\s*arrows3D\(\)/, 'clearing selection in 3D must remove resize arrows');
+});
+
+test('(h) toggleSel3D handles single replacement, Shift+click add/remove and group toggles (#181)', () => {
+  const toggleSel3D = new Function(`${fnSrc('toggleSel3D')} return toggleSel3D;`)();
+  assert.deepStrictEqual(toggleSel3D(['w1', 'f1'], ['w2'], false), ['w2']);
+  assert.deepStrictEqual(toggleSel3D(['w1'], ['f1'], true), ['w1', 'f1']);
+  assert.deepStrictEqual(toggleSel3D(['w1', 'f1'], ['w1'], true), ['f1']);
+  assert.deepStrictEqual(toggleSel3D(['w1', 'g1', 'g2'], ['g1', 'g2'], true), ['w1']);
+  assert.deepStrictEqual(toggleSel3D(['w1', 'g1'], ['g1', 'g2'], true), ['w1', 'g1', 'g2']);
 });
 
 test('geometric opDragHit calculation: returns distance t along wall from a', () => {
