@@ -1090,6 +1090,7 @@ function restore(s) {
   $('#pname').value = P.name; syncGridUI();
   refresh(); buildLib(); // kütüphane ön ayarları / şekiller de geri alınır (#42)
   if (ui.view3d && T3) schedBuild3D(); // undo/redo sonrası 3B sahnesi tazelensin
+  if (ui.modal === 'arch') { archRedraw(); archRenderProps(); } // kesit/görünüş penceresi açıksa tazelensin
 }
 function undo() { if (typeof collab !== 'undefined' && collab.room) { collabUndo(); return; } if (hi > 0) { hi--; restore(hist[hi]); autosave(); updateUndo(); } }
 function redo() { if (typeof collab !== 'undefined' && collab.room) { collabRedo(); return; } if (hi < hist.length - 1) { hi++; restore(hist[hi]); autosave(); updateUndo(); } }
@@ -8508,7 +8509,8 @@ function applyProp(t, final) {
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
-$('#props').addEventListener('click', e => {
+$('#props').addEventListener('click', e => onPropsClick(e));
+function onPropsClick(e) {
   const s = e.target.closest('[data-sel]'); if (s) { sel = [s.dataset.sel]; refresh(); return; }
   const b = e.target.closest('[data-act]'); if (!b) return;
   const a = b.dataset.act, os = selObjs(), f = F();
@@ -8689,7 +8691,7 @@ $('#props').addEventListener('click', e => {
     }
   }
   commit(); refresh();
-});
+}
 
 /* ---------- Kütüphane ---------- */
 /* ---------- Kütüphane ön ayarları (issue #42) ----------
@@ -9608,6 +9610,7 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && document.getElementById('ctxMenu')) { closeCtxMenu(); return; }
   if (ui.modal === 'tex' && ui.txStudio) { if (e.key === 'Escape') closeModal(); return; } // stüdyonun üstündeki doku penceresi: tuşlar plana düşmez, Esc stüdyoya döner
   if (ui.modal === 'parts') { fsKey(e); return; } // mobilya stüdyosu açıkken tuşlar stüdyonun: Delete / Ctrl+Z arkadaki plana gitmez
+  if (ui.modal === 'arch') { archKey(e); return; } // kesit / görünüş düzenleyici açıkken tuşlar pencerenin
   // komut satırı (#43): ":" — 2B'de de 3B'de de; açık bir pencere (modal) varken değil
   if (e.key === ':' && !ctrl && !e.altKey && $('#modalbg').style.display !== 'flex') { e.preventDefault(); keys3D.clear(); openCmdPalette(); return; }
   // 3B'de çizim aracı (fp3D): Esc aracı / yarım çizimi bitirir ve 3B'de kalınır; Enter ve yazılan ölçü 2B tuş yolundan geçer
@@ -9729,7 +9732,9 @@ $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8)
 function openModal(html, kind = null) { ui.modal = kind; $('#modal').innerHTML = html; $('#modalbg').style.display = 'flex'; }
 function closeModal() {
   if (ui.modal === 'tex' && ui.txStudio) { ui.txStudio = null; ui.modal = 'parts'; $('#modalbg').style.display = 'none'; pbRedraw(); return; }
-  ui.txWall = 0; if (ui.modal === 'parts') fsClose(); ui.modal = null; $('#modalbg').style.display = 'none';
+  ui.txWall = 0; if (ui.modal === 'parts') fsClose();
+  if (ui.modal === 'arch') { $('#modal').classList.remove('arch-modal'); if (ui.arch) { ui.arch.drag = null; ui.arch.tool = 'select'; } }
+  ui.modal = null; $('#modalbg').style.display = 'none';
 }
 $('#modalbg').addEventListener('mousedown', e => { if (e.target.id === 'modalbg') closeModal(); });
 $('#modal').addEventListener('click', e => { if (e.target.closest('[data-close]')) closeModal(); });
@@ -12960,16 +12965,23 @@ function archPrims(spec) {
     prims.push({ t: 'face', s0, s1, z0, z1, depth: ps.reduce((a, q) => a + q.d, 0) / ps.length, ...extra });
   };
   P.floors.forEach((f, i) => {
-    const E = floorElev(i); levels.push({ z: E, name: f.name });
+    const E = floorElev(i); levels.push({ z: E, name: f.name, floorIdx: i });
     f = visFloor(f, true);
     // döşemeler
-    const pl0 = groundP(P).plinth, skirt = pl0 > 20 && i === groundFloorIdx() ? slabPolys(f).map(pts => ({ pts, z0: E - pl0, z1: E - 20 })) : []; // subasman eteği (#148)
-    const plates = [...skirt, ...slabPolys(f).map(pts => ({ pts, z0: E - 20, z1: E })), ...(f.slabs || []).filter(s => s.pts && s.pts.length > 2).map(s => ({ pts: s.pts, z0: E + (+s.off || 0) - (+s.t || 20), z1: E + (+s.off || 0) }))];
+    const pl0 = groundP(P).plinth, skirt = pl0 > 20 && i === groundFloorIdx() ? slabPolys(f).map(pts => ({ pts, z0: E - pl0, z1: E - 20, id: null, kind: 'floorslab', floorIdx: i, color: f.slabColor || null })) : []; // subasman eteği (#148)
+    const plates = [
+      ...skirt,
+      ...slabPolys(f).map(pts => ({ pts, z0: E - 20, z1: E, id: null, kind: 'floorslab', floorIdx: i, color: f.slabColor || null })),
+      ...(f.slabs || []).filter(s => s.pts && s.pts.length > 2).map(s => ({ pts: s.pts, z0: E + (+s.off || 0) - (+s.t || 20), z1: E + (+s.off || 0), id: s.id, kind: 'slab', floorIdx: i, color: s.color || null }))
+    ];
     const voidIv = cut ? (f.voids || []).flatMap(v => lineCutIntervals(v.pts, O, u)) : [];
     for (const pl of plates) {
       if (cut) {
-        for (const [s0, s1] of subIntervals(lineCutIntervals(pl.pts, O, u), voidIv)) { const c = inCrop(s0, s1); if (c[1] - c[0] > 0.5) prims.push({ t: 'cut', s0: c[0], s1: c[1], z0: pl.z0, z1: pl.z1, depth: 0 }); }
-      } else face(pl.pts, pl.z0, pl.z1, { slab: true });
+        for (const [s0, s1] of subIntervals(lineCutIntervals(pl.pts, O, u), voidIv)) {
+          const c = inCrop(s0, s1);
+          if (c[1] - c[0] > 0.5) prims.push({ t: 'cut', s0: c[0], s1: c[1], z0: pl.z0, z1: pl.z1, depth: 0, slab: true, id: pl.id, kind: pl.kind, floorIdx: pl.floorIdx, color: pl.color });
+        }
+      } else face(pl.pts, pl.z0, pl.z1, { slab: true, id: pl.id, kind: pl.kind, floorIdx: pl.floorIdx, color: pl.color });
     }
     // duvarlar (+ kapı/pencereler)
     for (const w of f.walls) {
@@ -12978,15 +12990,24 @@ function archPrims(spec) {
       const at = t => ({ x: w.a.x + (w.b.x - w.a.x) * t, y: w.a.y + (w.b.y - w.a.y) * t });
       const A = pr(w.a), B = pr(w.b), ops = f.ops.filter(o => o.wall === w.id);
       const curtain = w.wt === 'curtain', rail = isLowWall(w) ? w.wt : null;
+      const uProj = wx * u.x + wy * u.y;
+      const faceCol = (wy * n.x - wx * n.y >= 0 ? (w.c1 || w.color) : (w.c2 || w.color)) || null;
+      const mulN = curtain ? (typeof curtainBays === 'function' ? curtainBays(w) : Math.max(2, Math.round(L / (w.mul || 120)))) : 0;
       const faceOf = (t0, t1) => {
         const p0 = at(t0), p1 = at(t1);
         const corners = [{ x: p0.x + nx, y: p0.y + ny }, { x: p0.x - nx, y: p0.y - ny }, { x: p1.x + nx, y: p1.y + ny }, { x: p1.x - nx, y: p1.y - ny }];
         const holes = ops.filter(o => o.d / L >= t0 && o.d / L <= t1).map(o => {
           const q0 = pr(at(clamp((o.d - o.w / 2) / L, t0, t1))), q1 = pr(at(clamp((o.d + o.w / 2) / L, t0, t1)));
-          return { s0: Math.min(q0.s, q1.s), s1: Math.max(q0.s, q1.s), z0: WE + (+o.sill || 0), z1: WE + (+o.sill || 0) + (+o.h || 0), type: o.type };
+          return {
+            s0: Math.min(q0.s, q1.s), s1: Math.max(q0.s, q1.s),
+            z0: WE + (+o.sill || 0), z1: WE + (+o.sill || 0) + (+o.h || 0),
+            type: o.type, id: o.id, kind: 'op', wallId: w.id, floorIdx: i,
+            color: o.color || null, frameCol: o.frameCol || null, mat: o.mat || null, flip: o.flip || 0, open: o.open || 0
+          };
         }).filter(hh => hh.s1 - hh.s0 > 1);
         const top = wallTopOn(w) ? wallTopPts(w, t0 * L, t1 * L).map(([d, hh]) => ({ s: pr(at(d / L)).s, z: WE + hh })) : null; // eğimli üst (#96)
-        face(corners, WE, WE + H, rail ? { rail, rs: railStyle(w) } : { holes, curtain, top });
+        const baseMeta = { id: w.id, kind: 'wall', floorIdx: i, color: faceCol, t0, t1, sA: A.s, sB: B.s, uProj, L };
+        face(corners, WE, WE + H, rail ? { ...baseMeta, rail, rs: railStyle(w) } : { ...baseMeta, holes, curtain, mulN, top });
       };
       if (cut && (A.d > 0) !== (B.d > 0)) {
         const t = A.d / (A.d - B.d), sc = A.s + (B.s - A.s) * t, sin = Math.abs(B.d - A.d) / L, cw = w.t / Math.max(sin, 0.2);
@@ -12994,23 +13015,35 @@ function archPrims(spec) {
         const [c0, c1] = inCrop(sc - cw / 2, sc + cw / 2);
         if (c1 - c0 > 0.2) {
           const bands = op ? [[WE, WE + (+op.sill || 0)], [WE + (+op.sill || 0) + (+op.h || 0), WE + Hc]] : [[WE, WE + Hc]];
-          for (const [z0, z1] of bands) if (z1 - z0 > 0.5) prims.push({ t: 'cut', s0: c0, s1: c1, z0, z1, depth: 0, curtain });
-          if (op && op.type === 'window') prims.push({ t: 'glass', s0: c0, s1: c1, z0: WE + (+op.sill || 0), z1: WE + (+op.sill || 0) + (+op.h || 0), depth: 0 });
+          for (const [z0, z1] of bands) if (z1 - z0 > 0.5) prims.push({ t: 'cut', s0: c0, s1: c1, z0, z1, depth: 0, curtain, id: w.id, kind: 'wall', floorIdx: i, color: faceCol, uProj });
+          if (op && op.type === 'window') prims.push({ t: 'glass', s0: c0, s1: c1, z0: WE + (+op.sill || 0), z1: WE + (+op.sill || 0) + (+op.h || 0), depth: 0, id: op.id, kind: 'op', wallId: w.id, floorIdx: i });
         }
         if (A.d > 0) faceOf(0, t); else faceOf(t, 1);
       } else if (!cut || (A.d > 0 && B.d > 0)) faceOf(0, 1);
     }
-    // çatılar (IFC): her yüz düzleme izdüşürülür; kesitte yalnızca bakış yönündekiler (kesilmez, görünüş olarak)
+    // çatılar ve mobilyalar: düzleme izdüşürülür; kesitte yalnızca bakış yönündekiler (görünüş olarak)
     for (const o of f.furn || []) {
-      if (o.k !== 'roof') continue;
-      const th = (o.rot || 0) * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th), base = E + furnElev(o);
-      for (const q of roofFaces(o)) {
-        const ps = q.map(p => { const w = pr({ x: o.x + p[0] * c - p[1] * sn, y: o.y + p[0] * sn + p[1] * c }); return { s: w.s, d: w.d, z: base + p[2] }; });
-        const depth = ps.reduce((a, p) => a + p.d, 0) / ps.length; if (cut && depth <= 0) continue;
-        const sv = ps.map(p => p.s), zv = ps.map(p => p.z), s0 = Math.min(...sv), s1 = Math.max(...sv);
-        if (s1 - s0 < 0.5 || (crop && (s1 < crop[0] || s0 > crop[1]))) continue;
-        prims.push({ t: 'rpoly', pts: ps.map(p => ({ s: p.s, z: p.z })), s0, s1, z0: Math.min(...zv), z1: Math.max(...zv), depth });
+      const fe = typeof furnElev === 'function' ? furnElev(o) : (+o.elev || 0);
+      if (o.k === 'roof') {
+        const th = (o.rot || 0) * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th), base = E + fe;
+        for (const q of roofFaces(o)) {
+          const ps = q.map(p => { const w = pr({ x: o.x + p[0] * c - p[1] * sn, y: o.y + p[0] * sn + p[1] * c }); return { s: w.s, d: w.d, z: base + p[2] }; });
+          const depth = ps.reduce((a, p) => a + p.d, 0) / ps.length; if (cut && depth <= 0) continue;
+          const sv = ps.map(p => p.s), zv = ps.map(p => p.z), s0 = Math.min(...sv), s1 = Math.max(...sv);
+          if (s1 - s0 < 0.5 || (crop && (s1 < crop[0] || s0 > crop[1]))) continue;
+          prims.push({ t: 'rpoly', id: o.id, kind: 'furn', subkind: 'roof', floorIdx: i, color: o.color || null, pts: ps.map(p => ({ s: p.s, z: p.z })), s0, s1, z0: Math.min(...zv), z1: Math.max(...zv), depth });
+        }
+        continue;
       }
+      const z0 = E + fe, z1 = z0 + Math.max(5, +o.h || 50);
+      const th = (+o.rot || 0) * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th);
+      const hw = (+o.w || 40) / 2, hd = (+o.d || 40) / 2;
+      const corners = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([lx, ly]) => pr({ x: o.x + lx * c - ly * sn, y: o.y + lx * sn + ly * c }));
+      const depth = corners.reduce((a, q) => a + q.d, 0) / 4;
+      if (cut && depth <= 0) continue;
+      const sv = corners.map(q => q.s), [s0, s1] = inCrop(Math.min(...sv), Math.max(...sv));
+      if (s1 - s0 < 0.5) continue;
+      prims.push({ t: 'furn', id: o.id, kind: 'furn', floorIdx: i, s0, s1, z0, z1, depth, color: o.color || null, k: o.k || 'rect', type: o.type || '', name: o.name || '', icon: o.icon || '' });
     }
     // kesilen odaların adları
     if (cut) for (const r of f.rooms) for (const [s0, s1] of lineCutIntervals(r.pts, O, u)) {
@@ -13020,35 +13053,41 @@ function archPrims(spec) {
   return { prims, levels };
 }
 // Görünüş / kesitte korkuluk ve çit (#73): üst ray, alt ray, dikmeler ve çubuk / çıtalar; arkası görünür kalır
-function railElevSvg(p, X, Y, st) {
-  const spec = LOW_WALL[p.rail] || LOW_WALL.railing, x0 = X(p.s0), x1 = X(p.s1), yt = Y(p.z1), yb = Y(p.z0), wd = x1 - x0, C = pal(true);
-  if (p.rail === 'railing' && p.rs === 'solid') return `<rect x="${x0}" y="${yt}" width="${wd}" height="${yb - yt}" fill="${C.bg}" stroke="${st}" stroke-width="1.6"/>`;
-  if (p.rail === 'railing' && (p.rs === 'glass' || p.rs === 'cable')) {
-    let s = p.rs === 'glass' ? `<rect x="${x0}" y="${yt + 4}" width="${wd}" height="${yb - yt - 8}" fill="${C.glass}" stroke="${st}" stroke-width="0.8"/>` : '';
+function railElevSvg(p, X, Y, st, C = pal(true), mode = '2d', attrStr = '') {
+  const spec = LOW_WALL[p.rail] || LOW_WALL.railing, x0 = X(p.s0), x1 = X(p.s1), yt = Y(p.z1), yb = Y(p.z0), wd = x1 - x0;
+  let out = '';
+  if (p.rail === 'railing' && p.rs === 'solid') {
+    out = `<rect x="${x0}" y="${yt}" width="${wd}" height="${yb - yt}" fill="${mode === 'cad' ? C.bg : (p.color || C.bg)}" stroke="${st}" stroke-width="1.6"/>`;
+  } else if (p.rail === 'railing' && (p.rs === 'glass' || p.rs === 'cable')) {
+    let s = p.rs === 'glass' ? `<rect x="${x0}" y="${yt + 4}" width="${wd}" height="${yb - yt - 8}" fill="${mode === 'cad' ? C.bg : C.glass}" ${mode === 'cad' ? 'fill-opacity="0.35"' : ''} stroke="${st}" stroke-width="0.8"/>` : '';
     s += `<path d="M${x0} ${yt}H${x1}" stroke="${st}" stroke-width="2.6" fill="none"/>`;
     if (p.rs === 'cable') { let d = ''; for (let i = 0; i < 4; i++) { const y = Y(p.z0 + 10 + (p.z1 - p.z0 - 18) * i / 3); d += `M${x0} ${y}H${x1}`; } s += `<path d="${d}" stroke="${st}" stroke-width="0.8" fill="none"/>`; }
     const nP = Math.max(1, Math.round(wd / spec.post));
     for (let i = 0; i <= nP; i++) { const x = x0 + wd * i / nP; s += `<line x1="${x}" y1="${yt}" x2="${x}" y2="${yb}" stroke="${st}" stroke-width="2.6"/>`; }
-    return s;
+    out = s;
+  } else {
+    let s = `<path d="M${x0} ${yt}H${x1}M${x0} ${Y(p.z0 + 10)}H${x1}" stroke="${st}" stroke-width="${p.rail === 'fence' ? 2.2 : 2.6}" fill="none"/>`;
+    if (p.rail === 'fence') s += `<path d="M${x0} ${Y(p.z0 + (p.z1 - p.z0) * 0.75)}H${x1}" stroke="${st}" stroke-width="2" fill="none"/>`;
+    const nP = Math.max(1, Math.round(wd / spec.post)), step = Math.max(spec.bar, wd / 200);
+    let d = '';
+    for (let x = x0 + step; x < x1 - 1; x += step) d += `M${x} ${yt}V${yb}`;
+    s += `<path d="${d}" stroke="${st}" stroke-width="0.7" fill="none"/>`;
+    for (let i = 0; i <= nP; i++) { const x = x0 + wd * i / nP; s += `<line x1="${x}" y1="${yt}" x2="${x}" y2="${yb}" stroke="${st}" stroke-width="2.6"/>`; }
+    out = s;
   }
-  let s = `<path d="M${x0} ${yt}H${x1}M${x0} ${Y(p.z0 + 10)}H${x1}" stroke="${st}" stroke-width="${p.rail === 'fence' ? 2.2 : 2.6}" fill="none"/>`;
-  if (p.rail === 'fence') s += `<path d="M${x0} ${Y(p.z0 + (p.z1 - p.z0) * 0.75)}H${x1}" stroke="${st}" stroke-width="2" fill="none"/>`;
-  const nP = Math.max(1, Math.round(wd / spec.post)), step = Math.max(spec.bar, wd / 200);
-  let d = '';
-  for (let x = x0 + step; x < x1 - 1; x += step) d += `M${x} ${yt}V${yb}`;
-  s += `<path d="${d}" stroke="${st}" stroke-width="0.7" fill="none"/>`;
-  for (let i = 0; i <= nP; i++) { const x = x0 + wd * i / nP; s += `<line x1="${x}" y1="${yt}" x2="${x}" y2="${yb}" stroke="${st}" stroke-width="2.6"/>`; }
-  return s;
+  return attrStr ? `<g${attrStr}>${out}</g>` : out;
 }
-// Çizimi kağıda bas (her zaman beyaz kağıt paleti). Döner: { svg, w, h }
-function archSvg(spec, title) {
-  const C = pal(true), { prims, levels } = archPrims(spec), st = C.text;
-  const geo = prims.filter(p => p.t !== 'label');
+// Çizimi kağıda veya canlı düzenleyiciye bas. opts: { mode: '2d'|'cad', live: false, showFurn: true }
+function archSvg(spec, title, opts) {
+  opts = opts || {};
+  const mode = opts.mode === 'cad' ? 'cad' : '2d', live = !!opts.live, showFurn = opts.showFurn !== false;
+  const C = pal(!live), { prims, levels } = archPrims(spec), st = mode === 'cad' ? C.wall : C.text;
+  const geo = prims.filter(p => p.t !== 'label' && (showFurn || p.t !== 'furn'));
   if (!geo.length) return null;
   let s0 = Math.min(...geo.map(p => p.s0)), s1 = Math.max(...geo.map(p => p.s1));
   const M = 90, LM = 170, w = Math.round(s1 - s0 + LM + M), zBot = -groundP(P).plinth;
   // toprak profili (#149): kesitte kesit çizgisi boyunca arazi kotu, görünüşte bakış yönündeki en yüksek toprak; arazi yoksa düz
-  const tObj = terrainObj(), eL = s0 - 40, eR = s0 + w - 20 - LM, nU = { x: -spec.n.y, y: spec.n.x };
+  const tObj = terrainObj(), eL = live ? s0 - 150 : s0 - 40, eR = live ? s1 + 150 : s0 + w - 20 - LM, nU = { x: -spec.n.y, y: spec.n.x };
   const iv = []; // kazılar [s0, s1, taban]
   if (spec.cut) for (const c of groundCuts(true)) for (const [a, b] of lineCutIntervals(c.pts, spec.O, nU)) if (b - a > 0.5) iv.push([a, b, c.bot]);
   const dR = (() => { if (!tObj || spec.cut) return null; const b = tObj.box, ds = [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]].map(([x, y]) => (x - spec.O.x) * spec.n.x + (y - spec.O.y) * spec.n.y); return [Math.min(...ds), Math.max(...ds)]; })();
@@ -13064,50 +13103,100 @@ function archSvg(spec, title) {
   const smp = [...ss].sort((a, b) => a - b).map(s => { const g = prof(s), e = iv.find(q => q[0] <= s && q[1] >= s); return { s, g, top: e ? Math.min(g, e[2]) : g, exc: !!e }; });
   const zTop = Math.max(...geo.map(p => p.z1), ...smp.map(q => q.g + 20)), zLow = Math.min(zBot - 60, ...geo.map(p => p.z0 - 40), ...smp.map(q => q.top - 60)); // zLow: bodrum katlar ve toprak taraması (#148) toprak çizgisinin altına iner
   const h = Math.round(zTop - zLow + M * 2 + 70);
-  const X = s => s - s0 + LM, Y = z => zTop - z + M;
+  const X = live ? (s => s) : (s => s - s0 + LM);
+  const Y = live ? (z => -z) : (z => zTop - z + M);
+  const attr = (id, kind) => live && id ? ` data-arch-id="${esc(id)}" data-arch-kind="${esc(kind)}" style="cursor:pointer"` : '';
+  const defs = `<pattern id="arch-cut-hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="12" height="12" fill="${C.bg}"/><line x1="0" y1="0" x2="0" y2="12" stroke="${st}" stroke-width="1.6"/></pattern><pattern id="earthH" width="22" height="22" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="22" stroke="${C.sub}" stroke-width="1"/><circle cx="11" cy="6" r="1.1" fill="${C.sub}"/><circle cx="15" cy="16" r="0.8" fill="${C.sub}"/></pattern>`;
   let out = '';
-  /* toprak (#148): toprak çizgisinin altı beyaz zemin + tarama; görünüşte ve kesitte arkadaki yüzlerin üstüne, kesilen bantların
+  /* toprak (#148): toprak çizgisinin altı arka plan + tarama; görünüşte ve kesitte arkadaki yüzlerin üstüne, kesilen bantların
      altına çizilir (toprağın arkası görünmez). Kesitte kazıların (bodrum / çukur) içi açık kalır, tabanlarının altı taranır. */
-  let earth = `<defs><pattern id="earthH" width="22" height="22" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="22" stroke="${C.sub}" stroke-width="1"/><circle cx="11" cy="6" r="1.1" fill="${C.sub}"/><circle cx="15" cy="16" r="0.8" fill="${C.sub}"/></pattern></defs>`;
   const ePath = 'M' + X(eL) + ' ' + Y(zLow) + smp.map(q => 'L' + X(q.s).toFixed(1) + ' ' + Y(q.top).toFixed(1)).join('') + 'L' + X(eR) + ' ' + Y(zLow) + 'Z'; // solda kot yazıları açık kalır
-  earth += `<path d="${ePath}" fill="#fff"/><path d="${ePath}" fill="url(#earthH)"/>`;
+  const earth = `<path d="${ePath}" fill="${C.bg}" pointer-events="none"/><path d="${ePath}" fill="url(#earthH)" pointer-events="none"/>`;
   // kat kotları: kesikli seviye çizgisi + ▼ işareti + ±0.00
+  const lvX0 = live ? s0 - 150 : LM - 120, lvX1 = live ? s1 + 140 : w - M / 2;
   for (const lv of levels) {
     if (lv.z > zTop + 1) continue;
     const y = Y(lv.z);
-    out += `<line x1="${LM - 120}" y1="${y}" x2="${w - M / 2}" y2="${y}" stroke="${C.sub}" stroke-width="1" stroke-dasharray="14 6 3 6"/>`;
-    out += `<path d="M${LM - 110} ${y - 14}L${LM - 96} ${y}L${LM - 82} ${y - 14}Z" fill="${C.sub}"/>`;
-    out += `<text x="${LM - 118}" y="${y - 20}" font-size="17" font-weight="700" fill="${C.text}" font-family="Segoe UI,sans-serif">${fmtLevel(lv.z)}</text>`;
-    out += `<text x="${LM - 118}" y="${y + 20}" font-size="13" fill="${C.sub}" font-family="Segoe UI,sans-serif">${esc(lv.name)}</text>`;
+    const flAttr = live && lv.floorIdx != null ? ` data-arch-floor="${lv.floorIdx}" style="cursor:pointer"` : '';
+    out += `<g${flAttr}><line x1="${lvX0}" y1="${y}" x2="${lvX1}" y2="${y}" stroke="${C.sub}" stroke-width="1" stroke-dasharray="14 6 3 6"/>`;
+    out += `<path d="M${lvX0 + 10} ${y - 14}L${lvX0 + 24} ${y}L${lvX0 + 38} ${y - 14}Z" fill="${C.sub}"/>`;
+    out += `<text x="${lvX0 + 2}" y="${y - 20}" font-size="17" font-weight="700" fill="${C.text}" font-family="Segoe UI,sans-serif">${fmtLevel(lv.z)}</text>`;
+    out += `<text x="${lvX0 + 2}" y="${y + 20}" font-size="13" fill="${C.sub}" font-family="Segoe UI,sans-serif">${esc(lv.name)}</text></g>`;
   }
-  // uzaktan yakına: yüzler, sonra kesilenler, en son etiketler
-  const faces = prims.filter(p => p.t === 'face' || p.t === 'rpoly').sort((a, b) => b.depth - a.depth);
+  // uzaktan yakına: yüzler (duvar, döşeme, çatı, mobilya), sonra kesilenler, en son etiketler
+  const faces = prims.filter(p => p.t === 'face' || p.t === 'rpoly' || (showFurn && p.t === 'furn')).sort((a, b) => b.depth - a.depth);
   for (const p of faces) {
-    if (p.t === 'rpoly') { out += `<polygon points="${p.pts.map(q => X(q.s) + ',' + Y(q.z)).join(' ')}" fill="${C.gMin}" stroke="${st}" stroke-width="1.3" stroke-linejoin="round"/>`; continue; } // çatı yüzü
-    if (p.rail) { out += railElevSvg(p, X, Y, st); continue; } // korkuluk / çit: açık dikme + ray (#73)
-    const fill = p.slab ? C.gMin : p.curtain ? C.glass : C.bg;
-    if (p.top) { const tp = p.top.map(q => ({ s: clamp(q.s, p.s0, p.s1), z: q.z })).sort((a, b) => a.s - b.s); out += `<polygon points="${[[p.s0, p.z0], [p.s1, p.z0], ...tp.reverse().map(q => [q.s, q.z])].map(([a, b]) => X(a) + ',' + Y(b)).join(' ')}" fill="${fill}" stroke="${st}" stroke-width="1.6" stroke-linejoin="round"/>`; } // eğimli üst (#96)
-    else out += `<rect x="${X(p.s0)}" y="${Y(p.z1)}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="${fill}" stroke="${st}" stroke-width="1.6"/>`;
+    if (p.t === 'rpoly') {
+      const rf = mode === 'cad' ? C.bg : (p.color || C.gMin);
+      out += `<polygon${attr(p.id, 'furn')} points="${p.pts.map(q => X(q.s) + ',' + Y(q.z)).join(' ')}" fill="${rf}" stroke="${st}" stroke-width="${mode === 'cad' ? 1.2 : 1.3}" stroke-linejoin="round"/>`;
+      continue;
+    }
+    if (p.t === 'furn') {
+      const x0 = X(p.s0), yt = Y(p.z1), wd = p.s1 - p.s0, ht = p.z1 - p.z0;
+      const ff = mode === 'cad' ? C.bg : (p.color || C.gMin), fop = mode === 'cad' ? '' : ' fill-opacity="0.72"';
+      let fsvg = `<rect x="${x0}" y="${yt}" width="${wd}" height="${ht}" fill="${ff}"${fop} stroke="${st}" stroke-width="${mode === 'cad' ? 1 : 1.2}"/>`;
+      if (p.k === 'stairs' && ht > 20) {
+        const nSt = Math.max(2, Math.min(24, Math.round(ht / 18)));
+        let stp = ''; for (let k = 1; k < nSt; k++) { const yy = yt + ht * k / nSt; stp += `M${x0} ${yy}H${x0 + wd}`; }
+        fsvg += `<path d="${stp}" stroke="${st}" stroke-width="0.6" stroke-opacity="0.65" fill="none"/>`;
+      }
+      out += `<g${attr(p.id, 'furn')}>${p.name ? `<title>${esc(p.name)}</title>` : ''}${fsvg}</g>`;
+      continue;
+    }
+    if (p.rail) { out += railElevSvg(p, X, Y, st, C, mode, attr(p.id, 'wall')); continue; }
+    const fill = mode === 'cad'
+      ? C.bg
+      : (p.slab ? (p.color || C.gMin) : p.curtain ? C.glass : (p.color || (C.lt ? '#f5f1e8' : '#1e293b')));
+    const fop = mode === '2d' && p.curtain ? ' fill-opacity="0.55"' : '';
+    const wAttr = attr(p.id, p.kind || 'wall');
+    if (p.top) {
+      const tp = p.top.map(q => ({ s: clamp(q.s, p.s0, p.s1), z: q.z })).sort((a, b) => a.s - b.s);
+      out += `<polygon${wAttr} points="${[[p.s0, p.z0], [p.s1, p.z0], ...tp.reverse().map(q => [q.s, q.z])].map(([a, b]) => X(a) + ',' + Y(b)).join(' ')}" fill="${fill}"${fop} stroke="${st}" stroke-width="1.6" stroke-linejoin="round"/>`;
+    } else {
+      out += `<rect${wAttr} x="${X(p.s0)}" y="${Y(p.z1)}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="${fill}"${fop} stroke="${st}" stroke-width="1.6"/>`;
+    }
+    if (p.curtain && p.mulN > 1) {
+      let md = ''; const span = p.s1 - p.s0;
+      for (let m = 1; m < p.mulN; m++) { const mx = X(p.s0 + span * m / p.mulN); md += `M${mx} ${Y(p.z1)}V${Y(p.z0)}`; }
+      if (md) out += `<path d="${md}" stroke="${st}" stroke-width="${mode === 'cad' ? 0.9 : 1.1}" fill="none" pointer-events="none"/>`;
+    }
     for (const hh of p.holes || []) {
       const win = hh.type === 'window', x = X(hh.s0), y = Y(hh.z1), ww = hh.s1 - hh.s0, hgt = hh.z1 - hh.z0;
-      out += `<rect x="${x}" y="${y}" width="${ww}" height="${hgt}" fill="${win ? C.glass : C.bg}" stroke="${st}" stroke-width="1.3"/>`;
-      if (win) out += `<path d="M${x + ww / 2} ${y}V${y + hgt}M${x} ${y + hgt * 0.35}H${x + ww}" stroke="${st}" stroke-width="0.9" fill="none"/>`;
-      else if (hh.type !== 'arch') out += `<rect x="${x + ww * 0.12}" y="${y + hgt * 0.08}" width="${ww * 0.76}" height="${hgt * 0.84}" fill="none" stroke="${C.sub}" stroke-width="0.8"/><circle cx="${x + ww * 0.8}" cy="${y + hgt * 0.52}" r="2.5" fill="${st}"/>`;
+      const opFill = mode === 'cad'
+        ? C.bg
+        : (win ? C.glass : hh.type === 'arch' ? C.bg : (hh.mat === 'glass' ? C.glass : (hh.color || (C.lt ? '#e7d8bf' : '#334155'))));
+      const fCol = mode === 'cad' ? st : (hh.frameCol || st);
+      let hsvg = `<rect x="${x}" y="${y}" width="${ww}" height="${hgt}" fill="${opFill}" stroke="${fCol}" stroke-width="1.3"/>`;
+      if (win) hsvg += `<path d="M${x + ww / 2} ${y}V${y + hgt}M${x} ${y + hgt * 0.35}H${x + ww}" stroke="${fCol}" stroke-width="0.9" fill="none"/>`;
+      else if (hh.type === 'double') hsvg += `<line x1="${x + ww / 2}" y1="${y}" x2="${x + ww / 2}" y2="${y + hgt}" stroke="${fCol}" stroke-width="1.1"/><rect x="${x + ww * 0.08}" y="${y + hgt * 0.08}" width="${ww * 0.36}" height="${hgt * 0.84}" fill="none" stroke="${C.sub}" stroke-width="0.8"/><rect x="${x + ww * 0.56}" y="${y + hgt * 0.08}" width="${ww * 0.36}" height="${hgt * 0.84}" fill="none" stroke="${C.sub}" stroke-width="0.8"/>`;
+      else if (hh.type === 'slide') hsvg += `<line x1="${x + ww / 2}" y1="${y}" x2="${x + ww / 2}" y2="${y + hgt}" stroke="${fCol}" stroke-width="1.1"/><path d="M${x + ww * 0.28} ${y + hgt * 0.5}h${ww * 0.14}M${x + ww * 0.72} ${y + hgt * 0.5}h${-ww * 0.14}" stroke="${st}" stroke-width="1.2" fill="none"/>`;
+      else if (hh.type !== 'arch') hsvg += `<rect x="${x + ww * 0.12}" y="${y + hgt * 0.08}" width="${ww * 0.76}" height="${hgt * 0.84}" fill="none" stroke="${C.sub}" stroke-width="0.8"/><circle cx="${x + ww * (hh.flip ? 0.2 : 0.8)}" cy="${y + hgt * 0.52}" r="2.5" fill="${st}"/>`;
+      out += `<g${attr(hh.id, 'op')}>${hsvg}</g>`;
     }
   }
   out += earth; // toprak: arkadaki yüzlerin üstünde, kesilen bantların altında
-  for (const p of prims.filter(p => p.t === 'cut')) out += `<rect x="${X(p.s0)}" y="${Y(p.z1)}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="${p.curtain ? C.glass : C.wall}" stroke="${C.wall}" stroke-width="1"/>`;
-  for (const p of prims.filter(p => p.t === 'glass')) out += `<rect x="${X(p.s0) + (p.s1 - p.s0) * 0.4}" y="${Y(p.z1)}" width="${(p.s1 - p.s0) * 0.2}" height="${p.z1 - p.z0}" fill="${C.glass}" stroke="${st}" stroke-width="0.8"/>`;
-  for (const p of prims.filter(p => p.t === 'label')) out += `<text x="${X(p.s)}" y="${Y(p.z)}" text-anchor="middle" font-size="20" font-weight="600" fill="${C.text}" stroke="${C.halo}" stroke-width="4" paint-order="stroke" font-family="Segoe UI,sans-serif">${esc(p.text)}</text>`;
+  for (const p of prims.filter(p => p.t === 'cut')) {
+    const cFill = mode === 'cad' ? (p.curtain ? C.bg : 'url(#arch-cut-hatch)') : (p.curtain ? C.glass : C.wall);
+    const cStroke = mode === 'cad' ? st : C.wall;
+    out += `<rect${attr(p.id, p.kind || 'wall')} x="${X(p.s0)}" y="${Y(p.z1)}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="${cFill}" stroke="${cStroke}" stroke-width="${mode === 'cad' ? 1.8 : 1}"/>`;
+  }
+  for (const p of prims.filter(p => p.t === 'glass')) {
+    out += `<rect${attr(p.id, 'op')} x="${X(p.s0) + (p.s1 - p.s0) * 0.4}" y="${Y(p.z1)}" width="${(p.s1 - p.s0) * 0.2}" height="${p.z1 - p.z0}" fill="${mode === 'cad' ? C.bg : C.glass}" stroke="${st}" stroke-width="0.8"/>`;
+  }
+  for (const p of prims.filter(p => p.t === 'label')) out += `<text x="${X(p.s)}" y="${Y(p.z)}" text-anchor="middle" font-size="20" font-weight="600" fill="${C.text}" stroke="${C.halo}" stroke-width="4" paint-order="stroke" font-family="Segoe UI,sans-serif" pointer-events="none">${esc(p.text)}</text>`;
   // zemin çizgisi + başlık + 2 m ölçek çubuğu
-  if (!tObj) out += `<line x1="${LM - 130}" y1="${Y(zBot)}" x2="${w - 20}" y2="${Y(zBot)}" stroke="${st}" stroke-width="5"/>`;
-  else { let d = 'M' + (LM - 130) + ' ' + Y(smp[0].g).toFixed(1), pen = true; for (const q of smp) { if (q.exc) { pen = false; continue; } d += (pen ? 'L' : 'M') + X(q.s).toFixed(1) + ' ' + Y(q.g).toFixed(1); pen = true; } out += `<path d="${d}" fill="none" stroke="${st}" stroke-width="5" stroke-linejoin="round"/>`; } // eğimli toprak çizgisi, kazıda kesilir
+  const gX0 = live ? s0 - 170 : LM - 130, gX1 = live ? s1 + 170 : w - 20;
+  if (!tObj) out += `<line x1="${gX0}" y1="${Y(zBot)}" x2="${gX1}" y2="${Y(zBot)}" stroke="${st}" stroke-width="${live ? 4 : 5}" pointer-events="none"/>`;
+  else { let d = 'M' + gX0 + ' ' + Y(smp[0].g).toFixed(1), pen = true; for (const q of smp) { if (q.exc) { pen = false; continue; } d += (pen ? 'L' : 'M') + X(q.s).toFixed(1) + ' ' + Y(q.g).toFixed(1); pen = true; } out += `<path d="${d}" fill="none" stroke="${st}" stroke-width="${live ? 4 : 5}" stroke-linejoin="round" pointer-events="none"/>`; } // eğimli toprak çizgisi, kazıda kesilir
+  if (live) {
+    return { svg: '', inner: out, defs, w: Math.max(200, s1 - s0), h: Math.max(200, zTop - zLow), s0, s1, zLow, zTop, prims, levels, mode };
+  }
   const ty = h - 30;
   out += `<text x="${LM}" y="${ty}" font-size="24" font-weight="700" fill="${C.text}" font-family="Segoe UI,sans-serif">${esc(title)}</text>`;
-  out += `<text x="${LM}" y="${ty + 22}" font-size="14" fill="${C.sub}" font-family="Segoe UI,sans-serif">${esc(P.name)} · ${new Date().toLocaleDateString()}</text>`;
+  out += `<text x="${LM}" y="${ty + 22}" font-size="14" fill="${C.sub}" font-family="Segoe UI,sans-serif">${esc(P.name)} · ${mode.toUpperCase()} · ${new Date().toLocaleDateString()}</text>`;
   const bx = w - M / 2 - 200;
   out += `<g font-family="Segoe UI,sans-serif" font-size="13" fill="${C.text}"><rect x="${bx}" y="${ty - 10}" width="100" height="8" fill="${st}"/><rect x="${bx + 100}" y="${ty - 10}" width="100" height="8" fill="#fff" stroke="${st}"/><text x="${bx}" y="${ty + 12}">0</text><text x="${bx + 100}" y="${ty + 12}" text-anchor="middle">1 m</text><text x="${bx + 200}" y="${ty + 12}" text-anchor="end">2 m</text></g>`;
-  return { svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="#fff"/>${out}</svg>`, w, h };
+  return { svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><defs>${defs}</defs><rect width="${w}" height="${h}" fill="#fff"/>${out}</svg>`, w, h, s0, s1, zLow, zTop, prims, levels, mode };
 }
 function elevationSpec(dir) {
   const n = ELEV_DIRS[dir]; let bb = null;
@@ -13120,19 +13209,598 @@ function sectionSpec(sec) {
   const fr = sectionFrame(sec), u = { x: -fr.n.y, y: fr.n.x }, sb = (sec.b.x - sec.a.x) * u.x + (sec.b.y - sec.a.y) * u.y;
   return { O: fr.O, n: fr.n, cut: true, crop: [Math.min(0, sb), Math.max(0, sb)] };
 }
-// Çizim penceresi: kesitler ve dört görünüş arasında sekme; SVG / PNG indir
-function archModal(key) {
+// Görünüş / kesitte düzenleme yardımcıları (saf mantık; testler de kullanır)
+function archSnapVal(v, step) {
+  return step > 0 ? Math.round(v / step) * step : Math.round(v * 10) / 10;
+}
+function archApplyDrag(spec, drag, ds, dz, snapStep = 0) {
+  if (!drag || !drag.o) return '';
+  const { kind, o, orig, handle } = drag, u = { x: -spec.n.y, y: spec.n.x };
+  const sn = v => archSnapVal(v, snapStep);
+  const dsSn = sn(ds), dzSn = sn(dz);
+  if (kind === 'op') {
+    const w = drag.wall; if (!w) return '';
+    const L = dist(w.a, w.b) || 1, WH = +w.h || drag.floorH || 270, uProj = drag.uProj || 0;
+    o.d = orig.d; o.w = orig.w; o.h = orig.h; o.sill = orig.sill;
+    if (!handle) {
+      if (Math.abs(uProj) > 0.15) {
+        const dRaw = orig.d + ds / uProj;
+        o.d = clamp(sn(dRaw), Math.min(orig.w / 2, L / 2), Math.max(L - orig.w / 2, L / 2));
+      }
+      o.sill = clamp(sn(orig.sill + dz), 0, Math.max(0, WH - orig.h));
+    } else if (handle === 'opL' || handle === 'opR') {
+      if (Math.abs(uProj) > 0.15) {
+        const absU = Math.abs(uProj), halfS = (orig.w / 2) * absU, sC = drag.sCenter || 0;
+        const s0 = sC - halfS, s1 = sC + halfS, minS = 20 * absU;
+        let ns0 = s0, ns1 = s1, nw = orig.w;
+        if (handle === 'opL') {
+          ns0 = Math.min(s1 - minS, s0 + ds);
+          nw = clamp(sn((s1 - ns0) / absU), 20, L);
+          ns0 = s1 - nw * absU;
+        } else {
+          ns1 = Math.max(s0 + minS, s1 + ds);
+          nw = clamp(sn((ns1 - s0) / absU), 20, L);
+          ns1 = s0 + nw * absU;
+        }
+        const nsC = (ns0 + ns1) / 2;
+        o.w = nw;
+        o.d = clamp(orig.d + (nsC - sC) / uProj, nw / 2, L - nw / 2);
+      }
+    } else if (handle === 'opT') {
+      o.h = clamp(sn(orig.h + dz), 20, Math.max(20, WH - orig.sill));
+    } else if (handle === 'opB') {
+      const top = orig.sill + orig.h;
+      o.sill = clamp(sn(orig.sill + dz), 0, Math.max(0, top - 20));
+      o.h = Math.max(20, top - o.sill);
+    }
+    return `w: ${Math.round(o.w)} · h: ${Math.round(o.h)} · sill: ${Math.round(o.sill)} cm`;
+  }
+  if (kind === 'wall') {
+    const wallMax = typeof WALL_ELEV_MAX === 'number' ? WALL_ELEV_MAX : 500;
+    const origElev = +orig.elev || 0;
+    o.a = { x: orig.a.x, y: orig.a.y }; o.b = { x: orig.b.x, y: orig.b.y };
+    o.h = orig.h; if (orig.elev != null) o.elev = orig.elev; else delete o.elev;
+    if (drag.conn) for (const c of drag.conn) c.w[c.k] = { x: c.orig.x, y: c.orig.y };
+    if (drag.ops) for (const op of drag.ops) { op.o.d = op.d; }
+    if (handle === 'wTop') {
+      o.h = clamp(sn(orig.h + dz), 50, 800);
+      delete o.top;
+    } else if (handle === 'wBot') {
+      const top = origElev + orig.h;
+      const ne = clamp(sn(origElev + dz), -wallMax, Math.min(wallMax, top - 50));
+      if (ne) o.elev = ne; else delete o.elev;
+      o.h = clamp(top - ne, 50, 800);
+      delete o.top;
+    } else if (handle === 'wL' || handle === 'wR') {
+      const L0 = dist(orig.a, orig.b) || 1;
+      const sA = (orig.a.x - spec.O.x) * u.x + (orig.a.y - spec.O.y) * u.y;
+      const sB = (orig.b.x - spec.O.x) * u.x + (orig.b.y - spec.O.y) * u.y;
+      const ek = (handle === 'wL') === (sA <= sB) ? 'a' : 'b', fk = ek === 'a' ? 'b' : 'a';
+      const ux = (orig[ek].x - orig[fk].x) / L0, uy = (orig[ek].y - orig[fk].y) / L0;
+      const dirU = ux * u.x + uy * u.y;
+      if (Math.abs(dirU) > 0.2) {
+        const newL = Math.max(20, sn(L0 + ds / dirU));
+        const np = { x: Math.round((orig[fk].x + ux * newL) * 100) / 100, y: Math.round((orig[fk].y + uy * newL) * 100) / 100 };
+        o[ek] = { x: np.x, y: np.y };
+        if (drag.conn) for (const c of drag.conn) if (c.end === ek) c.w[c.k] = { x: np.x, y: np.y };
+        if (drag.ops) for (const op of drag.ops) {
+          const mw = op.w, L1 = dist(mw.a, mw.b) || 1;
+          let nd = op.d;
+          if ((mw === o && ek === 'a') || (op.end === ek && op.k === 'a')) nd += L1 - op.L0;
+          op.o.d = clamp(nd, Math.min(op.o.w / 2, L1 / 2), Math.max(L1 - op.o.w / 2, L1 / 2));
+        }
+      }
+    } else {
+      const dx = Math.round(u.x * dsSn * 100) / 100, dy = Math.round(u.y * dsSn * 100) / 100;
+      o.a = { x: orig.a.x + dx, y: orig.a.y + dy };
+      o.b = { x: orig.b.x + dx, y: orig.b.y + dy };
+      if (drag.conn) for (const c of drag.conn) c.w[c.k] = { x: c.orig.x + dx, y: c.orig.y + dy };
+      if (drag.ops) for (const op of drag.ops) if (op.w !== o) {
+        const L1 = dist(op.w.a, op.w.b) || 1;
+        let nd = op.d;
+        if (op.k === 'a') nd += L1 - op.L0;
+        op.o.d = clamp(nd, Math.min(op.o.w / 2, L1 / 2), Math.max(L1 - op.o.w / 2, L1 / 2));
+      }
+      const ne = clamp(sn(origElev + dz), -wallMax, wallMax);
+      if (ne) o.elev = ne; else delete o.elev;
+    }
+    return `L: ${Math.round(dist(o.a, o.b))} · h: ${Math.round(o.h)} · elev: ${Math.round(+o.elev || 0)} cm`;
+  }
+  if (kind === 'furn') {
+    const fMax = typeof FURN_ELEV_MAX === 'number' ? FURN_ELEV_MAX : 500;
+    const origElev = +orig.elev || 0;
+    o.x = orig.x; o.y = orig.y; o.h = orig.h;
+    if (orig.elev != null) o.elev = orig.elev; else delete o.elev;
+    if (orig.mount) o.mount = orig.mount;
+    if (handle === 'fTop') {
+      o.h = clamp(sn(orig.h + dz), 5, 800);
+    } else {
+      o.x = Math.round((orig.x + u.x * dsSn) * 100) / 100;
+      o.y = Math.round((orig.y + u.y * dsSn) * 100) / 100;
+      const ne = clamp(sn(origElev + dz), -fMax, fMax);
+      if (ne) o.elev = ne; else delete o.elev;
+      if (Math.abs(dz) > 0.5) delete o.mount;
+    }
+    return `h: ${Math.round(o.h)} · elev: ${Math.round(+o.elev || 0)} cm`;
+  }
+  if (kind === 'slab') {
+    const origOff = +orig.off || 0, origT = +orig.t || 20;
+    if (handle === 'sBot') {
+      o.t = clamp(sn(origT - dz), 5, 200);
+    } else {
+      o.off = clamp(sn(origOff + dz), -200, 200);
+    }
+    return `t: ${Math.round(o.t)} · off: ${Math.round(+o.off || 0)} cm`;
+  }
+  return '';
+}
+function archPlaceOpAt(spec, prims, s, z, def, snapStep = 0) {
+  if (!def || !prims) return null;
+  const sn = v => archSnapVal(v, snapStep);
+  const hits = prims.filter(p => p.t === 'face' && p.kind === 'wall' && !p.rail && Math.abs(p.uProj || 0) > 0.2 && s >= p.s0 && s <= p.s1 && z >= p.z0 && z <= p.z1);
+  if (!hits.length) return null;
+  hits.sort((a, b) => a.depth - b.depth);
+  const p = hits[0], L = p.L || 1, H = p.z1 - p.z0, spanS = p.sB - p.sA;
+  if (Math.abs(spanS) < 1) return null;
+  const t = clamp((s - p.sA) / spanS, 0, 1);
+  const d = L >= def.w ? clamp(sn(t * L), def.w / 2, L - def.w / 2) : L / 2;
+  const isWin = def.id && (def.id.startsWith('window') || def.id === 'wsmall');
+  const sill = isWin
+    ? clamp(sn(z - p.z0 - def.h / 2), 0, Math.max(0, H - def.h))
+    : (z - p.z0 < def.h * 0.85 ? 0 : clamp(sn(z - p.z0), 0, Math.max(0, H - def.h)));
+  const sC = p.sA + spanS * (d / L), halfS = (def.w / 2) * Math.abs(p.uProj);
+  return { floorIdx: p.floorIdx, wallId: p.id, d, sill, s0: sC - halfS, s1: sC + halfS, z0: p.z0 + sill, z1: p.z0 + sill + def.h };
+}
+function archHandleSvg(meta, selIds, zScale) {
+  if (!meta || !selIds || !selIds.length) return '';
+  const z = Math.max(zScale || 0.5, 0.01), hs = 5.5 / z, sw = 2 / z;
+  const hnd = (s, zv, id, cur = 'pointer') => `<rect data-arch-h="${id}" x="${s - hs}" y="${-zv - hs}" width="${hs * 2}" height="${hs * 2}" fill="#fff" stroke="#f59e0b" stroke-width="${1.6 / z}" style="cursor:${cur}"/>`;
+  let out = '';
+  for (const id of selIds) {
+    let drawn = false;
+    for (const p of meta.prims) {
+      if (p.t === 'face' && p.holes) {
+        const hh = p.holes.find(h => h.id === id);
+        if (hh) {
+          out += `<rect x="${hh.s0}" y="${-hh.z1}" width="${hh.s1 - hh.s0}" height="${hh.z1 - hh.z0}" fill="#f59e0b" fill-opacity="0.18" stroke="#f59e0b" stroke-width="${sw}" pointer-events="none"/>`;
+          if (selIds.length === 1) {
+            const sm = (hh.s0 + hh.s1) / 2, zm = (hh.z0 + hh.z1) / 2;
+            out += hnd(sm, hh.z1, 'opT', 'ns-resize') + hnd(sm, hh.z0, 'opB', 'ns-resize');
+            if (Math.abs(p.uProj || 0) > 0.2) out += hnd(hh.s0, zm, 'opL', 'ew-resize') + hnd(hh.s1, zm, 'opR', 'ew-resize');
+          }
+          drawn = true; break;
+        }
+      }
+      if (p.t === 'glass' && p.id === id) {
+        out += `<rect x="${p.s0}" y="${-p.z1}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="#f59e0b" fill-opacity="0.22" stroke="#f59e0b" stroke-width="${sw}" pointer-events="none"/>`;
+        if (selIds.length === 1) { const sm = (p.s0 + p.s1) / 2; out += hnd(sm, p.z1, 'opT', 'ns-resize') + hnd(sm, p.z0, 'opB', 'ns-resize'); }
+        drawn = true; break;
+      }
+    }
+    if (drawn) continue;
+    const ms = meta.prims.filter(p => p.id === id && (p.t === 'face' || p.t === 'cut' || p.t === 'furn' || p.t === 'rpoly'));
+    if (!ms.length) continue;
+    const s0 = Math.min(...ms.map(p => p.s0)), s1 = Math.max(...ms.map(p => p.s1));
+    const z0 = Math.min(...ms.map(p => p.z0)), z1 = Math.max(...ms.map(p => p.z1));
+    const sm = (s0 + s1) / 2, zm = (z0 + z1) / 2, kind = ms[0].kind;
+    out += `<rect x="${s0}" y="${-z1}" width="${s1 - s0}" height="${z1 - z0}" fill="#f59e0b" fill-opacity="0.14" stroke="#f59e0b" stroke-width="${sw}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
+    if (selIds.length === 1) {
+      if (kind === 'wall') {
+        out += hnd(sm, z1, 'wTop', 'ns-resize') + hnd(sm, z0, 'wBot', 'ns-resize');
+        const wf = ms.find(p => p.t === 'face');
+        if (wf && Math.abs(wf.uProj || 0) > 0.2) out += hnd(s0, zm, 'wL', 'ew-resize') + hnd(s1, zm, 'wR', 'ew-resize');
+      } else if (kind === 'furn') {
+        if (ms[0].t === 'furn') out += hnd(sm, z1, 'fTop', 'ns-resize');
+      } else if (kind === 'slab') {
+        out += hnd(sm, z1, 'sTop', 'ns-resize') + hnd(sm, z0, 'sBot', 'ns-resize');
+      }
+    }
+  }
+  return out;
+}
+function archState() {
+  if (!ui.arch) ui.arch = { key: 'elev:south', mode: ui.outline ? 'cad' : '2d', tool: 'select', placeId: 'window', showFurn: true, view: { x: 0, y: 0, z: 0.5 }, spec: null, meta: null, drag: null, title: '' };
+  return ui.arch;
+}
+function archCurrentSpec(key) {
   const secs = []; P.floors.forEach(f => (f.sections || []).forEach(s => secs.push(s)));
   const tabs = [...secs.map(s => ['sec:' + s.id, L('Kesit ', 'Section ') + s.name + '–' + s.name + "'"]), ...Object.keys(ELEV_DIRS).map(d => ['elev:' + d, L(...ELEV_NAMES[d])])];
   if (!tabs.some(t => t[0] === key)) key = tabs[0][0];
   const [kind, id] = key.split(':'), sec = kind === 'sec' && secs.find(s => s.id === id);
   const title = sec ? L('Kesit ', 'Section ') + sec.name + '–' + sec.name + "'" : L(...ELEV_NAMES[id]);
-  const spec = sec ? sectionSpec(sec) : elevationSpec(id), dr = spec && archSvg(spec, title);
-  ui.archDraw = dr ? { ...dr, title } : null; ui.archKey = key;
-  openModal(`<h2>📐 ${L('Kesit & görünüşler', 'Sections & elevations')} <button class="btn sm" data-close>✕</button></h2>
-    <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 10px">${tabs.map(([k, n]) => `<button class="btn sm${k === key ? ' primary' : ''}" data-arch="${k}">${esc(n)}</button>`).join('')}</div>
-    <div class="archview" style="background:#fff;border-radius:8px;overflow:auto;max-height:62vh;padding:8px">${dr ? dr.svg.replace('<svg ', '<svg style="width:100%;height:auto;max-height:60vh" ') : `<p class="muted" style="color:#475569">${L('Çizilecek bir şey yok — önce duvar ekle.', 'Nothing to draw yet — add some walls first.')}</p>`}</div>
-    <div class="row" style="margin-top:10px;gap:8px"><button class="btn sm" data-archdl="svg" ${dr ? '' : 'disabled'}>⬇ SVG</button><button class="btn sm primary" data-archdl="png" ${dr ? '' : 'disabled'}>⬇ PNG</button></div>`, 'arch');
+  const spec = sec ? sectionSpec(sec) : elevationSpec(id);
+  return { key, title, spec, tabs };
+}
+function archGridSvg(meta, v) {
+  const cv = $('#archCv'); if (!cv || !meta) return '';
+  const W = cv.clientWidth || 700, H = cv.clientHeight || 480, z = Math.max(v.z || 0.5, 0.01);
+  const step = 100 * z < 24 ? 500 : 100, C = pal(false);
+  const x0 = Math.floor((-v.x / z) / step) * step - step, x1 = Math.ceil(((W - v.x) / z) / step) * step + step;
+  const y0 = Math.floor((-v.y / z) / step) * step - step, y1 = Math.ceil(((H - v.y) / z) / step) * step + step;
+  let d = '';
+  for (let x = x0; x <= x1; x += step) d += `M${x} ${y0}V${y1}`;
+  for (let y = y0; y <= y1; y += step) d += `M${x0} ${y}H${x1}`;
+  return `<path d="${d}" stroke="${C.gMin}" stroke-width="${1 / z}" fill="none" pointer-events="none"/>`;
+}
+function archApplyView() {
+  const st = archState(), w = $('#archWorld');
+  if (w) w.setAttribute('transform', `translate(${st.view.x} ${st.view.y}) scale(${st.view.z})`);
+  const g = $('#archGrid'); if (g && st.meta) g.innerHTML = archGridSvg(st.meta, st.view);
+}
+function archFit() {
+  const st = archState(), cv = $('#archCv'), m = st.meta;
+  if (!cv || !m) return;
+  const cw = cv.clientWidth || 720, ch = cv.clientHeight || 480;
+  const x0 = m.s0 - 170, x1 = m.s1 + 150, y0 = -(m.zTop + 40), y1 = -(m.zLow - 40);
+  const bw = Math.max(x1 - x0, 200), bh = Math.max(y1 - y0, 200);
+  const z = clamp(Math.min(cw / bw, ch / bh) * 0.88, 0.05, 8);
+  st.view = { z, x: cw / 2 - ((x0 + x1) / 2) * z, y: ch / 2 - ((y0 + y1) / 2) * z };
+  archRedraw(false);
+}
+function archZoomBy(factor, cx, cy) {
+  const st = archState(), cv = $('#archCv'); if (!cv) return;
+  const r = cv.getBoundingClientRect();
+  const px = cx != null ? cx - r.left : (r.width || 600) / 2;
+  const py = cy != null ? cy - r.top : (r.height || 400) / 2;
+  const nz = clamp(st.view.z * factor, 0.05, 12), k = nz / st.view.z;
+  st.view = { z: nz, x: px - (px - st.view.x) * k, y: py - (py - st.view.y) * k };
+  archRedraw(false);
+}
+function archPt(e) {
+  const st = archState(), cv = $('#archCv'), r = cv.getBoundingClientRect();
+  const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  const x = (sx - st.view.x) / st.view.z, y = (sy - st.view.y) / st.view.z;
+  return { s: x, z: -y, x, y, sx, sy };
+}
+function archSyncUndoBtns() {
+  const u = $('#archUndo'), r = $('#archRedo');
+  if (u && $('#bUndo')) u.disabled = $('#bUndo').disabled;
+  if (r && $('#bRedo')) r.disabled = $('#bRedo').disabled;
+}
+function archSyncTopbar() {
+  const st = archState(), m = $('#modal'); if (!m) return;
+  m.querySelectorAll('[data-arch]').forEach(b => b.classList.toggle('primary', b.dataset.arch === st.key));
+  m.querySelectorAll('[data-archmode]').forEach(b => b.classList.toggle('on', b.dataset.archmode === st.mode));
+  m.querySelectorAll('[data-archtool]').forEach(b => b.classList.toggle('primary', b.dataset.archtool === st.tool));
+  const fb = m.querySelector('[data-archopt="furn"]'); if (fb) fb.classList.toggle('primary', !!st.showFurn);
+  const cv = $('#archCv'); if (cv) cv.style.cursor = st.tool === 'place' ? 'crosshair' : (ui.space ? 'grab' : 'default');
+  archSyncUndoBtns();
+}
+function archSetMode(mode) {
+  const st = archState(); st.mode = mode === 'cad' ? 'cad' : '2d';
+  archSyncTopbar(); archRedraw(false);
+}
+function archSetTool(t) {
+  const st = archState(); st.tool = t === 'place' ? 'place' : 'select';
+  const pv = $('#archPv'); if (pv) pv.innerHTML = '';
+  archSyncTopbar();
+}
+function archRedraw(refit = false) {
+  if (ui.modal !== 'arch') return;
+  const st = archState(), cur = archCurrentSpec(st.key);
+  st.key = cur.key; st.title = cur.title; st.spec = cur.spec; ui.archKey = cur.key;
+  const dr = cur.spec && archSvg(cur.spec, cur.title, { mode: st.mode, live: true, showFurn: st.showFurn });
+  st.meta = dr || null;
+  ui.archDraw = dr ? { ...dr, title: cur.title } : null;
+  const dlSvg = $('#modal [data-archdl="svg"]'), dlPng = $('#modal [data-archdl="png"]');
+  if (dlSvg) dlSvg.disabled = !dr;
+  if (dlPng) dlPng.disabled = !dr;
+  const defs = $('#archDefs'), geo = $('#archGeo'), selG = $('#archSel'), grid = $('#archGrid'), hud = $('#archHud');
+  if (!dr) {
+    if (defs) defs.innerHTML = '';
+    if (grid) grid.innerHTML = '';
+    if (geo) geo.innerHTML = '';
+    if (selG) selG.innerHTML = '';
+    if (hud) hud.textContent = L('Çizilecek bir şey yok — önce duvar ekle.', 'Nothing to draw yet — add some walls first.');
+    return;
+  }
+  if (refit) {
+    const cv = $('#archCv');
+    const cw = (cv && cv.clientWidth) || 720, ch = (cv && cv.clientHeight) || 480;
+    const x0 = dr.s0 - 170, x1 = dr.s1 + 150, y0 = -(dr.zTop + 40), y1 = -(dr.zLow - 40);
+    const bw = Math.max(x1 - x0, 200), bh = Math.max(y1 - y0, 200);
+    const z = clamp(Math.min(cw / bw, ch / bh) * 0.88, 0.05, 8);
+    st.view = { z, x: cw / 2 - ((x0 + x1) / 2) * z, y: ch / 2 - ((y0 + y1) / 2) * z };
+  }
+  if (defs) defs.innerHTML = dr.defs || '';
+  archApplyView();
+  if (geo) geo.innerHTML = dr.inner;
+  if (selG) selG.innerHTML = archHandleSvg(dr, sel, st.view.z);
+  if (hud && !st.drag) hud.textContent = `${cur.title} · ${st.mode.toUpperCase()} · ${F().name}`;
+  archSyncUndoBtns();
+}
+function archRenderProps() {
+  const el = $('#archProps'); if (!el) return;
+  const st = archState(), os = selObjs();
+  if (!os.length) {
+    const f = F();
+    let h = `<h3>⚙️ ${esc(f.name)}</h3><p class="muted">${L('Bir duvar, kapı, pencere, mobilya veya döşeme seçip sürükleyerek ya da buradan düzenleyin.', 'Select a wall, door, window, furniture or slab to drag handles or edit below.')}</p>`;
+    h += floorLevelHtml(f);
+    h += `<h4>${L('Kat yüksekliği', 'Floor height')}</h4>` + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'floor', 'wallH', floorH(f), { min: FLOOR_H_MIN, max: FLOOR_H_MAX })
+      + `<div class="row"><button class="btn sm" data-act="wallhfloor">⬆ ${L('Bu kattaki duvarlara uygula', 'Apply to walls on this floor')}</button>${f.wallH ? `<button class="btn sm" data-act="floorhreset">↺ ${P.wallH} cm</button>` : ''}</div>`;
+    h += `<h4>${L('Görünüm ipuçları', 'View shortcuts')}</h4><p class="muted">${L('J: 2B / CAD · 0: Sığdır · Del: Sil · Ctrl+Z/Y: Geri/İleri · Ok tuşları: Kaydır · Boşluk+sürükle: Kaydır', 'J: 2D / CAD · 0: Fit · Del: Delete · Ctrl+Z/Y: Undo/Redo · Arrows: Nudge · Space+drag: Pan')}</p>`;
+    el.innerHTML = h; return;
+  }
+  const kinds = [...new Set(os.map(x => x.kind))];
+  if (kinds.length > 1) {
+    el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><div class="row"><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+    return;
+  }
+  const k = kinds[0], o = os[0].o, n = os.length, lk = os.every(x => isLocked(x.o));
+  const acts = (extra = '') => `<p class="muted flbadge">📍 ${L('Kat', 'Floor')}: <b>${esc(F().name)}</b></p>`
+    + (lk ? `<p class="muted lockline">🔒 ${L('Kilitli: sürüklenmez. Alanlar düzenlenebilir.', 'Locked: dragging disabled. Fields still edit it.')}</p>` : '')
+    + `<div class="row">${extra}<button class="btn sm${lk ? ' on' : ''}" data-act="lock">${lk ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+  let h = `<h3>${(isEN() ? KIND_EN : KIND_TR)[k]}${n > 1 ? ` <span class="muted">(${n})</span>` : ''}</h3>`;
+  if (k === 'wall') {
+    if (n === 1) h += fld(L('Uzunluk (cm)', 'Length (cm)'), 'wall', 'len', wLen(o), { step: 1, min: 1 });
+    h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 })
+      + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 })
+      + fld(L('Taban kotu (cm)', 'Base offset (cm)'), 'wall', 'elev', wallElev(o), { min: -WALL_ELEV_MAX, max: WALL_ELEV_MAX, step: 5 });
+    if (os.some(x => wallTopOn(x.o))) h += `<div class="row"><button class="btn sm" data-act="walldetach">${L('⌂✕ Düz yap', '⌂✕ Make flat')}</button></div>`;
+    h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall'), railing: L('🛡 Korkuluk', '🛡 Railing / Balustrade'), fence: L('🌿 Bahçe çiti', '🌿 Garden Fence') } });
+    if (os.every(x => x.o.wt === 'railing')) h += fld(L('Korkuluk stili', 'Railing style'), 'wall', 'rs', railStyle(o), { sel: Object.fromEntries(Object.entries(RAIL_STYLES).map(([kk, v]) => [kk, L(...v)])) });
+    if (os.every(x => x.o.wt === 'curtain')) {
+      const bays = curtainBays(o), fixed = o.mulN != null;
+      h += fld(L('Dikme aralığı (cm)', 'Mullion spacing (cm)'), 'wall', 'mul', fixed ? Math.round(wLen(o) / bays) : (+o.mul || MUL_DEF), { min: 20, max: 1000, step: 10 })
+        + fld(L('Ara dikme adedi', 'Intermediate mullions'), 'wall', 'mulN', bays - 1, { min: 0, max: 200, step: 1 });
+    }
+    h += fld(L('🎨 Duvar boyası', '🎨 Wall paint'), 'wall', 'color', o.color || '#f5f1e8', { type: 'color' });
+    h += `<div class="row swatches">${PAINTS.map(([c, tr, en]) => `<button class="btn sm swatch${o.color === c ? ' on' : ''}" data-act="paint" data-c="${c}" title="${L(tr, en)}" style="background:${c}"></button>`).join('')}<button class="btn sm" data-act="paint" data-c="">${L('↺ Varsayılan', '↺ Default')}</button></div>`;
+    if (F().walls.length > 1 && os.every(x => x.o.h === o.h)) h += `<div class="row"><button class="btn sm" data-act="wallhfloor">⬆ ${L('Kattaki tüm duvarlara uygula', 'Apply to all walls on floor')}</button></div>`;
+    h += acts();
+  } else if (k === 'op') {
+    h += fld(L('Tür', 'Type'), 'op', 'type', o.type, { sel: isEN() ? { door: 'Door', double: 'Double door', slide: 'Sliding', arch: 'Archway', window: 'Window' } : { door: 'Kapı', double: 'Çift kapı', slide: 'Sürgülü', arch: 'Açıklık', window: 'Pencere' } });
+    h += fld(L('Genişlik (cm)', 'Width (cm)'), 'op', 'w', o.w, { min: 20, max: 500 })
+      + fld(L('Yükseklik (cm)', 'Height (cm)'), 'op', 'h', o.h, { min: 20, max: 400 })
+      + fld(L('Denizlik (cm)', 'Sill height (cm)'), 'op', 'sill', o.sill, { min: 0, max: 300 });
+    if (o.type === 'door' || o.type === 'double' || o.type === 'slide') h += `<label class="f"><span>${L('Açık', 'Open')}</span><input type="checkbox" data-k="op" data-p="open" ${o.open ? 'checked' : ''}></label>`;
+    if (isDoorOp(o)) {
+      const dm = doorMat(o);
+      h += fld(L('Malzeme', 'Material'), 'op', 'mat', dm, { sel: biOpts(DOOR_MATS) });
+      if (dm !== 'glass') h += fld(L('Kanat rengi', 'Leaf colour'), 'op', 'color', doorLeafCol(o), { type: 'color' });
+    }
+    if (o.type !== 'arch') h += fld(L('Kasa rengi', 'Frame colour'), 'op', 'frameCol', o.frameCol || '#c3c1bf', { type: 'color' });
+    if (o.color || o.frameCol) h += `<div class="row"><button class="btn sm" data-act="opcolreset">${L('↺ Varsayılan renkler', '↺ Default colours')}</button></div>`;
+    h += acts(`<button class="btn sm" data-act="opflip">${L('↔ Yön', '↔ Flip')}</button>${o.type === 'slide' ? '' : `<button class="btn sm" data-act="opside">${L('↕ Açılış', '↕ Swing')}</button>`}`);
+  } else if (k === 'furn') {
+    h += fld(L('Etiket', 'Label'), 'furn', 'label', o.label || '', { type: 'text' })
+      + fld(L('Genişlik (cm)', 'Width (cm)'), 'furn', 'w', o.w, { min: 5 })
+      + fld(L('Derinlik (cm)', 'Depth (cm)'), 'furn', 'd', o.d, { min: 5 })
+      + (isParamRoof(o) ? '' : fld(L('Yükseklik (cm)', 'Height (cm)'), 'furn', 'h', o.h, { min: 1 }))
+      + fld(o.k === 'stairs' || o.k === 'ramp' ? L('Başlangıç kotu (cm)', 'Start level (cm)') : L('Yerden yükseklik (cm)', 'Height above floor (cm)'), 'furn', 'elev', furnElev(o), { min: -FURN_ELEV_MAX, max: FURN_ELEV_MAX, step: 5 })
+      + fld(L('Açı (°)', 'Angle (°)'), 'furn', 'rot', o.rot, { min: 0, max: 360 })
+      + fld(L('Renk', 'Color'), 'furn', 'color', o.color, { type: 'color' });
+    if (isParamRoof(o) && n === 1) {
+      const q = roofP(o);
+      h += `<h4>${L('Çatı', 'Roof')}</h4>` + fld(L('Tür', 'Type'), 'furn', 'roofType', q.type, { sel: biOpts(ROOF_TYPES) });
+      if (!q.flat) h += fld(L('Eğim (°)', 'Pitch (°)'), 'furn', 'pitch', q.pitch, { min: 1, max: ROOF_PITCH_MAX, step: 1 });
+      h += fld(L('Saçak çıkıntısı (cm)', 'Eaves overhang (cm)'), 'furn', 'over', q.over, { min: 0, max: ROOF_OVER_MAX, step: 5 })
+        + fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'furn', 'th', q.th, { min: 2, max: 80 })
+        + `<div class="row"><button class="btn sm" data-act="rooffit">⌂ ${L('Duvarlara oturt', 'Fit to walls')}</button></div>`;
+    }
+    h += acts(`<button class="btn sm" data-act="rot90">⟳ 90°</button><button class="btn sm" data-act="swapwd">${L('⇄ En/Boy', '⇄ Swap W/D')}</button>`);
+  } else if (k === 'slab') {
+    h += fld(L('Ad', 'Name'), 'slab', 'name', o.name || '', { type: 'text' })
+      + fld(L('Kaplama', 'Finish'), 'slab', 'floor', o.floor || 'none', { sel: floorOpts() })
+      + fld(L('Renk', 'Color'), 'slab', 'color', o.color || '#cbd5e1', { type: 'color' })
+      + fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'slab', 't', o.t ?? 20, { min: 5, max: 100 })
+      + fld(L('Kot farkı (cm)', 'Level offset (cm)'), 'slab', 'off', o.off || 0, { min: -200, max: 200 });
+    if (o.color) h += `<div class="row"><button class="btn sm" data-act="slabcolreset">${L('↺ Varsayılan renk', '↺ Default colour')}</button></div>`;
+    h += acts();
+  } else {
+    h += acts();
+  }
+  el.innerHTML = h;
+}
+function archStartDrag(e, handle = null, id = null) {
+  const st = archState(), ro = typeof collabReadOnly === 'function' && collabReadOnly();
+  if (ro) { collabViewerToast(); return; }
+  const pt = archPt(e), targetId = id || sel[0], fd = targetId && findAnyFloor(targetId);
+  if (!fd) return;
+  if (isLocked(fd.o)) { lockToast(1); return; }
+  followSelFloor(fd);
+  const { kind, o, floor } = fd, spec = st.spec, u = { x: -spec.n.y, y: spec.n.x };
+  const drag = { kind, o, floor, floorH: floorH(floor), handle, start: pt, sx: e.clientX, sy: e.clientY, orig: JSON.parse(JSON.stringify(o)), moved: false };
+  if (kind === 'op') {
+    const w = floor.walls.find(x => x.id === o.wall); if (!w) return;
+    const L = wLen(w) || 1, wx = (w.b.x - w.a.x) / L, wy = (w.b.y - w.a.y) / L;
+    drag.wall = w; drag.uProj = wx * u.x + wy * u.y;
+    const cx = w.a.x + wx * o.d, cy = w.a.y + wy * o.d;
+    drag.sCenter = (cx - spec.O.x) * u.x + (cy - spec.O.y) * u.y;
+  } else if (kind === 'wall') {
+    drag.conn = []; drag.ops = [];
+    const seenW = new Set([o]);
+    for (const ow of floor.walls) if (ow !== o) for (const k of ['a', 'b']) {
+      if (dist(ow[k], o.a) < 1) drag.conn.push({ w: ow, k, end: 'a', orig: { x: ow[k].x, y: ow[k].y } });
+      else if (dist(ow[k], o.b) < 1) drag.conn.push({ w: ow, k, end: 'b', orig: { x: ow[k].x, y: ow[k].y } });
+    }
+    for (const op of floor.ops) if (op.wall === o.id) drag.ops.push({ o: op, w: o, d: op.d, L0: wLen(o) });
+    for (const c of drag.conn) if (!seenW.has(c.w)) {
+      seenW.add(c.w);
+      for (const op of floor.ops) if (op.wall === c.w.id) drag.ops.push({ o: op, w: c.w, d: op.d, L0: wLen(c.w), k: c.k, end: c.end });
+    }
+  }
+  st.drag = { type: 'edit', ...drag };
+}
+function archBindDom() {
+  const cv = $('#archCv'), pr = $('#archProps'), ps = $('#archPlaceSel');
+  if (ps) ps.onchange = () => { archState().placeId = ps.value; archSetTool('place'); };
+  if (pr) {
+    pr.addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') { applyProp(e.target, false); archRedraw(false); } });
+    pr.addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); archRedraw(false); archRenderProps(); } });
+    pr.addEventListener('click', e => {
+      const s = e.target.closest('[data-sel]'); if (s) { sel = [s.dataset.sel]; archRedraw(false); archRenderProps(); return; }
+      if (e.target.closest('[data-act]')) { onPropsClick(e); archRedraw(false); archRenderProps(); }
+    });
+  }
+  if (!cv) return;
+  cv.addEventListener('wheel', e => { e.preventDefault(); archZoomBy(e.deltaY < 0 ? 1.16 : 0.86, e.clientX, e.clientY); }, { passive: false });
+  cv.addEventListener('pointerdown', e => {
+    const st = archState();
+    if (e.button === 1 || ui.space) {
+      e.preventDefault();
+      st.drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: st.view.x, vy: st.view.y };
+      cv.style.cursor = 'grabbing'; return;
+    }
+    if (e.button !== 0) return;
+    if (st.tool === 'place') {
+      if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; }
+      const pt = archPt(e), snapStep = ui.snap && !e.shiftKey ? (P.grid || 10) : 0;
+      const hit = st.meta && archPlaceOpAt(st.spec, st.meta.prims, pt.s, pt.z, OPDEF[st.placeId], snapStep);
+      if (!hit) { toast(L('Kapı veya pencere yerleştirmek için bir duvar yüzüne tıklayın', 'Click on a wall face to place a door or window')); return; }
+      const fl = P.floors[hit.floorIdx], wall = fl && fl.walls.find(w => w.id === hit.wallId);
+      if (!wall) return;
+      if (isLocked(wall)) { lockToast(1); return; }
+      const op = mkOp(OPDEF[st.placeId], wall, hit.d); op.sill = hit.sill;
+      fl.ops.push(op); fi = hit.floorIdx; sel = [op.id];
+      commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+      archRedraw(false); archRenderProps();
+      return;
+    }
+    const h = e.target.closest('[data-arch-h]');
+    if (h) { e.preventDefault(); archStartDrag(e, h.dataset.archH); return; }
+    const fl = e.target.closest('[data-arch-floor]');
+    if (fl) {
+      const idx = +fl.dataset.archFloor;
+      if (P.floors[idx]) { fi = idx; sel = []; refresh(); archRedraw(false); archRenderProps(); }
+      return;
+    }
+    const item = e.target.closest('[data-arch-id]');
+    if (item) {
+      const id = item.dataset.archId, fd = findAnyFloor(id);
+      if (fd) {
+        followSelFloor(fd);
+        sel = [id];
+        render(); renderProps();
+        archRedraw(false); archRenderProps();
+        archStartDrag(e, null, id);
+        return;
+      }
+    }
+    if (sel.length) { sel = []; render(); renderProps(); archRedraw(false); archRenderProps(); }
+    st.drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: st.view.x, vy: st.view.y };
+    cv.style.cursor = 'grabbing';
+  });
+  if (!ui._archWinBound) {
+    ui._archWinBound = true;
+    window.addEventListener('pointermove', e => {
+      if (ui.modal !== 'arch' || !ui.arch) return;
+      const st = ui.arch;
+      if (st.drag) {
+        if (st.drag.type === 'pan') {
+          st.view.x = st.drag.vx + (e.clientX - st.drag.sx);
+          st.view.y = st.drag.vy + (e.clientY - st.drag.sy);
+          archApplyView(); return;
+        }
+        if (st.drag.type === 'edit') {
+          const pt = archPt(e), ds = pt.s - st.drag.start.s, dz = pt.z - st.drag.start.z;
+          if (!st.drag.moved && Math.hypot(e.clientX - (st.drag.sx || e.clientX), e.clientY - (st.drag.sy || e.clientY)) < 2 && Math.hypot(ds, dz) * st.view.z < 3) return;
+          st.drag.moved = true;
+          const snapStep = ui.snap && !e.shiftKey ? (P.grid || 10) : 0;
+          const info = archApplyDrag(st.spec, st.drag, ds, dz, snapStep);
+          archRedraw(false);
+          const hud = $('#archHud'); if (hud && info) hud.textContent = info;
+          return;
+        }
+      }
+      if (st.tool === 'place' && st.meta) {
+        const cvEl = $('#archCv'); if (!cvEl) return;
+        const r = cvEl.getBoundingClientRect();
+        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+        const pt = archPt(e), snapStep = ui.snap && !e.shiftKey ? (P.grid || 10) : 0;
+        const hit = archPlaceOpAt(st.spec, st.meta.prims, pt.s, pt.z, OPDEF[st.placeId], snapStep);
+        const pv = $('#archPv'), hud = $('#archHud');
+        if (pv) pv.innerHTML = hit ? `<rect x="${hit.s0}" y="${-hit.z1}" width="${hit.s1 - hit.s0}" height="${hit.z1 - hit.z0}" fill="#22c55e" fill-opacity="0.25" stroke="#22c55e" stroke-width="${2 / st.view.z}" stroke-dasharray="${6 / st.view.z} ${4 / st.view.z}" pointer-events="none"/>` : '';
+        if (hud) hud.textContent = hit ? `${itemName(OPDEF[st.placeId])} · d: ${Math.round(hit.d)} cm · ${L('Denizlik', 'Sill')}: ${Math.round(hit.sill)} cm` : L('Bir duvar yüzünün üzerine gelin', 'Hover over a wall face');
+      }
+    });
+    window.addEventListener('pointerup', () => {
+      if (ui.modal !== 'arch' || !ui.arch || !ui.arch.drag) return;
+      const st = ui.arch, d = st.drag; st.drag = null;
+      const cvEl = $('#archCv'); if (cvEl) cvEl.style.cursor = st.tool === 'place' ? 'crosshair' : 'default';
+      if (d.type === 'edit' && d.moved) {
+        if (d.kind === 'furn' && isParamRoof(d.o)) cleanRoof(d.o);
+        if (d.kind === 'wall') fitOpsToWall(d.floor || F(), d.o);
+        commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+        archRedraw(false); archRenderProps();
+      }
+    });
+  }
+}
+function archKey(e) {
+  const st = archState(), ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+  if (e.key === 'Escape') {
+    if (st.drag) { st.drag = null; archRedraw(false); return; }
+    if (st.tool === 'place') { archSetTool('select'); return; }
+    closeModal(); return;
+  }
+  if (e.key === ' ') { ui.space = true; e.preventDefault(); return; }
+  if (ctrl && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (ctrl && k === 'y') { e.preventDefault(); redo(); return; }
+  if (k === 'j' && !ctrl) { e.preventDefault(); archSetMode(st.mode === 'cad' ? '2d' : 'cad'); return; }
+  if (k === 'v' && !ctrl) { e.preventDefault(); archSetTool('select'); return; }
+  if (e.key === '0' && !ctrl) { e.preventDefault(); archFit(); return; }
+  if ((e.key === '+' || e.key === '=') && !ctrl) { e.preventDefault(); archZoomBy(1.25); return; }
+  if (e.key === '-' && !ctrl) { e.preventDefault(); archZoomBy(0.8); return; }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSel(); archRedraw(false); archRenderProps(); return; }
+  if (e.key.startsWith('Arrow') && sel.length === 1 && st.spec) {
+    e.preventDefault();
+    const ro = typeof collabReadOnly === 'function' && collabReadOnly(); if (ro) { collabViewerToast(); return; }
+    const fd = findAnyFloor(sel[0]); if (!fd) return;
+    if (isLocked(fd.o)) { lockToast(1); return; }
+    const step = e.shiftKey ? 10 : (P.grid || 1);
+    const ds = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    const dz = e.key === 'ArrowUp' ? step : e.key === 'ArrowDown' ? -step : 0;
+    archStartDrag({ clientX: 0, clientY: 0 }, null, sel[0]);
+    if (st.drag && st.drag.type === 'edit') {
+      archApplyDrag(st.spec, st.drag, ds, dz, 0);
+      st.drag = null;
+      if (fd.kind === 'furn' && isParamRoof(fd.o)) cleanRoof(fd.o);
+      if (fd.kind === 'wall') fitOpsToWall(fd.floor || F(), fd.o);
+      commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
+      archRedraw(false); archRenderProps();
+    }
+  }
+}
+// Çizim penceresi: kesitler ve dört görünüş arasında sekme; 2B / CAD görünüm + canlı düzenleme; SVG / PNG indir
+function archModal(key) {
+  const st = archState(), cur = archCurrentSpec(key || st.key), fresh = ui.modal !== 'arch', tabChanged = st.key !== cur.key;
+  st.key = cur.key; st.title = cur.title; st.spec = cur.spec; ui.archKey = cur.key;
+  if (fresh) {
+    const opOpts = OPENINGS.map(o => `<option value="${o.id}" ${st.placeId === o.id ? 'selected' : ''}>${o.icon} ${esc(itemName(o))}</option>`).join('');
+    openModal(`<h2>📐 ${L('Kesit & görünüşler', 'Sections & elevations')}
+        <span class="row" style="gap:6px;margin:0">
+          <span class="btn-group seg-switch"><button class="btn sm${st.mode === '2d' ? ' on' : ''}" data-archmode="2d">2B</button><button class="btn sm${st.mode === 'cad' ? ' on' : ''}" data-archmode="cad">CAD</button></span>
+          <button class="btn sm" data-archdl="svg">⬇ SVG</button>
+          <button class="btn sm primary" data-archdl="png">⬇ PNG</button>
+          <button class="btn sm" data-close>✕</button>
+        </span>
+      </h2>
+      <div class="arch-top">
+        <div class="row arch-tabs">${cur.tabs.map(([k, n]) => `<button class="btn sm${k === cur.key ? ' primary' : ''}" data-arch="${k}">${esc(n)}</button>`).join('')}</div>
+        <div class="row arch-tools">
+          <button class="btn sm${st.tool === 'select' ? ' primary' : ''}" data-archtool="select" title="V">↖ ${L('Seç / Düzenle', 'Select / Edit')}</button>
+          <select id="archPlaceSel" title="${L('Yerleştirilecek kapı / pencere', 'Door / window to place')}">${opOpts}</select>
+          <button class="btn sm${st.tool === 'place' ? ' primary' : ''}" data-archtool="place">＋ ${L('Yerleştir', 'Place')}</button>
+          <button class="btn sm${st.showFurn ? ' primary' : ''}" data-archopt="furn" title="${L('Mobilyaları göster / gizle', 'Show / hide furniture')}">🛋</button>
+          <button class="btn sm" id="archUndo" data-archact="undo" title="Ctrl+Z">↶</button>
+          <button class="btn sm" id="archRedo" data-archact="redo" title="Ctrl+Y">↷</button>
+          <button class="btn sm" data-archact="fit" title="0">⤢</button>
+        </div>
+      </div>
+      <div class="arch-body">
+        <div class="arch-stage archview">
+          <svg id="archCv" xmlns="http://www.w3.org/2000/svg"><defs id="archDefs"></defs><g id="archWorld"><g id="archGrid"></g><g id="archGeo"></g><g id="archSel"></g><g id="archPv"></g></g></svg>
+          <div id="archHud"></div>
+        </div>
+        <aside id="archProps"></aside>
+      </div>`, 'arch');
+    $('#modal').classList.add('arch-modal');
+    archBindDom();
+  }
+  archSyncTopbar();
+  archRedraw(fresh || tabChanged);
+  archRenderProps();
 }
 function svgToPng(svg, w, h, name) {
   const sc = Math.min(3, 3200 / Math.max(w, h)) * (w < 1200 ? 1.5 : 1), img = new Image();
@@ -13142,11 +13810,23 @@ function svgToPng(svg, w, h, name) {
 }
 $('#modal').addEventListener('click', e => {
   if (ui.modal !== 'arch') return;
+  const st = archState();
   const t = e.target.closest('[data-arch]'); if (t) { archModal(t.dataset.arch); return; }
-  const d = e.target.closest('[data-archdl]'); if (!d || !ui.archDraw) return;
-  const base = fname('x').replace(/\.x$/, '') + '-' + ui.archDraw.title.toLowerCase().replace(/[^a-z0-9ğüşöçı]+/gi, '-');
-  if (d.dataset.archdl === 'svg') download(base + '.svg', new Blob([ui.archDraw.svg], { type: 'image/svg+xml' }));
-  else svgToPng(ui.archDraw.svg, ui.archDraw.w, ui.archDraw.h, base + '.png');
+  const m = e.target.closest('[data-archmode]'); if (m) { archSetMode(m.dataset.archmode); return; }
+  const tl = e.target.closest('[data-archtool]'); if (tl) { archSetTool(tl.dataset.archtool); return; }
+  const op = e.target.closest('[data-archopt="furn"]'); if (op) { st.showFurn = !st.showFurn; archSyncTopbar(); archRedraw(false); return; }
+  const ac = e.target.closest('[data-archact]'); if (ac) {
+    if (ac.dataset.archact === 'fit') archFit();
+    else if (ac.dataset.archact === 'undo') { undo(); archRenderProps(); }
+    else if (ac.dataset.archact === 'redo') { redo(); archRenderProps(); }
+    return;
+  }
+  const d = e.target.closest('[data-archdl]'); if (!d) return;
+  const cur = archCurrentSpec(st.key), dr = cur.spec && archSvg(cur.spec, cur.title, { mode: st.mode, live: false, showFurn: st.showFurn });
+  if (!dr) return;
+  const base = fname('x').replace(/\.x$/, '') + '-' + cur.title.toLowerCase().replace(/[^a-z0-9ğüşöçı]+/gi, '-') + '-' + st.mode;
+  if (d.dataset.archdl === 'svg') download(base + '.svg', new Blob([dr.svg], { type: 'image/svg+xml' }));
+  else svgToPng(dr.svg, dr.w, dr.h, base + '.png');
 });
 // 3B kesit (issue #30): seçili kesitin önünü kırp (renderer genel kırpma düzlemi)
 function applySecClip() {
