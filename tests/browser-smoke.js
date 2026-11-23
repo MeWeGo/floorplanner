@@ -3512,7 +3512,7 @@ check('drive save interval: after every change or a timer of any seconds / minut
 check('one Download menu: opens under its button, runs the export, closes on Esc / outside click', async page => {
   const info = await page.evaluate(`(() => {
     const b = document.getElementById('bDl'), m = document.getElementById('dlMenu'), out = {};
-    out.inside = ['bPng', 'bSvg', 'bPrint', 'bJson', 'bIfc', 'bRevit'].every(id => m.contains(document.getElementById(id)));
+    out.inside = ['bPng', 'bSvg', 'bPrint', 'bJson', 'bDxf', 'bIfc', 'bRevit'].every(id => m.contains(document.getElementById(id)));
     b.click(); const r = m.getBoundingClientRect(), br = b.getBoundingClientRect();
     out.open = !m.hidden && r.width > 100 && r.top >= br.bottom && r.right <= innerWidth + 1 && b.getAttribute('aria-expanded') === 'true';
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); out.esc = m.hidden;
@@ -3671,6 +3671,40 @@ check('Revit export: levels, walls, doors with swing, floors, rooms and furnitur
   for (const c of ['stairs', 'ramp', 'planting', 'furniture']) if (!r.cats.includes(c)) throw new Error('missing category ' + c);
   if (!r.got || !/.fp-revit.json$/.test(r.got.name) || r.got.size < 1000) throw new Error('#bRevit did not download: ' + JSON.stringify(r.got));
   return `${r.stats.walls} walls, ${r.stats.items} solid items, ${Math.round(r.got.size / 1024)} KB`;
+});
+
+check('DXF export: every template round-trips through the app DXF importer (walls, openings, rooms); the ⬇ menu button and the multi-floor toast download it', async page => {
+  await page.evaluate('ui.view3d && show3D(false)');
+  const n = await page.evaluate('TEMPLATES.length'), res = [];
+  for (let t = 1; t < n; t++) { // the download blob is read asynchronously: one template per step
+    res.push(await page.evaluate(`(async () => {
+      loadProject(newProject()); buildTemplate(${t}); commit();
+      let got = null; const keep = download; download = (name, blob) => { got = { name, blob }; };
+      try { document.getElementById('bDxf').click(); } finally { download = keep; }
+      const text = await got.blob.text(), f = F();
+      const g = dxfToProject(text, { uid, L, catalog: BYID, colors: ROOMCOL }).project.floors[0];
+      const solid = f.walls.filter(w => !isLowWall(w) && wLen(w) >= 0.5);
+      const named = a => a.map(o => o.name).filter(Boolean).sort().join('|');
+      return { t: ${t}, name: got.name, ascii: /^[\\x09\\x0a\\x0d\\x20-\\x7e]*$/.test(text), walls: [solid.length, g.walls.length], ops: [f.ops.filter(o => solid.some(w => w.id === o.wall)).length, g.ops.length], rooms: [named(f.rooms), named(g.rooms)], furn: [f.furn.length, g.furn.length, g.furn.filter(o => BYID[o.type]).length] };
+    })()`));
+  }
+  for (const o of res) {
+    if (!/\.dxf$/.test(o.name) || !o.ascii) throw new Error('template ' + o.t + ': bad file ' + JSON.stringify(o.name));
+    if (o.walls[1] !== o.walls[0]) throw new Error('template ' + o.t + ' walls: ' + JSON.stringify(o.walls));
+    if (o.ops[1] < o.ops[0] * 0.8) throw new Error('template ' + o.t + ' openings: ' + JSON.stringify(o.ops));
+    if (o.rooms[0] !== o.rooms[1]) throw new Error('template ' + o.t + ' rooms: ' + JSON.stringify(o.rooms));
+  }
+  // two floors: the active floor downloads with its name, the toast's "All floors" lays both out in one file
+  const m = await page.evaluate(`(async () => {
+    loadProject(newProject()); buildTemplate(1); P.floors.push(JSON.parse(JSON.stringify(P.floors[0]))); P.floors[1].name = 'Upper'; commit();
+    const got = [], keep = download; download = (name, blob) => { got.push({ name, blob }); };
+    try { document.getElementById('bDxf').click(); const b = document.querySelector('#toast button'); if (b) b.click(); } finally { download = keep; }
+    const txt = got[1] ? await got[1].blob.text() : '';
+    return { names: got.map(x => x.name), titles: (txt.match(/\\nA-ANNO-TTLB\\r/g) || []).length };
+  })()`);
+  if (m.names.length !== 2 || !/ - /.test(m.names[0]) || / - /.test(m.names[1])) throw new Error('multi-floor downloads: ' + JSON.stringify(m.names));
+  if (m.titles < 3) throw new Error('all-floors file has no floor titles: ' + m.titles);
+  return res.map(o => `template ${o.t}: walls ${o.walls.join('→')}, openings ${o.ops.join('→')}, items ${o.furn[2]}/${o.furn[0]}`).join(', ');
 });
 
 check('IFC export: every template round-trips through the app IFC importer (walls, door swing, rooms, catalogue items); the button downloads it', async page => {
