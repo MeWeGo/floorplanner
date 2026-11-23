@@ -1111,7 +1111,8 @@ const LAYER_COLS = ['#64748b', '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3
 const defaultLayer = () => ({ id: '0', name: L('Varsayılan', 'Default'), color: '#64748b', vis: true, lock: false, print: true });
 const layerById = id => (P.layers || []).find(l => l.id === (id || '0'));
 // Gizli (veya baskıda çıkmayan) katmanlardaki nesneler olmadan katın sığ kopyası; hepsi görünürse kat aynen döner
-function visFloor(f, print = false) {
+function visFloor(f, print = false, lift = false) {
+  if (lift) return liftLayers(visFloor(f, print));
   if (f.walls && f.walls.some(w => w.acc && (wLen(w) < 1 || w.acc.fill === 'fan'))) { // kapanmış akordiyon duvar (boşluk yok) çizilmez; yelpazede kapı / pencere yok
     const g = Object.assign({}, f); g.walls = f.walls.filter(w => !(w.acc && wLen(w) < 1));
     const wl = new Set(g.walls.filter(w => !isAccFan(w)).map(w => w.id)); g.ops = f.ops.filter(o => wl.has(o.wall)); f = g;
@@ -1122,6 +1123,26 @@ function visFloor(f, print = false) {
   const ok = o => !hide.has(o.layer || '0'), g = Object.assign({}, f);
   for (const k in KINDS) g[k] = (f[k] || []).filter(ok);
   const wl = new Set(g.walls.map(w => w.id)); g.ops = g.ops.filter(o => wl.has(o.wall));
+  return g;
+}
+/* Katman yükseltisi: P.layers[i].z (cm, ±LAYER_Z_MAX; yok = 0). O katmandaki her şey 3B'de, kesit / görünüşlerde, yürüyüşte
+   ve IFC / Revit çıktısında bu kadar yukarı (eksi: aşağı) kayar; nesnelerin kendi değerleri değişmez, 2B plan aynı kalır.
+   liftLayers kaydırılan nesnelerin sığ kopyalarını döndürür: duvar → elev, eşya → elev, serbest döşeme → off,
+   oda → köşelerinde eşit kot noktaları (eğimli yüzey motoru, SURF-SLOPE) — yani oda zemini de bir platform olarak kalkar. */
+const LAYER_Z_MAX = 500;
+const layerZ = id => { const l = layerById(id), z = l ? +l.z : 0; return z ? Math.max(-LAYER_Z_MAX, Math.min(LAYER_Z_MAX, z)) : 0; };
+function liftLayers(f) {
+  if (!P.layers || P.layers.length < 2 || !P.layers.some(l => +l.z)) return f;
+  const g = Object.assign({}, f), dz = o => layerZ(o.layer);
+  g.walls = (f.walls || []).map(w => dz(w) ? Object.assign({}, w, { elev: Math.round(+w.elev || 0) + dz(w) }) : w);
+  g.furn = (f.furn || []).map(o => dz(o) ? Object.assign({}, o, { elev: (+o.elev || 0) + dz(o) }) : o);
+  g.slabs = (f.slabs || []).map(s => dz(s) ? Object.assign({}, s, { off: (+s.off || 0) + dz(s) }) : s);
+  g.rooms = (f.rooms || []).map(r => {
+    const z = dz(r); if (!z || !r.pts || r.pts.length < 3 || r.floor === 'glass') return r;
+    const hp = (Array.isArray(r.hp) ? r.hp : []).map(q => ({ x: q.x, y: q.y, z: (+q.z || 0) + z }));
+    for (const p of r.pts) if (!hp.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 1)) hp.push({ x: p.x, y: p.y, z });
+    return hp.length > SURF_HP_MAX ? r : Object.assign({}, r, { hp });
+  });
   return g;
 }
 // Seçilebilir mi: gizli ve kilitli katmanlardaki nesneler tıklanamaz, kutuyla seçilemez, silinemez
@@ -1151,7 +1172,8 @@ function layersPanelHtml() {
       + `<button class="btn sm" data-act="lyrprint" data-lid="${lid}" title="${L('Çıktıya dahil (PNG / SVG / PDF)', 'Include in exports (PNG / SVG / PDF)')}">${l.print === false ? '⛔' : '🖨'}</button>`
       + (layerDraftCount(l.id) ? `<button class="btn sm" data-act="lyrwalls" data-lid="${lid}" title="${L('Bu katmandaki paralel çizgi çiftlerini duvara çevir (DXF)', 'Turn this layer’s parallel line pairs into walls (DXF)')}">🧱</button>` : '')
       + (l.id === '0' ? '' : `<button class="btn sm" data-act="lyrdel" data-lid="${lid}" style="color:var(--danger)" title="${L('Katmanı sil (nesneler Varsayılan katmana geçer)', 'Delete layer (objects move to Default)')}">🗑</button>`)
-      + `</div>`;
+      + `</div>`
+      + `<label class="f" style="margin:0 0 6px 22px" title="${L('Bu katmandaki duvar, eşya, döşeme ve odalar 3B’de, kesitlerde ve yürüyüşte birlikte bu kadar yükselir (eksi = alçalır); 2B plan değişmez', 'The walls, items, slabs and rooms on this layer move up by this much together in 3D, sections and walk mode (minus = down); the 2D plan stays the same')}"><span>↕ ${L('Katman yüksekliği (cm)', 'Layer height (cm)')}</span><input type="number" data-k="lyr" data-p="z" data-lid="${lid}" value="${+l.z || 0}" min="${-LAYER_Z_MAX}" max="${LAYER_Z_MAX}" step="10"></label>`;
   }
   return h + `<div class="row"><button class="btn sm" data-act="lyradd">${L('＋ Katman ekle', '＋ Add layer')}</button></div>`;
 }
@@ -1500,6 +1522,7 @@ function normalizeProject(P) {
   P.textures = (Array.isArray(P.textures) ? P.textures : []).filter(t => t && /^[\w-]{1,32}$/.test(t.id))
     .map(t => ({ id: t.id, name: String(t.name || t.id).slice(0, 60), w: clamp(+t.w || 60, 1, 5000), h: clamp(+t.h || +t.w || 60, 1, 5000) }));
   if (!Array.isArray(P.layers) || !P.layers.length) P.layers = [defaultLayer()];
+  for (const l of P.layers) if (l && 'z' in l) { const z = Math.round(Math.max(-LAYER_Z_MAX, Math.min(LAYER_Z_MAX, +l.z || 0))); if (z) l.z = z; else delete l.z; } // katman yükseltisi
   if (!P.layers.some(l => l.id === '0')) P.layers.unshift(defaultLayer());
   P.layers.forEach(l => { l.vis = l.vis !== false; l.lock = !!l.lock; l.print = l.print !== false; l.name = l.name || l.id; });
   if (!P.layers.some(l => l.id === P.activeLayer)) P.activeLayer = '0';
@@ -6813,7 +6836,7 @@ function mkOp(def, wall, d) {
 function mkFurn(def, x, y, rot = 0) { const o = { id: uid(), type: def.id, name: itemName(def), icon: def.icon, k: def.k, w: def.w, d: def.d, h: def.h, color: def.color, x, y, rot, label: '' }; if (def.k === 'poly' && def.pts) o.pts = JSON.parse(JSON.stringify(def.pts)); if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } if (def.extra) for (const k in def.extra) if (k !== 'pts') o[k] = JSON.parse(JSON.stringify(def.extra[k])); if (o.elev == null && CAT_ELEV[def.id]) o.elev = CAT_ELEV[def.id]; if (o.elev == null && LIGHT_DEFS[def.id] && LIGHT_DEFS[def.id].mount === 'ceil') { o.mount = 'ceil'; o.elev = ceilElev(o, curFloorH()); } if (o.k === 'roof' && !Array.isArray(o.faces)) roofDefaults(o); cleanParts(o); return o; }
 // yeni parametrik çatı (#115): beşik, 30°, kiremit; duvarların üstünde (kat yüksekliği); hazır ayarın kendi alanları korunur
 // çatıyı bu kattaki dolu duvarların dış hattına oturt (#115): çatının kendi açısında sınır kutusu (duvar kalınlığı dahil), yükseklik = en yüksek duvar üstü
-function roofFitWalls(o, f = F()) {
+function roofFitWalls(o, f = F(), dz = 0) {
   const ws = f.walls.filter(w => isSolidWall(w) && pickable(w.id)); if (!ws.length) return false;
   const r = (+o.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, top = 0;
@@ -6824,8 +6847,36 @@ function roofFitWalls(o, f = F()) {
   }
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
   o.w = Math.round(x1 - x0); o.d = Math.round(y1 - y0); o.x = Math.round(cx * c - cy * sn); o.y = Math.round(cx * sn + cy * c);
-  o.elev = clamp(Math.round(top), -FURN_ELEV_MAX, FURN_ELEV_MAX); o.h = roofHeight(o);
+  o.elev = clamp(Math.round(top + dz), -FURN_ELEV_MAX, FURN_ELEV_MAX); o.h = roofHeight(o);
   return true;
+}
+// Bu katta duvar yoksa bir alt kattaki duvarlar (çatı katı): { f, i, dz } — dz = alt kattan bu kata kot farkı (çatı yüksekliği bu kata göre)
+function roofWallFloor() {
+  const has = g => g && g.walls.some(w => isSolidWall(w) && pickable(w.id));
+  if (has(F())) return { f: F(), i: fi, dz: 0 };
+  return fi > 0 && has(P.floors[fi - 1]) ? { f: P.floors[fi - 1], i: fi - 1, dz: floorElev(fi - 1) - floorElev(fi) } : null;
+}
+/* Elle çatı çizimi (araç 'roofd'): sürükle = dikdörtgen, tıkla = köşeler; çizilen şeklin en küçük dönük dikdörtgeni çatının
+   ayak izi olur (duvar şartı yok: pergola, teras, sundurma…). Mahya uzun kenar boyunca; yükseklik = ayak izinin altındaki
+   en yüksek dolu duvarın üstü (bu kat, yoksa alt kat), hiç duvar yoksa üst katlarda kat düzlemi, zemin katta kat yüksekliği.
+   Yükseklik ve ölçüler sonra panelden serbestçe değişir. */
+function roofDrawElev(o, f = F()) {
+  const cs = furnCorners(o), inside = p => pointInPoly(p, cs), top = (g, dz) => {
+    let t = null; for (const w of g.walls) if (isSolidWall(w) && pickable(w.id) && (inside(w.a) || inside(w.b) || inside({ x: (w.a.x + w.b.x) / 2, y: (w.a.y + w.b.y) / 2 }))) t = Math.max(t == null ? -Infinity : t, wallElev(w) + (+w.h || 0) + dz);
+    return t;
+  };
+  let t = top(f, 0);
+  if (t == null && fi > 0) t = top(P.floors[fi - 1], floorElev(fi - 1) - floorElev(fi));
+  if (t == null) t = fi > 0 ? 0 : curFloorH();
+  return clamp(Math.round(t), -FURN_ELEV_MAX, FURN_ELEV_MAX);
+}
+function roofFromPts(pts) {
+  const r = ifcRect(pts.map(p => [p.x, p.y])); if (!r || r.w < 50 || r.d < 50) return null;
+  const o = mkFurn(BYID.roof, Math.round(r.cx), Math.round(r.cy), Math.round(r.rot * 10) / 10);
+  o.w = Math.round(r.w); o.d = Math.round(r.d);
+  if (o.d > o.w) o.ridgeDir = 'd'; // mahya uzun kenar boyunca
+  o.elev = roofDrawElev(o); o.h = roofHeight(o);
+  return o;
 }
 function roofDefaults(o) { if (!ROOF_TYPES[o.roofType]) o.roofType = 'gable'; if (o.pitch == null && o.roofType !== 'flat') o.pitch = 30; if (o.over == null) o.over = o.roofType === 'flat' ? 0 : 50; if (o.th == null) o.th = 20; if (!o.rmat) o.rmat = o.roofType === 'flat' ? 'concrete' : 'tile'; if (o.elev == null) o.elev = curFloorH(); if (!o.color || o.color === BYID.roof.color) o.color = ROOF_MAT_COL[o.rmat] || o.color; o.icon = ''; o.h = roofHeight(o); return o; }
 function mkRoom(pts, name) {
@@ -7153,10 +7204,10 @@ function slabPolys(f) {
 
 /* ---------- Araçlar ---------- */
 // köşe tıklayarak poligon çizen araçlar: oda, serbest döşeme (#22), döşeme boşluğu (#23)
-const POLY_TOOLS = new Set(['poly', 'slab', 'void', 'zone']);
+const POLY_TOOLS = new Set(['poly', 'slab', 'void', 'zone', 'roofd']);
 const TOOLS = [
   ['select', '↖', 'Seç', 'V', 'Select'], ['pan', '✋', 'Kaydır', 'H', 'Pan'], null,
-  ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['railing', '🛡', 'Korkuluk', 'Q', 'Railing'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['slab', '🔲', 'Döşeme', 'K', 'Slab'], ['void', '🕳️', 'Boşluk', 'Y', 'Void'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
+  ['wall', '🧱', 'Duvar', 'W', 'Wall'], ['railing', '🛡', 'Korkuluk', 'Q', 'Railing'], ['rect', '⬜', 'Oda duvar', 'R', 'Rect Room'], ['room', '🏠', 'Oda algıla', 'O', 'Auto Room'], ['poly', '⬠', 'Oda çiz', 'P', 'Draw Room'], ['slab', '🔲', 'Döşeme', 'K', 'Slab'], ['void', '🕳️', 'Boşluk', 'Y', 'Void'], ['roofd', '🛖', 'Çatı çiz', '', 'Draw roof'], ['shape', '⬡', 'Şekil', 'S', 'Shapes'], null,
   ['door', '🚪', 'Kapı', 'D', 'Door'], ['window', '🪟', 'Pencere', 'N', 'Window'], ['furn', '🛋️', 'Mobilya', 'F', 'Furniture'], null,
   ['pen', '✏️', 'Kalem', 'B', 'Pen'], ['draft', '📐', 'Çizim', 'U', 'Draft'], ['dim', '📏', 'Ölçü', 'M', 'Dimension'], ['text', '🔤', 'Metin', 'T', 'Text'], ['eraser', '🧽', 'Sil', 'E', 'Eraser'], ['trim', '✂️', 'Kırp', 'X', 'Trim'], ['mirror', '🪞', 'Aynala', 'I', 'Mirror'], ['section', '🔪', 'Kesit', 'L', 'Section'], ['axis', '⊹', 'Aks', 'Z', 'Axis'], ['attach', '⌂', 'Yüzeye bağla', 'A', 'Attach to surface'], ['zone', '🌳', 'Dış zemin', '', 'Site zone'], ['terrain', '⛰', 'Arazi', '', 'Terrain'], ['calib', '⚖️', 'Ölçek', 'C', 'Calibrate'],
 ];
@@ -7184,6 +7235,7 @@ const HINTS = {
   section: 'Kesit: kesit çizgisinin iki ucuna tıkla • ok bakış yönünü gösterir • panelden yönü çevir, 3B kesit aç veya 2B kesit çizimini göster',
   mirror: 'Aynala: önce nesneleri seç, sonra ayna ekseninin iki noktasına tıkla • orijinali silmek isteyip istemediğin sorulur • Shift+H / Shift+V: yatay / dikey aynala',
   calib: 'Ölçek: arka plan görselinde bilinen iki noktaya tıkla, gerçek mesafeyi gir',
+  roofd: 'Çatı çiz: sürükle = dikdörtgen çatı, ya da köşelere tıkla (Enter / ilk nokta: bitir) • duvar gerekmez; yükseklik altındaki duvarlardan gelir, panelden serbestçe değişir',
   zone: 'Dış zemin: arsa sınırı / yol / kaldırım / çim / avlu / çakıl / havuz köşelerine tıkla (sürükle: dikdörtgen) • ilk noktaya tıkla / Enter: tamamla • türü, kaplamayı, bordür ve çekme mesafesini sağ panelden seç',
   terrain: 'Arazi: boş yere tıkla = kot noktası ekle (o noktadaki arazi kotuyla) • noktayı sürükle = taşı • kotu sağ panelden yaz • Delete: seçili noktayı sil • Esc: bitir',
 };
@@ -7211,6 +7263,7 @@ const HINTS_EN = {
   section: 'Section: click both ends of the cut line • the arrows show the viewing direction • the panel flips it, cuts the 3D view or opens the 2D section drawing',
   mirror: 'Mirror: select objects first, then click two points of the mirror axis • you are asked whether to erase the originals • Shift+H / Shift+V: flip horizontal / vertical',
   calib: 'Calibrate: click two points with a known distance on the background image, then enter real distance',
+  roofd: 'Draw roof: drag = a rectangular roof, or click its corners (Enter / first point: finish) • no walls needed; the height comes from the walls under it and can be changed freely in the panel',
   zone: 'Site zone: click the corners of a parcel / road / path / lawn / patio / gravel yard / pond (drag: rectangle) • click the first point / Enter: finish • pick its type, finish, curb and setback in the right panel',
   terrain: 'Terrain: click an empty spot = add a height point (at the terrain height there) • drag a point = move it • type its height in the right panel • Delete: remove the selected point • Esc: done',
 };
@@ -7452,7 +7505,7 @@ function setCursor(e) {
   else if (tool === 'mirror' && ui.mAxis) from = ui.mAxis;
   else if ((tool === 'section' || tool === 'axis') && ui.secStart) from = ui.secStart;
   else if (tool === 'draft' && ui.dr && ui.dr.pts.length && draftUi().mode !== 'rect' && draftUi().mode !== 'arc') from = ui.dr.pts[ui.dr.pts.length - 1]; // dikdörtgen ve yay açı kilidi kullanmaz
-  ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'zone', 'dim', 'calib', 'shape', 'mirror', 'section', 'axis', 'draft'].includes(tool) ? snapPt(raw, from, e) : null;
+  ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'zone', 'roofd', 'dim', 'calib', 'shape', 'mirror', 'section', 'axis', 'draft'].includes(tool) ? snapPt(raw, from, e) : null;
   if (tool === 'draft' && ui.dr && ui.dr.pts.length && ui.typed) ui.cur = draftTypedPt(ui.dr.pts[ui.dr.pts.length - 1], ui.cur, ui.typed, draftUi().mode);
   if (tool === 'wall' && ui.draw && ui.typed) {
     const a = ui.draw.start, l = parseFloat(ui.typed) || 0, dx = ui.cur.x - a.x, dy = ui.cur.y - a.y, m = Math.hypot(dx, dy) || 1;
@@ -7818,7 +7871,7 @@ function cvDown(e) {
       if (ui.polyPts.length > 2 && dist(cur, ui.polyPts[0]) < 12 / view.z) { finishPoly(); return; }
       ui.polyPts.push({ x: cur.x, y: cur.y }); render(); return;
     }
-    case 'slab': case 'void': case 'zone': {
+    case 'slab': case 'void': case 'zone': case 'roofd': {
       // ilk basış: sürüklenirse dikdörtgen, tıklanırsa köşe köşe çokgen (pointerup karar verir)
       if (!ui.polyPts) { ui.drag = { type: 'prect', start: { x: cur.x, y: cur.y } }; return; }
       if (ui.polyPts.length > 2 && dist(cur, ui.polyPts[0]) < 12 / view.z) { finishPoly(); return; }
@@ -7941,6 +7994,11 @@ function finishPoly() {
 }
 // Çizilen poligonu aracın türüne göre ekler: oda / serbest döşeme / döşeme boşluğu
 function addPolyObj(t, pts) {
+  if (t === 'roofd') { // elle çizilen çatı: duvar şartı yok
+    const o = roofFromPts(pts); if (!o) { toast(L('Çatı en az 50 × 50 cm olmalı', 'A roof must be at least 50 × 50 cm')); return null; }
+    F().furn.push(o); sel = [o.id]; commit(); if (ui.view3d && T3) schedBuild3D();
+    toast(L(`Çatı eklendi: ${o.w} × ${o.d} cm, yükseklik +${o.elev} cm`, `Roof added: ${o.w} × ${o.d} cm, height +${o.elev} cm`)); return o;
+  }
   const f = F(), o = t === 'slab' ? mkSlab(pts) : t === 'void' ? mkVoid(pts) : t === 'zone' ? mkZone(pts) : mkRoom(pts);
   (t === 'slab' ? f.slabs : t === 'void' ? f.voids : t === 'zone' ? (f.zones = f.zones || []) : f.rooms).push(o);
   sel = [o.id]; commit(); if (ui.view3d && T3) schedBuild3D();
@@ -8744,8 +8802,10 @@ function applyProp(t, final) {
   if (k === 'grplink') { if (final && v) linkGroupTo(v); return; }
   if (k === 'lyr') {
     const l = layerById(t.dataset.lid); if (!l) return;
-    if (p === 'active') { if (t.checked) P.activeLayer = l.id; } else l[p] = v;
-    if (final) { commit(); syncLayerUI(); } return;
+    if (p === 'active') { if (t.checked) P.activeLayer = l.id; }
+    else if (p === 'z') { const z = Math.round(clamp(+v || 0, -LAYER_Z_MAX, LAYER_Z_MAX)); if (z) l.z = z; else delete l.z; } // katman yükseltisi: 3B'yi yeniden kur
+    else l[p] = v;
+    if (final) { commit(); syncLayerUI(); if (p === 'z' && ui.view3d && T3) schedBuild3D(); } return;
   }
   if (k === 'sellayer') {
     if (!final || !v || !layerById(v)) return;
@@ -8916,8 +8976,10 @@ function onPropsClick(e) {
   }
   if (a === 'roofhipauto') { for (const { o } of os) if (isParamRoof(o)) delete o.hip; commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'rooffit') { // ayak izi + yükseklik duvarlara, sonra alttaki duvarlar çatıya bağlanır (#96): beşik alınları kapanır
-    let n = 0, nw = 0; for (const { o } of os) if (isParamRoof(o) && roofFitWalls(o)) { n++; const fs = surfFaces(o); for (const w of F().walls) if (isSolidWall(w) && !isLocked(w) && pickable(w.id) && attachWallTop(w, fs) && wallTopOn(w)) nw++; }
-    if (!n) { toast(L('Bu katta dolu duvar yok', 'No solid walls on this floor')); return; }
+    const wf = roofWallFloor(); // bu katta duvar yoksa alt kattakiler (çatı katına konmuş çatı)
+    if (!wf) { toast(L('Altında dolu duvar yok — çatıyı 🛖 Çatı çiz aracıyla istediğin yere çiz, ölçü ve yüksekliğini panelden yaz', 'No solid walls below — draw the roof anywhere with the 🛖 Draw roof tool and type its size and height in the panel')); return; }
+    let n = 0, nw = 0; for (const { o } of os) if (isParamRoof(o) && roofFitWalls(o, wf.f, wf.dz)) { n++; const fs = surfFacesOn({ o, floorIdx: fi }, wf.i); for (const w of wf.f.walls) if (isSolidWall(w) && !isLocked(w) && pickable(w.id) && attachWallTop(w, fs, wf.f) && wallTopOn(w)) nw++; }
+    if (!n) return;
     commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L('Çatı duvarlara oturtuldu', 'Roof fitted to the walls') + (nw ? L(` · ${nw} duvar çatıya uzatıldı`, ` · ${nw} wall(s) extended up to the roof`) : '')); return; }
   if (a === 'rampfit') { for (const { o } of os) if (o.k === 'ramp' && o.h > 0) o.d = Math.ceil(o.h / 0.08); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'lmset') { const lv = LIGHT_LEVELS[b.dataset.lv]; if (!lv) return; for (const { o } of os) if (isLightFix(o)) { o.lm = Math.round(LIGHT_DEFS[o.type].lm * lv[0]); cleanLight(o); } commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
@@ -10985,7 +11047,7 @@ function revitExport(proj = P) {
   const keep = fi, keepP = P; P = proj;
   try {
     proj.floors.forEach((f0, i) => {
-      fi = i; const f = visFloor(f0), E = floorElev(i), lv = 'L' + i;
+      fi = i; const f = visFloor(f0, false, true), E = floorElev(i), lv = 'L' + i;
       out.levels.push({ id: lv, name: f0.name || L('Kat', 'Floor') + ' ' + (i + 1), elev: rvFt(E), height: rvFt(floorH(f0)) });
       const wById = {};
       for (const w of f.walls) {
@@ -13357,7 +13419,7 @@ function archPrims(spec) {
   };
   P.floors.forEach((f, i) => {
     const E = floorElev(i); levels.push({ z: E, name: f.name, floorIdx: i });
-    f = visFloor(f, true);
+    f = visFloor(f, true, true);
     // döşemeler
     const pl0 = groundP(P).plinth, skirt = pl0 > 20 && i === groundFloorIdx() ? slabPolys(f).map(pts => ({ pts, z0: E - pl0, z1: E - 20, id: null, kind: 'floorslab', floorIdx: i, color: f.slabColor || null })) : []; // subasman eteği (#148)
     const plates = [
@@ -17087,7 +17149,7 @@ function walkMove(p, mv, segs, r) {
 // yürüyenin katı: 2B'deki kat 3B'de görünüyorsa o, yoksa görünen en alt kat (#85); kotu build3D ile aynı
 function walkFloorIdx() { return P.floors[fi] && v3dShown(P.floors[fi]) ? fi : v3dBase(); }
 function walkElev(i) { return v3dElev(i); }
-function walkSegsAt(i, z = 0) { const f = P.floors[i]; return f ? walkSegs(visFloor(f), z) : []; }
+function walkSegsAt(i, z = 0) { const f = P.floors[i]; return f ? walkSegs(visFloor(f, false, true), z) : []; }
 /* --- Merdiven / rampa tırmanma: yürüyenin ayağı basamak, rampa ve platformların üstüne çıkar, katlar arasında geçer ---
    Merdivenin üst basamağı üst kat kotuna ulaşınca yürüyen üst kata geçer; aşağı inmek için üst katta merdivenin üstünde
    bir döşeme boşluğu (Y aracı) olmalı — boşluk yoksa döşeme orada kapalıdır (3B'de de öyle görünür). */
@@ -17105,7 +17167,7 @@ function walkSurfAt(o, x, y) {
 function walkLevels(i) {
   const f = P.floors[i]; if (!f) return [];
   const gi = groundFloorIdx(), pl = groundP(P).plinth;
-  const lv = (f0, base, j) => { const f = visFloor(f0), L = { f, base, sp: () => walkSlabPolys(f0, f) }; if (j === gi) { L.gnd = base - floorElev(j) - pl - 1; if (terrainObj()) L.tz = p => terrainZ(p.x, p.y) + pl; L.zs = layersVis.site ? P.floors.filter(v3dShown).flatMap(g => visFloor(g).zones || []) : []; } return L; }; // zemin katın dışı toprak (#148), arazi kotu (#149)
+  const lv = (f0, base, j) => { const f = visFloor(f0, false, true), L = { f, base, sp: () => walkSlabPolys(f0, f) }; if (j === gi) { L.gnd = base - floorElev(j) - pl - 1; if (terrainObj()) L.tz = p => terrainZ(p.x, p.y) + pl; L.zs = layersVis.site ? P.floors.filter(v3dShown).flatMap(g => visFloor(g).zones || []) : []; } return L; }; // zemin katın dışı toprak (#148), arazi kotu (#149)
   const out = [lv(f, 0, i)], dn = P.floors[i - 1], up = P.floors[i + 1];
   if (dn && v3dShown(dn)) out.push(lv(dn, -floorPitch(i - 1), i - 1)); // kat kotları: gerçek kot farkı
   if (up && v3dShown(up)) out.push(lv(up, floorPitch(i), i + 1));
@@ -19119,7 +19181,7 @@ function build3D(keepCam = false) {
   P.floors.forEach((f, fidx) => {
     if (!v3dShown(f)) return;
     elev = v3dElev(fidx); // görünen katlar gerçek kotunda; en alttaki görünen kat zeminde (#85)
-    f = visFloor(f); // gizli katmanlar 3B'de de yok (#32) // kat seçici: yalnızca seçili kat çizilir
+    f = visFloor(f, false, true); // gizli katmanlar 3B'de de yok (#32); katman yükseltisi uygulanır // kat seçici: yalnızca seçili kat çizilir
     // zemin plakası: duvarların dış konturunu izleyen poligon — açılı planlarda AABB gibi taşmaz
     const slabCol = lt ? 0xded8cc : (fidx === 0 ? 0x171e29 : 0x232b38);
     // kat döşemesi malzemesi (issue #12): kullanıcı seçtiyse üst yüze doku/renk, yan yüzler düz
