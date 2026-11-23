@@ -3732,6 +3732,70 @@ check('IFC export: every template round-trips through the app IFC importer (wall
   return r.out.map(o => `template ${o.t}: ${o.furn[2]}/${o.furn[0]} catalogue items back`).join(', ');
 });
 
+check('interactive 2D / CAD elevation view on the main canvas (#bElev, #vElev) and inside archModal', async page => {
+  const r = await page.evaluate(`(() => {
+    if (ui.view3d) show3D(false);
+    closeModal();
+    loadProject(newProject());
+    const ws = addRectWalls(0, 0, 800, 500);
+    ws[2].color = '#c8826b';
+    const win = mkOp(OPDEF.window, ws[2], 400);
+    F().ops.push(win);
+    commit(); sel = []; refresh();
+    const out = {};
+    document.getElementById('bElev').click();
+    const sTab = document.querySelector('#elevTabs [data-elevk="elev:south"]');
+    if (sTab) sTab.click();
+    out.opened = !!ui.viewElev && document.getElementById('vElev').style.display === 'block';
+    out.solid2d = document.getElementById('elevGeo').innerHTML.includes('#c8826b');
+    document.getElementById('bCad').click();
+    out.cad = !document.getElementById('elevGeo').innerHTML.includes('#c8826b') && document.getElementById('bCad').classList.contains('on');
+    document.getElementById('b2d').click();
+    out.back2d = document.getElementById('elevGeo').innerHTML.includes('#c8826b');
+
+    // select the window on #elevCv and drag its top handle (opT) up by 30 cm
+    const winEl = document.querySelector('#elevGeo [data-arch-id="' + win.id + '"]');
+    out.winDrawn = !!winEl;
+    if (winEl) {
+      winEl.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: 100, clientY: 100 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 1, clientX: 100, clientY: 100 }));
+    }
+    out.selected = sel.length === 1 && sel[0] === win.id && !!document.querySelector('#props [data-k="op"][data-p="h"]');
+    const hTop = document.querySelector('#elevSel [data-arch-h="opT"]');
+    out.handle = !!hTop;
+    if (hTop) {
+      const hr = hTop.getBoundingClientRect(), z = archState().mainView.z || 0.5;
+      const sx = hr.left + hr.width / 2, sy = hr.top + hr.height / 2;
+      hTop.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: sx, clientY: sy }));
+      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: sx, clientY: sy - 30 * z }));
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 1, clientX: sx, clientY: sy - 30 * z }));
+    }
+    out.resizedH = win.h;
+    undo();
+    out.undoH = F().ops.find(x => x.id === win.id).h;
+
+    // place a door onto the front wall in elevation view
+    const selPlace = document.getElementById('elevPlaceSel');
+    selPlace.value = 'door';
+    selPlace.dispatchEvent(new Event('change'));
+    const wallEl = document.querySelector('#elevGeo [data-arch-id="' + ws[2].id + '"]');
+    if (wallEl) {
+      const wr = wallEl.getBoundingClientRect();
+      wallEl.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: wr.left + wr.width * 0.25, clientY: wr.top + wr.height * 0.7 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 1, clientX: wr.left + wr.width * 0.25, clientY: wr.top + wr.height * 0.7 }));
+    }
+    out.placedCount = F().ops.length;
+    out.exportElev = /South|Güney/.test(exportSvg().svg);
+    document.getElementById('bElevClose').click();
+    out.closed = !ui.viewElev && document.getElementById('vElev').style.display === 'none';
+    return out;
+  })()`);
+  if (!r.opened || !r.solid2d || !r.cad || !r.back2d) throw new Error('main-canvas elevation 2D/CAD switch failed: ' + JSON.stringify(r));
+  if (!r.winDrawn || !r.selected || !r.handle || r.resizedH !== 150 || r.undoH !== 120) throw new Error('elevation selection / handle resize / undo failed: ' + JSON.stringify(r));
+  if (r.placedCount !== 2 || !r.exportElev || !r.closed) throw new Error('elevation placement / export / close failed: ' + JSON.stringify(r));
+  return 'main canvas #bElev 2D/CAD toggle, window opT drag 120->150 + undo, door place, SVG export, close';
+});
+
 
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();

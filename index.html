@@ -60,6 +60,7 @@
       <button class="btn" id="bCad" title="2B Çizgisel (CAD) Görünüm (J)">CAD</button>
       <button class="btn" id="b3d" title="3B Görünüm">3B</button>
     </div>
+    <button class="btn" id="bElev" title="Görünüş / Kesit (Ana Tuval)">📐 Görünüş</button>
     <div class="sep"></div>
     <div class="btn-group">
       <button class="btn" id="bLang" title="Dil / Language">🌐 EN</button>
@@ -109,6 +110,26 @@
           <button class="btn" id="b3dS" type="button">G</button>
           <button class="btn" id="b3dW" type="button">B</button>
         </div>
+      </div>
+      <div id="vElev">
+        <div class="ctl3d ctlElev" id="cElevBar">
+          <div class="elev-tabs" id="elevTabs"></div>
+          <div class="elev-tools">
+            <button class="btn sm" id="bElevSel" type="button">↖</button>
+            <select id="elevPlaceSel"></select>
+            <button class="btn sm" id="bElevPlace" type="button">＋</button>
+            <button class="btn sm" id="bElevFurn" type="button">🛋</button>
+            <button class="btn sm" id="bElevFit" type="button">⤢</button>
+            <button class="btn sm" id="bElevClose" type="button">✕</button>
+          </div>
+        </div>
+        <svg id="elevCv" xmlns="http://www.w3.org/2000/svg">
+          <defs id="elevDefs"></defs>
+          <g id="elevWorld">
+            <g id="elevGrid"></g><g id="elevGeo"></g><g id="elevSel"></g><g id="elevPv"></g>
+          </g>
+        </svg>
+        <div id="elevHud"></div>
       </div>
       <div id="hud"></div>
       <div id="shapeBar"></div>
