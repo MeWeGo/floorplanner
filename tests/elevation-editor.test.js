@@ -9,6 +9,7 @@ const { read, fnSrcOf, wallTopSrc } = require('./helpers/repo');
 
 const src = read('app.js');
 const css = read('style.css');
+const html = read('index.html');
 const fnSrc = name => fnSrcOf(src, name);
 
 const constLine = name => {
@@ -247,11 +248,21 @@ test('(5) archHandleSvg draws selection box and handles for openings and walls',
   for (const h of ['wTop', 'wBot', 'wL', 'wR']) assert.ok(wallHandles.includes(`data-arch-h="${h}"`), `missing ${h}`);
 });
 
-test('(6) wiring checks in app.js and style.css', () => {
+test('(6) wiring checks in app.js, index.html, and style.css', () => {
   assert.match(src, /if\s*\(ui\.modal\s*===\s*['"]arch['"]\)\s*\{\s*archKey\(e\);\s*return;\s*\}/);
+  assert.match(src, /if\s*\(ui\.viewElev\s*&&\s*\$\('#modalbg'\)\.style\.display\s*!==\s*'flex'\)\s*\{\s*archKey\(e\);\s*return;\s*\}/);
   assert.match(src, /if\s*\(ui\.modal\s*===\s*['"]arch['"]\)\s*\{\s*archRedraw\(\);\s*archRenderProps\(\);\s*\}/);
+  assert.match(src, /if\s*\(ui\.viewElev\)\s*archRedraw\(false\);/);
   assert.match(src, /classList\.remove\(['"]arch-modal['"]\)/);
   assert.match(fnSrc('archModal'), /data-archmode=["']2d["']/);
   assert.match(fnSrc('archModal'), /data-archmode=["']cad["']/);
+  assert.match(fnSrc('archModal'), /data-archact=["']tomain["']/);
+  assert.match(fnSrc('syncViewSwitch'), /#bElev/);
+  assert.match(fnSrc('showElev'), /#vElev/);
+  assert.match(fnSrc('exportSvg'), /if\s*\(ui\.viewElev\)/);
+  for (const id of ['bElev', 'vElev', 'elevCv', 'elevTabs', 'elevPlaceSel', 'elevHud']) {
+    assert.ok(html.includes(`id="${id}"`), `index.html missing #${id}`);
+  }
   assert.ok(css.includes('#modal.arch-modal') && css.includes('#archCv') && css.includes('#archProps'));
+  assert.ok(css.includes('#vElev') && css.includes('#elevCv') && css.includes('#elevHud'));
 });

@@ -274,7 +274,7 @@ const view = { x: 0, y: 0, z: 0.5 };
    planları, parsel sınırları ve çok binalı yerleşimler bütünüyle görülebilir. */
 const MIN_ZOOM = 0.002, MAX_ZOOM = 40; // 40 px/cm: 1 mm = 4 px (detay çizimi); sınırda kısa bir uyarı çıkar
 let tool = 'select', sel = [], placing = null;
-const ui = { snap: true, angle: true, dims: true, outline: false, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
+const ui = { snap: true, angle: true, dims: true, outline: false, cur: null, raw: null, draw: null, typed: '', drag: null, space: false, cat: 0, q: '', view3d: false, viewElev: false, dimStart: null, polyPts: null, calib: null, clip: null, boxSel: 'all', connWalls: true, shape: { kind: 'tri', n: 6, mode: 'object' }, shot: false };
 const layersVis = { site: true, terrain: true, bg: true, rooms: true, walls: true, furn: true, furnLabel: true, furnIcon: true, lightArea: false, dims: true, sketch: true, underlay: true }; // furnLabel / furnIcon (#84): yalnızca görünüm, veriye dokunmaz
 // Kat izdüşümü (issue #26): hangi kat altlık olarak gösterilir ('prev' = bir alt kat) ve opaklığı — görünüm ayarı, projeye kaydedilmez
 const underlay = { floor: 'prev', op: 0.2 };
@@ -1587,6 +1587,7 @@ function activateTab(i) {
   if (t.view) Object.assign(view, t.view); else fit();
   if (tool === 'place') setTool('select');
   refresh(); updateUndo(); renderTabs(); autosave(); buildLib();
+  if (ui.viewElev) archRedraw(true);
   if (ui.view3d && T3) schedBuild3D();
 }
 function switchTab(i) {
@@ -1702,6 +1703,7 @@ function zoomPreview() {
   zoomSettleT = setTimeout(() => { zoomSettleT = 0; scheduleRender(true); }, ZOOM_SETTLE);
 }
 function fit() {
+  if (ui.viewElev) { archFit(); return; }
   if (typeof collabStopFollow === 'function' && typeof collab !== 'undefined' && !collab.followApplying && !collab.applying) collabStopFollow(false);
   const s = svgSize(); let b = contentBounds();
   if (!b && P.bg) b = { x0: P.bg.x, y0: P.bg.y, x1: P.bg.x + P.bg.w, y1: P.bg.y + P.bg.h };
@@ -5864,6 +5866,7 @@ function render() {
   setLayerHtml('gSketch', layersVis.sketch ? L.sketches : '');
   setLayerHtml('gSel', handleSvg());
   drawPreview();
+  if (ui.viewElev) archRedraw(false);
 }
 
 /* ---------- Yakalama (snap) ---------- */
@@ -6877,7 +6880,7 @@ function updateTools() {
     ? (tool === 'place' && placing ? L('3B yerleştirme: Tık: yerleştir • R: döndür • Shift: serbest • Sürükle: döndür / bak • Esc: bitir • ', '3D placing: Click: place • R: rotate • Shift: free • Drag: orbit / look • Esc: done • ')
       : fp3DOn() ? ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '') + L(' • Sağ sürükle: kaydır • Esc: aracı bitir • ', ' • Right-drag: pan • Esc: end tool • ') : '') + L('3B Gezinme: WASD / Oklar: Hareket • Q/E: Yükseklik • Shift: Hızlı • Fare: Döndür / Yakınlaştır • Ctrl+Z: Geri al • Del: Sil • Esc: 2B', '3D View: WASD / Arrows: Move • Q/E: Up/Down • Shift: Fast • Mouse: Orbit / Zoom • Ctrl+Z: Undo • Del: Delete • Esc: 2D')
     : ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '');
-  $('#hud').style.display = '';
+  $('#hud').style.display = ui.viewElev ? 'none' : '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
   document.querySelectorAll('#items .item').forEach(el => el.classList.toggle('on', !!placing && el.dataset.id === (el.dataset.type === 'pre' ? placing.def.preset : !placing.def.preset && placing.def.id)));
   const bar = $('#shapeBar'), showShape = (tool === 'shape' || tool === 'draft'), was = bar.dataset.on === '1';
@@ -6901,6 +6904,7 @@ function setTool(t) {
   // sol çubuktaki araçlar 3B'de de çalışır: tıklar zemin / yüzey ışınıyla plan noktasına çevrilip 2B araç koduna iletilir (fp3D*);
   // yalnızca 2B altlığa bağlı olanlar (ölçek kalibrasyonu, çıktı penceresi seçimi) 2B'ye döner
   if (ui.view3d && FP3D_2D_ONLY.has(t)) show3D(false);
+  if (ui.viewElev && t !== 'select' && t !== 'pan') showElev(false);
   ui.ghost = null; place3DSync();
   updateTools(); render(); fp3DPreview();
 }
@@ -9543,6 +9547,7 @@ function cmdList() {
     act('ungroup', '⛓', 'Grubu çöz', 'Ungroup', 'Ctrl+Shift+G', ungroupSel, false),
     act('axgrid', '⊞', 'Aks ızgarası oluştur', 'Create an axis grid', '', () => axisGridPrompt(), false, 'grid ızgara aks axis column kolon structure yapı'),
     act('elev', '📐', 'Görünüşler ve kesitler', 'Elevations & sections', '', () => archModal('elev:south'), true, 'facade cephe drawing çizim'),
+    act('elevmain', '📐', 'Ana tuvalde görünüş / kesit', 'Elevation / section on main canvas', '', () => showElev(!ui.viewElev), true, 'facade cephe elevation section görünüş kesit'),
     act('furnLabel', '🔤', 'Mobilya yazılarını göster / gizle', 'Show / hide furniture labels', '', () => { layersVis.furnLabel = !layersVis.furnLabel; refresh(); }, false, 'etiket label text yazı tefriş'),
     act('furnIcon', '🙂', 'Mobilya simgelerini (emoji) göster / gizle', 'Show / hide furniture icons (emoji)', '', () => { layersVis.furnIcon = !layersVis.furnIcon; refresh(); }, false, 'emoji icon simge ikon tefriş'),
     act('layers', '🗂', 'Katmanlar', 'Layers', '', () => { sel = []; refresh(); const h = [...document.querySelectorAll('#props h4')].find(x => /Çizim katmanları|Drawing layers/.test(x.textContent)); if (h) h.scrollIntoView({ block: 'start' }); }, false, 'layer'),
@@ -9610,9 +9615,10 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && document.getElementById('ctxMenu')) { closeCtxMenu(); return; }
   if (ui.modal === 'tex' && ui.txStudio) { if (e.key === 'Escape') closeModal(); return; } // stüdyonun üstündeki doku penceresi: tuşlar plana düşmez, Esc stüdyoya döner
   if (ui.modal === 'parts') { fsKey(e); return; } // mobilya stüdyosu açıkken tuşlar stüdyonun: Delete / Ctrl+Z arkadaki plana gitmez
-  if (ui.modal === 'arch') { archKey(e); return; } // kesit / görünüş düzenleyici açıkken tuşlar pencerenin
+  if (ui.modal === 'arch') { archKey(e); return; } // kesit / görünüş penceresi açıkken tuşlar pencerenin
   // komut satırı (#43): ":" — 2B'de de 3B'de de; açık bir pencere (modal) varken değil
   if (e.key === ':' && !ctrl && !e.altKey && $('#modalbg').style.display !== 'flex') { e.preventDefault(); keys3D.clear(); openCmdPalette(); return; }
+  if (ui.viewElev && $('#modalbg').style.display !== 'flex') { archKey(e); return; } // ana tuval görünüşü açıkken tuşlar görünüşün
   // 3B'de çizim aracı (fp3D): Esc aracı / yarım çizimi bitirir ve 3B'de kalınır; Enter ve yazılan ölçü 2B tuş yolundan geçer
   if (ui.view3d) {
     if (e.key === 'Escape' && fp3DOn()) { escTool(); fp3DPreview(); return; } // 3B çizim aracı: Esc aracı / yarım çizimi bitirir, 3B'de kalınır
@@ -9724,7 +9730,7 @@ window.addEventListener('keydown', e => {
   if (k === '0') fit(); else if (k === '+' || k === '=') zoomBtn(1.25); else if (k === '-') zoomBtn(0.8);
 });
 window.addEventListener('keyup', e => { if (e.key === ' ') ui.space = false; keys3D.delete(e.key.toLowerCase()); });
-function zoomBtn(f) { const s = svgSize(); zoomAt(f, s.w / 2, s.h / 2); }
+function zoomBtn(f) { if (ui.viewElev) { archZoomBy(f); return; } const s = svgSize(); zoomAt(f, s.w / 2, s.h / 2); }
 if ($('#bInspect')) $('#bInspect').onclick = () => toggleDrawer('props'); // dar ekranda özellik çekmecesi (#82)
 $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8); $('#zFit').onclick = fit;
 
@@ -12902,6 +12908,11 @@ function templatesModal() {
 
 /* ---------- Dışa aktarma ---------- */
 function exportSvg() {
+  if (ui.viewElev) {
+    const st = archState(), cur = archCurrentSpec(st.key);
+    const dr = cur.spec && archSvg(cur.spec, cur.title, { mode: ui.outline ? 'cad' : '2d', live: false, showFurn: st.showFurn });
+    if (dr) return { svg: dr.svg, w: dr.w, h: dr.h };
+  }
   const f = F(), b = contentBounds(f) || { x0: 0, y0: 0, x1: 1000, y1: 700 }, pad = 120;
   const x0 = b.x0 - pad, y0 = b.y0 - pad, w = b.x1 - b.x0 + pad * 2, h = b.y1 - b.y0 + pad * 2 + 90;
   const z0 = view.z; view.z = 0.5; ui.exporting = true;
@@ -13399,8 +13410,27 @@ function archHandleSvg(meta, selIds, zScale) {
   return out;
 }
 function archState() {
-  if (!ui.arch) ui.arch = { key: 'elev:south', mode: ui.outline ? 'cad' : '2d', tool: 'select', placeId: 'window', showFurn: true, view: { x: 0, y: 0, z: 0.5 }, spec: null, meta: null, drag: null, title: '' };
+  if (!ui.arch) ui.arch = { key: 'elev:south', mode: ui.outline ? 'cad' : '2d', tool: 'select', placeId: 'window', showFurn: true, view: { x: 0, y: 0, z: 0.5 }, mainView: { x: 0, y: 0, z: 0.5 }, spec: null, meta: null, drag: null, title: '' };
+  if (!ui.arch.mainView) ui.arch.mainView = { x: 0, y: 0, z: 0.5 };
   return ui.arch;
+}
+function archSurface() {
+  if (ui.modal === 'arch') {
+    return { kind: 'modal', cv: $('#archCv'), defs: $('#archDefs'), world: $('#archWorld'), grid: $('#archGrid'), geo: $('#archGeo'), sel: $('#archSel'), pv: $('#archPv'), hud: $('#archHud') };
+  }
+  if (ui.viewElev) {
+    return { kind: 'main', cv: $('#elevCv'), defs: $('#elevDefs'), world: $('#elevWorld'), grid: $('#elevGrid'), geo: $('#elevGeo'), sel: $('#elevSel'), pv: $('#elevPv'), hud: $('#elevHud') };
+  }
+  return null;
+}
+function archActiveMode() {
+  const sf = archSurface();
+  if (sf && sf.kind === 'main') return ui.outline ? 'cad' : '2d';
+  return archState().mode === 'cad' ? 'cad' : '2d';
+}
+function archView(sf = archSurface()) {
+  const st = archState();
+  return sf && sf.kind === 'main' ? st.mainView : st.view;
 }
 function archCurrentSpec(key) {
   const secs = []; P.floors.forEach(f => (f.sections || []).forEach(s => secs.push(s)));
@@ -13411,8 +13441,8 @@ function archCurrentSpec(key) {
   const spec = sec ? sectionSpec(sec) : elevationSpec(id);
   return { key, title, spec, tabs };
 }
-function archGridSvg(meta, v) {
-  const cv = $('#archCv'); if (!cv || !meta) return '';
+function archGridSvg(meta, v, cv) {
+  cv = cv || (archSurface() && archSurface().cv); if (!cv || !meta) return '';
   const W = cv.clientWidth || 700, H = cv.clientHeight || 480, z = Math.max(v.z || 0.5, 0.01);
   const step = 100 * z < 24 ? 500 : 100, C = pal(false);
   const x0 = Math.floor((-v.x / z) / step) * step - step, x1 = Math.ceil(((W - v.x) / z) / step) * step + step;
@@ -13423,33 +13453,37 @@ function archGridSvg(meta, v) {
   return `<path d="${d}" stroke="${C.gMin}" stroke-width="${1 / z}" fill="none" pointer-events="none"/>`;
 }
 function archApplyView() {
-  const st = archState(), w = $('#archWorld');
-  if (w) w.setAttribute('transform', `translate(${st.view.x} ${st.view.y}) scale(${st.view.z})`);
-  const g = $('#archGrid'); if (g && st.meta) g.innerHTML = archGridSvg(st.meta, st.view);
+  const sf = archSurface(); if (!sf) return;
+  const st = archState(), v = archView(sf);
+  if (sf.world) sf.world.setAttribute('transform', `translate(${v.x} ${v.y}) scale(${v.z})`);
+  if (sf.grid && st.meta) sf.grid.innerHTML = archGridSvg(st.meta, v, sf.cv);
 }
 function archFit() {
-  const st = archState(), cv = $('#archCv'), m = st.meta;
-  if (!cv || !m) return;
-  const cw = cv.clientWidth || 720, ch = cv.clientHeight || 480;
+  const sf = archSurface(), st = archState(), m = st.meta;
+  if (!sf || !sf.cv || !m) return;
+  const cw = sf.cv.clientWidth || 720, ch = sf.cv.clientHeight || 480;
   const x0 = m.s0 - 170, x1 = m.s1 + 150, y0 = -(m.zTop + 40), y1 = -(m.zLow - 40);
   const bw = Math.max(x1 - x0, 200), bh = Math.max(y1 - y0, 200);
   const z = clamp(Math.min(cw / bw, ch / bh) * 0.88, 0.05, 8);
-  st.view = { z, x: cw / 2 - ((x0 + x1) / 2) * z, y: ch / 2 - ((y0 + y1) / 2) * z };
+  const v = { z, x: cw / 2 - ((x0 + x1) / 2) * z, y: ch / 2 - ((y0 + y1) / 2) * z };
+  if (sf.kind === 'main') st.mainView = v; else st.view = v;
   archRedraw(false);
 }
 function archZoomBy(factor, cx, cy) {
-  const st = archState(), cv = $('#archCv'); if (!cv) return;
-  const r = cv.getBoundingClientRect();
+  const sf = archSurface(); if (!sf || !sf.cv) return;
+  const v = archView(sf), r = sf.cv.getBoundingClientRect();
   const px = cx != null ? cx - r.left : (r.width || 600) / 2;
   const py = cy != null ? cy - r.top : (r.height || 400) / 2;
-  const nz = clamp(st.view.z * factor, 0.05, 12), k = nz / st.view.z;
-  st.view = { z: nz, x: px - (px - st.view.x) * k, y: py - (py - st.view.y) * k };
+  const nz = clamp(v.z * factor, 0.05, 12), k = nz / v.z;
+  v.z = nz; v.x = px - (px - v.x) * k; v.y = py - (py - v.y) * k;
   archRedraw(false);
 }
 function archPt(e) {
-  const st = archState(), cv = $('#archCv'), r = cv.getBoundingClientRect();
+  const sf = archSurface(), v = archView(sf), cv = sf && sf.cv;
+  if (!cv) return { s: 0, z: 0, x: 0, y: 0, sx: 0, sy: 0 };
+  const r = cv.getBoundingClientRect();
   const sx = e.clientX - r.left, sy = e.clientY - r.top;
-  const x = (sx - st.view.x) / st.view.z, y = (sy - st.view.y) / st.view.z;
+  const x = (sx - v.x) / v.z, y = (sy - v.y) / v.z;
   return { s: x, z: -y, x, y, sx, sy };
 }
 function archSyncUndoBtns() {
@@ -13458,13 +13492,16 @@ function archSyncUndoBtns() {
   if (r && $('#bRedo')) r.disabled = $('#bRedo').disabled;
 }
 function archSyncTopbar() {
-  const st = archState(), m = $('#modal'); if (!m) return;
-  m.querySelectorAll('[data-arch]').forEach(b => b.classList.toggle('primary', b.dataset.arch === st.key));
-  m.querySelectorAll('[data-archmode]').forEach(b => b.classList.toggle('on', b.dataset.archmode === st.mode));
-  m.querySelectorAll('[data-archtool]').forEach(b => b.classList.toggle('primary', b.dataset.archtool === st.tool));
-  const fb = m.querySelector('[data-archopt="furn"]'); if (fb) fb.classList.toggle('primary', !!st.showFurn);
-  const cv = $('#archCv'); if (cv) cv.style.cursor = st.tool === 'place' ? 'crosshair' : (ui.space ? 'grab' : 'default');
-  archSyncUndoBtns();
+  const st = archState(), m = $('#modal');
+  if (ui.modal === 'arch' && m) {
+    m.querySelectorAll('[data-arch]').forEach(b => b.classList.toggle('primary', b.dataset.arch === st.key));
+    m.querySelectorAll('[data-archmode]').forEach(b => b.classList.toggle('on', b.dataset.archmode === st.mode));
+    m.querySelectorAll('[data-archtool]').forEach(b => b.classList.toggle('primary', b.dataset.archtool === st.tool));
+    const fb = m.querySelector('[data-archopt="furn"]'); if (fb) fb.classList.toggle('primary', !!st.showFurn);
+    const cv = $('#archCv'); if (cv) cv.style.cursor = st.tool === 'place' ? 'crosshair' : (ui.space ? 'grab' : 'default');
+    archSyncUndoBtns();
+  }
+  if (ui.viewElev) elevSyncBar();
 }
 function archSetMode(mode) {
   const st = archState(); st.mode = mode === 'cad' ? 'cad' : '2d';
@@ -13472,42 +13509,47 @@ function archSetMode(mode) {
 }
 function archSetTool(t) {
   const st = archState(); st.tool = t === 'place' ? 'place' : 'select';
-  const pv = $('#archPv'); if (pv) pv.innerHTML = '';
+  const sf = archSurface(); if (sf && sf.pv) sf.pv.innerHTML = '';
   archSyncTopbar();
 }
 function archRedraw(refit = false) {
-  if (ui.modal !== 'arch') return;
-  const st = archState(), cur = archCurrentSpec(st.key);
+  const sf = archSurface(); if (!sf) return;
+  const st = archState(), cur = archCurrentSpec(st.key), mode = archActiveMode();
   st.key = cur.key; st.title = cur.title; st.spec = cur.spec; ui.archKey = cur.key;
-  const dr = cur.spec && archSvg(cur.spec, cur.title, { mode: st.mode, live: true, showFurn: st.showFurn });
+  const dr = cur.spec && archSvg(cur.spec, cur.title, { mode, live: true, showFurn: st.showFurn });
   st.meta = dr || null;
   ui.archDraw = dr ? { ...dr, title: cur.title } : null;
-  const dlSvg = $('#modal [data-archdl="svg"]'), dlPng = $('#modal [data-archdl="png"]');
-  if (dlSvg) dlSvg.disabled = !dr;
-  if (dlPng) dlPng.disabled = !dr;
-  const defs = $('#archDefs'), geo = $('#archGeo'), selG = $('#archSel'), grid = $('#archGrid'), hud = $('#archHud');
+  if (sf.kind === 'modal') {
+    const dlSvg = $('#modal [data-archdl="svg"]'), dlPng = $('#modal [data-archdl="png"]');
+    if (dlSvg) dlSvg.disabled = !dr;
+    if (dlPng) dlPng.disabled = !dr;
+  } else {
+    elevBuildTabs(false, cur);
+    elevSyncBar();
+  }
   if (!dr) {
-    if (defs) defs.innerHTML = '';
-    if (grid) grid.innerHTML = '';
-    if (geo) geo.innerHTML = '';
-    if (selG) selG.innerHTML = '';
-    if (hud) hud.textContent = L('Çizilecek bir şey yok — önce duvar ekle.', 'Nothing to draw yet — add some walls first.');
+    if (sf.defs) sf.defs.innerHTML = '';
+    if (sf.grid) sf.grid.innerHTML = '';
+    if (sf.geo) sf.geo.innerHTML = '';
+    if (sf.sel) sf.sel.innerHTML = '';
+    if (sf.hud) sf.hud.textContent = L('Çizilecek bir şey yok — önce duvar ekle.', 'Nothing to draw yet — add some walls first.');
     return;
   }
-  if (refit) {
-    const cv = $('#archCv');
-    const cw = (cv && cv.clientWidth) || 720, ch = (cv && cv.clientHeight) || 480;
+  if (refit && sf.cv) {
+    const cw = sf.cv.clientWidth || 720, ch = sf.cv.clientHeight || 480;
     const x0 = dr.s0 - 170, x1 = dr.s1 + 150, y0 = -(dr.zTop + 40), y1 = -(dr.zLow - 40);
     const bw = Math.max(x1 - x0, 200), bh = Math.max(y1 - y0, 200);
     const z = clamp(Math.min(cw / bw, ch / bh) * 0.88, 0.05, 8);
-    st.view = { z, x: cw / 2 - ((x0 + x1) / 2) * z, y: ch / 2 - ((y0 + y1) / 2) * z };
+    const v = { z, x: cw / 2 - ((x0 + x1) / 2) * z, y: ch / 2 - ((y0 + y1) / 2) * z };
+    if (sf.kind === 'main') st.mainView = v; else st.view = v;
   }
-  if (defs) defs.innerHTML = dr.defs || '';
+  const v = archView(sf);
+  if (sf.defs) sf.defs.innerHTML = dr.defs || '';
   archApplyView();
-  if (geo) geo.innerHTML = dr.inner;
-  if (selG) selG.innerHTML = archHandleSvg(dr, sel, st.view.z);
-  if (hud && !st.drag) hud.textContent = `${cur.title} · ${st.mode.toUpperCase()} · ${F().name}`;
-  archSyncUndoBtns();
+  if (sf.geo) sf.geo.innerHTML = dr.inner;
+  if (sf.sel) sf.sel.innerHTML = archHandleSvg(dr, sel, v.z);
+  if (sf.hud && !st.drag) sf.hud.textContent = `${cur.title} · ${mode === 'cad' ? 'CAD' : L('2B', '2D')} · ${F().name}`;
+  if (sf.kind === 'modal') archSyncUndoBtns();
 }
 function archRenderProps() {
   const el = $('#archProps'); if (!el) return;
@@ -13622,24 +13664,14 @@ function archStartDrag(e, handle = null, id = null) {
   }
   st.drag = { type: 'edit', ...drag };
 }
-function archBindDom() {
-  const cv = $('#archCv'), pr = $('#archProps'), ps = $('#archPlaceSel');
-  if (ps) ps.onchange = () => { archState().placeId = ps.value; archSetTool('place'); };
-  if (pr) {
-    pr.addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') { applyProp(e.target, false); archRedraw(false); } });
-    pr.addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); archRedraw(false); archRenderProps(); } });
-    pr.addEventListener('click', e => {
-      const s = e.target.closest('[data-sel]'); if (s) { sel = [s.dataset.sel]; archRedraw(false); archRenderProps(); return; }
-      if (e.target.closest('[data-act]')) { onPropsClick(e); archRedraw(false); archRenderProps(); }
-    });
-  }
+function archBindCanvas(cv, onProps) {
   if (!cv) return;
   cv.addEventListener('wheel', e => { e.preventDefault(); archZoomBy(e.deltaY < 0 ? 1.16 : 0.86, e.clientX, e.clientY); }, { passive: false });
   cv.addEventListener('pointerdown', e => {
-    const st = archState();
+    const st = archState(), v = archView();
     if (e.button === 1 || ui.space) {
       e.preventDefault();
-      st.drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: st.view.x, vy: st.view.y };
+      st.drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: v.x, vy: v.y };
       cv.style.cursor = 'grabbing'; return;
     }
     if (e.button !== 0) return;
@@ -13654,7 +13686,7 @@ function archBindDom() {
       const op = mkOp(OPDEF[st.placeId], wall, hit.d); op.sill = hit.sill;
       fl.ops.push(op); fi = hit.floorIdx; sel = [op.id];
       commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
-      archRedraw(false); archRenderProps();
+      archRedraw(false); onProps();
       return;
     }
     const h = e.target.closest('[data-arch-h]');
@@ -13662,7 +13694,7 @@ function archBindDom() {
     const fl = e.target.closest('[data-arch-floor]');
     if (fl) {
       const idx = +fl.dataset.archFloor;
-      if (P.floors[idx]) { fi = idx; sel = []; refresh(); archRedraw(false); archRenderProps(); }
+      if (P.floors[idx]) { fi = idx; sel = []; refresh(); archRedraw(false); onProps(); }
       return;
     }
     const item = e.target.closest('[data-arch-id]');
@@ -13672,77 +13704,144 @@ function archBindDom() {
         followSelFloor(fd);
         sel = [id];
         render(); renderProps();
-        archRedraw(false); archRenderProps();
+        archRedraw(false); onProps();
         archStartDrag(e, null, id);
         return;
       }
     }
-    if (sel.length) { sel = []; render(); renderProps(); archRedraw(false); archRenderProps(); }
-    st.drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: st.view.x, vy: st.view.y };
+    if (sel.length) { sel = []; render(); renderProps(); archRedraw(false); onProps(); }
+    st.drag = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: v.x, vy: v.y };
     cv.style.cursor = 'grabbing';
   });
   if (!ui._archWinBound) {
     ui._archWinBound = true;
     window.addEventListener('pointermove', e => {
-      if (ui.modal !== 'arch' || !ui.arch) return;
-      const st = ui.arch;
+      const sf = archSurface(); if (!sf || !ui.arch) return;
+      const st = ui.arch, v = archView(sf);
       if (st.drag) {
         if (st.drag.type === 'pan') {
-          st.view.x = st.drag.vx + (e.clientX - st.drag.sx);
-          st.view.y = st.drag.vy + (e.clientY - st.drag.sy);
+          v.x = st.drag.vx + (e.clientX - st.drag.sx);
+          v.y = st.drag.vy + (e.clientY - st.drag.sy);
           archApplyView(); return;
         }
         if (st.drag.type === 'edit') {
           const pt = archPt(e), ds = pt.s - st.drag.start.s, dz = pt.z - st.drag.start.z;
-          if (!st.drag.moved && Math.hypot(e.clientX - (st.drag.sx || e.clientX), e.clientY - (st.drag.sy || e.clientY)) < 2 && Math.hypot(ds, dz) * st.view.z < 3) return;
+          if (!st.drag.moved && Math.hypot(e.clientX - (st.drag.sx || e.clientX), e.clientY - (st.drag.sy || e.clientY)) < 2 && Math.hypot(ds, dz) * v.z < 3) return;
           st.drag.moved = true;
           const snapStep = ui.snap && !e.shiftKey ? (P.grid || 10) : 0;
           const info = archApplyDrag(st.spec, st.drag, ds, dz, snapStep);
           archRedraw(false);
-          const hud = $('#archHud'); if (hud && info) hud.textContent = info;
+          if (sf.hud && info) sf.hud.textContent = info;
           return;
         }
       }
-      if (st.tool === 'place' && st.meta) {
-        const cvEl = $('#archCv'); if (!cvEl) return;
-        const r = cvEl.getBoundingClientRect();
+      if (st.tool === 'place' && st.meta && sf.cv) {
+        const r = sf.cv.getBoundingClientRect();
         if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
         const pt = archPt(e), snapStep = ui.snap && !e.shiftKey ? (P.grid || 10) : 0;
         const hit = archPlaceOpAt(st.spec, st.meta.prims, pt.s, pt.z, OPDEF[st.placeId], snapStep);
-        const pv = $('#archPv'), hud = $('#archHud');
-        if (pv) pv.innerHTML = hit ? `<rect x="${hit.s0}" y="${-hit.z1}" width="${hit.s1 - hit.s0}" height="${hit.z1 - hit.z0}" fill="#22c55e" fill-opacity="0.25" stroke="#22c55e" stroke-width="${2 / st.view.z}" stroke-dasharray="${6 / st.view.z} ${4 / st.view.z}" pointer-events="none"/>` : '';
-        if (hud) hud.textContent = hit ? `${itemName(OPDEF[st.placeId])} · d: ${Math.round(hit.d)} cm · ${L('Denizlik', 'Sill')}: ${Math.round(hit.sill)} cm` : L('Bir duvar yüzünün üzerine gelin', 'Hover over a wall face');
+        if (sf.pv) sf.pv.innerHTML = hit ? `<rect x="${hit.s0}" y="${-hit.z1}" width="${hit.s1 - hit.s0}" height="${hit.z1 - hit.z0}" fill="#22c55e" fill-opacity="0.25" stroke="#22c55e" stroke-width="${2 / v.z}" stroke-dasharray="${6 / v.z} ${4 / v.z}" pointer-events="none"/>` : '';
+        if (sf.hud) sf.hud.textContent = hit ? `${itemName(OPDEF[st.placeId])} · d: ${Math.round(hit.d)} cm · ${L('Denizlik', 'Sill')}: ${Math.round(hit.sill)} cm` : L('Bir duvar yüzünün üzerine gelin', 'Hover over a wall face');
       }
     });
     window.addEventListener('pointerup', () => {
-      if (ui.modal !== 'arch' || !ui.arch || !ui.arch.drag) return;
+      const sf = archSurface(); if (!sf || !ui.arch || !ui.arch.drag) return;
       const st = ui.arch, d = st.drag; st.drag = null;
-      const cvEl = $('#archCv'); if (cvEl) cvEl.style.cursor = st.tool === 'place' ? 'crosshair' : 'default';
+      if (sf.cv) sf.cv.style.cursor = st.tool === 'place' ? 'crosshair' : 'default';
       if (d.type === 'edit' && d.moved) {
         if (d.kind === 'furn' && isParamRoof(d.o)) cleanRoof(d.o);
         if (d.kind === 'wall') fitOpsToWall(d.floor || F(), d.o);
         commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
-        archRedraw(false); archRenderProps();
+        archRedraw(false); if (sf.kind === 'modal') archRenderProps(); else renderProps();
       }
     });
   }
 }
+function archBindDom() {
+  const cv = $('#archCv'), pr = $('#archProps'), ps = $('#archPlaceSel');
+  if (ps) ps.onchange = () => { archState().placeId = ps.value; archSetTool('place'); };
+  if (pr) {
+    pr.addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') { applyProp(e.target, false); archRedraw(false); } });
+    pr.addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); archRedraw(false); archRenderProps(); } });
+    pr.addEventListener('click', e => {
+      const s = e.target.closest('[data-sel]'); if (s) { sel = [s.dataset.sel]; archRedraw(false); archRenderProps(); return; }
+      if (e.target.closest('[data-act]')) { onPropsClick(e); archRedraw(false); archRenderProps(); }
+    });
+  }
+  archBindCanvas(cv, archRenderProps);
+}
+function elevBuildTabs(force = false, cur = null) {
+  const tb = $('#elevTabs'), ps = $('#elevPlaceSel'), st = archState();
+  if (tb && P) {
+    cur = cur || archCurrentSpec(st.key);
+    const sig = cur.tabs.map(t => t[0] + ':' + t[1]).join('|');
+    if (force || tb.dataset.sig !== sig) {
+      tb.dataset.sig = sig;
+      tb.innerHTML = cur.tabs.map(([k, n]) => `<button class="btn sm" type="button" data-elevk="${k}">${esc(n)}</button>`).join('');
+    }
+  }
+  if (ps && (force || !ps.options.length)) {
+    ps.innerHTML = OPENINGS.map(o => `<option value="${o.id}">${o.icon} ${esc(itemName(o))}</option>`).join('');
+    ps.value = st.placeId;
+  }
+}
+function elevSyncBar() {
+  const st = archState(), tb = $('#elevTabs');
+  if (tb) tb.querySelectorAll('[data-elevk]').forEach(b => b.classList.toggle('primary', b.dataset.elevk === st.key));
+  if ($('#bElevSel')) $('#bElevSel').classList.toggle('primary', st.tool === 'select');
+  if ($('#bElevPlace')) $('#bElevPlace').classList.toggle('primary', st.tool === 'place');
+  if ($('#bElevFurn')) $('#bElevFurn').classList.toggle('primary', !!st.showFurn);
+  if ($('#elevPlaceSel')) $('#elevPlaceSel').value = st.placeId;
+  if ($('#elevCv')) $('#elevCv').style.cursor = st.tool === 'place' ? 'crosshair' : (ui.space ? 'grab' : 'default');
+}
+function showElev(on, key = null, skipRender = false) {
+  if (on && ui.view3d) show3D(false);
+  const st = archState(), tabChanged = !!(key && key !== st.key), wasOff = !ui.viewElev;
+  ui.viewElev = !!on;
+  if (key) st.key = key;
+  if (!on) {
+    st.drag = null; st.tool = 'select';
+    if ($('#elevPv')) $('#elevPv').innerHTML = '';
+  }
+  if ($('#vElev')) $('#vElev').style.display = on ? 'block' : 'none';
+  syncViewSwitch(); updateTools(); syncExportTitles();
+  if (on) {
+    elevBuildTabs(false);
+    elevSyncBar();
+    archRedraw(wasOff || tabChanged);
+    renderProps();
+  } else if (!skipRender) {
+    render(); renderProps();
+  }
+}
+function elevBindDom() {
+  if ($('#bElev')) $('#bElev').onclick = () => showElev(!ui.viewElev);
+  if ($('#bElevSel')) $('#bElevSel').onclick = () => archSetTool('select');
+  if ($('#bElevPlace')) $('#bElevPlace').onclick = () => archSetTool(archState().tool === 'place' ? 'select' : 'place');
+  if ($('#bElevFurn')) $('#bElevFurn').onclick = () => { const st = archState(); st.showFurn = !st.showFurn; elevSyncBar(); archRedraw(false); };
+  if ($('#bElevFit')) $('#bElevFit').onclick = () => archFit();
+  if ($('#bElevClose')) $('#bElevClose').onclick = () => showElev(false);
+  if ($('#elevPlaceSel')) $('#elevPlaceSel').onchange = () => { archState().placeId = $('#elevPlaceSel').value; archSetTool('place'); };
+  if ($('#elevTabs')) $('#elevTabs').addEventListener('click', e => { const b = e.target.closest('[data-elevk]'); if (b) showElev(true, b.dataset.elevk); });
+  archBindCanvas($('#elevCv'), renderProps);
+}
 function archKey(e) {
-  const st = archState(), ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+  const sf = archSurface(), st = archState(), ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (e.key === 'Escape') {
     if (st.drag) { st.drag = null; archRedraw(false); return; }
     if (st.tool === 'place') { archSetTool('select'); return; }
-    closeModal(); return;
+    if (sf && sf.kind === 'modal') closeModal(); else if (ui.viewElev) showElev(false);
+    return;
   }
   if (e.key === ' ') { ui.space = true; e.preventDefault(); return; }
   if (ctrl && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && k === 'y') { e.preventDefault(); redo(); return; }
-  if (k === 'j' && !ctrl) { e.preventDefault(); archSetMode(st.mode === 'cad' ? '2d' : 'cad'); return; }
+  if (k === 'j' && !ctrl) { e.preventDefault(); if (sf && sf.kind === 'main') setOutline(!ui.outline); else archSetMode(st.mode === 'cad' ? '2d' : 'cad'); return; }
   if (k === 'v' && !ctrl) { e.preventDefault(); archSetTool('select'); return; }
   if (e.key === '0' && !ctrl) { e.preventDefault(); archFit(); return; }
   if ((e.key === '+' || e.key === '=') && !ctrl) { e.preventDefault(); archZoomBy(1.25); return; }
   if (e.key === '-' && !ctrl) { e.preventDefault(); archZoomBy(0.8); return; }
-  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSel(); archRedraw(false); archRenderProps(); return; }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSel(); archRedraw(false); if (sf && sf.kind === 'modal') archRenderProps(); else renderProps(); return; }
   if (e.key.startsWith('Arrow') && sel.length === 1 && st.spec) {
     e.preventDefault();
     const ro = typeof collabReadOnly === 'function' && collabReadOnly(); if (ro) { collabViewerToast(); return; }
@@ -13758,7 +13857,7 @@ function archKey(e) {
       if (fd.kind === 'furn' && isParamRoof(fd.o)) cleanRoof(fd.o);
       if (fd.kind === 'wall') fitOpsToWall(fd.floor || F(), fd.o);
       commit(); refresh(); if (ui.view3d && T3) schedBuild3D();
-      archRedraw(false); archRenderProps();
+      archRedraw(false); if (sf && sf.kind === 'modal') archRenderProps(); else renderProps();
     }
   }
 }
@@ -13771,6 +13870,7 @@ function archModal(key) {
     openModal(`<h2>📐 ${L('Kesit & görünüşler', 'Sections & elevations')}
         <span class="row" style="gap:6px;margin:0">
           <span class="btn-group seg-switch"><button class="btn sm${st.mode === '2d' ? ' on' : ''}" data-archmode="2d">2B</button><button class="btn sm${st.mode === 'cad' ? ' on' : ''}" data-archmode="cad">CAD</button></span>
+          <button class="btn sm" data-archact="tomain" title="${L('Ana tuvalde düzenle', 'Edit on main canvas')}">↗ ${L('Ana tuval', 'Main canvas')}</button>
           <button class="btn sm" data-archdl="svg">⬇ SVG</button>
           <button class="btn sm primary" data-archdl="png">⬇ PNG</button>
           <button class="btn sm" data-close>✕</button>
@@ -13819,6 +13919,7 @@ $('#modal').addEventListener('click', e => {
     if (ac.dataset.archact === 'fit') archFit();
     else if (ac.dataset.archact === 'undo') { undo(); archRenderProps(); }
     else if (ac.dataset.archact === 'redo') { redo(); archRenderProps(); }
+    else if (ac.dataset.archact === 'tomain') { const k = st.key; closeModal(); showElev(true, k); }
     return;
   }
   const d = e.target.closest('[data-archdl]'); if (!d) return;
@@ -15834,7 +15935,9 @@ function syncExportTitles() {
   if (b) {
     b.title = ui.view3d
       ? L('3B render al (yüksek kalite) — Shift: hızlı görünüm', 'Render the 3D view (high quality) — Shift: quick capture')
-      : L('2B planı PNG olarak kaydet', 'Save the 2D plan as a PNG');
+      : ui.viewElev
+        ? L('Görünüş / kesiti PNG olarak kaydet', 'Save the elevation / section as a PNG')
+        : L('2B planı PNG olarak kaydet', 'Save the 2D plan as a PNG');
   }
   const s = $('#b3dShot');
   if (s) s.title = L('🎬 Render al (PNG) — Shift: hızlı görünüm', '🎬 Render (PNG) — Shift: quick capture');
@@ -16116,6 +16219,7 @@ function syncViewSwitch() {
   $('#b2d').classList.toggle('on', !ui.view3d && !ui.outline);
   const bCad = $('#bCad'); if (bCad) bCad.classList.toggle('on', !ui.view3d && !!ui.outline);
   $('#b3d').classList.toggle('on', !!ui.view3d);
+  const bElev = $('#bElev'); if (bElev) bElev.classList.toggle('on', !!ui.viewElev);
   const chk = $('#cOutline'); if (chk) chk.checked = !!ui.outline;
 }
 function setOutline(on) {
@@ -16126,6 +16230,8 @@ function setOutline(on) {
 function show3D(on) {
   if (on && (!window.THREE || !THREE.OrbitControls)) { toast(L('3B için internet bağlantısı gerekli (Three.js yüklenemedi)', 'Internet connection required for 3D (Three.js failed to load)')); return; }
   if (!on) stopWalkPick();
+  let fromElev = null;
+  if (on && ui.viewElev) { fromElev = archState().key; showElev(false, null, true); }
   ui.view3d = on; keys3D.clear(); $('#v3d').style.display = on ? 'block' : 'none'; syncViewSwitch();
   $('#zoomctl').style.display = on ? 'none' : ''; updateTools(); syncExportTitles();
   if (on) {
@@ -16135,7 +16241,11 @@ function show3D(on) {
     T3.selKey = selKey;
     if (keep) { T3.cam.position.copy(T3.lastCam.pos); T3.ctl.target.copy(T3.lastCam.target); }
     build3D(keep);
-    if (!keep) orient3DFrom2D(focus);
+    if (fromElev) {
+      const [ek, eid] = fromElev.split(':');
+      if (ek === 'elev' && ELEV_DIRS[eid]) set3DCam(eid);
+      else if (ek === 'sec') { const sc = findAnyFloor(eid); if (sc && sc.kind === 'section') lookAtSection(sc.o); else if (!keep) orient3DFrom2D(focus); }
+    } else if (!keep) orient3DFrom2D(focus);
     T3.center2d = c;
     T3.lastT = 0; T3.run = true; loop3D();
   } else if (T3) {
@@ -19285,6 +19395,16 @@ function applyLangUI() {
     $('#bCad').title = L('2B Çizgisel (CAD) Görünüm (J)', '2D Outline (CAD) View (J)');
   }
   $('#b3d').textContent = L('3B', '3D');
+  if ($('#bElev')) {
+    $('#bElev').textContent = L('📐 Görünüş', '📐 Elevation');
+    $('#bElev').title = L('Ana tuvalde 2B / CAD görünüş ve kesit düzenleyici', 'Interactive 2D / CAD elevation & section view on main canvas');
+  }
+  if ($('#bElevSel')) { $('#bElevSel').textContent = L('↖ Seç', '↖ Select'); $('#bElevSel').title = L('Seç ve düzenle (V)', 'Select & edit (V)'); }
+  if ($('#bElevPlace')) { $('#bElevPlace').textContent = L('＋ Yerleştir', '＋ Place'); $('#bElevPlace').title = L('Duvar yüzüne kapı / pencere yerleştir', 'Place door / window onto a wall face'); }
+  if ($('#bElevFurn')) $('#bElevFurn').title = L('Mobilyaları göster / gizle', 'Show / hide furniture');
+  if ($('#bElevFit')) $('#bElevFit').title = L('Sığdır (0)', 'Fit to view (0)');
+  if ($('#bElevClose')) $('#bElevClose').title = L('2B plana dön (Esc)', 'Back to 2D plan (Esc)');
+  if (typeof elevBuildTabs === 'function' && P) { elevBuildTabs(true); if (ui.viewElev) elevSyncBar(); }
   $('#bLang').textContent = isEN() ? '🌐 EN' : '🌐 TR';
   $('#bLang').title = L('Switch to English', 'Türkçe diline geç');
   $('#bTheme').title = L('Tema (Açık / Koyu)', 'Theme (Light / Dark)');
@@ -19381,6 +19501,7 @@ $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { 
 $('#b2d').onclick = () => { ui.outline = false; show3D(false); syncViewSwitch(); render(); };
 if ($('#bCad')) $('#bCad').onclick = () => setOutline(true);
 $('#b3d').onclick = () => show3D(true);
+elevBindDom();
 $('#s3dFloor').onchange = () => { const v = $('#s3dFloor').value; if (v !== 'custom') v3dOnly(v); sync3DFloors(); if (T3 && T3.walk) walkToFloor(v3dShown(P.floors[T3.walk.fi] || {}) ? T3.walk.fi : walkFloorIdx()); if (T3 && ui.view3d) build3D(true); };
 if ($('#b3dFloors')) $('#b3dFloors').onclick = () => v3dListToggle();
 $('#b3dFit').onclick = () => set3DCam('fit');
