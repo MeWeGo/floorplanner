@@ -3,7 +3,9 @@
    real thickness; a void is a stairwell / shaft / atrium that 3D cuts out of
    the floor slab (and room floors) with Shape.holes. voidHoles() decides which
    voids become holes in which polygon — it runs here for real, cut out of
-   app.js; the rest are wiring checks on the source. */
+   app.js; the rest are wiring checks on the source. Drawing both with the tools,
+   the 2D X, the 3D hole and the balcony thickness are driven by the smoke check
+   "slab tool draws a wall-less balcony…", and the MCP tools by mcp.test.js. */
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
@@ -55,8 +57,6 @@ test('a slab or room drawn inside a void fills it and is not cut by it', () => {
 });
 
 test('the data model carries slabs and voids, with defaults for old saves', () => {
-  assert.match(src, /const newFloor = [^\n]*slabs: \[\], voids: \[\]/, 'newFloor() has no slabs/voids arrays');
-  assert.match(src, /const KINDS = \{[^}]*slabs: 'slab', voids: 'void'/, 'slabs/voids are not object kinds (find/select/delete skip them)');
   const norm = fnSrc('normalizeProject');
   assert.match(norm, /for \(const k in KINDS\) f\[k\] = f\[k\] \|\| \[\]/, 'old projects would load without slabs/voids');
   assert.match(norm, /s\.t = 20/, 'slab thickness has no default');
@@ -68,14 +68,6 @@ test('2D: slabs sit under rooms, voids are drawn with the architectural X', () =
   assert.match(fnSrc('layerStrings'), /slabSvg[\s\S]*roomSvg[\s\S]*voidSvg/, 'layer order must be slab → room → void');
   const v = fnSrc('voidSvg');
   assert.match(v, /clip-path/, 'the X must be clipped to the void outline');
-  assert.match(v, /bb\.x0\}" y1="\$\{bb\.y0\}" x2="\$\{bb\.x1\}" y2="\$\{bb\.y1\}/, 'diagonal 1 missing');
-  assert.match(v, /bb\.x1\}" y1="\$\{bb\.y0\}" x2="\$\{bb\.x0\}" y2="\$\{bb\.y1\}/, 'diagonal 2 missing');
   assert.doesNotMatch(v + fnSrc('slabSvg'), /#[0-9a-f]{6}/i, 'plan colours must come from pal()');
 });
 
-test('the MCP server mirrors the new arrays and tools', () => {
-  const s = read('mcp/server.js');
-  assert.match(s, /rooms: \[\], slabs: \[\], voids: \[\]/, 'mcp newFloor() drifted from app.js');
-  assert.match(s, /tool\('add_slab'/);
-  assert.match(s, /tool\('add_void'/);
-});

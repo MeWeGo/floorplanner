@@ -154,53 +154,28 @@ test('(A3) floorTexture caches by (kind, color, lt, real) in C.floorTex', () => 
 
 // ---------- (B) Source-shape & constant checks for issue #87 ----------
 
-test('(B2) realLook upgrades materials, skips T3.ground, regenerates floor textures, and restores/disposes', () => {
-  const start = src.indexOf('function realLook(');
-  const end = src.indexOf('function applyLive3D(');
-  assert.ok(start >= 0 && end > start, 'realLook() not found');
-  const body = src.slice(start, end);
-  assert.match(body, /new\s+THREE\.MeshStandardMaterial\s*\(/);
-  assert.match(body, /\broughness\b/);
-  assert.match(body, /\bmetalness\b/);
-  assert.match(body, /\bbumpMap\b/);
-  assert.match(body, /\broughnessMap\b/);
+/* The smoke check "realistic look: physically based materials…" proves with a real scene that the live
+   view and a realistic render get MeshStandardMaterials with distinct roughness, a wood floor with bump +
+   roughness maps in its light variant, an environment map, a non-black image, the same brightness in both
+   themes, no GPU leak across renders, and nothing left behind afterwards. These checks cover the rest. */
+test('(B2) realLook skips T3.ground, gives bare rooms a screed, and restores the lights', () => {
+  const body = fnSrcOf(src, 'realLook');
   assert.match(body, /T3\.ground/);
-  assert.match(body, /floorTexture\([^)]*,\s*true\s*,\s*C\s*,\s*true\s*\)/);
   assert.match(body, /cls\s*===\s*['"]room['"][\s\S]*floorTexture\(\s*['"]concrete['"]/);
-  assert.match(body, /S\.environment\s*=/);
-  assert.match(body, /\brestore\s*\(\s*\)/);
-  assert.match(body, /\bdispose\s*\(\s*\)/);
-  // restore() puts materials, lights, S.environment back and removes decals
-  assert.match(body, /swaps\[i\]\.o\.material\s*=\s*swaps\[i\]\.mat/);
   assert.match(body, /s\.l\.intensity\s*=\s*s\.i/);
   assert.match(body, /s\.l\.color\.copy\(\s*s\.c\s*\)/);
-  assert.match(body, /S\.environment\s*=\s*oldEnv/);
-  assert.match(body, /S\.remove\(\s*d\s*\)/);
-  // dispose() disposes made materials and textures
-  assert.match(body, /for\s*\(\s*const\s+m\s+of\s+made\s*\)\s*m\.dispose\(\)/);
-  assert.match(body, /for\s*\(\s*const\s+t\s+of\s+texs\s*\)\s*t\.dispose\(\)/);
 });
 
-test('(B3) realEnv uses PMREMGenerator, caches on T3.env, and converts sky shader with linearToOutputTexel', () => {
-  const body = fnSrcOf(src, 'realEnv');
-  assert.match(body, /THREE\.PMREMGenerator/);
-  assert.match(body, /T3\.env\b/);
-  assert.match(body, /linearToOutputTexel/);
+test('(B3) realEnv caches the reflection map on T3.env', () => {
+  assert.match(fnSrcOf(src, 'realEnv'), /T3\.env\b/);
 });
 
-test('(B4) render3DHQ applies realLook for realistic and maquette styles and cleans up in finally', () => {
-  const body = fnSrcOf(src, 'render3DHQ');
-  assert.match(body, /style\s*===\s*['"]realistic['"]\s*\|\|\s*style\s*===\s*['"]maquette['"]/);
-  assert.match(body, /realLook\s*\(/);
-  assert.match(body, /finally\s*\{[\s\S]*real\.restore\(\s*\)[\s\S]*real\.dispose\(\s*\)/);
+test('(B4) render3DHQ applies realLook for the maquette style too', () => {
+  assert.match(fnSrcOf(src, 'render3DHQ'), /style\s*===\s*['"]realistic['"]\s*\|\|\s*style\s*===\s*['"]maquette['"]/);
 });
 
-test('(B5) applyLive3D applies realLook, stores it on T3.live, and restores/disposes previous', () => {
-  const body = fnSrcOf(src, 'applyLive3D');
-  // the previous look is restored at once; its materials are disposed one frame later (#106) so shaders carry over
-  assert.match(body, /old\s*&&\s*old\.real[\s\S]*old\.real\.restore\(\s*\)[\s\S]*dispose3DLater\(\s*\[\s*\{\s*dispose:\s*\(\)\s*=>\s*r\.dispose\(\)/);
-  assert.match(body, /real\s*=\s*realLook\s*\(/);
-  assert.match(body, /T3\.live\s*=\s*\{[^}]*\breal\b/);
+test('(B5) applyLive3D disposes the previous look one frame later, so shaders carry over (#106)', () => {
+  assert.match(fnSrcOf(src, 'applyLive3D'), /old\s*&&\s*old\.real[\s\S]*old\.real\.restore\(\s*\)[\s\S]*dispose3DLater\(\s*\[\s*\{\s*dispose:\s*\(\)\s*=>\s*r\.dispose\(\)/);
 });
 
 test('(B6) RENDER_STYLES includes maquette and RENDER_MOODS has day & evening with two labels each', () => {

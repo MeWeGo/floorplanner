@@ -212,6 +212,6 @@ function mcpClient() {
 
 module.exports = {
   wallTopSrc, markerBlock, mcpClient,
-  ROOT, read, exists, parseJsonc, fnSrcOf,
+  ROOT, read, exists, parseJsonc, fnSrcOf, matchBracket,
   htmlIds, runtimeIds, domLookups, domContractViolations, fatalBindings,
 };

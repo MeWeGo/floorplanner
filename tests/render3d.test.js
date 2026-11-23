@@ -58,36 +58,21 @@ test('the capture happens in one synchronous task', () => {
   const between = fn.slice(renderAt, grabAt);
   assert.doesNotMatch(between, /await|toBlob|setTimeout|requestAnimationFrame/, 'the buffer is not preserved — render() and toDataURL() cannot be split');
   assert.doesNotMatch(fn, /async function render3DDataUrl/, 'render3DDataUrl() must stay synchronous');
-  assert.match(fn, /getPixelRatio\(\)/, 'the original pixel ratio must be saved');
-  assert.match(fn, /setPixelRatio\(1\)/, 'accumulated devicePixelRatio would silently multiply the output size');
-  assert.match(fn, /setSize\([^\n]*false\)/, 'setSize must not change the element CSS size');
-  assert.match(fn, /finally\s*{[\s\S]*resize3D\(\)/, 'the viewport must be restored in a finally block');
-  assert.match(fn, /setCamAspect\(cam, w \/ h\)|updateProjectionMatrix\(\)/, 'camera aspect must be updated for the capture size');
 });
 
-test('the 3D capture is reachable from both UIs, with a 3D-named file', () => {
-  assert.ok(html.includes('id="b3dShot"'), 'index.html has no #b3dShot button');
-  const cam = html.slice(html.indexOf('ctl3dCam'), html.indexOf('</div>', html.indexOf('ctl3dCam')));
-  for (const id of ['b3dFit', 'b3dTop', 'b3dEye', 'b3dShot']) {
-    assert.ok(cam.includes('id="' + id + '"'), `#${id} should sit in the camera overlay bar`);
-  }
+// The camera-bar buttons, the two file names and the restored viewport, shadow map, background,
+// fog and materials are checked by the smoke tests "3D: a real render is produced…" and
+// "sky backdrop and toon style…"; the wiring and guards in this file are not.
+test('the render button runs export3DRender, with a re-entrancy and 3D-only guard', () => {
   assert.match(js, /\$\('#b3dShot'\)\.onclick = e => export3DRender\(e && e\.shiftKey\)/, 'the render button is not wired (Shift = quick capture)');
 
   const fn = sliceFn('export3DRender');
-  assert.match(fn, /-3d-render\.png/, 'the exported file must be named "<project>-3d-render.png"');
-  assert.match(fn, /-3d-view\.png/, 'the quick capture needs its own name so the two never overwrite each other');
-  assert.match(fn, /fname\('png'\)/, 'the filename should reuse the existing sanitiser');
   assert.match(fn, /ui\.shot/, 'a double click would capture twice — keep the re-entrancy guard');
   assert.match(fn, /ui\.view3d/, 'export3DRender() must refuse to run outside 3D');
 });
 
 test('the default export is a rendered image, not a viewport screenshot', () => {
-  const fn = sliceFn('export3DRender');
   // the regression this guards: "it just takes a photo of the scene"
-  assert.match(fn, /render3DHQ\((opts)?\)/, 'the button no longer runs the high-quality render');
-  assert.match(fn, /let url = quick \? fast\(\) : await render3DHQ\((opts)?\)/, 'Shift should keep the cheap capture');
-  assert.match(fn, /render3DDataUrl\(\)/, 'the quick/fallback capture must still exist');
-
   const hq = sliceFn('render3DHQ');
   assert.match(hq, /drawImage/, 'the passes must be composited into an accumulation canvas');
   assert.match(hq, /globalAlpha = 1 \/ \(i \+ 1\)/, 'the passes are not averaged — that is what removes aliasing');
@@ -98,9 +83,7 @@ test('the default export is a rendered image, not a viewport screenshot', () => 
   assert.match(hq, /shadowMap\.autoUpdate = false/, 'the static shadow map is rebuilt on every pass — that is seconds wasted');
   assert.match(hq, /isLineSegments/, 'the CAD outline helpers must be hidden for a render (they read as a viewport)');
   assert.match(hq, /scene\.background = new THREE\.Color\(0xffffff\)/, 'a render uses a studio backdrop, not the dark viewport sky');
-  assert.match(hq, /finally\s*{[\s\S]*mapSize\.copy/, 'the shadow map settings must be restored');
   assert.match(hq, /finally\s*{[\s\S]*e\.visible = true/, 'the outline helpers must be restored');
-  assert.match(hq, /finally\s*{[\s\S]*scene\.background = oldBg/, 'the backdrop must be restored');
   assert.match(hq, /finally\s*{[\s\S]*T3\.run = oldRun/, 'the animation loop must be restored');
   assert.match(hq, /projectionMatrix\.elements\[(9|JX \+ 1)\] = (0|jy0)/, 'the camera jitter must be cleared after the render');
   assert.match(hq, /supersample|bufK/, 'the supersampled buffer is what makes the downscale produce smooth edges');
@@ -133,8 +116,6 @@ test('sky backdrop: realistic defaults to Sky, other styles to Studio, the user 
 
 test('the sky is an inline shader (no files, no add-ons) whose colours follow the sun', () => {
   const mk = sliceFn('makeSky');
-  assert.match(mk, /new THREE\.ShaderMaterial\(/);
-  assert.match(mk, /side: THREE\.BackSide/);
   assert.match(mk, /fog: false/);
   assert.match(mk, /new THREE\.Fog\(c\.hor/, 'fog must use the sky horizon colour so the ground edge disappears');
   assert.match(mk, /gl_FragCoord/, 'no dither: the gradient would band');
@@ -161,16 +142,10 @@ test('toon style: banded MeshToonMaterial with inked edges, built from the objec
   assert.match(hq, /inkStyle = style === 'technical' \|\| style === 'sketch' \|\| style === 'toon'/, 'toon needs its outlines');
 });
 
-test('everything the sky / toon render changes is restored in finally', () => {
+test('the sky / toon render disposes the materials it made', () => {
   const hq = sliceFn('render3DHQ');
   const fin = hq.slice(hq.indexOf('} finally {'));
-  assert.match(hq, /const oldFog = scene\.fog;/);
-  assert.match(fin, /scene\.fog = oldFog;/, 'fog is not restored');
-  assert.match(fin, /scene\.remove\(sky\.mesh\); sky\.mesh\.geometry\.dispose\(\); sky\.mesh\.material\.dispose\(\);/, 'the sky mesh is left behind');
-  assert.match(fin, /scene\.background = oldBg/);
-  assert.match(fin, /swapped\[i\]\.m\.material = swapped\[i\]\.mat/, 'toon materials are not swapped back');
   assert.match(fin, /for \(const m of styleMats\) m\.dispose\(\)/, 'toon materials / gradient are not disposed');
-  assert.match(fin, /T3\.ground\.material = oldGroundMat/);
 });
 
 test('the project ground (auto = grass) is used in sky renders and live realistic mode (#147)', () => {

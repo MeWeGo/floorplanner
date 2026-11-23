@@ -9,7 +9,9 @@
       reconnected until the user reloaded.
 
    These are source-level assertions because the behaviour lives in DOM code the
-   unit tests cannot boot; browser-smoke.js still proves the page renders. */
+   unit tests cannot boot. The bridge side (requests, snapshots, CORS, SSE) is
+   tested over HTTP in bridge.test.js, and ?bridge=off by the smoke check "the
+   test tab stays off any running AI bridge". */
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
@@ -67,27 +69,5 @@ test('the panel offers a "go back" list backed by real snapshot files', () => {
   const restore = sliceFn('aiRestoreSnapshot');
   assert.match(restore, /\/__snapshots\/restore/, 'restore does not call the restore endpoint');
   assert.match(restore, /confirm\(/, 'restoring must ask before replacing the plan');
-  // the bridge must actually persist snapshots, not just advertise them
-  const bridge = read('mcp/bridge.js');
-  assert.match(bridge, /function checkpoint\(/, 'the bridge has no checkpoint()');
-  assert.match(bridge, /\.fp-history|HIST_DIR/, 'snapshots are not written to disk');
-  assert.match(bridge, /p === '\/__snapshots'/, 'GET /__snapshots is gone');
-  assert.match(bridge, /p === '\/__snapshots\/restore'/, 'POST /__snapshots/restore is gone');
 });
 
-test('the bridge keeps the endpoints this UI depends on', () => {
-  const bridge = read('mcp/bridge.js');
-  assert.match(bridge, /p === '\/__requests'/, 'GET/POST /__requests is gone');
-  assert.match(bridge, /Access-Control-Allow-Private-Network/, 'the private-network header is gone');
-  assert.match(bridge, /event: ' \+ name \+ '\\ndata: '/, 'SSE event framing changed');
-});
-
-test('?bridge=off disables every bridge entry point, and the browser smoke test uses it', () => {
-  const app = read('app.js');
-  assert.match(app, /const BRIDGE_OFF = /, 'no ?bridge=off switch');
-  assert.match(app, /async function brgFetch\([^)]*\) \{\s*if \(BRIDGE_OFF\) throw/, 'brgFetch ignores BRIDGE_OFF');
-  assert.match(app, /async function brgConnect\(\) \{\s*if \(BRIDGE_OFF\) return false;/, 'brgConnect ignores BRIDGE_OFF');
-  assert.match(app, /function brgStartProbe\(\) \{\s*if \(BRIDGE_OFF/, 'brgStartProbe ignores BRIDGE_OFF');
-  // the smoke test loads plans; without the switch it overwrote the user's live AI plan
-  assert.match(read('tests/browser-smoke.js'), /[?&]bridge=off(?:&|`)/, 'browser-smoke.js does not open the app with ?bridge=off');
-});
