@@ -52,6 +52,10 @@ function makeEnv(initialP) {
     };
     ${constLine('defaultLayer')}
     ${constLine('layerById')}
+    ${constLine('LAYER_Z_MAX')}
+    ${constLine('layerZ')}
+    const SURF_HP_MAX = 64;
+    ${fnSrc('liftLayers')}
     ${fnSrc('visFloor')}
     ${fnSrc('pickable')}
     ${fnSrc('stampLayers')}
@@ -66,6 +70,7 @@ function makeEnv(initialP) {
       normalizeProject: proj => { P = normalizeProject(proj); return P; },
       stampLayers,
       visFloor,
+      liftLayers,
       pickable,
       defaultLayer,
       layerById,
@@ -282,11 +287,11 @@ test('(6) wiring asserts on app.js source and index.html', () => {
   // layerStrings starts with f = visFloor(f,
   assert.match(fnSrc('layerStrings'), /f\s*=\s*visFloor\(f,/);
 
-  // build3D's floor loop calls f = visFloor(f)
-  assert.match(fnSrc('build3D'), /f\s*=\s*visFloor\(f\)/);
+  // build3D's floor loop calls f = visFloor(f, false, true) (hidden layers out, layer heights applied)
+  assert.match(fnSrc('build3D'), /f\s*=\s*visFloor\(f,\s*false,\s*true\)/);
 
-  // archPrims calls visFloor(f, true)
-  assert.match(fnSrc('archPrims'), /visFloor\(f,\s*true\)/);
+  // archPrims calls visFloor(f, true, true)
+  assert.match(fnSrc('archPrims'), /visFloor\(f,\s*true,\s*true\)/);
 
   // pickDataId and idsAt and the box-select loop use pickable
   assert.match(fnSrc('pickDataId'), /pickable\(/);
@@ -312,4 +317,32 @@ test('(6) wiring asserts on app.js source and index.html', () => {
 
   // index.html has a select with id sLayer
   assert.match(html, /<select[^>]*id="sLayer"/);
+});
+
+test('(7) layer height: liftLayers raises walls, items, free slabs and rooms of a lifted layer as copies; originals and 2D stay put', () => {
+  const env = makeEnv();
+  const f = env.newFloor();
+  f.walls.push({ id: 'w1', a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, t: 20, h: 270, layer: 'up' }, { id: 'w2', a: { x: 0, y: 0 }, b: { x: 0, y: 100 }, t: 20, h: 270 });
+  f.furn.push({ id: 'f1', x: 50, y: 50, w: 50, d: 50, h: 80, elev: 20, layer: 'up' });
+  f.slabs.push({ id: 's1', pts: [], t: 20, off: -10, layer: 'up' });
+  f.rooms.push({ id: 'r1', pts: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }], hp: [{ x: 100, y: 0, z: 30 }], layer: 'up' });
+  env.P = { floors: [f], layers: [{ id: '0', name: 'D', vis: true }, { id: 'up', name: 'Up', vis: true, z: 150 }] };
+  assert.strictEqual(env.visFloor(f), f, 'no lift without the flag (2D)');
+  const g = env.visFloor(f, false, true);
+  assert.strictEqual(g.walls[0].elev, 150); assert.strictEqual(g.walls[1], f.walls[1]);
+  assert.strictEqual(g.furn[0].elev, 170); assert.strictEqual(g.slabs[0].off, 140);
+  assert.deepStrictEqual(g.rooms[0].hp.map(q => q.z).sort((a, b) => a - b), [150, 150, 180]);
+  assert.strictEqual(f.walls[0].elev, undefined); assert.strictEqual(f.furn[0].elev, 20); assert.strictEqual(f.rooms[0].hp.length, 1);
+  env.P.layers[1].z = 9999; assert.strictEqual(env.liftLayers(f).walls[0].elev, 500, 'clamped');
+  env.P.layers[1].vis = false; assert.ok(!env.visFloor(f, false, true).walls.some(w => w.id === 'w1'), 'hidden layer still hidden');
+});
+
+test('(8) layer height: panel field, normalize clamps / drops it, 3D / sections / walk / export apply it', () => {
+  assert.match(fnSrc('layersPanelHtml'), /data-p="z"/);
+  assert.match(fnSrc('applyProp'), /p === 'z'[\s\S]{0,200}LAYER_Z_MAX/);
+  const env = makeEnv();
+  const p = env.normalizeProject({ floors: [env.newFloor()], layers: [{ id: '0', name: 'D', vis: true, z: 0 }, { id: 'a', name: 'A', vis: true, z: '-777.4' }] });
+  assert.ok(!('z' in p.layers[0])); assert.strictEqual(p.layers[1].z, -500);
+  assert.match(fnSrc('walkSegsAt'), /visFloor\(f, false, true\)/);
+  assert.match(fnSrc('revitExport'), /visFloor\(f0, false, true\)/);
 });

@@ -2404,6 +2404,40 @@ check('site zones (#150): draw a zone with the mouse, panel type + curb, parcel 
   return 'mouse-drawn zone, panel path + 15 cm curb, 3 m setback, upper-floor context, not a room, 3D + walk on curb, IFC';
 });
 
+check('draw roof + layer height: a roof drawn by hand where there are no walls, fit-to-walls uses the floor below, a lifted layer rises in 3D', async page => {
+  const r = await page.evaluate(`(async () => {
+    show3D(false); closeModal();
+    const wait = ms => new Promise(res => setTimeout(res, ms)), out = {};
+    loadProject(newProject()); fit(); render();
+    setTool('roofd');
+    const cvr = cv.getBoundingClientRect(), ev = (type, w) => { const s = w2s(w); cv.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, isPrimary: true, button: 0, pointerType: 'mouse', clientX: cvr.left + s.x, clientY: cvr.top + s.y })); };
+    ev('pointerdown', { x: 0, y: 0 }); ev('pointermove', { x: 300, y: 300 }); ev('pointermove', { x: 600, y: 900 }); ev('pointerup', { x: 600, y: 900 });
+    const o = F().furn[0]; out.roof = !!o && isParamRoof(o) && o.w === 600 && o.d === 900 && o.ridgeDir === 'd' && o.elev === curFloorH() && sel[0] === o.id;
+    setTool('select'); undo(); out.undo = F().furn.length === 0; redo();
+    // roof on an empty upper floor: fit to the walls of the floor below
+    loadProject(newProject()); addRectWalls(0, 0, 800, 500); P.floors.push(newFloor('2')); commit(); fi = 1; refresh();
+    const rf = mkFurn(BYID.roof, 100, 100, 0); F().furn.push(rf); commit(); sel = [rf.id]; renderProps();
+    const b = document.querySelector('#props [data-act="rooffit"]'); if (b) b.click();
+    out.fit = rf.w === 820 && rf.d === 520 && rf.x === 400 && rf.elev === -20; out.rf = [rf.w, rf.d, rf.x, rf.y, rf.elev];
+    out.gable = P.floors[0].walls.some(w => wallTopOn(w));
+    // layer height
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); refresh();
+    layerAct('lyradd'); const lid = P.activeLayer; F().furn.push(mkFurn(BYID.tableR || BYID.coffee, 300, 200, 0)); commit(); refresh(); sel = []; renderProps();
+    const zi = document.querySelector('#props [data-k="lyr"][data-p="z"][data-lid="' + lid + '"]');
+    if (zi) { zi.value = '120'; zi.dispatchEvent(new Event('change', { bubbles: true })); }
+    out.lz = layerById(lid).z === 120 && furnElev(F().furn[0]) === 0;
+    out.ok3d = false; document.getElementById('b3d').click(); await wait(1200);
+    if (ui.view3d && T3 && T3.fit) { out.ok3d = true; let y = null; T3.scene.traverse(m => { if (m.userData.furnId === F().furn[0].id && y == null) y = m.position.y; }); out.y3d = y; show3D(false); }
+    return out;
+  })()`);
+  if (!r.roof || !r.undo) throw new Error('drawing a roof with no walls failed: ' + JSON.stringify(r));
+  if (!r.fit || !r.gable) throw new Error('fit to walls from an empty upper floor failed: ' + JSON.stringify(r));
+  if (!r.lz) throw new Error('layer height field failed: ' + JSON.stringify(r));
+  if (!r.ok3d) return 'skipped 3D (WebGL unavailable); roof drawing + fit + layer field ok';
+  if (!(r.y3d >= 119)) throw new Error('item on the lifted layer did not rise in 3D: ' + JSON.stringify(r));
+  return 'roof drawn without walls (6 × 9 m, ridge along the long side), fit from the floor below, layer +120 cm in 3D';
+});
+
 check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light pool (no new shaders), 30 lamps build fast (#121)', async page => {
   await page.evaluate(`(() => {
     show3D(false); closeModal();
