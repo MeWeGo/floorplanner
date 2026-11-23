@@ -266,6 +266,12 @@ function makeClientEnv(initialLang = 'en', loc = { protocol: 'https:', hostname:
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
   });
   const nodes = { '#onlineWrap': makeNode(), '#onlineCnt': makeNode() };
+  const mem = {};
+  const store = {
+    mem,
+    getItem(k) { return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null; },
+    setItem(k, v) { mem[k] = String(v); },
+  };
   const openedSockets = [];
   const timers = [];
   const intervals = [];
@@ -293,8 +299,9 @@ function makeClientEnv(initialLang = 'en', loc = { protocol: 'https:', hostname:
   assert.ok(presUrlLine, 'const PRESENCE_URL missing from app.js');
 
   const api = new Function(
-    'location', 'navigator', 'window', 'document', 'WebSocket', '$', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'initialLang',
+    'location', 'navigator', 'window', 'document', 'WebSocket', '$', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'initialLang', 'localStorage',
     `
+    const uid = () => Math.random().toString(36).slice(2, 9);
     let lang = initialLang;
     const L = (tr, en) => (lang === 'en' ? en : tr);
     ${presUrlLine[0].replace(/\r$/, '')}
@@ -306,8 +313,12 @@ function makeClientEnv(initialLang = 'en', loc = { protocol: 'https:', hostname:
     ${fnSrcOf(appSrc, 'presenceDrop')}
     ${fnSrcOf(appSrc, 'presenceSchedule')}
     ${fnSrcOf(appSrc, 'presenceConnect')}
+    ${fnSrcOf(appSrc, 'presenceDevId')}
+    ${fnSrcOf(appSrc, 'presenceWithDev')}
     ${fnSrcOf(appSrc, 'presenceBoot')}
     return {
+      presenceDevId,
+      presenceWithDev,
       PRESENCE_URL,
       pres,
       setLang(v) { lang = v; },
@@ -333,9 +344,10 @@ function makeClientEnv(initialLang = 'en', loc = { protocol: 'https:', hostname:
     (fn, ms) => { const id = nextId++; intervals.push({ id, fn, ms, cleared: false }); return id; },
     id => { const t = intervals.find(x => x.id === id); if (t) t.cleared = true; },
     initialLang,
+    store,
   );
 
-  return { api, nodes, openedSockets, timers, intervals, listeners };
+  return { api, nodes, openedSockets, timers, intervals, listeners, store };
 }
 
 test('presenceEndpoint resolves production URLs, local skips, and ?presence overrides', () => {
@@ -397,7 +409,9 @@ test('presenceBoot connects, handles keepalive/updates/reconnect, and stays off 
   onEnv.api.presenceBoot();
   assert.strictEqual(onEnv.openedSockets.length, 1);
   const ws1 = onEnv.openedSockets[0];
-  assert.strictEqual(ws1.url, 'ws://127.0.0.1:8787/ws');
+  const dev = onEnv.store.mem.fp_dev;
+  assert.match(dev, /^[A-Za-z0-9_-]{8,40}$/);
+  assert.strictEqual(ws1.url, 'ws://127.0.0.1:8787/ws?d=' + dev);
 
   ws1.onopen();
   assert.strictEqual(onEnv.intervals.length, 1);
@@ -423,4 +437,47 @@ test('presenceBoot connects, handles keepalive/updates/reconnect, and stays off 
   onEnv.listeners.win.pagehide.forEach(fn => fn());
   assert.strictEqual(onEnv.api.pres.closed, true);
   assert.strictEqual(onEnv.timers.length, beforeTimers);
+});
+
+test('presenceDevId keeps one anonymous id per browser and degrades without storage', () => {
+  const { api, store } = makeClientEnv();
+  const a = api.presenceDevId(store);
+  assert.match(a, /^[A-Za-z0-9_-]{8,40}$/);
+  assert.strictEqual(api.presenceDevId(store), a, 'a second tab reuses the stored id');
+  store.setItem('fp_dev', 'bad id!');
+  const b = api.presenceDevId(store);
+  assert.notStrictEqual(b, 'bad id!');
+  assert.match(b, /^[A-Za-z0-9_-]{8,40}$/);
+  const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+  assert.strictEqual(api.presenceDevId(broken), '');
+  assert.strictEqual(api.presenceWithDev('wss://p.example/ws', ''), 'wss://p.example/ws');
+  assert.strictEqual(api.presenceWithDev('wss://p.example/ws', 'abcdefgh12'), 'wss://p.example/ws?d=abcdefgh12');
+  assert.strictEqual(api.presenceWithDev('', 'abcdefgh12'), '');
+});
+
+test('PresenceRoom counts tabs of the same browser once', async () => {
+  const { worker, env, sockets, ensureRoom } = makeWorkerEnv();
+  const open = d => worker.fetch(new Request('https://presence.example/ws' + (d ? '?d=' + d : ''), {
+    headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
+  }), env);
+  await open('browserAAAA1');
+  assert.strictEqual(sockets[0].sent.at(-1), '{"online":1}');
+  await open('browserAAAA1');
+  assert.strictEqual(sockets[1].sent.at(-1), '{"online":1}', 'second tab, same browser');
+  await open('browserBBBB2');
+  assert.strictEqual(sockets[0].sent.at(-1), '{"online":2}');
+  await open('');
+  assert.strictEqual(sockets[0].sent.at(-1), '{"online":3}', 'older app without an id counts on its own');
+  await open('<bad>');
+  assert.strictEqual(sockets[0].sent.at(-1), '{"online":4}', 'an invalid id is ignored');
+
+  const res = await worker.fetch(new Request('https://presence.example/count'), env);
+  assert.deepStrictEqual(JSON.parse(await res.text()), { online: 4 });
+
+  // Closing one of the two tabs of browser A keeps that person online.
+  const room = ensureRoom();
+  await room.webSocketClose(sockets[0], 1000, '');
+  assert.strictEqual(sockets[1].sent.at(-1), '{"online":4}');
+  await room.webSocketClose(sockets[1], 1000, '');
+  assert.strictEqual(sockets[2].sent.at(-1), '{"online":3}');
 });

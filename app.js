@@ -12334,8 +12334,22 @@ function presenceConnect(url) {
     if (!pres.closed) presenceSchedule(url);
   };
 }
+// Anonymous random id per browser (localStorage), so several tabs of one browser count as one person.
+// Not linked to any account or plan; without storage the tab simply counts on its own.
+function presenceDevId(store) {
+  try {
+    const ls = store || localStorage;
+    let d = ls.getItem('fp_dev') || '';
+    if (!/^[A-Za-z0-9_-]{8,40}$/.test(d)) { d = uid() + uid() + uid(); ls.setItem('fp_dev', d); }
+    return d;
+  } catch (e) { return ''; }
+}
+function presenceWithDev(url, dev) {
+  if (!url || !dev) return url;
+  try { const u = new URL(url); u.searchParams.set('d', dev); return u.toString(); } catch (e) { return url; }
+}
 function presenceBoot() {
-  const url = presenceEndpoint();
+  const url = presenceWithDev(presenceEndpoint(), presenceDevId());
   if (!url || typeof WebSocket !== 'function') { presenceRender(); return; }
   window.addEventListener('online', () => {
     if (!pres.closed && !pres.ws) { pres.delay = 2000; presenceConnect(url); }

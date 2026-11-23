@@ -40,8 +40,20 @@ function corsHeaders(origin, env) {
 }
 
 /**
+ * Clean the anonymous per-browser id a tab sends as `?d=` (random, made by the app).
+ * Anything that does not look like one is ignored, so the tab counts on its own.
+ * @param {string|null} raw
+ * @returns {string}
+ */
+function presenceDevId(raw) {
+  const v = String(raw || '').trim();
+  return /^[A-Za-z0-9_-]{8,40}$/.test(v) ? v : '';
+}
+
+/**
  * Singleton Durable Object tracking active WebSocket tabs using the Hibernation API.
- * Stores no user identifiers, cookies, logs, or plan data.
+ * Tabs of the same browser (same random `?d=` id) count once. The id lives only in the
+ * socket's in-memory attachment while it is open; no cookies, logs or plan data are stored.
  */
 export class PresenceRoom extends DurableObject {
   constructor(ctx, env) {
@@ -62,13 +74,41 @@ export class PresenceRoom extends DurableObject {
   }
 
   /**
+   * Anonymous browser id of a socket ('' = none: an older app, counted on its own).
+   * @param {WebSocket} s
+   * @returns {string}
+   */
+  devOf(s) {
+    try {
+      const a = typeof s.deserializeAttachment === 'function' ? s.deserializeAttachment() : null;
+      if (a && typeof a.d === 'string') return a.d;
+    } catch (_) { }
+    return typeof s.fpDev === 'string' ? s.fpDev : '';
+  }
+
+  /**
+   * Number of people online: open sockets, with tabs of the same browser counted once.
+   * @param {WebSocket[]} live
+   * @returns {number}
+   */
+  countOf(live) {
+    const devs = new Set();
+    let solo = 0;
+    for (const s of live) {
+      const d = this.devOf(s);
+      if (d) devs.add(d); else solo++;
+    }
+    return devs.size + solo;
+  }
+
+  /**
    * Broadcast the live connection count to every connected client.
    * Any dead sockets discovered during send are closed and excluded from a follow-up update.
    * @param {WebSocket} [exclude]
    */
   broadcast(exclude) {
     let live = this.liveSockets(exclude);
-    const msg = JSON.stringify({ online: live.length });
+    const msg = JSON.stringify({ online: this.countOf(live) });
     const dead = [];
     for (const s of live) {
       try {
@@ -80,7 +120,7 @@ export class PresenceRoom extends DurableObject {
     }
     if (dead.length > 0) {
       live = live.filter(s => !dead.includes(s));
-      const corrected = JSON.stringify({ online: live.length });
+      const corrected = JSON.stringify({ online: this.countOf(live) });
       for (const s of live) {
         try { s.send(corrected); } catch (_) { }
       }
@@ -90,7 +130,7 @@ export class PresenceRoom extends DurableObject {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === '/count') {
-      return new Response(JSON.stringify({ online: this.liveSockets().length }), {
+      return new Response(JSON.stringify({ online: this.countOf(this.liveSockets()) }), {
         status: 200,
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
@@ -104,6 +144,12 @@ export class PresenceRoom extends DurableObject {
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.ctx.acceptWebSocket(server);
+    const dev = presenceDevId(url.searchParams.get('d'));
+    if (dev) {
+      // The attachment survives hibernation; the property is the fallback for runtimes without it.
+      try { if (typeof server.serializeAttachment === 'function') server.serializeAttachment({ d: dev }); } catch (_) { }
+      server.fpDev = dev;
+    }
     this.broadcast();
     return new Response(null, { status: 101, webSocket: client });
   }
