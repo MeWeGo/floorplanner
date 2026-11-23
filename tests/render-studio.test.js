@@ -4,18 +4,14 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
 
 const js = read('app.js');
 const html = read('index.html');
 
 const sliceFn = name => fnSrcOf(js, name);
 
-const constSrc = name => {
-  const start = js.indexOf('const ' + name);
-  assert.ok(start >= 0, name + ' is gone from app.js');
-  return js.slice(start, js.indexOf('\n', start));
-};
+const constSrc = name => constLineOf(js, name);
 
 test('(1) sunVector(az, alt) returns a unit vector with correct orientation and alt clamping', () => {
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -84,7 +80,7 @@ test('(2) RENDER_STYLES and RENDER_RES constants define styles and resolution lo
   assert.strictEqual(RENDER_RES.uhd[2], 3840, 'uhd resolution must give long side 3840');
 });
 
-test('(5) index.html #b3dStudio, openRenderStudio click binding, studioHtml controls, and render action', () => {
+test('(3) index.html #b3dStudio, openRenderStudio click binding, studioHtml controls, and render action', () => {
   // index.html has a button with id b3dStudio
   assert.match(html, /<button[^>]*id="b3dStudio"/, 'index.html has a button with id b3dStudio');
 

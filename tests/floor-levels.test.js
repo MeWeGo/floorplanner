@@ -4,17 +4,13 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, markerBlock, mcpClient } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock, mcpClient, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcpSrc = read('mcp/server.js');
 const fnSrc = name => fnSrcOf(src, name);
 
-const constLine = prefix => {
-  const start = src.indexOf(prefix);
-  assert.ok(start >= 0, prefix + ' is missing from app.js');
-  return src.slice(start, src.indexOf('\n', start));
-};
+const constLine = name => constLineOf(src, name);
 
 const {
   floorLvl,
@@ -26,10 +22,10 @@ const {
   setP,
 } = new Function(`
   let P = { wallT: 20, wallH: 270, floors: [] };
-  ${constLine('const floorH =')}
-  ${constLine('const floorLvl =')}
-  ${constLine('const floorElev =')}
-  ${constLine('const floorPitch =')}
+  ${constLine('floorH')}
+  ${constLine('floorLvl')}
+  ${constLine('floorElev')}
+  ${constLine('floorPitch')}
   ${fnSrc('pointInPoly')}
   ${fnSrc('voidDrop')}
   return {

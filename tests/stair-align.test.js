@@ -3,25 +3,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
-const fnSrc = name => {
-  const s = fnSrcOf(src, name);
-  if (s.endsWith('{}')) {
-    const start = src.indexOf('function ' + name + '(');
-    const body = src.indexOf(') {', start);
-    const prefix = 'function ' + name + '()';
-    const tail = fnSrcOf(prefix + src.slice(body + 2), name).slice(prefix.length);
-    return src.slice(start, body + 2) + tail;
-  }
-  return s;
-};
-const constSrc = name => {
-  const start = src.indexOf('const ' + name);
-  assert.ok(start >= 0, name + ' is missing from app.js');
-  return src.slice(start, src.indexOf('\n', start));
-};
+const fnSrc = name => fnSrcOf(src, name);
+const constSrc = name => constLineOf(src, name);
 
 function makeSandbox() {
   const store = new Map();

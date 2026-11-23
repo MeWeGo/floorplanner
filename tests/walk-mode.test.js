@@ -116,36 +116,15 @@ test('5. Starting inside a wall (200,0) with zero move gets pushed out (|y| >= 3
   assert.ok(Math.abs(pInside.y) >= 30 - 0.01, `expected |y| >= 30 - 0.01, got ${pInside.y}`);
 });
 
-test('6. Source-shape guards: loop3D, walkStep, keydown, set3DCam, show3D, s3dFloor, applyWalkCam', () => {
-  // loop3D computes dt from performance.now and calls walkStep(dt) and returns before T3.ctl.update() when T3.walk
-  const loopSrc = fnSrc('loop3D');
-  assert.match(loopSrc, /performance\.now\(\)/, 'loop3D must compute dt using performance.now()');
-  assert.match(loopSrc, /walkStep\(dt\)/, 'loop3D must call walkStep(dt)');
-  assert.match(loopSrc, /if\s*\(T3\.walk\)\s*\{\s*walkStep\(dt\);[^}]*return;\s*\}/, 'loop3D must return when T3.walk');
-  const walkRetIdx = loopSrc.indexOf('walkStep(dt)');
-  const ctlUpdIdx = loopSrc.indexOf('T3.ctl.update()');
-  assert.ok(walkRetIdx > 0 && ctlUpdIdx > walkRetIdx, 'loop3D must return before T3.ctl.update() when T3.walk');
-
-  // walkStep ignores 'q'/'e' (its source does not contain "'q'" or "'e'")
-  const stepSrc = fnSrc('walkStep');
-  assert.strictEqual(stepSrc.includes("'q'"), false, "walkStep must not contain 'q'");
-  assert.strictEqual(stepSrc.includes("'e'"), false, "walkStep must not contain 'e'");
-
+// The smoke check "3D walk mode: W stops at a wall…" drives entering from the eye button, W, Q being
+// ignored and Esc restoring the orbit with real keys; these are the parts it does not reach.
+test('6. Source-shape guards: walkStep speed, set3DCam, show3D, s3dFloor, applyWalkCam', () => {
   // speed uses dt (WALK.speed/WALK.run * dt)
-  assert.match(stepSrc, /\(k\.has\('shift'\)\s*\?\s*WALK\.run\s*:\s*WALK\.speed\)\s*\*\s*dt/, 'speed must use dt with WALK.speed / WALK.run');
+  assert.match(fnSrc('walkStep'), /\(k\.has\('shift'\)\s*\?\s*WALK\.run\s*:\s*WALK\.speed\)\s*\*\s*dt/, 'speed must use dt with WALK.speed / WALK.run');
 
-  // the 3D keydown branch calls exitWalk(true) on Escape before show3D(false)
-  const kdStart = src.indexOf('if (ui.view3d) {');
-  assert.ok(kdStart > 0, 'keydown ui.view3d branch must exist');
-  const kdEnd = src.indexOf('if (e.key === \' \') {', kdStart);
-  const kdBranch = src.slice(kdStart, kdEnd);
-  assert.match(kdBranch, /if\s*\(e\.key === 'Escape'\)\s*\{\s*if\s*\(T3 && T3\.walk\)\s*exitWalk\(true\);\s*else\s*show3D\(false\);/,
-    'keydown Escape must call exitWalk(true) before show3D(false)');
-
-  // set3DCam calls enterWalk() for 'eye' and exitWalk(false) otherwise
+  // set3DCam calls exitWalk(false) for every preset but 'eye'
   const setCamSrc = fnSrc('set3DCam');
   assert.match(setCamSrc, /if\s*\(kind !== 'eye'\)\s*exitWalk\(false\);/, "set3DCam must call exitWalk(false) when kind !== 'eye'");
-  assert.match(setCamSrc, /if\s*\(kind === 'eye'\)\s*enterWalk\(\);/, "set3DCam must call enterWalk() when kind === 'eye'");
 
   // show3D(false) calls exitWalk(true)
   const show3dSrc = fnSrc('show3D');

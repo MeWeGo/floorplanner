@@ -3,12 +3,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, markerBlock } = require('./helpers/repo');
 
 const appJs = read('app.js').replace(/\r\n/g, '\n');
-const a = appJs.indexOf('/* IFC-IMPORT:BEGIN'), b = appJs.indexOf('/* IFC-IMPORT:END */');
 // eslint-disable-next-line no-new-func
-const { ifcToProject } = new Function(appJs.slice(a, b) + '; return { ifcToProject };')();
+const { ifcToProject } = new Function(markerBlock(appJs, 'IFC-IMPORT') + '; return { ifcToProject };')();
 
 /** One storey, one IfcStairFlight built from step boxes (tread × width, heights rising along `dir` = +1 / −1 on X). */
 function stairIfc({ n, tread = 25, width = 250, riser = 17, dir = 1 }) {

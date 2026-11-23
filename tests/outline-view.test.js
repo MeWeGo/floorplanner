@@ -68,18 +68,9 @@ const env = new Function(`
   const partTilted = p => !!(p && (+p.rx || +p.ry));
   const partR = v => Math.round(v * 100) / 100;
   const partsScale = () => ({ sx: 1, sy: 1, sz: 1 });
-  const segProj = (p, a, b) => {
-    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-    const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
-    const x = a.x + dx * t, y = a.y + dy * t;
-    return { t, d: Math.hypot(p.x - x, p.y - y) };
-  };
-  function polyArea(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; s += p.x * q.y - q.x * p.y; } return Math.abs(s) / 2; }
-  function polyCentroid(pts) {
-    let a = 0, cx = 0, cy = 0;
-    for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length], c = p.x * q.y - q.x * p.y; a += c; cx += (p.x + q.x) * c; cy += (p.y + q.y) * c; }
-    return a ? { x: cx / (3 * a), y: cy / (3 * a) } : pts[0] || { x: 0, y: 0 };
-  }
+  ${fnSrc('segProj')}
+  ${fnSrc('polyArea')}
+  ${fnSrc('polyCentroid')}
   ${fnSrc('convexHull')}
   ${fnSrc('wallJoints')}
   ${fnSrc('pal')}

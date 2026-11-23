@@ -3,9 +3,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, mcpClient } = require('./helpers/repo');
 
-const src = read('app.js').replace(/\r\n/g, '\n'), mcp = read('mcp/server.js').replace(/\r\n/g, '\n');
+const src = read('app.js').replace(/\r\n/g, '\n');
 
 test('slabPolys returns nothing for a floor with noSlab, before touching the canvas', () => {
   // eslint-disable-next-line no-new-func
@@ -28,8 +28,16 @@ test('panel checkbox toggles noSlab with one commit and hides the material field
   assert.match(src, /p === 'slabOn'\) \{ if \(v\) delete F\(\)\.noSlab; else F\(\)\.noSlab = true;[^\n]*commit\(\)/);
 });
 
-test('MCP add_floor accepts noSlab and summarize reports it', () => {
-  assert.match(mcp, /noSlab: \{ type: 'boolean'/);
-  assert.match(mcp, /if \(a\.noSlab === true\) f\.noSlab = true;/);
-  assert.match(mcp, /f\.noSlab \? ', no floor slab' : ''/);
+test('MCP add_floor accepts noSlab and summarize reports it', async t => {
+  const c = mcpClient();
+  t.after(() => c.stop());
+  await c.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'floor-slab-off-test', version: '1' } });
+  assert.ok(!(await c.tool('new_project', { name: 'Slab off' })).err);
+  assert.ok(!(await c.tool('add_floor', { name: 'Roof terrace', noSlab: true })).err);
+  assert.ok(!(await c.tool('add_floor', { name: 'Attic' })).err);
+  const floors = JSON.parse((await c.tool('get_project')).text).floors;
+  assert.deepStrictEqual(floors.map(f => !!f.noSlab), [false, true, false], 'only the floor added with noSlab drops its slab');
+  const sum = (await c.tool('summarize')).text;
+  assert.strictEqual((sum.match(/, no floor slab/g) || []).length, 1, 'summarize reports the floor without a slab once');
+  assert.match(sum, /"Roof terrace"[^\n]*, no floor slab/);
 });

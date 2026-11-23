@@ -35,3 +35,30 @@ test('.gitignore keeps build noise out of the repo', () => {
     assert.ok(gi.includes(p), `.gitignore is missing ${p}`);
   }
 });
+
+test('fnSrcOf cuts parameter defaults, regex literals and async functions correctly', () => {
+  const { fnSrcOf } = require('./helpers/repo');
+  const src = [
+    'function a(opts = {}) { return opts.x; }',
+    "function b(s) { return s.replace(/[\"'`{]/g, '').split(/}/); }",
+    'async function c() { await 1; return `${ { k: 1 }.k }`; }',
+    'function d(x) { return x / 2 / 3; }',
+  ].join('\n');
+  assert.strictEqual(fnSrcOf(src, 'a'), 'function a(opts = {}) { return opts.x; }');
+  assert.deepStrictEqual(new Function('return ' + fnSrcOf(src, 'b'))()("{a'}b"), ['a', 'b']);
+  assert.match(fnSrcOf(src, 'c'), /^async function c\(\)/);
+  assert.strictEqual(new Function('return ' + fnSrcOf(src, 'd'))()(12), 2);
+});
+
+test('fnSrcOf extracts every named function in app.js and mcp/server.js as parseable source', () => {
+  const { fnSrcOf } = require('./helpers/repo');
+  for (const file of ['app.js', 'mcp/server.js']) {
+    const src = read(file);
+    const names = new Set([...src.matchAll(/(?:^|[^\w$.])function\s+([A-Za-z_$][\w$]*)\s*\(/g)].map(m => m[1]));
+    const bad = [];
+    for (const n of names) {
+      try { new Function('return (' + fnSrcOf(src, n) + ')'); } catch (e) { bad.push(n + ': ' + e.message); }
+    }
+    assert.deepStrictEqual(bad, [], file + ': functions fnSrcOf cannot cut out cleanly');
+  }
+});

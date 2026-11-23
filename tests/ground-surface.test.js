@@ -3,7 +3,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, markerBlock, mcpClient } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock, mcpClient, makeRng } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcpSrc = read('mcp/server.js');
@@ -460,16 +460,6 @@ test('(15) IFC writer writes IFCGEOGRAPHICELEMENT (.TERRAIN.) contained in IFCSI
   const { ifcFromExchange } = new Function(
     markerBlock(src, 'IFC-EXPORT') + '; return { ifcFromExchange };'
   )();
-
-  const makeRng = (seed = 123) => {
-    let s = seed >>> 0;
-    return () => {
-      s = (s + 0x6D2B79F5) | 0;
-      let t = Math.imul(s ^ (s >>> 15), 1 | s);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  };
 
   const baseExchange = () => ({
     name: 'Terrain IFC Test',

@@ -3,13 +3,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, markerBlock } = require('./helpers/repo');
 
 const appJs = read('app.js').replace(/\r\n/g, '\n');
 const serverJs = read('mcp/server.js').replace(/\r\n/g, '\n');
-const a = appJs.indexOf('/* PARTS-ENGINE:BEGIN'), b = appJs.indexOf('/* PARTS-ENGINE:END */');
 // eslint-disable-next-line no-new-func
-const E = new Function(appJs.slice(a, b) + '\nreturn { cleanPart, partIssues, partBounds, partRotM, partCloud, partHull, partTilted, validateParts };')();
+const E = new Function(markerBlock(appJs, 'PARTS-ENGINE') + '\nreturn { cleanPart, partIssues, partBounds, partRotM, partCloud, partHull, partTilted, validateParts };')();
 const near = (x, y, m) => assert.ok(Math.abs(x - y) < 0.05, (m || '') + ' ' + x + ' ≠ ' + y);
 
 test('cleanPart keeps rx / ry as normalised degrees and drops zero tilts', () => {

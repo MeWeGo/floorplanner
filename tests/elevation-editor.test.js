@@ -5,19 +5,14 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, wallTopSrc } = require('./helpers/repo');
+const { read, fnSrcOf, wallTopSrc, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const css = read('style.css');
 const html = read('index.html');
 const fnSrc = name => fnSrcOf(src, name);
 
-const constLine = name => {
-  const start = src.indexOf('const ' + name);
-  assert.ok(start >= 0, name + ' is gone from app.js');
-  const end = src.indexOf('\n', start);
-  return src.slice(start, end).replace(/\r$/, '');
-};
+const constLine = name => constLineOf(src, name);
 
 function makeEnv(floors = []) {
   return new Function('floors', `

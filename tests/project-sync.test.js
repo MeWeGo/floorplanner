@@ -7,32 +7,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { read, fnSrcOf, markerBlock } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
 
-function fnSrc(name) {
-  let body;
-  try {
-    body = fnSrcOf(src, name);
-    new Function(body);
-  } catch (e) {
-    // fnSrcOf stops early on parameter default `{}` (gdFetch) and regexes containing quotes/backticks (sanitizePlan)
-    const start = src.indexOf('function ' + name + '(');
-    assert.ok(start >= 0, name + '() missing');
-    const end = src.indexOf('\n}', start);
-    assert.ok(end >= 0, 'closing brace missing for ' + name);
-    body = src.slice(start, end + 2);
-  }
-  const idx = src.indexOf(body);
-  return idx >= 6 && src.slice(idx - 6, idx) === 'async ' ? 'async ' + body : body;
-}
+const fnSrc = name => fnSrcOf(src, name);
 
-function constLine(name) {
-  const m = new RegExp(`^const\\s+${name}\\b.*$`, 'm').exec(src);
-  assert.ok(m, `${name} missing from app.js`);
-  return m[0].replace(/\r$/, '');
-}
+const constLine = name => constLineOf(src, name);
 
 const qrMod = new Function(`
   ${markerBlock(src, 'QR-ENCODE')}

@@ -89,63 +89,97 @@ function fatalBindings(js, html) {
   return out;
 }
 
-/** Source of `function name(...) {...}` cut out of src; skips braces inside strings, comments and template literals. */
-function fnSrcOf(src, name) {
-  const start = src.indexOf('function ' + name + '(');
-  if (start < 0) throw new Error(name + '() missing');
-  let i = src.indexOf('{', start);
-  if (i < 0) throw new Error('no opening brace for ' + name);
-  let depth = 0;
-  const stack = ['code'];
-  const exprDepths = [];
-  while (i < src.length) {
-    const c = src[i];
-    const next = src[i + 1];
-    const top = stack[stack.length - 1];
-    if (top === 'code' || top === 'template-expr') {
-      if (c === '/' && next === '/') { stack.push('comment'); i++; }
-      else if (c === '/' && next === '*') { stack.push('block-comment'); i++; }
-      else if (c === "'") stack.push('single');
-      else if (c === '"') stack.push('double');
-      else if (c === '`') stack.push('template');
-      else if (c === '{') {
-        if (top === 'code') depth++;
-        else exprDepths[exprDepths.length - 1]++;
-      } else if (c === '}') {
-        if (top === 'code') {
-          depth--;
-          if (depth === 0) return src.slice(start, i + 1);
-        } else {
-          exprDepths[exprDepths.length - 1]--;
-          if (exprDepths[exprDepths.length - 1] === 0) {
-            exprDepths.pop();
-            stack.pop();
-          }
+/* Words after which a `/` starts a regex literal rather than a division. */
+const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'new', 'delete', 'void', 'throw', 'instanceof', 'yield', 'await']);
+
+/**
+ * Index of the bracket that closes the one at `open` (`(`, `[` or `{`), skipping
+ * strings, comments, template literals (with nested `${…}`) and regex literals.
+ */
+function matchBracket(src, open) {
+  const stack = [{ m: 'code', d: 0 }];   // code frames count their own bracket depth
+  let prev = '', word = '';               // last significant code char / identifier, for regex detection
+  for (let i = open; i < src.length; i++) {
+    const c = src[i], next = src[i + 1], top = stack[stack.length - 1];
+    if (top.m === 'code') {
+      if (c === '/' && next === '/') { const e = src.indexOf('\n', i); i = e < 0 ? src.length : e; continue; }
+      if (c === '/' && next === '*') { const e = src.indexOf('*/', i + 2); if (e < 0) break; i = e + 1; continue; }
+      if (/\s/.test(c)) continue;
+      if (c === "'" || c === '"') {
+        for (i++; i < src.length && src[i] !== c; i++) if (src[i] === '\\') i++;
+        prev = c; word = ''; continue;
+      }
+      if (c === '`') { stack.push({ m: 'tpl' }); continue; }
+      if (c === '/' && (!/[\w$)\]]/.test(prev) || REGEX_AFTER_WORD.has(word))) {
+        let cls = false;
+        for (i++; i < src.length; i++) {
+          const r = src[i];
+          if (r === '\\') i++;
+          else if (r === '[') cls = true;
+          else if (r === ']') cls = false;
+          else if (r === '/' && !cls) break;
+          else if (r === '\n') throw new Error('unterminated regex literal at ' + i);
+        }
+        while (/[a-z]/i.test(src[i + 1] || '')) i++;
+        prev = ')'; word = ''; continue;   // a regex is a value: a following `/` divides
+      }
+      if (c === '(' || c === '[' || c === '{') top.d++;
+      else if (c === ')' || c === ']' || c === '}') {
+        top.d--;
+        if (top.d === 0) {
+          if (stack.length === 1) return i;
+          stack.pop();                       // end of a template `${…}`
+          continue;
         }
       }
-    } else if (top === 'comment') {
-      if (c === '\n') stack.pop();
-    } else if (top === 'block-comment') {
-      if (c === '*' && next === '/') { stack.pop(); i++; }
-    } else if (top === 'single') {
+      word = /[\w$]/.test(c) ? (/[\w$]/.test(prev) ? word + c : c) : '';
+      prev = c;
+    } else {                                 // template literal text
       if (c === '\\') i++;
-      else if (c === "'") stack.pop();
-    } else if (top === 'double') {
-      if (c === '\\') i++;
-      else if (c === '"') stack.pop();
-    } else if (top === 'template') {
-      if (c === '\\') i++;
-      else if (c === '$' && next === '{') {
-        stack.push('template-expr');
-        exprDepths.push(1);
-        i++;
-      } else if (c === '`') {
-        stack.pop();
-      }
+      else if (c === '`') { stack.pop(); prev = '`'; word = ''; }
+      else if (c === '$' && next === '{') { stack.push({ m: 'code', d: 1 }); prev = '{'; word = ''; i++; }
     }
-    i++;
   }
-  throw new Error('Unterminated function ' + name);
+  throw new Error('unbalanced bracket at ' + open);
+}
+
+/**
+ * Source of `function name(...) {...}` (with a leading `async` when present) cut out of src.
+ * Skips the parameter list first, so defaults such as `opts = {}` are not taken for the body,
+ * and ignores brackets inside strings, comments, template literals and regex literals.
+ */
+function fnSrcOf(src, name) {
+  const re = new RegExp('(^|[^\\w$.])((?:async\\s+)?function\\s*\\*?\\s*' + name.replace(/\$/g, '\\$') + '\\s*\\()', 'g');
+  const m = re.exec(src);
+  if (!m) throw new Error(name + '() missing');
+  const start = m.index + m[1].length;
+  const close = matchBracket(src, start + m[2].length - 1);
+  const body = src.indexOf('{', close);
+  if (body < 0) throw new Error('no opening brace for ' + name);
+  return src.slice(start, matchBracket(src, body) + 1);
+}
+
+/**
+ * The source line that declares `const name = …` (to the end of that line, without `\r`). The
+ * declaration must start its line and the name must match as a whole word, so
+ * `constLineOf(src, 'rampRail')` never returns `const rampRailSides …` and `'gd'` never `for (const gd of …`.
+ */
+function constLineOf(src, name) {
+  const m = new RegExp('(^|\\n)[ \\t]*const\\s+' + name.replace(/\$/g, '\\$') + '\\s*=').exec(src);
+  if (!m) throw new Error('const ' + name + ' missing');
+  const start = m.index + m[1].length, end = src.indexOf('\n', start);
+  return src.slice(start, end < 0 ? src.length : end).replace(/\r$/, '').trim();
+}
+
+/** Seeded PRNG (mulberry32) for deterministic tests. */
+function makeRng(seed = 123456789) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 /** The sloped wall top block of app.js (#96: cleanWallTop … detachWallTop) plus isSolidWall, for sandboxes that run wall code. */
@@ -200,7 +234,7 @@ function mcpClient() {
 }
 
 module.exports = {
-  wallTopSrc, markerBlock, mcpClient,
-  ROOT, read, exists, parseJsonc, fnSrcOf,
+  wallTopSrc, markerBlock, mcpClient, constLineOf, makeRng,
+  ROOT, read, exists, parseJsonc, fnSrcOf, matchBracket,
   htmlIds, runtimeIds, domLookups, domContractViolations, fatalBindings,
 };

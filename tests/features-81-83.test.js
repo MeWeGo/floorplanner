@@ -2,19 +2,13 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcp = read('mcp/server.js');
-const html = read('index.html');
 const css = read('style.css');
 
-function constLine(name) {
-  const start = src.indexOf(`const ${name} =`);
-  assert.ok(start >= 0, `const ${name} not found in app.js`);
-  const end = src.indexOf('\n', start);
-  return src.slice(start, end >= 0 ? end : src.length).trim();
-}
+const constLine = name => constLineOf(src, name);
 
 function makeDraftEnv() {
   const fn = new Function(`
@@ -140,22 +134,19 @@ test('(A5) mirrorObjs preserves circle point order [center, edge]', () => {
   assert.deepStrictEqual(pline.pts, [{ x: 250, y: 50 }, { x: 300, y: 50 }]);
 });
 
+// The smoke check "2D drafting: …" draws all shapes with the tool, selects one, edits / undoes it,
+// exports it and proves 3D builds no meshes for it; this covers what it does not touch.
 test('(A6) issue #83 source wiring in app.js and mcp/server.js', () => {
-  assert.match(src, /const\s+KINDS\s*=\s*\{[^}]*drafts:\s*'draft'/);
   assert.match(src, /const\s+PTS_KINDS\s*=\s*new\s+Set\([^)]*'draft'/);
   assert.match(src, /const\s+XFORM_KINDS\s*=\s*new\s+Set\([^)]*'draft'/);
   assert.match(src, /const\s+LAYER_ARR\s*=\s*\{[^}]*draft:\s*'drafts'/);
   assert.match(src, /const\s+GRESIZE\s*=\s*\{[^}]*draft:\s*1/);
-  assert.match(src, /const\s+newFloor\s*=[^;]*drafts:\s*\[\]/);
   assert.match(src, /function\s+deleteIds[\s\S]*?\[[^\]]*'drafts'[^\]]*\]/);
-  assert.match(fnSrcOf(src, 'layerStrings'), /draftSvg\(/);
   assert.match(src, /const\s+TOOLS\s*=\s*\[[\s\S]*?\['draft',[^,\]]+,[^,\]]+,\s*'U'/);
   assert.match(src, /const\s+HINTS\s*=\s*\{[\s\S]*?draft:/);
   assert.match(src, /const\s+HINTS_EN\s*=\s*\{[\s\S]*?draft:/);
   assert.match(src, /\bu:\s*'draft'/);
 
-  const build3DSrc = fnSrcOf(src, 'build3D');
-  assert.ok(!/\bdrafts\b|\bdraftSvg\b/.test(build3DSrc), 'build3D must not mention drafts or draftSvg (2D only)');
   // a wall-less floor gets its automatic slab from the content bounds: drafting lines must not count
   assert.match(fnSrcOf(src, 'slabPolys'), /contentBounds\([^;]*drafts:\s*\[\]/, 'slabPolys ignores drafts');
 
@@ -165,28 +156,11 @@ test('(A6) issue #83 source wiring in app.js and mcp/server.js', () => {
   assert.match(mcp, /'drafts'/);
 });
 
-test('(B) issue #82 3D floor-following, slab/room selection, and props drawer wiring', () => {
-  const followSrc = fnSrcOf(src, 'followSelFloor');
-  assert.match(followSrc, /fi\s*=\s*fd\.floorIdx/);
-
-  const pickableSrc = fnSrcOf(src, 'pickable');
-  assert.match(pickableSrc, /findAnyFloor/);
-
-  const walkSrc = fnSrcOf(src, 'walkClick');
-  assert.match(walkSrc, /slabId/);
-  assert.match(walkSrc, /roomId/);
-  assert.match(walkSrc, /followSelFloor/);
-
-  const build3DSrc = fnSrcOf(src, 'build3D');
-  assert.match(build3DSrc, /userData\.slabId/);
-
-  const sel3DSrc = fnSrcOf(src, 'refreshSel3D');
-  assert.match(sel3DSrc, /slabId/);
-  assert.match(sel3DSrc, /roomId/);
-
-  const propsSrc = fnSrcOf(src, 'renderProps');
-  assert.match(propsSrc, /const\s+acts\s*=[\s\S]*?floorBadgeHtml\(\)/);
-
-  assert.match(html, /id="bInspect"/);
+// The smoke check "3D selection on another floor fills the side panel…" proves the floor follows a 3D
+// pick, the floor badge, editing a wall on another floor, and slab picking + highlight; rooms and the
+// narrow-screen drawer are what it does not reach.
+test('(B) issue #82 room selection in 3D and the props drawer', () => {
+  assert.match(fnSrcOf(src, 'walkClick'), /roomId/);
+  assert.match(fnSrcOf(src, 'refreshSel3D'), /roomId/);
   assert.match(css, /body\.props-open\s+#props/);
 });
