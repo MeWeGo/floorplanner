@@ -6,7 +6,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const fnSrc = name => fnSrcOf(src, name);
@@ -23,9 +23,12 @@ function env(floors, opts = {}) {
     const KINDS = { walls: 'wall', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', dims: 'dim' };
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), rnd = (v, s) => Math.round(v / s) * s;
     const visFloor = f => f; // katman süzgeci (#32): bu testlerde tüm katmanlar görünür
-    const snapToGrid = p => ({ x: rnd(p.x, P.grid), y: rnd(p.y, P.grid) });
-    const furnCorners = o => [{ x: o.x - o.w / 2, y: o.y - o.d / 2 }, { x: o.x + o.w / 2, y: o.y - o.d / 2 }, { x: o.x + o.w / 2, y: o.y + o.d / 2 }, { x: o.x - o.w / 2, y: o.y + o.d / 2 }];
-    const bboxOf = (k, o) => { const pts = o.pts || (o.a ? [o.a, o.b] : furnCorners(o)); const xs = pts.map(p => p.x), ys = pts.map(p => p.y); return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) }; };
+    ${fnSrc('snapToGrid')}
+    ${constLineOf(src, 'NO_TILT_K')}
+    ${constLineOf(src, 'AB_KINDS')}
+    ${constLineOf(src, 'PTS_KINDS')}
+    ${fnSrc('furnCorners')}
+    ${fnSrc('bboxOf')}
     ${fnSrc('polyCentroid')}
     ${src.slice(start, end)}
     return { snapPt, snapCenters, underlayFloor, nearCenter };`)(floors, opts);
@@ -55,7 +58,7 @@ test('a wall dragged by its end does not snap to its own moving midpoint', () =>
 
 test('room centroid and group centre snap; a dragged vertex ignores its own room', () => {
   const room = { id: 'r', pts: rect(0, 0, 500, 300) };
-  const grp = [{ id: 'a', grp: 'g', x: 1000, y: 0, w: 40, d: 40 }, { id: 'b', grp: 'g', x: 1200, y: 100, w: 40, d: 40 }];
+  const grp = [{ id: 'a', grp: 'g', x: 1000, y: 0, w: 40, d: 40, rot: 0 }, { id: 'b', grp: 'g', x: 1200, y: 100, w: 40, d: 40, rot: 0 }];
   const { snapPt, snapCenters, nearCenter } = env([floor({ rooms: [room], furn: grp })]);
   const q = snapPt({ x: 243, y: 157 }, null, null);
   assert.deepStrictEqual([q.x, q.y, q.hit], [250, 150, 'center']);

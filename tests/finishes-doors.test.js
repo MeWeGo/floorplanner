@@ -6,18 +6,14 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcpSrc = read('mcp/server.js');
 
 const fnSrc = name => fnSrcOf(src, name);
 
-const constSrc = name => {
-  const start = src.indexOf('const ' + name);
-  assert.ok(start >= 0, name + ' is gone from app.js');
-  return src.slice(start, src.indexOf('\n', start));
-};
+const constSrc = name => constLineOf(src, name);
 
 const mcpConst = name => {
   const start = mcpSrc.indexOf('const ' + name);

@@ -8,21 +8,16 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const ROOT = path.join(__dirname, '..');
 
 const sliceFunc = name => fnSrcOf(src, name);
-function block() {
-  const a = src.indexOf('/* REVIT-MESH:BEGIN */'), b = src.indexOf('/* REVIT-MESH:END */');
-  assert.ok(a > 0 && b > a, 'REVIT-MESH block not found');
-  return src.slice(a, b);
-}
 const M = new Function(`
-  const NO_TILT_K = new Set(['stairs', 'ramp', 'roof']), furnTilted = o => !!(o && !NO_TILT_K.has(o.k) && (+o.rx || +o.ry));
+  ${constLineOf(src, 'NO_TILT_K')}
   ${sliceFunc('partRotM')}
-  ${block()}
+  ${markerBlock(src, 'REVIT-MESH')}
   return { REVIT_FT, rvPrism, rvSphere, rvPartFaces, rvPlace, rvCyc, rvEllipse };
 `)();
 
@@ -56,7 +51,9 @@ test('part shapes keep their volume and size', () => {
     const c = M.rvPartFaces({ type: 'cyl', axis, x: 0, y: 0, z: 0, w: 60, d: 20, h: 20 });
     assert.ok(vol(c) > 0, `lying cylinder ${axis} faces outward`);
     near(ext(c, 2)[1] - ext(c, 2)[0], 20, 1e-6, `lying cylinder ${axis} height`);
-    near(ext(c, 0)[1] - ext(c, 0)[0], axis === 'x' ? 60 : 60, 1e-6, `lying cylinder ${axis} bounding box x`);
+    // w × d × h is always the bounding box, whichever way the cylinder lies (y is flipped, not scaled)
+    near(ext(c, 0)[1] - ext(c, 0)[0], 60, 1e-6, `lying cylinder ${axis} bounding box x`);
+    near(ext(c, 1)[1] - ext(c, 1)[0], 20, 1e-6, `lying cylinder ${axis} bounding box y`);
   }
   const sph = M.rvPartFaces({ type: 'sphere', x: 0, y: 0, z: 0, w: 30, d: 30, h: 30 });
   near(vol(sph), 4 / 3 * Math.PI * 15 ** 3, 4 / 3 * Math.PI * 15 ** 3 * 0.15, 'sphere');

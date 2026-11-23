@@ -159,6 +159,29 @@ function fnSrcOf(src, name) {
   return src.slice(start, matchBracket(src, body) + 1);
 }
 
+/**
+ * The source line that declares `const name = …` (to the end of that line, without `\r`). The
+ * declaration must start its line and the name must match as a whole word, so
+ * `constLineOf(src, 'rampRail')` never returns `const rampRailSides …` and `'gd'` never `for (const gd of …`.
+ */
+function constLineOf(src, name) {
+  const m = new RegExp('(^|\\n)[ \\t]*const\\s+' + name.replace(/\$/g, '\\$') + '\\s*=').exec(src);
+  if (!m) throw new Error('const ' + name + ' missing');
+  const start = m.index + m[1].length, end = src.indexOf('\n', start);
+  return src.slice(start, end < 0 ? src.length : end).replace(/\r$/, '').trim();
+}
+
+/** Seeded PRNG (mulberry32) for deterministic tests. */
+function makeRng(seed = 123456789) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /** The sloped wall top block of app.js (#96: cleanWallTop … detachWallTop) plus isSolidWall, for sandboxes that run wall code. */
 function wallTopSrc(js) {
   js = js.replace(/\r\n/g, '\n');
@@ -211,7 +234,7 @@ function mcpClient() {
 }
 
 module.exports = {
-  wallTopSrc, markerBlock, mcpClient,
+  wallTopSrc, markerBlock, mcpClient, constLineOf, makeRng,
   ROOT, read, exists, parseJsonc, fnSrcOf, matchBracket,
   htmlIds, runtimeIds, domLookups, domContractViolations, fatalBindings,
 };

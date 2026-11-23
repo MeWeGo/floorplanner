@@ -5,31 +5,26 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock, constLineOf, makeRng } = require('./helpers/repo');
 
 const src = read('app.js').replace(/\r\n/g, '\n');
 
 const sliceFunc = name => fnSrcOf(src, name);
 
-function block(begin, end) {
-  const a = src.indexOf(begin), b = src.indexOf(end);
-  assert.ok(a >= 0 && b > a, `${begin} .. ${end} block missing`);
-  return src.slice(a, b);
-}
 
 const { ifcFromExchange } = new Function(
-  block('/* IFC-EXPORT:BEGIN */', '/* IFC-EXPORT:END */') + '; return { ifcFromExchange };'
+  markerBlock(src, 'IFC-EXPORT') + '; return { ifcFromExchange };'
 )();
 
 const M = new Function(`
-  const NO_TILT_K = new Set(['stairs', 'ramp', 'roof']), furnTilted = o => !!(o && !NO_TILT_K.has(o.k) && (+o.rx || +o.ry));
+  ${constLineOf(src, 'NO_TILT_K')}
   ${sliceFunc('partRotM')}
-  ${block('/* REVIT-MESH:BEGIN */', '/* REVIT-MESH:END */')}
+  ${markerBlock(src, 'REVIT-MESH')}
   return { REVIT_FT, rvPartFaces, rvPlace };
 `)();
 
 const { ifcToProject, ifcParse } = new Function(
-  block('/* IFC-IMPORT:BEGIN', '/* IFC-IMPORT:END */') + '; return { ifcToProject, ifcParse };'
+  markerBlock(src, 'IFC-IMPORT') + '; return { ifcToProject, ifcParse };'
 )();
 
 const FT = M.REVIT_FT;
@@ -37,16 +32,6 @@ const ft = cm => cm / FT;
 const pt = (x, y) => [ft(x), ft(-y)];
 const vec = (x, y) => [x, -y];
 const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg}: got ${a}, want ${b} ± ${tol}`);
-
-function makeRng(seed = 123456789) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6D2B79F5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function buildExchange() {
   const pt2 = (x, y) => ({ x, y });

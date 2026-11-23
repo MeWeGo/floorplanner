@@ -5,27 +5,31 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
-const start = src.indexOf('/* ---------- Katmanlar: üst üste binen nesneler');
-const end = src.indexOf("cv.addEventListener('pointerdown'");
-assert.ok(start > 0 && end > start, 'layer section not found in app.js');
+const fnSrc = name => fnSrcOf(src, name);
 
 function env(f, selIds) {
   return new Function('f', 'selIds', `
     let sel = selIds, committed = 0;
     const F = () => f, ui = {}, T3 = null, toast = () => {}, L = (a, b) => b;
     const commit = () => { committed++; }, refresh = () => {}, schedBuild3D = () => {};
-    const document = {}, window = { addEventListener() {} }, addEventListener = () => {};
-    function bboxOf(kind, o) {
-      if (kind === 'room') { const xs = o.pts.map(p => p.x), ys = o.pts.map(p => p.y); return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) }; }
-      return { x0: o.x - o.w / 2, y0: o.y - o.d / 2, x1: o.x + o.w / 2, y1: o.y + o.d / 2 };
-    }
-    ${src.slice(start, end).replace(/window\.addEventListener\([^;]*;/g, '')}
+    ${constLineOf(src, 'NO_TILT_K')}
+    ${constLineOf(src, 'AB_KINDS')}
+    ${constLineOf(src, 'PTS_KINDS')}
+    ${fnSrc('furnCorners')}
+    ${fnSrc('bboxOf')}
+    ${constLineOf(src, 'LAYER_ARR')}
+    ${constLineOf(src, 'bbOverlap')}
+    ${constLineOf(src, 'isLocked')}
+    ${constLineOf(src, 'unlocked')}
+    ${fnSrc('lockToast')}
+    ${fnSrc('reorderSel')}
+    ${fnSrc('stackLevels')}
     return { reorderSel, stackLevels, get sel() { return sel; }, get committed() { return committed; } };`)(f, selIds);
 }
-const fu = (id, x, y, w = 100, d = 100) => ({ id, x, y, w, d });
+const fu = (id, x, y, w = 100, d = 100) => ({ id, x, y, w, d, rot: 0 });
 const ids = a => a.map(o => o.id).join(',');
 
 test('front / back move the selection to the end / start of its kind', () => {

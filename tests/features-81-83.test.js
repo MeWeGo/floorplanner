@@ -2,18 +2,13 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcp = read('mcp/server.js');
 const css = read('style.css');
 
-function constLine(name) {
-  const start = src.indexOf(`const ${name} =`);
-  assert.ok(start >= 0, `const ${name} not found in app.js`);
-  const end = src.indexOf('\n', start);
-  return src.slice(start, end >= 0 ? end : src.length).trim();
-}
+const constLine = name => constLineOf(src, name);
 
 function makeDraftEnv() {
   const fn = new Function(`

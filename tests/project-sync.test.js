@@ -7,17 +7,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { read, fnSrcOf, markerBlock } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
 
 const fnSrc = name => fnSrcOf(src, name);
 
-function constLine(name) {
-  const m = new RegExp(`^const\\s+${name}\\b.*$`, 'm').exec(src);
-  assert.ok(m, `${name} missing from app.js`);
-  return m[0].replace(/\r$/, '');
-}
+const constLine = name => constLineOf(src, name);
 
 const qrMod = new Function(`
   ${markerBlock(src, 'QR-ENCODE')}
