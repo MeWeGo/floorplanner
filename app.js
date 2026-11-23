@@ -5310,6 +5310,372 @@ function dxfMergeWalls(walls, o = {}) {
   return { walls: out, gaps };
 }
 /* DXF-IMPORT:END */
+/* DXF-EXPORT:BEGIN ---------- DXF dışa aktarma (#157): AutoCAD / BricsCAD / LibreCAD / DraftSight ----------
+   Saf JS, bağımlılıksız; DOM'a ve global duruma dokunmaz. dxfFromPlan(proj, floors, opts) → { text, stats }:
+   ASCII DXF R2000 (AC1015, tutamaçlı; CLASSES / TABLES / BLOCKS / ENTITIES / OBJECTS), $INSUNITS = cm (opts.units: mm / cm / m),
+   CAD ekseni: X = x, Y = −y (SVG'de y aşağı). Türkçe karakterler \U+XXXX olarak yazılır, dosya saf ASCII.
+   - Anlamsal katmanlar (DXF_EXP_LAYERS): duvarlar A-WALL (gönyeli yüz çizgileri, serbest uç kapakları), kapılar A-DOOR
+     (kanat + açılış yayı + söveler), pencereler A-GLAZ, korkuluk A-RAIL, odalar A-ROOM + adı / alanı A-ROOM-IDEN, döşeme A-SLAB,
+     boşluk A-VOID, eşyalar A-FURN (her tür + boyut bir blok, INSERT ile döndürülür), ölçü A-ANNO-DIMS (bloklu DIMENSION),
+     yazı A-ANNO-TEXT, çizim A-DRAFT (renk, çizgi tipi, kalınlık, dolgu = HATCH), kalem A-SKETCH, aks A-GRID, kesit A-SECT.
+   - Katman adları içe aktarıcının (DXF-IMPORT) tanıdığı sözcükleri taşır; dışa aktarılan dosya geri okunduğunda duvarlar,
+     kapı / pencereler, odalar, eşyalar, ölçüler ve yazılar yeniden oluşur (tests/dxf-export.test.js).
+   - Birden çok kat: floors dizisi; her kat bir öncekinin sağına 5 m arayla dizilir, üstüne kat adı yazılır.
+   opts.geo uygulamanın geometri yardımcılarını verir: foot(o) (eğik eşyanın izi, yoksa null),
+   steps(o) (merdiven basamak çokgenleri, yerel cm), arc(o) (draftArc). Yoksa ilgili ayrıntı atlanır. */
+const DXF_EXP_UNITS = { mm: [10, 4], cm: [1, 5], m: [0.01, 6] }; // birim → [cm başına birim, $INSUNITS]
+const DXF_EXP_LAYERS = [ // anahtar, ad, ACI renk, çizgi tipi, kalınlık (1/100 mm)
+  ['wall', 'A-WALL', 7, 'Continuous', 50], ['door', 'A-DOOR', 30, 'Continuous', 25], ['glaz', 'A-GLAZ', 4, 'Continuous', 25],
+  ['rail', 'A-RAIL', 8, 'Continuous', 18], ['room', 'A-ROOM', 8, 'Continuous', 13], ['iden', 'A-ROOM-IDEN', 7, 'Continuous', 18],
+  ['slab', 'A-SLAB', 8, 'DASHED', 13], ['void', 'A-VOID', 1, 'Continuous', 18], ['furn', 'A-FURN', 5, 'Continuous', 18],
+  ['dims', 'A-ANNO-DIMS', 150, 'Continuous', 13], ['text', 'A-ANNO-TEXT', 7, 'Continuous', 18], ['draft', 'A-DRAFT', 7, 'Continuous', 25],
+  ['sketch', 'A-SKETCH', 7, 'Continuous', 25], ['grid', 'A-GRID', 1, 'CENTER', 13], ['sect', 'A-SECT', 6, 'Continuous', 35],
+  ['title', 'A-ANNO-TTLB', 7, 'Continuous', 25],
+];
+const DXF_EXP_LW = [0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211];
+const DXF_EXP_DASH = { dashed: 'DASHED', dotted: 'DOT', center: 'CENTER' };
+// metin: ASCII dışı karakterler \U+XXXX, satır sonu ve denetim karakterleri boşluk
+function dxfExpStr(s) {
+  let o = '';
+  for (const ch of String(s == null ? '' : s)) {
+    const c = ch.codePointAt(0);
+    if (c < 32) o += ' ';
+    else if (c < 127) o += ch;
+    else if (c <= 0xffff) o += '\\U+' + c.toString(16).toUpperCase().padStart(4, '0');
+    else o += '?';
+  }
+  return o.slice(0, 250);
+}
+// #rrggbb → { aci (yaklaşık), tc (24 bit gerçek renk) }; geçersiz → null (BYLAYER)
+function dxfExpColor(hex) {
+  if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return null;
+  const n = parseInt(hex.slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255;
+  const base = [[255, 0, 0, 1], [255, 255, 0, 2], [0, 255, 0, 3], [0, 255, 255, 4], [0, 0, 255, 5], [255, 0, 255, 6], [128, 128, 128, 8], [192, 192, 192, 9], [0, 0, 0, 7], [255, 255, 255, 7]];
+  let best = 7, bd = Infinity;
+  for (const [R, G, B, i] of base) { const d = (R - r) ** 2 + (G - g) ** 2 + (B - b) ** 2; if (d < bd) { bd = d; best = i; } }
+  return { aci: best, tc: n };
+}
+const dxfExpLw = cm => { const v = Math.round((+cm || 0) * 10); let b = 0; for (const s of DXF_EXP_LW) if (Math.abs(s - v) < Math.abs(b - v)) b = s; return b; };
+// ARC açıları: c merkez, p1 → p2 saat yönünün tersine (CAD Y yukarı) giden yay; ccw false ise ters sırada
+function dxfExpArcAng(c, p1, p2) {
+  const d = (a, b) => Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+  return [d(c, p1), d(c, p2)].map(a => Math.round((((a % 360) + 360) % 360) * 1e4) / 1e4);
+}
+function dxfFromPlan(proj, floors, opts = {}) {
+  const geo = opts.geo || {}, [K, INS] = DXF_EXP_UNITS[opts.units] || DXF_EXP_UNITS.cm;
+  const N = v => { const r = Math.round(v * 1e4) / 1e4; return Object.is(r, -0) ? 0 : r; };
+  let hs = 0x20; const H = () => (hs++).toString(16).toUpperCase();
+  const LY = Object.fromEntries(DXF_EXP_LAYERS.map(l => [l[0], l[1]]));
+  const msRec = H(), psRec = H(), blocks = [], blockByKey = new Map();
+  const stats = { floors: 0, walls: 0, openings: 0, rooms: 0, slabs: 0, voids: 0, furn: 0, drafts: 0, sketches: 0, dims: 0, texts: 0, axes: 0, sections: 0, blocks: 0 };
+  let ms = [], ext = [Infinity, Infinity, -Infinity, -Infinity];
+  // ---- varlık yazıcıları: out = çift dizisi, ow = sahip blok kaydı, X = plan noktası → [X, Y] (CAD birimi)
+  const ent = (out, ow, type, layer, st, sub) => {
+    out.push(0, type, 5, H(), 330, ow, 100, 'AcDbEntity', 8, layer);
+    if (st && st.lt) out.push(6, st.lt);
+    if (st && st.col) out.push(62, st.col.aci, 420, st.col.tc);
+    if (st && st.lw != null) out.push(370, st.lw);
+    out.push(100, sub);
+  };
+  const grow = q => { if (q[0] < ext[0]) ext[0] = q[0]; if (q[1] < ext[1]) ext[1] = q[1]; if (q[0] > ext[2]) ext[2] = q[0]; if (q[1] > ext[3]) ext[3] = q[1]; };
+  function W(out, ow, track) {
+    const g = track ? grow : () => { };
+    return {
+      line(ly, a, b, st) { if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-6) return; g(a); g(b); ent(out, ow, 'LINE', ly, st, 'AcDbLine'); out.push(10, N(a[0]), 20, N(a[1]), 30, 0, 11, N(b[0]), 21, N(b[1]), 31, 0); },
+      pline(ly, pts, closed, st, width) {
+        if (pts.length < 2) return; pts.forEach(g);
+        ent(out, ow, 'LWPOLYLINE', ly, st, 'AcDbPolyline'); out.push(90, pts.length, 70, closed ? 1 : 0);
+        if (width) out.push(43, N(width));
+        for (const q of pts) out.push(10, N(q[0]), 20, N(q[1]));
+      },
+      circle(ly, c, r, st) { if (!(r > 0)) return; g([c[0] - r, c[1] - r]); g([c[0] + r, c[1] + r]); ent(out, ow, 'CIRCLE', ly, st, 'AcDbCircle'); out.push(10, N(c[0]), 20, N(c[1]), 30, 0, 40, N(r)); },
+      arc(ly, c, r, a0, a1, st) { if (!(r > 0)) return; g([c[0] - r, c[1] - r]); g([c[0] + r, c[1] + r]); ent(out, ow, 'ARC', ly, st, 'AcDbCircle'); out.push(10, N(c[0]), 20, N(c[1]), 30, 0, 40, N(r), 100, 'AcDbArc', 50, a0, 51, a1); },
+      // hj: 0 sol, 1 orta, 2 sağ · vj: 0 taban, 1 alt, 2 orta, 3 üst (DXF TEXT hizası)
+      text(ly, p, h, s, rot, hj, vj, st) {
+        s = dxfExpStr(s); if (!s.trim() || !(h > 0)) return; g(p);
+        ent(out, ow, 'TEXT', ly, st, 'AcDbText');
+        out.push(10, N(p[0]), 20, N(p[1]), 30, 0, 40, N(h), 1, s, 50, N(((rot % 360) + 360) % 360), 7, 'Standard');
+        if (hj || vj) out.push(72, hj || 0, 11, N(p[0]), 21, N(p[1]), 31, 0);
+        out.push(100, 'AcDbText'); if (vj) out.push(73, vj);
+      },
+      hatch(ly, loop, solid, st, scale) {
+        if (loop.length < 3) return; loop.forEach(g);
+        ent(out, ow, 'HATCH', ly, st, 'AcDbHatch');
+        out.push(10, 0, 20, 0, 30, 0, 210, 0, 220, 0, 230, 1, 2, solid ? 'SOLID' : 'ANSI31', 70, solid ? 1 : 0, 71, 0, 91, 1, 92, 3, 72, 0, 73, 1, 93, loop.length);
+        for (const q of loop) out.push(10, N(q[0]), 20, N(q[1]));
+        out.push(97, 0, 75, 0, 76, 1);
+        if (!solid) { const s = N(scale || 1); out.push(52, 0, 41, s, 77, 0, 78, 1, 53, 45, 43, 0, 44, 0, 45, N(-2.2450640303 * s), 46, N(2.2450640303 * s), 79, 0); }
+        out.push(98, 0);
+      },
+      insert(ly, name, p, rot) { g(p); ent(out, ow, 'INSERT', ly, null, 'AcDbBlockReference'); out.push(2, name, 10, N(p[0]), 20, N(p[1]), 30, 0, 41, 1, 42, 1, 43, 1, 50, N(((rot % 360) + 360) % 360)); },
+      dim(ly, name, a, b, q, mid, txt) {
+        g(a); g(b); g(q); ent(out, ow, 'DIMENSION', ly, null, 'AcDbDimension');
+        out.push(2, name, 10, N(q[0]), 20, N(q[1]), 30, 0, 11, N(mid[0]), 21, N(mid[1]), 31, 0, 70, 33, 1, dxfExpStr(txt), 3, 'Standard', 100, 'AcDbAlignedDimension', 13, N(a[0]), 23, N(a[1]), 33, 0, 14, N(b[0]), 24, N(b[1]), 34, 0);
+      },
+    };
+  }
+  const newBlock = (name, anon) => { const b = { name, rec: H(), out: [], anon }; blocks.push(b); return b; };
+  const msW = W(ms, msRec, true);
+  // ---- katlar: her biri bir öncekinin sağına
+  const fBox = f => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const e = p => { if (p && isFinite(p.x) && isFinite(p.y)) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } };
+    for (const w of f.walls || []) { e(w.a); e(w.b); }
+    for (const k of ['rooms', 'slabs', 'voids', 'drafts', 'sketches']) for (const o of f[k] || []) (o.pts || []).forEach(e);
+    for (const o of f.furn || []) { const r = Math.max(o.w || 0, o.d || 0) / 2; e({ x: o.x - r, y: o.y - r }); e({ x: o.x + r, y: o.y + r }); }
+    for (const o of [...(f.dims || []), ...(f.axes || []), ...(f.sections || [])]) { e(o.a); e(o.b); }
+    for (const o of f.texts || []) e(o);
+    return isFinite(x0) ? { x0, y0, x1, y1 } : null;
+  };
+  let ox = 0, cur = 0, first = true;
+  for (const f of floors) {
+    const bb = fBox(f);
+    if (bb) ox = first ? 0 : cur - bb.x0;
+    const T = p => [(p.x + ox) * K, -p.y * K], TT = (x, y) => T({ x, y });
+    if (floors.length > 1 && bb) msW.text(LY.title, TT(bb.x0, bb.y0 - 120), 40 * K, f.name || '', 0, 0, 0);
+    exportFloor(f, T, TT);
+    stats.floors++;
+    if (bb) { cur = bb.x1 + ox + 500; first = false; }
+  }
+  function exportFloor(f, T, TT) {
+    const walls = f.walls || [], low = w => w.wt === 'railing' || w.wt === 'fence';
+    // ---- duvarlar: açıklıklarda kesilen parçalar, iki yüz çizgisi. Köşede her yüz komşu duvarın yüzüne kadar uzar / kısalır
+    // (gönye), T birleşiminde karşı duvarın yüzünde durur; serbest uç kapaklı, açıklık söveleri açıklığın katmanında
+    // (A-WALL'daki iki söve dar bir kapıda karşılıklı "duvar" sanılırdı).
+    const opsOf = new Map(); for (const op of f.ops || []) { if (!opsOf.has(op.wall)) opsOf.set(op.wall, []); opsOf.get(op.wall).push(op); }
+    const frame = w => { const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1, ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L; return { w, L, ux, uy, nx: -uy, ny: ux, ht: Math.max(1, +w.t || 20) / 2 }; };
+    const frames = walls.filter(w => !low(w) && Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) >= 0.5).map(frame), FR = new Map(frames.map(F => [F.w, F]));
+    // köşe grupları (uçlar ≤ 1 cm): her uç için yüz uzatması ext.get(w)[uç][yüz] (+ = uçtan dışarı)
+    const ext = new Map(frames.map(F => [F.w, { a: [0, 0], b: [0, 0], ja: false, jb: false }])), endsL = [];
+    for (const F of frames) endsL.push({ F, e: 'a', p: F.w.a, d: { x: F.ux, y: F.uy } }, { F, e: 'b', p: F.w.b, d: { x: -F.ux, y: -F.uy } });
+    const usedE = new Set();
+    for (let i = 0; i < endsL.length; i++) {
+      if (usedE.has(i)) continue;
+      const grp = [endsL[i]]; usedE.add(i);
+      for (let j = i + 1; j < endsL.length; j++) if (!usedE.has(j) && Math.hypot(endsL[j].p.x - endsL[i].p.x, endsL[j].p.y - endsL[i].p.y) <= 1) { grp.push(endsL[j]); usedE.add(j); }
+      if (grp.length < 2) continue;
+      const O = grp[0].p, maxT = Math.max(...grp.map(g => g.F.ht * 2));
+      grp.forEach(g => { g.ang = Math.atan2(g.d.y, g.d.x); ext.get(g.F.w)['j' + g.e] = true; });
+      grp.sort((a, b) => a.ang - b.ang);
+      // yüz dizini: uç a'da +n = duvarın +normal yüzü (1), uç b'de +n = −normal yüzü (0)
+      const face = (g, plus) => (g.e === 'a') === plus ? 1 : 0;
+      for (let k = 0; k < grp.length; k++) {
+        const e1 = grp[k], e2 = grp[(k + 1) % grp.length]; if (e1 === e2) continue;
+        const n1 = { x: -e1.d.y, y: e1.d.x }, n2 = { x: -e2.d.y, y: e2.d.x };
+        const p1 = { x: O.x + n1.x * e1.F.ht, y: O.y + n1.y * e1.F.ht }, p2 = { x: O.x - n2.x * e2.F.ht, y: O.y - n2.y * e2.F.ht };
+        const den = e1.d.x * e2.d.y - e1.d.y * e2.d.x; if (Math.abs(den) < 1e-6) continue; // aynı doğrultu: yüzler uçta buluşur
+        const s1 = ((p2.x - p1.x) * e2.d.y - (p2.y - p1.y) * e2.d.x) / den, M = { x: p1.x + e1.d.x * s1, y: p1.y + e1.d.y * s1 };
+        if (Math.hypot(M.x - O.x, M.y - O.y) > maxT * 2.5) continue; // çok dar açı: gönye yok
+        const s2 = (M.x - p2.x) * e2.d.x + (M.y - p2.y) * e2.d.y;
+        ext.get(e1.F.w)[e1.e][face(e1, true)] = -s1; ext.get(e2.F.w)[e2.e][face(e2, false)] = -s2;
+      }
+    }
+    const inBody = (q, F, tol) => { const dx = q.x - F.w.a.x, dy = q.y - F.w.a.y, s = dx * F.ux + dy * F.uy, n = dx * F.nx + dy * F.ny; return s > -tol && s < F.L + tol && Math.abs(n) < F.ht + tol; };
+    const host = (w, p) => frames.find(F => F.w !== w && inBody(p, F, 0.5)); // T birleşimi: başka duvarın gövdesinde biten uç
+    const clip = (F0, p, dir, o, Hf) => { // uçtan içeri, karşı duvarın yüzüne kadar olan uzaklık
+      const qx = p.x + F0.nx * o, qy = p.y + F0.ny * o, dx = qx - Hf.w.a.x, dy = qy - Hf.w.a.y, n0 = dx * Hf.nx + dy * Hf.ny, k = (F0.ux * Hf.nx + F0.uy * Hf.ny) * dir;
+      if (Math.abs(k) < 0.05) return 0;
+      const c = [(Hf.ht - n0) / k, (-Hf.ht - n0) / k].filter(s => s >= -0.01); return c.length ? Math.max(0, Math.min(...c)) : 0;
+    };
+    for (const w of walls) {
+      const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y); if (L < 0.5) continue;
+      const ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, nx = -uy, ny = ux, t = Math.max(1, +w.t || 20), ht = t / 2;
+      const at = (s, o) => TT(w.a.x + ux * s + nx * o, w.a.y + uy * s + ny * o);
+      if (low(w)) { msW.pline(LY.rail, [at(0, -ht), at(L, -ht), at(L, ht), at(0, ht)], true); stats.walls++; continue; }
+      const gaps = (opsOf.get(w.id) || []).map(o => [Math.max(0, o.d - o.w / 2), Math.min(L, o.d + o.w / 2), o.type === 'window' || !o.type ? LY.glaz : LY.door]).filter(g => g[1] - g[0] > 1).sort((a, b) => a[0] - b[0]);
+      const pieces = []; let s = 0, prev = null; // [s0, s1, söve katmanı başta, sonda]
+      for (const [g0, g1, ly] of gaps) { if (g0 > s + 0.5) pieces.push([s, g0, prev, ly]); s = Math.max(s, g1); prev = ly; }
+      if (L > s + 0.5) pieces.push([s, L, prev, null]);
+      const F0 = FR.get(w), X = ext.get(w), hA = !X.ja && host(w, w.a), hB = !X.jb && host(w, w.b);
+      for (const [s0, s1, lyA, lyB] of pieces) {
+        const atA = s0 < 0.5, atB = s1 > L - 0.5;
+        [-ht, ht].forEach((o, fi) => {
+          const a0 = atA ? (hA ? clip(F0, w.a, 1, o, hA) : -X.a[fi]) : 0, b0 = atB ? (hB ? clip(F0, w.b, -1, o, hB) : -X.b[fi]) : 0;
+          if (s1 - b0 > s0 + a0 + 1e-6) msW.line(LY.wall, at(s0 + a0, o), at(s1 - b0, o));
+        });
+        if (!atA) msW.line(lyA, at(s0, -ht), at(s0, ht)); else if (!X.ja && !hA) msW.line(LY.wall, at(s0, -ht), at(s0, ht));
+        if (!atB) msW.line(lyB, at(s1, -ht), at(s1, ht)); else if (!X.jb && !hB) msW.line(LY.wall, at(s1, -ht), at(s1, ht));
+      }
+      if (w.wt === 'curtain') msW.line(LY.glaz, at(0, 0), at(L, 0));
+      stats.walls++;
+    }
+    // ---- kapı / pencere: yerel x duvar boyunca (flip aynalar), yerel y duvar normali (−uy, ux)
+    const byId = new Map(walls.map(w => [w.id, w]));
+    for (const op of f.ops || []) {
+      const w = byId.get(op.wall); if (!w || low(w)) continue;
+      const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1, ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, nx = -uy, ny = ux;
+      const cx = w.a.x + ux * op.d, cy = w.a.y + uy * op.d, fx = op.flip ? -1 : 1, hw = op.w / 2, ht = Math.max(1, +w.t || 20) / 2, sd = op.side < 0 ? -1 : 1;
+      const lp = (x, y) => TT(cx + ux * x * fx + nx * y, cy + uy * x * fx + ny * y);
+      const swing = (hx, len, tx) => { // menteşe (hx, 0), kanat açık (hx, sd·len), yay kapalı uçtan (tx, 0)
+        const c = lp(hx, 0), p1 = lp(tx, 0), p2 = lp(hx, sd * len);
+        msW.line(LY.door, c, p2);
+        const [a1, a2] = dxfExpArcAng(c, p1, p2), ccw = ((a2 - a1) % 360 + 360) % 360 <= 180;
+        msW.arc(LY.door, c, len * K, ccw ? a1 : a2, ccw ? a2 : a1);
+      };
+      if (op.type === 'door') swing(-hw, op.w, hw);
+      else if (op.type === 'double') { swing(-hw, hw, 0); swing(hw, hw, 0); }
+      else if (op.type === 'slide') {
+        const pw = op.w * 0.55, d = ht * 0.7;
+        msW.pline(LY.door, [lp(-hw, -d), lp(-hw + pw, -d), lp(-hw + pw, 0), lp(-hw, 0)], true);
+        msW.pline(LY.door, [lp(hw - pw, 0), lp(hw, 0), lp(hw, d), lp(hw - pw, d)], true);
+      } else if (op.type === 'arch') {
+        const st = { lt: 'DASHED' };
+        msW.line(LY.door, lp(-hw, -ht), lp(hw, -ht), st); msW.line(LY.door, lp(-hw, ht), lp(hw, ht), st);
+      } else {
+        msW.line(LY.glaz, lp(-hw, -ht), lp(hw, -ht)); msW.line(LY.glaz, lp(-hw, ht), lp(hw, ht)); msW.line(LY.glaz, lp(-hw, 0), lp(hw, 0));
+      }
+      stats.openings++;
+    }
+    // ---- döşeme, boşluk, oda
+    for (const s of f.slabs || []) { if ((s.pts || []).length > 2) { msW.pline(LY.slab, s.pts.map(T), true); stats.slabs++; } }
+    for (const v of f.voids || []) {
+      const p = v.pts || []; if (p.length < 3) continue;
+      msW.pline(LY.void, p.map(T), true);
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const q of p) { x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
+      if (p.length === 4) { msW.line(LY.void, T(p[0]), T(p[2])); msW.line(LY.void, T(p[1]), T(p[3])); }
+      else { msW.line(LY.void, TT(x0, y0), TT(x1, y1)); msW.line(LY.void, TT(x1, y0), TT(x0, y1)); }
+      stats.voids++;
+    }
+    for (const r of f.rooms || []) {
+      const p = r.pts || []; if (p.length < 3) continue;
+      msW.pline(LY.room, p.map(T), true);
+      let a = 0, cx = 0, cy = 0;
+      for (let i = 0; i < p.length; i++) { const q = p[i], n = p[(i + 1) % p.length], c = q.x * n.y - n.x * q.y; a += c; cx += (q.x + n.x) * c; cy += (q.y + n.y) * c; }
+      const area = Math.abs(a / 2), c = Math.abs(a) > 1e-6 ? { x: cx / (3 * a), y: cy / (3 * a) } : p[0];
+      const fs = Math.max(16, Math.min(34, Math.sqrt(area) / 12)), h = fs * 0.72 * K;
+      if (r.name) msW.text(LY.iden, TT(c.x, c.y - fs * 0.45), h, r.name, 0, 1, 2);
+      msW.text(LY.iden, TT(c.x, c.y + fs * 0.75), h * 0.7, (area / 10000).toFixed(2) + ' m²', 0, 1, 2);
+      stats.rooms++;
+    }
+    // ---- eşyalar: tür + boyut başına bir blok (yerel cm, Y yukarı), INSERT ile döndürülür
+    for (const o of f.furn || []) {
+      if (!(o.w > 0 && o.d > 0)) continue;
+      const tilt = geo.foot && geo.foot(o);
+      if (tilt) { msW.pline(LY.furn, tilt.map(T), true); stats.furn++; continue; }
+      const key = [o.type, o.k, o.w, o.d, o.stepN || '', o.stairType || '', o.k === 'poly' ? JSON.stringify(o.pts || []) : ''].join('|');
+      let b = blockByKey.get(key);
+      if (!b) {
+        const nm = ('FP_' + String(o.type || 'item') + '_' + String(opts.catName ? opts.catName(o) || '' : o.name || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ı/g, 'i').replace(/[^A-Za-z0-9]+/g, '_') + '_' + Math.round(o.w) + 'x' + Math.round(o.d)).replace(/_+/g, '_').slice(0, 200);
+        let name = nm, n = 2; while (blocks.some(x => x.name.toUpperCase() === name.toUpperCase())) name = nm + '_' + n++;
+        b = newBlock(name); blockByKey.set(key, b);
+        const bw = W(b.out, b.rec, false), L = (x, y) => [x * K, -y * K], hw = o.w / 2, hd = o.d / 2;
+        if (o.k === 'round') {
+          if (Math.abs(o.w - o.d) < 0.5) bw.circle('0', [0, 0], hw * K);
+          else { const q = []; for (let i = 0; i < 48; i++) { const a = i / 48 * 2 * Math.PI; q.push(L(hw * Math.cos(a), hd * Math.sin(a))); } bw.pline('0', q, true); }
+        } else if (o.k === 'poly' && Array.isArray(o.pts) && o.pts.length > 2) bw.pline('0', o.pts.map(q => L(q.x, q.y)), true);
+        else {
+          bw.pline('0', [L(-hw, -hd), L(hw, -hd), L(hw, hd), L(-hw, hd)], true);
+          if (o.k === 'stairs' && geo.steps) for (const st of geo.steps(o) || []) if (st.length > 2) bw.pline('0', st.map(q => L(q.x, q.y)), true);
+        }
+      }
+      msW.insert(LY.furn, b.name, T(o), -(+o.rot || 0));
+      stats.furn++;
+    }
+    // ---- 2B çizim (#83) ve kalem
+    const style = (o, dash) => { const col = dxfExpColor(o.color), lt = DXF_EXP_DASH[dash]; return { col, lt, lw: dxfExpLw(o.w) }; };
+    for (const o of f.drafts || []) {
+      const p = o.pts || []; if (p.length < 2) continue;
+      const st = style(o, o.dash); let loop = null;
+      if (o.shape === 'circle') {
+        const r = Math.hypot(p[1].x - p[0].x, p[1].y - p[0].y); msW.circle(LY.draft, T(p[0]), r * K, st);
+        loop = []; for (let i = 0; i < 64; i++) { const a = i / 64 * 2 * Math.PI; loop.push(TT(p[0].x + r * Math.cos(a), p[0].y + r * Math.sin(a))); }
+      } else if (o.shape === 'arc' && p.length > 2 && geo.arc && geo.arc(o)) {
+        const A = geo.arc(o), c = T(A.c), s = T(p[0]), e = T(p[2]), m = T(p[1]);
+        const [a0, a1] = dxfExpArcAng(c, s, e), [, am] = dxfExpArcAng(c, s, m), sweep = ((a1 - a0) % 360 + 360) % 360, mid = ((am - a0) % 360 + 360) % 360;
+        if (mid <= sweep) msW.arc(LY.draft, c, A.r * K, a0, a1, st); else msW.arc(LY.draft, c, A.r * K, a1, a0, st);
+      } else {
+        const closed = o.shape !== 'arc' && !!o.closed && p.length > 2;
+        if (p.length === 2) msW.line(LY.draft, T(p[0]), T(p[1]), st); else msW.pline(LY.draft, p.map(T), closed, st);
+        if (closed) loop = p.map(T);
+      }
+      if (loop && (o.fill === 'solid' || o.fill === 'hatch')) msW.hatch(LY.draft, loop, o.fill === 'solid', { col: dxfExpColor(o.fillCol || o.color) }, 15 / 3.175 * K);
+      stats.drafts++;
+    }
+    for (const sk of f.sketches || []) { const p = sk.pts || []; if (p.length > 1) { msW.pline(LY.sketch, p.map(T), false, style({ color: sk.color, w: sk.w || 4 })); stats.sketches++; } }
+    // ---- ölçüler: DIMENSION + çizgileri taşıyan anonim *D bloğu (CAD programları bloğu gösterir)
+    for (const d of f.dims || []) {
+      const Ld = Math.hypot(d.b.x - d.a.x, d.b.y - d.a.y); if (Ld < 1) continue;
+      const ux = (d.b.x - d.a.x) / Ld, uy = (d.b.y - d.a.y) / Ld, nx = -uy, ny = ux, off = d.off ?? 40, sg = off >= 0 ? 1 : -1;
+      const A = { x: d.a.x + nx * off, y: d.a.y + ny * off }, B = { x: d.b.x + nx * off, y: d.b.y + ny * off };
+      const txt = opts.fmtLen ? opts.fmtLen(Ld) : (Math.round(Ld * 10) / 10) + '';
+      const b = newBlock('*D' + (blocks.filter(x => x.anon).length + 1), true), bw = W(b.out, b.rec, false), st = { col: null };
+      bw.line('0', T(A), T(B), st);
+      bw.line('0', TT(d.a.x + nx * 5 * sg, d.a.y + ny * 5 * sg), TT(A.x + nx * 6 * sg, A.y + ny * 6 * sg));
+      bw.line('0', TT(d.b.x + nx * 5 * sg, d.b.y + ny * 5 * sg), TT(B.x + nx * 6 * sg, B.y + ny * 6 * sg));
+      for (const q of [A, B]) bw.line('0', TT(q.x - (ux + nx) * 4.9, q.y - (uy + ny) * 4.9), TT(q.x + (ux + nx) * 4.9, q.y + (uy + ny) * 4.9));
+      let ang = Math.atan2(-uy, ux) * 180 / Math.PI; if (ang > 90 || ang <= -90) ang += 180;
+      const mid = { x: (A.x + B.x) / 2 + nx * 5 * sg, y: (A.y + B.y) / 2 + ny * 5 * sg };
+      bw.text('0', T(mid), 14 * 0.72 * K, txt, ang, 1, 1);
+      msW.dim(LY.dims, b.name, T(d.a), T(d.b), T(A), T(mid), txt);
+      stats.dims++;
+    }
+    for (const t of f.texts || []) { msW.text(LY.text, T(t), (+t.size || 16) * 0.72 * K, t.text, -(+t.rot || 0), 0, 0, { col: dxfExpColor(t.color) }); stats.texts++; }
+    // ---- aks ve kesit çizgileri
+    for (const ax of f.axes || []) {
+      const st = { lt: 'CENTER' }, Lx = Math.hypot(ax.b.x - ax.a.x, ax.b.y - ax.a.y) || 1, ux = (ax.b.x - ax.a.x) / Lx, uy = (ax.b.y - ax.a.y) / Lx, R = 30;
+      msW.line(LY.grid, T(ax.a), T(ax.b), st);
+      for (const [e, sg] of [['a', -1], ['b', 1]]) {
+        if (ax.bub === 'none' || (ax.bub && ax.bub !== e)) continue;
+        const c = { x: ax[e].x + ux * R * sg, y: ax[e].y + uy * R * sg };
+        msW.circle(LY.grid, T(c), R * K); msW.text(LY.grid, T(c), 24 * 0.72 * K, ax.name || '', 0, 1, 2);
+      }
+      stats.axes++;
+    }
+    for (const sc of f.sections || []) {
+      msW.line(LY.sect, T(sc.a), T(sc.b));
+      for (const e of ['a', 'b']) msW.text(LY.sect, T(sc[e]), 30 * 0.72 * K, sc.name || '', 0, 1, 2);
+      stats.sections++;
+    }
+  }
+  stats.blocks = blocks.filter(b => !b.anon).length;
+  // ---- dosyayı birleştir
+  const o = [], P = (...kv) => { for (let i = 0; i < kv.length; i++) o.push(kv[i]); };
+  const tbl = (name, recs, sub) => { // recs: [ (tableHandle) => pairs ]
+    const th = H(); P(0, 'TABLE', 2, name, 5, th, 330, 0, 100, 'AcDbSymbolTable', 70, recs.length);
+    if (sub) P(...sub);
+    for (const r of recs) P(...r(th));
+    P(0, 'ENDTAB');
+  };
+  if (!isFinite(ext[0])) ext = [0, 0, 1000 * K, 1000 * K];
+  const sym = (type, sub, th, name, code5 = 5) => [0, type, code5, H(), 330, th, 100, 'AcDbSymbolTableRecord', 100, sub, 2, name, 70, 0];
+  const body = [];
+  const swap = () => { const s = o.splice(0); body.push(...s); };
+  P(0, 'SECTION', 2, 'CLASSES', 0, 'ENDSEC'); swap();
+  P(0, 'SECTION', 2, 'TABLES');
+  const cw = ext[2] - ext[0], ch = ext[3] - ext[1];
+  tbl('VPORT', [th => [...sym('VPORT', 'AcDbViewportTableRecord', th, '*ACTIVE'), 10, 0, 20, 0, 11, 1, 21, 1, 12, N((ext[0] + ext[2]) / 2), 22, N((ext[1] + ext[3]) / 2), 13, 0, 23, 0, 14, 10 * K, 24, 10 * K, 15, 10 * K, 25, 10 * K, 16, 0, 26, 0, 36, 1, 17, 0, 27, 0, 37, 0, 40, N(Math.max(ch, cw / 1.6, 100 * K) * 1.1), 41, 1.6, 42, 50, 43, 0, 44, 0, 50, 0, 51, 0, 71, 0, 72, 1000, 73, 1, 74, 3, 75, 0, 76, 0, 77, 0, 78, 0]]);
+  const lt = (name, desc, pat) => th => [...sym('LTYPE', 'AcDbLinetypeTableRecord', th, name), 3, desc, 72, 65, 73, pat.length, 40, N(pat.reduce((s, v) => s + Math.abs(v), 0)), ...pat.flatMap(v => [49, N(v), 74, 0])];
+  const u = 10 * K; // çizgi tipi deseni: 10 cm birimli
+  tbl('LTYPE', [lt('ByBlock', '', []), lt('ByLayer', '', []), lt('Continuous', 'Solid line', []),
+    lt('DASHED', 'Dashed __ __ __', [3 * u, -1.5 * u]), lt('DOT', 'Dot . . . .', [0, -1 * u]), lt('CENTER', 'Center ____ _ ____ _', [6 * u, -1 * u, 1 * u, -1 * u])]);
+  tbl('LAYER', [['0', '0', 7, 'Continuous', -3], ...DXF_EXP_LAYERS].map(l => th => [...sym('LAYER', 'AcDbLayerTableRecord', th, l[1]).slice(0, -2), 70, 0, 62, l[2], 6, l[3], 370, l[4]]));
+  tbl('STYLE', [th => [...sym('STYLE', 'AcDbTextStyleTableRecord', th, 'Standard'), 40, 0, 41, 1, 50, 0, 71, 0, 42, 2.5, 3, 'txt', 4, '']]);
+  tbl('VIEW', []); tbl('UCS', []);
+  tbl('APPID', [th => sym('APPID', 'AcDbRegAppTableRecord', th, 'ACAD')]);
+  tbl('DIMSTYLE', [th => [...sym('DIMSTYLE', 'AcDbDimStyleTableRecord', th, 'Standard', 105), 40, 1, 41, N(7 * K), 42, N(5 * K), 43, 0, 44, N(6 * K), 140, N(14 * 0.72 * K), 141, 0, 147, N(3 * K), 77, 1, 78, 8, 176, 0]], [100, 'AcDbDimStyleTable', 71, 0]);
+  tbl('BLOCK_RECORD', [{ name: '*Model_Space', rec: msRec }, { name: '*Paper_Space', rec: psRec }, ...blocks].map(b => th => [0, 'BLOCK_RECORD', 5, b.rec, 330, th, 100, 'AcDbSymbolTableRecord', 100, 'AcDbBlockTableRecord', 2, b.name]));
+  P(0, 'ENDSEC'); swap();
+  P(0, 'SECTION', 2, 'BLOCKS');
+  for (const b of [{ name: '*Model_Space', rec: msRec, out: [] }, { name: '*Paper_Space', rec: psRec, out: [], ps: true }, ...blocks]) {
+    P(0, 'BLOCK', 5, H(), 330, b.rec, 100, 'AcDbEntity'); if (b.ps) P(67, 1); P(8, '0', 100, 'AcDbBlockBegin', 2, b.name, 70, b.anon ? 1 : 0, 10, 0, 20, 0, 30, 0, 3, b.name, 1, '');
+    P(...b.out);
+    P(0, 'ENDBLK', 5, H(), 330, b.rec, 100, 'AcDbEntity'); if (b.ps) P(67, 1); P(8, '0', 100, 'AcDbBlockEnd');
+  }
+  P(0, 'ENDSEC'); swap();
+  P(0, 'SECTION', 2, 'ENTITIES', ...ms, 0, 'ENDSEC'); swap();
+  const root = H(), grp = H();
+  P(0, 'SECTION', 2, 'OBJECTS', 0, 'DICTIONARY', 5, root, 330, 0, 100, 'AcDbDictionary', 281, 1, 3, 'ACAD_GROUP', 350, grp,
+    0, 'DICTIONARY', 5, grp, 330, root, 100, 'AcDbDictionary', 281, 1, 0, 'ENDSEC', 0, 'EOF'); swap();
+  const head = [0, 'SECTION', 2, 'HEADER', 9, '$ACADVER', 1, 'AC1015', 9, '$DWGCODEPAGE', 3, 'ANSI_1252', 9, '$INSBASE', 10, 0, 20, 0, 30, 0,
+    9, '$EXTMIN', 10, N(ext[0]), 20, N(ext[1]), 30, 0, 9, '$EXTMAX', 10, N(ext[2]), 20, N(ext[3]), 30, 0,
+    9, '$LIMMIN', 10, N(ext[0]), 20, N(ext[1]), 9, '$LIMMAX', 10, N(ext[2]), 20, N(ext[3]),
+    9, '$LTSCALE', 40, 1, 9, '$TEXTSTYLE', 7, 'Standard', 9, '$CLAYER', 8, '0', 9, '$DIMSTYLE', 2, 'Standard',
+    9, '$INSUNITS', 70, INS, 9, '$MEASUREMENT', 70, 1, 9, '$LUNITS', 70, 2, 9, '$HANDSEED', 5, (hs + 1).toString(16).toUpperCase(), 0, 'ENDSEC'];
+  const all = head.concat(body), lines = [];
+  for (let i = 0; i < all.length; i += 2) lines.push(String(all[i]).padStart(3, ' '), String(all[i + 1]));
+  return { text: lines.join('\r\n') + '\r\n', stats };
+}
+/* DXF-EXPORT:END */
 // Çok parçalı mobilya 2B: parçaların üstten görünüşü — yüksekte olan üstte çizilir, grup tek katman olarak saydamlaşır
 function partsSvg(f) {
   const C = pal(), s = partsScale(f), sk = C.furnStroke, hw = f.w / 2, hd = f.d / 2;
@@ -9525,6 +9891,10 @@ function cmdList() {
     act('png', '🖼', 'PNG dışa aktar', 'Export PNG', '', () => $('#bPng').click(), true, 'image görsel render'),
     act('svg', '⬇', 'SVG dışa aktar', 'Export SVG', '', () => $('#bSvg').click(), false),
     act('json', '⬇', 'JSON indir', 'Download JSON', '', () => downloadJson(P), true, 'export backup yedek'),
+    act('dxf', '⬇', 'DXF olarak dışa aktar (etkin kat)', 'Export DXF (active floor)', '', () => downloadDxf(), true, 'dxf autocad cad bricscad librecad draftsight export dışa aktar'),
+    act('dxfall', '⬇', 'DXF olarak dışa aktar (tüm katlar)', 'Export DXF (all floors)', '', () => downloadDxf(true), true, 'dxf autocad cad all floors tüm katlar export dışa aktar'),
+    act('dxfm', '⬇', 'DXF olarak dışa aktar (metre)', 'Export DXF (metres)', '', () => downloadDxf(false, 'm'), true, 'dxf autocad cad metre metres meters m units birim'),
+    act('dxfmm', '⬇', 'DXF olarak dışa aktar (milimetre)', 'Export DXF (millimetres)', '', () => downloadDxf(false, 'mm'), true, 'dxf autocad cad milimetre millimetres millimeters mm units birim'),
     act('ifc', '⬇', 'IFC olarak dışa aktar', 'Export IFC', '', () => exportBim('ifc'), true, 'ifc ifc4 bim revit archicad export dışa aktar'),
     act('revit', '⬇', 'Revit için dışa aktar', 'Export for Revit', '', () => exportBim('revit'), true, 'revit bim pyrevit autodesk export dışa aktar family aile'),
     act('bimhelp', 'ℹ', 'IFC mi Revit mi? (dışa aktarma bilgisi)', 'IFC or Revit? (export info)', '', () => exportBim('ifc', true), true, 'ifc revit bim hangisi which format bilgi info help yardım'),
@@ -10863,6 +11233,16 @@ function ifcFromExchange(x, opts = {}) {
     `FILE_NAME(${fn},'${now}',(''),(''),'Floor Planner','Floor Planner','');`, "FILE_SCHEMA(('IFC4'));", 'ENDSEC;', 'DATA;', ...out, 'ENDSEC;', 'END-ISO-10303-21;', ''].join('\n');
 }
 /* IFC-EXPORT:END */
+// DXF dışa aktarma (#157): saf DXF-EXPORT bloğu + uygulamanın geometri yardımcıları; gizli ve çıktı dışı katmanlar düşer
+function downloadDxf(all = false, units = 'cm') {
+  const fl = (all ? P.floors : [F()]).map(f => visFloor(f, true));
+  const geo = { arc: draftArc, foot: o => furnTilted(o) ? furnCorners(o) : null, steps: o => o.k === 'stairs' ? stairSteps(o).steps.map(stepCorners) : null };
+  const { text, stats: s } = dxfFromPlan(P, fl, { units, geo, catName: o => (BYID[o.type] && BYID[o.type].en) || o.name, fmtLen });
+  const base = fname('dxf').replace(/\.dxf$/, ''), part = all || P.floors.length < 2 ? '' : ' - ' + String(F().name || fi + 1).replace(/[^\w\-çğıöşüÇĞİÖŞÜ ]+/g, '_');
+  download(base + part + '.dxf', new Blob([text], { type: 'application/dxf' }));
+  const msg = L(`DXF dosyası hazır (${units}): ${s.walls} duvar, ${s.openings} kapı / pencere, ${s.rooms} oda, ${s.furn} eşya${all ? `, ${s.floors} kat` : ''}.`, `DXF file ready (${units}): ${s.walls} walls, ${s.openings} doors / windows, ${s.rooms} rooms, ${s.furn} items${all ? `, ${s.floors} floors` : ''}.`);
+  toast(msg, !all && P.floors.length > 1 ? { label: L('Tüm katlar', 'All floors'), fn: () => downloadDxf(true, units) } : undefined);
+}
 function downloadIfc() {
   const x = revitExport(P), txt = ifcFromExchange(x);
   download(fname('ifc'), new Blob([txt], { type: 'application/x-step' }));
@@ -19269,6 +19649,7 @@ function applyLangUI() {
   $('#bSave').textContent = L('💾 Kaydet', '💾 Save');
   $('#bSave').title = L('Tarayıcıya kaydet (Ctrl+S)', 'Save to browser (Ctrl+S)');
   $('#bJson').title = L('JSON dosyası olarak indir', 'Download as JSON file');
+  $('#bDxf').title = L('DXF olarak dışa aktar (AutoCAD, BricsCAD, LibreCAD, DraftSight): etkin kat, cm, katmanlı', 'Export as DXF (AutoCAD, BricsCAD, LibreCAD, DraftSight): active floor, cm, on layers');
   $('#bIfc').title = L('IFC4 olarak dışa aktar (Revit, ArchiCAD, BIM görüntüleyiciler): duvar, kapı / pencere, döşeme, oda, mobilya', 'Export as IFC4 (Revit, ArchiCAD, BIM viewers): walls, doors / windows, slabs, rooms, furniture');
   $('#bRevit').title = L('Revit için dışa aktar: duvar, kapı / pencere, döşeme, oda, mobilya — Revit\'te pyRevit + revit/ eklentisiyle açılır (eklentisiz: IFC)', 'Export for Revit: walls, doors / windows, floors, rooms, furniture — opened in Revit with pyRevit + the revit/ add-in (no add-in: use IFC)');
   $('#bOpen').textContent = L('📂 Aç', '📂 Open');
@@ -19276,7 +19657,7 @@ function applyLangUI() {
   $('#bUndo').title = L('Geri al (Ctrl+Z)', 'Undo (Ctrl+Z)');
   $('#bRedo').title = L('Yinele (Ctrl+Y)', 'Redo (Ctrl+Y)');
   $('#bPrint').textContent = L('🖨 PDF / Yazdır', '🖨 PDF / Print');
-  $('#bDl').textContent = L('⬇ İndir ▾', '⬇ Download ▾'); $('#bDl').title = L('İndir: görüntü (PNG, SVG, PDF) ya da dosya (JSON, IFC, Revit)', 'Download: an image (PNG, SVG, PDF) or a file (JSON, IFC, Revit)');
+  $('#bDl').textContent = L('⬇ İndir ▾', '⬇ Download ▾'); $('#bDl').title = L('İndir: görüntü (PNG, SVG, PDF) ya da dosya (JSON, DXF, IFC, Revit)', 'Download: an image (PNG, SVG, PDF) or a file (JSON, DXF, IFC, Revit)');
   $('#dlHImg').textContent = L('Görüntü', 'Image'); $('#dlHFile').textContent = L('Dosya', 'File');
   $('#b2d').textContent = L('2B', '2D');
   $('#b2d').title = L('2B Katı Görünüm', '2D Solid View');
@@ -19372,6 +19753,7 @@ document.addEventListener('pointerdown', e => { if (!e.target.closest('#dlMenu, 
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#dlMenu').hidden) { dlMenuOpen(false); e.stopPropagation(); } }, true);
 window.addEventListener('resize', () => dlMenuOpen(false));
 $('#bJson').onclick = () => downloadJson(P);
+$('#bDxf').onclick = () => downloadDxf();
 $('#bRevit').onclick = () => exportBim('revit');
 $('#bIfc').onclick = () => exportBim('ifc');
 $('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpModal; $('#bAi').onclick = () => aiModal();
