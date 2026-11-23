@@ -522,6 +522,9 @@ test('(7e) night mode (#122) wiring in app.js and index.html', () => {
 
 test('(8) fixShadowPick & fixShadowAssign: sticky slots with hysteresis prevent redundant shadow redraws (#128)', () => {
   const { fixShadowPick, fixShadowAssign } = new Function(`
+    const FIX_SHADOW_MINH = 140, LIGHT_DEFS = { lampCeil: { mount: 'ceil' }, floorLamp: { mount: 'floor' }, tableLamp: { mount: 'floor' }, bollard: { mount: 'floor' } };
+    ${fnSrcOf(src, 'fixShadowOk')}
+    ${fnSrcOf(src, 'fixKey')}
     ${fnSrcOf(src, 'fixScore')}
     ${fnSrcOf(src, 'fixShadowPick')}
     ${fnSrcOf(src, 'fixShadowAssign')}
@@ -547,4 +550,59 @@ test('(8) fixShadowPick & fixShadowAssign: sticky slots with hysteresis prevent 
   // Focus moves right next to challenger (x=1040): challenger overwhelmingly beats 'a' (>1.35x) and replaces ONLY 'a' in slot 0
   const s2 = fixShadowAssign([a, b, c, d, ch], { x: 1040, y: 150, z: 0, fi: 0 }, 4, s1);
   assert.deepStrictEqual(s2.map(x => x && x.id), ['challenger', 'b', 'c', 'd'], 'challenger replaces only the evicted slot');
+});
+
+test('(8b) lamp pool while walking: low lamps never take a downward shadow cone, slots stay put, swaps fade', () => {
+  const { fixShadowPick, fixShadowAssign, fixRank, fixSlotKeep, fixKey } = new Function(`
+    const FIX_SHADOW_MINH = 140, LIGHT_DEFS = { lampCeil: { mount: 'ceil' }, floorLamp: { mount: 'floor' }, tableLamp: { mount: 'floor' }, bollard: { mount: 'floor' } };
+    ${fnSrcOf(src, 'fixShadowOk')}
+    ${fnSrcOf(src, 'fixKey')}
+    ${fnSrcOf(src, 'fixScore')}
+    ${fnSrcOf(src, 'fixShadowPick')}
+    ${fnSrcOf(src, 'fixShadowAssign')}
+    ${fnSrcOf(src, 'fixRank')}
+    ${fnSrcOf(src, 'fixSlotKeep')}
+    return { fixShadowPick, fixShadowAssign, fixRank, fixSlotKeep, fixKey };`)();
+  const focus = { x: 0, y: 150, z: 0, fi: 0 };
+  // a ball lamp in a planter (light 25 cm above its floor) next to the walker, a ceiling lamp further away
+  const ball = { o: { id: 'ball' }, kind: 'point', on: true, lm: 800, fidx: 0, x: 20, y: 25, z: 0, fy: 0 };
+  const ceil = { o: { id: 'ceil' }, kind: 'point', on: true, lm: 800, fidx: 0, x: 400, y: 250, z: 0, fy: 0 };
+  const spot = { o: { id: 'spot' }, kind: 'spot', on: true, lm: 800, fidx: 0, x: 30, y: 20, z: 0, fy: 0 };
+  assert.deepStrictEqual(fixShadowPick([ball, ceil, spot], focus, 4).map(e => e.o.id), ['spot', 'ceil'], 'the ground-level ball lamp stays an all-round point light');
+  assert.deepStrictEqual(fixShadowAssign([ball, ceil], focus, 4, []).map(e => e && e.o.id), ['ceil', null, null, null]);
+  const fx = (type, h, extra = {}) => ({ o: { id: type, type }, kind: 'point', on: true, lm: 800, fidx: 0, x: 0, y: h, z: 0, fy: 0, ...extra });
+  const ok = e => fixShadowPick([e], focus, 1).length === 1;
+  assert.ok(ok(fx('floorLamp', 135)), 'a floor lamp keeps its shadow (a wall still blocks it)');
+  assert.ok(ok(fx('tableLamp', 115)), 'a table lamp on a table keeps its shadow');
+  assert.ok(!ok(fx('tableLamp', 40)), 'a lamp put on the floor does not');
+  assert.ok(!ok(fx('bollard', 92)), 'a bollard does not');
+  assert.ok(ok(fx('lampCeil', 60)), 'a ceiling fixture always does');
+  assert.ok(!ok(fx('lampCeil', 120, { part: true })), 'a bulb part of a custom item low down does not');
+  assert.ok(ok(fx('x', 0, { auto: true })), 'automatic room lights do');
+
+  // build3D makes new entry objects: stickiness goes by key, so a rebuild does not reshuffle the shadow slots
+  const a = { o: { id: 'a' }, kind: 'point', on: true, lm: 800, fidx: 0, x: 0, y: 250, z: 0, fy: 0 }, b = { ...a, o: { id: 'b' }, x: 300 };
+  const s0 = fixShadowAssign([a, b], focus, 2, []);
+  const a2 = { ...a }, b2 = { ...b };
+  const s1 = fixShadowAssign([b2, a2], focus, 2, s0);
+  assert.deepStrictEqual(s1.map(fixKey), s0.map(fixKey), 'same slots after a rebuild');
+  assert.strictEqual(s1[0], a2, 'the slot holds the new entry object');
+
+  // ranking hysteresis: a lit lamp keeps its place until a rival is clearly (1.35x) better
+  const p = x => ({ o: { id: 'p' + x }, kind: 'point', on: true, lm: 800, fidx: 0, x, y: 150, z: 0 });
+  const near = p(100), rival = p(-90);
+  assert.deepStrictEqual(fixRank([near, rival], focus, 1, false).map(e => e.o.id), ['p-90']);
+  assert.deepStrictEqual(fixRank([near, rival], focus, 1, false, new Set([fixKey(near)])).map(e => e.o.id), ['p100'], 'the lit lamp stays');
+  assert.deepStrictEqual(fixRank([near, p(-10)], { ...focus, x: -200 }, 1, false, new Set([fixKey(near)])).map(e => e.o.id), ['p-10'], 'a clearly better lamp wins');
+
+  // winners stay in the slot that already shows them (no needless fade), newcomers fill the empty ones
+  const L = cur => ({ userData: { fx: { cur } } });
+  const x1 = p(1), x2 = p(2), x3 = p(3);
+  const out = fixSlotKeep([x1, x2, x3], [L(''), L(fixKey(x3)), L(fixKey(x1)), L('gone')]);
+  assert.deepStrictEqual(out.map(e => e && e.o.id), ['p2', 'p3', 'p1', null]);
+
+  // wiring: only re-ranks while moving fade, everything else (rebuilds, renders, switches) is instant
+  assert.match(fnSrcOf(src, 'fixTick'), /fixFadeTick\(now\)[\s\S]*assignFixLights\(undefined, false\)/);
+  assert.match(fnSrcOf(src, 'assignFixLights'), /function assignFixLights\(alt, instant = true\)/);
+  assert.match(fnSrcOf(src, 'fixFadeTick'), /FIX_FADE \/ 2/);
 });

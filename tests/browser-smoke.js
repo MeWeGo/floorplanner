@@ -557,7 +557,15 @@ check('bellows corridor: fills between the first and current wall position (layo
     out.zig = document.querySelectorAll('#gWalls path[data-id="' + w.id + '"]').length;
     out.walk = walkSegs(F()).length;
     show3D(true); await new Promise(r => setTimeout(r, 500));
+    const floors3D = () => { let n = 0; T3.scene.traverse(o => { if (o.isMesh && o.userData && o.userData.wallId === w.id && Math.abs(o.position.y - 0.3) < 0.01) n++; }); return n; };
     out.m3 = 0; T3.scene.traverse(o => { if (o.isMesh && o.userData && o.userData.wallId === w.id && !o.parent.userData.wallId) out.m3++; });
+    out.floor = floors3D();                          // #154: a floor at the wall base
+    sel = [w.id]; refresh();
+    const fb = document.querySelector('#props [data-p="belFloor"]');
+    if (fb) { fb.checked = false; fb.dispatchEvent(new Event('change', { bubbles: true })); }
+    build3D(true); out.floorOff = [floors3D(), w.bel.floor];
+    const fb2 = document.querySelector('#props [data-p="belFloor"]');
+    if (fb2) { fb2.checked = true; fb2.dispatchEvent(new Event('change', { bubbles: true })); }
     show3D(false);
     switchGroupVarTo(rec, 0); out.closed = belSides(find(w.id).o).length;
     switchGroupVarTo(rec, 1);
@@ -572,10 +580,95 @@ check('bellows corridor: fills between the first and current wall position (layo
   if (!info.home || info.home[0] !== 0 || info.home[1] !== 0) throw new Error('bellows did not take the other layout as its first position: ' + JSON.stringify(info));
   if (info.sides !== 2 || info.roof !== 4 || info.zig !== 2) throw new Error('bellows corridor not drawn in 2D: ' + JSON.stringify(info));
   if (info.walk < 3) throw new Error('bellows sides do not block walking: ' + JSON.stringify(info));
-  if (info.m3 < 3) throw new Error('bellows not built in 3D: ' + JSON.stringify(info));
+  if (info.m3 < 4) throw new Error('bellows not built in 3D: ' + JSON.stringify(info));
+  if (info.floor !== 1 || info.floorOff[0] !== 0 || info.floorOff[1] !== 0) throw new Error('bellows floor missing or not switchable: ' + JSON.stringify(info));
   if (info.closed !== 0) throw new Error('bellows should close in the first layout: ' + JSON.stringify(info));
   if (info.fan[0] !== 1 || !(info.fan[1] > 3)) throw new Error('moving one end should give a fan with an arc: ' + JSON.stringify(info));
   if (info.undo !== 2 || !info.svg) throw new Error('undo / export failed: ' + JSON.stringify(info));
+});
+
+check('live room walkers: walk mode sends the walker position, peers see a person figure in 3D and a marker in 2D', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject());
+    addRectWalls(0, 0, 600, 400); sel = []; commit(); refresh();
+    const sent = [], fl = F();
+    collab.room = 'smoketest'; collab.peerId = 'me';
+    collab.ws = { readyState: 1, send: m => sent.push(JSON.parse(m)), close() {} };
+    collab.peers.set('p2', { id: 'p2', name: 'Ayşe', color: '#e11d48', sel: [], walk: { floorId: fl.id, x: 300, y: 200, z: 0, yaw: Math.PI / 2 } });
+    const out = {};
+    out.svg = collabOverlaySvg(pal(), view.z).includes('👁 Ayşe');
+    show3D(true); await new Promise(r => setTimeout(r, 300));
+    const av = () => T3.avatars && T3.avatars.get('p2');
+    const a = av(); out.has = !!a && a.g.parent === T3.scene;
+    if (a) { out.pos = [a.g.position.x, a.g.position.y, a.g.position.z]; out.rot = a.g.rotation.y; }
+    // the figure never blocks picking: a ray through it hits the wall behind / the floor, not the figure
+    const rc = new THREE.Raycaster(new THREE.Vector3(300, 150, -500), new THREE.Vector3(0, 0, 1));
+    out.pick = rc.intersectObjects(T3.scene.children, true).some(h => { let o = h.object; while (o) { if (o.userData && o.userData.avatar) return true; o = o.parent; } return false; });
+    build3D(true); out.kept = av() === a && a.g.parent === T3.scene;      // survives a rebuild, not disposed
+    // the peer moves: the figure glides to the new place
+    collab.peers.get('p2').walk = { floorId: fl.id, x: 100, y: 100, z: 0, yaw: 0 }; collabAvatars3D();
+    await new Promise(r => setTimeout(r, 1500));
+    out.moved = [Math.round(a.g.position.x), Math.round(a.g.position.z)];
+    // this window walks: its position goes out with presence, and walking away clears it
+    sent.length = 0; set3DCam('eye'); await new Promise(r => setTimeout(r, 200));
+    out.enter = sent.filter(m => m.type === 'presence').map(m => m.walk).pop() || null;
+    sent.length = 0; T3.walk.x += 120; await new Promise(r => setTimeout(r, 250));
+    const mv = sent.filter(m => m.type === 'presence' && m.walk).pop();
+    out.walkSent = mv ? Math.round(mv.walk.x - out.enter.x) : null;
+    sent.length = 0; exitWalk(true);
+    out.exit = sent.filter(m => m.type === 'presence').map(m => m.walk);
+    // the peer leaves the walk mode: the figure goes away
+    collab.peers.get('p2').walk = null; collabAvatars3D(); out.gone = !av() && !a.g.parent;
+    show3D(false);
+    collab.ws = null; collabLeave(true);
+    return out;
+  })()`);
+  if (!info.svg) throw new Error('2D overlay has no walker marker: ' + JSON.stringify(info));
+  if (!info.has) throw new Error('no person figure for the walking peer in 3D: ' + JSON.stringify(info));
+  if (info.pos[0] !== 300 || info.pos[2] !== 200 || Math.abs(info.pos[1]) > 0.01 || Math.abs(info.rot + Math.PI / 2) > 1e-6) throw new Error('figure in the wrong place: ' + JSON.stringify(info));
+  if (info.pick) throw new Error('the figure blocks 3D picking: ' + JSON.stringify(info));
+  if (!info.kept) throw new Error('the figure did not survive build3D: ' + JSON.stringify(info));
+  if (Math.abs(info.moved[0] - 100) > 15 || Math.abs(info.moved[1] - 100) > 15) throw new Error('the figure did not glide to the new place: ' + JSON.stringify(info));
+  if (!info.enter || info.enter.floorId == null || !Number.isFinite(info.enter.yaw)) throw new Error('entering walk mode sent no walk position: ' + JSON.stringify(info));
+  if (info.walkSent !== 120) throw new Error('walking did not send the new position: ' + JSON.stringify(info));
+  if (!info.exit.length || info.exit[info.exit.length - 1] !== null) throw new Error('leaving walk mode did not clear the position: ' + JSON.stringify(info));
+  if (!info.gone) throw new Error('the figure stayed after the peer stopped walking: ' + JSON.stringify(info));
+});
+
+check('2D speed: zoom previews by transform and sharpens once it stops, unchanged layers are not re-parsed, a sparse grid has no giant tiles', async page => {
+  const r = await page.evaluate(`(async () => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400);
+    const o = mkFurn(BYID.sofa3, 300, 200, 0); F().furn.push(o); commit(); refresh(); fit();
+    const raf = () => new Promise(r => requestAnimationFrame(r)), out = {};
+    await new Promise(r => setTimeout(r, 200)); await raf(); await raf(); // let redraws queued by the setup land first
+    const wall0 = document.querySelector('#gWalls').firstElementChild, furn0 = document.querySelector('#gFurn').firstElementChild, defs0 = document.getElementById('defs').innerHTML;
+    // zoom: the next frame only moves the drawing; the layers are rebuilt once the wheel stops
+    const z0 = view.z; zoomAt(1.5, 400, 300); await raf();
+    out.zoomed = view.z > z0;
+    out.previewKept = document.querySelector('#gFurn').firstElementChild === furn0 && document.getElementById('defs').innerHTML === defs0;
+    out.transform = document.getElementById('world').getAttribute('transform').includes('scale(' + view.z + ')');
+    await new Promise(r => setTimeout(r, 600)); await raf();
+    out.settled = document.getElementById('defs').innerHTML !== defs0; // stroke widths follow the new zoom
+    // a furniture drag frame re-writes only the furniture layer
+    const w1 = document.querySelector('#gWalls').firstElementChild, f1 = document.querySelector('#gFurn').firstElementChild;
+    o.x += 40; render();
+    out.wallsKept = document.querySelector('#gWalls').firstElementChild === w1;
+    out.furnRebuilt = document.querySelector('#gFurn').firstElementChild !== f1;
+    out.furnMoved = document.querySelector('#gFurn').innerHTML.includes('340');
+    o.x -= 40; commit();
+    // grid 4 m zoomed in: no pattern tile wider than GRID_TILE_MAX
+    P.grid = 400; syncGridUI(); view.z = 4; render();
+    const g = document.getElementById('gGrid');
+    out.gridPatterns = g.querySelectorAll('rect').length; out.gridTiles = g.querySelectorAll('g > g').length;
+    P.grid = 10; syncGridUI(); fit();
+    return out;
+  })()`);
+  if (!r.zoomed || !r.transform) throw new Error('zoom did not move the view: ' + JSON.stringify(r));
+  if (!r.previewKept) throw new Error('a wheel step rebuilt the layers instead of previewing: ' + JSON.stringify(r));
+  if (!r.settled) throw new Error('the drawing was not sharpened after the zoom stopped: ' + JSON.stringify(r));
+  if (!r.wallsKept || !r.furnRebuilt || !r.furnMoved) throw new Error('a furniture drag re-parsed unchanged layers or missed the move: ' + JSON.stringify(r));
+  if (r.gridPatterns !== 0 || !(r.gridTiles > 0 && r.gridTiles < 60)) throw new Error('a 4 m grid zoomed in still used giant pattern tiles: ' + JSON.stringify(r));
 });
 
 check('overlapping objects: Ctrl+click cycles, right-click lists, layers reorder, 3D lifts', async page => {
@@ -2165,6 +2258,152 @@ check('light fixtures: placed on the ceiling, panel on / off and brightness, roo
   return 'on the ceiling at ' + r.elev + ' cm, panel + room switch + undo + storey height + export + IFC round trip';
 });
 
+check('3D ground surface (#147): panel picks the surface, undo restores it, hidden ground, live view + render studio use it and restore', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 600, 400); commit(); sel = []; refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(async () => {
+    const out = {}, wait = ms => new Promise(res => setTimeout(res, ms));
+    const pick = (p, v) => { const el = document.querySelector('#props [data-k="ground"][data-p="' + p + '"]'); if (!el) return false; el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); return true; };
+    out.autoMap = !!T3.ground.material.map;
+    out.panel = pick('kind', 'sand'); await wait(400); build3D(true);
+    out.kind = P.ground && P.ground.kind; out.sandMap = !!T3.ground.material.map;
+    const col = () => { set3DCam('top'); draw3D(performance.now()); const cv = T3.r.domElement, c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0); const d = g.getImageData(4, 4, 1, 1).data; return [d[0], d[1], d[2]]; };
+    out.sand = col();
+    pick('kind', 'asphalt'); await wait(400); build3D(true); out.asphalt = col();
+    undo(); await wait(300); build3D(true); out.undoKind = P.ground && P.ground.kind;
+    pick('kind', 'none'); await wait(300); build3D(true); out.hidden = T3.ground.visible === false;
+    pick('kind', 'grass'); await wait(300); build3D(true);
+    const p0 = T3.r.info.programs.length; setLive3D(true); await wait(400);
+    out.live = T3.ground.material.type === 'MeshPhongMaterial' && !!T3.ground.material.map;
+    const before = T3.ground.material;
+    await render3DHQ({ style: 'realistic', longSide: 480, frames: 1 }); await render3DHQ({ style: 'technical', backdrop: 'studio', longSide: 480, frames: 1 });
+    out.restored = T3.ground.material === before;
+    setLive3D(false); await wait(300); out.cadBack = T3.ground.material.type === 'MeshLambertMaterial';
+    out.progs = T3.r.info.programs.length - p0;
+    return out;
+  })()`);
+  await page.evaluate(`(() => { setLive3D(false); show3D(false); })()`);
+  const lum = c => c[0] + c[1] + c[2];
+  if (r.autoMap) throw new Error('auto ground must stay the old untextured CAD colour: ' + JSON.stringify(r));
+  if (!r.panel || r.kind !== 'sand' || !r.sandMap) throw new Error('the project panel did not switch the ground to sand: ' + JSON.stringify(r));
+  if (!(lum(r.sand) > lum(r.asphalt) + 60)) throw new Error('sand should read much lighter than asphalt from above: ' + JSON.stringify(r));
+  if (r.undoKind !== 'sand') throw new Error('undo did not restore the previous ground: ' + JSON.stringify(r));
+  if (!r.hidden) throw new Error('kind none must hide the ground: ' + JSON.stringify(r));
+  if (!r.live || !r.restored || !r.cadBack) throw new Error('live view / render studio did not use or restore the ground: ' + JSON.stringify(r));
+  return 'sand ' + r.sand + ' vs asphalt ' + r.asphalt + ', undo ok, hidden ok, live + 2 renders restored, ' + r.progs + ' new programs';
+});
+
+check('ground datum (#148): plinth skirt, merged basement excavation with earth sides, section earth hatch, walking outside on the ground', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject()); addRectWalls(0, 0, 1000, 700); commit();
+    addBasement(); fi = 0; addRectWalls(0, 0, 1000, 700); addRectWalls(800, 400, 1300, 900);
+    fi = 1; P.ground = { plinth: 100 }; commit(); refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(() => {
+    const out = {};
+    out.cuts = groundCuts(true).map(c => ({ n: c.pts.length, bot: c.bot }));
+    out.gy = groundY3D(); out.datum = groundDatum3D();
+    let plinth = 0, earth = 0; T3.scene.traverse(o => { if (o.userData.plinth) plinth++; if (o.isMesh && o.userData.fpDecal && o.material && o.material.polygonOffset) earth++; });
+    out.plinth = plinth; out.earth = earth;
+    enterWalk({ i: 1, x: 500, y: -400 }); out.walkOut = T3.walk.gz; exitWalk(false);
+    enterWalk({ i: 1, x: 500, y: 350 }); out.walkIn = T3.walk.gz; exitWalk(false);
+    show3D(false);
+    P.floors[1].sections = [{ id: 'sA', name: 'A', a: { x: -300, y: 300 }, b: { x: 1700, y: 300 }, dir: 1 }];
+    const sv = archSvg(sectionSpec(P.floors[1].sections[0]), 'A'); out.hatch = !!sv && sv.svg.includes('url(#earthH)');
+    out.noGround = (() => { P.ground = {}; cleanGround(P); return !P.ground; })();
+    return out;
+  })()`);
+  if (r.cuts.length !== 1 || r.cuts[0].bot !== -310 || r.cuts[0].n < 6) throw new Error('the overlapping basement footprints should merge into one L-shaped cut down to -310: ' + JSON.stringify(r));
+  if (r.gy !== r.datum - 101) throw new Error('the ground should lie plinth + 1 cm below ±0.00: ' + JSON.stringify(r));
+  if (r.plinth < 1 || r.earth < 1) throw new Error('missing plinth skirt or earth sides in 3D: ' + JSON.stringify(r));
+  if (r.walkOut !== -101 || r.walkIn !== 0) throw new Error('walking outside should stand on the ground (-101), inside on the floor (0): ' + JSON.stringify(r));
+  if (!r.hatch || !r.noGround) throw new Error('section earth hatch / default ground cleanup failed: ' + JSON.stringify(r));
+  return 'one L cut to -310, skirt + earth sides, outside -101 / inside 0, section hatch';
+});
+
+check('terrain (#149): hillside preset, contours in the export, point add / drag / delete with the mouse, 3D terrain, tree on the terrain, walk on the hill, IFC terrain', async page => {
+  const r = await page.evaluate(`(async () => {
+    show3D(false); closeModal();
+    const wait = ms => new Promise(res => setTimeout(res, ms)), out = {};
+    loadProject(newProject()); addRectWalls(0, 0, 1000, 700); commit();
+    terrainPreset('hill'); terrainPad();
+    F().furn.push(mkFurn(BYID.tree, 1500, -600)); P.ground.snap = true; commit(); refresh();
+    out.hill = Math.round(terrainZ(-800, -800)); out.svg = exportSvg().svg.includes('class="terrain"');
+    setTool('terrain'); fit(); render();
+    const n0 = groundP(P).tp.length, cvr = cv.getBoundingClientRect();
+    const ev = (type, w) => { const s = w2s(w); cv.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, isPrimary: true, button: 0, pointerType: 'mouse', clientX: cvr.left + s.x, clientY: cvr.top + s.y })); };
+    ev('pointerdown', { x: 300, y: 300 }); ev('pointerup', { x: 300, y: 300 }); out.added = groundP(P).tp.length - n0;
+    const i = groundP(P).tp.length - 1;
+    ev('pointerdown', { x: 300, y: 300 }); ev('pointermove', { x: 420, y: 330 }); ev('pointerup', { x: 420, y: 330 }); out.dragX = Math.round(groundP(P).tp[i].x);
+    out.panel = !!document.querySelector('#props [data-k="tp"]');
+    const tpEl = document.querySelector('#props [data-k="tp"][data-i="' + i + '"]'); if (tpEl) { tpEl.value = '300'; tpEl.dispatchEvent(new Event('input', { bubbles: true })); tpEl.dispatchEvent(new Event('change', { bubbles: true })); } out.typed = groundP(P).tp[i].z; // typed height reaches the point
+    deleteSel(); out.afterDel = groundP(P).tp.length - n0; undo(); out.undo = groundP(P).tp.length - n0;
+    setTool('select'); out.ok3d = false;
+    document.getElementById('b3d').click(); await wait(1200);
+    if (ui.view3d && T3 && T3.fit) {
+      out.ok3d = true; let t = 0; T3.scene.traverse(o => { if (o.userData.terrain) t++; }); out.terr = t;
+      let y = null; T3.scene.traverse(o => { if (o.userData.furnId && F().furn.some(x => x.id === o.userData.furnId && x.type === 'tree')) y = Math.round(new THREE.Box3().setFromObject(o).min.y); });
+      out.tree = y - Math.round(groundDatum3D() + terrainZ(1500, -600));
+      enterWalk({ i: fi, x: -800, y: -800 }); out.walk = Math.round(T3.walk.gz) - Math.round(terrainZ(-800, -800) - 1); exitWalk(false);
+      show3D(false);
+    }
+    out.ifc = /IFCGEOGRAPHICELEMENT\([^;]*\.TERRAIN\.\)/.test(ifcFromExchange(revitExport(P)));
+    return out;
+  })()`);
+  if (!(r.hill > 300) || !r.svg) throw new Error('hillside preset / 2D contours missing: ' + JSON.stringify(r));
+  if (r.added !== 1 || r.dragX !== 420 || !r.panel || r.afterDel !== 0 || r.undo !== 1 || r.typed !== 300) throw new Error('terrain tool add / drag / delete / undo failed: ' + JSON.stringify(r));
+  if (!r.ifc) throw new Error('IFC export has no terrain: ' + JSON.stringify(r));
+  if (!r.ok3d) return 'skipped 3D (WebGL unavailable); 2D + tool + IFC ok';
+  if (r.terr !== 1 || Math.abs(r.tree) > 2 || Math.abs(r.walk) > 2) throw new Error('terrain mesh / tree on terrain / walk on hill wrong: ' + JSON.stringify(r));
+  return 'hill ' + r.hill + ' cm, tool add/drag/delete/undo ok, terrain mesh, tree on terrain, walk on hill, IFC terrain';
+});
+
+check('site zones (#150): draw a zone with the mouse, panel type + curb, parcel setback, context on other floors, not a room, 3D + walk on the curb, IFC', async page => {
+  const r = await page.evaluate(`(async () => {
+    show3D(false); closeModal();
+    const wait = ms => new Promise(res => setTimeout(res, ms)), out = {};
+    loadProject(newProject()); addRectWalls(0, 0, 1000, 700); commit();
+    P.floors.push(newFloor('1')); commit(); fi = 0; refresh(); fit(); render();
+    setTool('zone');
+    const cvr = cv.getBoundingClientRect(), ev = (type, w) => { const s = w2s(w); cv.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, isPrimary: true, button: 0, pointerType: 'mouse', clientX: cvr.left + s.x, clientY: cvr.top + s.y })); };
+    ev('pointerdown', { x: 1200, y: 0 }); ev('pointermove', { x: 1400, y: 400 }); ev('pointermove', { x: 1600, y: 700 }); ev('pointerup', { x: 1600, y: 700 });
+    const z = F().zones[0]; out.drawn = !!z && z.pts.length === 4 && z.zt === 'lawn';
+    sel = [z.id]; setTool('select'); renderProps();
+    const pick = (p, v) => { const el = document.querySelector('#props [data-k="zone"][data-p="' + p + '"]'); if (!el) return false; el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); return true; };
+    out.panel = pick('zt', 'path') && pick('curb', '15') && z.zt === 'path' && z.curb === 15 && ui.zoneT === 'path';
+    F().zones.push(mkZone([{ x: -500, y: -500 }, { x: 2200, y: -500 }, { x: 2200, y: 1300 }, { x: -500, y: 1300 }], 'parcel')); F().zones[1].setback = 300; F().zones[1].name = 'Lot 9'; commit(); sel = []; refresh();
+    const sb = zoneSetback(F().zones[1]); out.setback = sb && sb[0].x === -200 && sb[0].y === -200;
+    out.svg = exportSvg().svg.includes('Lot 9'); out.rooms = F().rooms.length;
+    fi = 1; refresh(); out.ctx = exportSvg().svg.includes('opacity="0.35"'); fi = 0; refresh();
+    undo(); out.undo = F().zones.length === 1; redo();
+    sel = [F().zones[1].id]; renderProps(); const e0 = document.querySelector('#props [data-k="zsb"][data-i="0"]'); if (e0) { e0.value = '0'; e0.dispatchEvent(new Event('change', { bubbles: true })); } const sb2 = zoneSetback(F().zones[1]); out.edge0 = !!sb2 && sb2[0].x === -200 && sb2[0].y === -500; sel = []; refresh(); // edge field typed, 0 = on the boundary
+    out.ok3d = false; document.getElementById('b3d').click(); await wait(1200);
+    if (ui.view3d && T3 && T3.fit) {
+      out.ok3d = true; let n = 0; T3.scene.traverse(o => { if (o.userData.zoneId) n++; }); out.z3d = n;
+      enterWalk({ i: 0, x: 1400, y: 350 }); out.walk = Math.round(T3.walk.gz); exitWalk(false); show3D(false);
+    }
+    out.ifc = ifcFromExchange(revitExport(P)).split('IFCGEOGRAPHICELEMENT(').length - 1;
+    return out;
+  })()`);
+  if (!r.drawn || !r.panel) throw new Error('drawing a zone with the mouse / editing it in the panel failed: ' + JSON.stringify(r));
+  if (!r.setback || !r.svg || r.rooms !== 0 || !r.ctx || !r.undo || !r.edge0) throw new Error('parcel setback / export / context / undo failed: ' + JSON.stringify(r));
+  if (r.ifc !== 2) throw new Error('IFC should carry the path and the parcel: ' + JSON.stringify(r));
+  if (!r.ok3d) return 'skipped 3D (WebGL unavailable); 2D + panel + IFC ok';
+  if (r.z3d !== 2 || r.walk !== -4) throw new Error('3D zones / walking on the 15 cm curb (ground −21 + 2 + 15) wrong: ' + JSON.stringify(r));
+  return 'mouse-drawn zone, panel path + 15 cm curb, 3 m setback, upper-floor context, not a room, 3D + walk on curb, IFC';
+});
+
 check('lights in 3D: a lamp brightens the floor, click toggles it, fixed light pool (no new shaders), 30 lamps build fast (#121)', async page => {
   await page.evaluate(`(() => {
     show3D(false); closeModal();
@@ -2265,10 +2504,12 @@ check('daytime lights off by default, #b3dLights toggle, Night->Day revert, and 
       T3.ctl.target.x = 260; T3.ctl.update(); T3.fixAt = null; draw3D(performance.now());
       out.smallMovePasses = passes;
       passes = 0;
-      T3.ctl.target.x = 980; T3.ctl.update(); T3.fixAt = null; draw3D(performance.now());
+      // a far move swaps lamps with a short fade: the shadow maps redraw once the slot has moved (run the fade frames)
+      const frames = () => { const t0 = performance.now(); for (let i = 1; i <= 12; i++) draw3D(t0 + i * 60); };
+      T3.ctl.target.x = 980; T3.ctl.update(); T3.fixAt = null; frames();
       out.farMovePasses = passes;
       passes = 0;
-      T3.ctl.target.x = 940; T3.ctl.update(); T3.fixAt = null; draw3D(performance.now());
+      T3.ctl.target.x = 940; T3.ctl.update(); T3.fixAt = null; frames();
       out.settledPasses = passes;
     } finally {
       sm.render = orig;
@@ -2422,6 +2663,57 @@ check('night mode: 🌙 turns on the live view, night sky, moon, auto room light
   if (!r.flash || !r.flashOff) throw new Error('F did not switch the walk flashlight: ' + JSON.stringify(r));
   if (!r.dayAlt || !r.dayExp || !r.daySky || !r.dayBtn) throw new Error('day did not restore sun / exposure / sky: ' + JSON.stringify(r));
   return 'night sky ' + r.sky.toFixed(2) + ', exposure +' + r.exp.toFixed(2) + ', moon ' + r.moonI.toFixed(2) + ', auto room light, flashlight, day restored';
+});
+
+check('lamp pool while walking: low lamps keep lighting upward, slots stay put, swaps fade instead of popping', async page => {
+  await page.evaluate(`(() => {
+    show3D(false); closeModal();
+    loadProject(newProject());
+    const f = F();
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) { addRectWalls(i * 400, j * 400, i * 400 + 400, j * 400 + 400); f.rooms.push(mkRoom([{ x: i * 400, y: j * 400 }, { x: i * 400 + 400, y: j * 400 }, { x: i * 400 + 400, y: j * 400 + 400 }, { x: i * 400, y: j * 400 + 400 }])); }
+    for (const x of [120, 200, 280]) { const o = mkFurn(BYID.tableLamp, x, 200, 0); o.elev = 0; f.furn.push(o); } // lamps standing on the floor (e.g. in a planter)
+    commit(); refresh();
+    document.getElementById('b3d').click();
+  })()`);
+  await sleep(1200);
+  const in3d = await page.evaluate(`!!(ui.view3d && T3 && T3.fit)`);
+  if (!in3d) { await page.evaluate(`show3D(false)`); return 'skipped: WebGL/Three.js unavailable'; }
+  const r = await page.evaluate(`(async () => {
+    setNight3D(true); set3DCam('eye');
+    const out = { walk: !!T3.walk, lowInShadow: 0, autos: (T3.autoLights || []).length, fades: 0, settled: 0, swaps: 0 };
+    const lows = new Set(F().furn.map(o => o.id));
+    const spots = [[200, 260], [600, 600], [1400, 1000], [200, 300], [900, 200], [250, 250]];
+    let prev = null;
+    for (const [x, y] of spots) {
+      T3.walk.x = x; T3.walk.y = y; applyWalkCam(); T3.fixAt.t = 0;
+      fixTick(performance.now());
+      for (const e of T3.fixShadowEnts || []) if (e && e.o && lows.has(e.o.id)) out.lowInShadow++;
+      const keys = [...T3.fix.pts, ...T3.fix.spots].map(l => l.userData.fx && l.userData.fx.tgt ? l.userData.fx.tgt.key : '');
+      if (prev) out.swaps += keys.filter((k, i) => k !== prev[i]).length;
+      prev = keys;
+      if (T3.fixFading) out.fades++;
+      for (let t = 0; t < 40 && T3.fixFading; t++) { await new Promise(r => setTimeout(r, 25)); fixFadeTick(performance.now()); }
+      if (!T3.fixFading) out.settled++;
+    }
+    // standing at the lamps: all three light for real (not only their glow)
+    T3.walk.x = 200; T3.walk.y = 230; applyWalkCam(); T3.fixAt.t = 0; fixTick(performance.now());
+    for (let t = 0; t < 40 && T3.fixFading; t++) { await new Promise(r => setTimeout(r, 25)); fixFadeTick(performance.now()); }
+    out.lowReal = [...T3.fixReal].filter(e => e.o && lows.has(e.o.id)).length;
+    // a rebuild while standing still keeps every slot (no flash on edits)
+    const before = [...T3.fix.pts, ...T3.fix.spots].map(l => l.userData.fx && l.userData.fx.cur);
+    build3D(true);
+    const after = [...T3.fix.pts, ...T3.fix.spots].map(l => l.userData.fx && l.userData.fx.cur);
+    out.rebuildSame = before.slice().sort().join() === after.slice().sort().join(); // same lamps lit (slot order may change: instant, invisible)
+    out.rebuildFading = !!T3.fixFading;
+    exitWalk(false); setNight3D(false); setLive3D(false); show3D(false);
+    return out;
+  })()`);
+  if (!r.walk || r.autos < 10) throw new Error('setup failed: ' + JSON.stringify(r));
+  if (r.lowInShadow) throw new Error('a lamp on the floor was put into a downward shadow cone: ' + JSON.stringify(r));
+  if (!(r.fades >= 1) || r.settled !== 6) throw new Error('pool swaps while walking should fade and then settle: ' + JSON.stringify(r));
+  if (r.lowReal !== 3) throw new Error('the lamps next to the walker should all light for real: ' + JSON.stringify(r));
+  if (!r.rebuildSame || r.rebuildFading) throw new Error('a rebuild changed which lamps are lit, or faded them: ' + JSON.stringify(r));
+  return r.swaps + ' slot swaps over 6 spots, all faded; low lamps never in a shadow cone';
 });
 
 check('lamp shadows: a wall blocks the lamp light, shadow maps are drawn only when something changes (#128)', async page => {
@@ -3215,6 +3507,85 @@ check('drive save interval: after every change or a timer of any seconds / minut
   if (info.shown[0] !== '2' || info.shown[1] !== 'h') throw new Error('dialog does not show the stored interval: ' + JSON.stringify(info));
   if (info.min !== 10 || !/10/.test(info.toast)) throw new Error('3 seconds should clamp to 10 s and say so: ' + JSON.stringify(info));
   if ('every' in info.off || 'everyU' in info.off) throw new Error('"after every change" did not clear the timer: ' + JSON.stringify(info));
+});
+
+check('one Download menu: opens under its button, runs the export, closes on Esc / outside click', async page => {
+  const info = await page.evaluate(`(() => {
+    const b = document.getElementById('bDl'), m = document.getElementById('dlMenu'), out = {};
+    out.inside = ['bPng', 'bSvg', 'bPrint', 'bJson', 'bIfc', 'bRevit'].every(id => m.contains(document.getElementById(id)));
+    b.click(); const r = m.getBoundingClientRect(), br = b.getBoundingClientRect();
+    out.open = !m.hidden && r.width > 100 && r.top >= br.bottom && r.right <= innerWidth + 1 && b.getAttribute('aria-expanded') === 'true';
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); out.esc = m.hidden;
+    b.click(); document.getElementById('cv').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); out.outside = m.hidden;
+    b.click(); document.getElementById('bPrint').click(); out.ran = ui.modal === 'plot'; out.closedAfter = m.hidden; closeModal();
+    return out;
+  })()`);
+  if (!info.inside) throw new Error('export buttons are not inside the Download menu');
+  if (!info.open) throw new Error('Download menu did not open under its button: ' + JSON.stringify(info));
+  if (!info.esc || !info.outside) throw new Error('Download menu does not close on Esc / outside click: ' + JSON.stringify(info));
+  if (!info.ran || !info.closedAfter) throw new Error('menu item did not run its export or the menu stayed open: ' + JSON.stringify(info));
+});
+
+check('project groups: tabs gather behind a folding group chip, panel + right-click set the group, My Projects has a section per group, undo', async page => {
+  const info = await page.evaluate(`(async () => {
+    const mk = (name) => { const p = newProject(); p.name = name; p.floors[0].walls.push(mkWall({ x: 0, y: 0 }, { x: 300, y: 0 })); return p; };
+    try { localStorage.removeItem('fp_tabgrp_off'); } catch (e) { }
+    const out = {};
+    tabs = []; tabIdx = 0; // start from a single tab (earlier checks leave tabs open)
+    loadProject(mk('A1')); setProjGroup('Ahsen');
+    newTabSlot(); loadProject(mk('Z1')); setProjGroup('Zehra');
+    newTabSlot(); loadProject(mk('A2'));
+    sel = []; refresh();
+    const inp = document.querySelector('#props input[data-p="group"]'); out.field = !!inp;
+    inp.value = 'Ahsen'; inp.dispatchEvent(new Event('change', { bubbles: true })); out.grp = P.group;
+    const names = () => [...document.querySelectorAll('#ptabs .ptab .ptn, #ptabs .ptab-grp')].map(e => e.classList.contains('ptab-grp') ? '[' + e.dataset.tabgrp + ']' : e.textContent.replace(/^\\S+\\s/, ''));
+    out.order = names().join(' ');
+    document.querySelector('#ptabs [data-tabgrp="Zehra"]').click(); out.folded = names().join(' ');
+    document.querySelector('#ptabs [data-tabgrp="Zehra"]').click();
+    const keep = window.prompt; window.prompt = () => 'Zehra';
+    const a2 = [...document.querySelectorAll('#ptabs .ptab')].find(e => /A2/.test(e.textContent));
+    a2.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); window.prompt = keep;
+    out.right = P.group; undo(); out.undo = P.group;
+    await dbPut('projects', { name: '__g1', updatedAt: 3, project: { ...mk('__g1'), group: 'Zehra' } });
+    await dbPut('projects', { name: '__g2', updatedAt: 2, project: { ...mk('__g2'), group: 'Ahsen' } });
+    await dbPut('projects', { name: '__g3', updatedAt: 1, project: mk('__g3') });
+    await projectsModal();
+    out.sections = [...document.querySelectorAll('#modal .pgrp-h')].map(h => h.firstChild.textContent.trim());
+    closeModal(); for (const n of ['__g1', '__g2', '__g3']) await dbDel('projects', n);
+    return out;
+  })()`);
+  if (!info.field || info.grp !== 'Ahsen') throw new Error('project panel group field did not set the group: ' + JSON.stringify(info));
+  if (info.order !== '[Ahsen] A1 A2 [Zehra] Z1') throw new Error('tabs are not gathered by group: ' + info.order);
+  if (info.folded !== '[Ahsen] A1 A2 [Zehra]') throw new Error('folding a group did not hide its tabs: ' + info.folded);
+  if (info.right !== 'Zehra' || info.undo !== 'Ahsen') throw new Error('right-click group / undo failed: ' + JSON.stringify(info));
+  if (info.sections.join('|') !== 'Ahsen|Zehra|No group') throw new Error('My Projects sections wrong: ' + JSON.stringify(info.sections));
+});
+
+check('choose which projects sync with Drive: per-project switch, "only the ones I choose" default, My Projects toggle', async page => {
+  const info = await page.evaluate(`(async () => {
+    const keepCfg = localStorage.getItem('fp_gdrive'), keepPick = localStorage.getItem('fp_gdrive_pick'), out = {};
+    localStorage.removeItem('fp_gdrive_pick'); gdSetCfg({ on: true });
+    const p = newProject(); p.name = '__drive'; p.floors[0].walls.push(mkWall({ x: 0, y: 0 }, { x: 300, y: 0 })); loadProject(p);
+    out.def = gdWanted(P.id);
+    await dbPut('projects', { name: '__drive', updatedAt: 9, project: JSON.parse(JSON.stringify(P)) });
+    await projectsModal();
+    const t = document.querySelector('#modal [data-gdp]'); out.card = t && t.textContent;
+    t.click(); await new Promise(r => setTimeout(r, 50)); out.off = gdWanted(P.id);
+    out.card2 = (document.querySelector('#modal [data-gdp]') || {}).textContent;
+    closeModal(); await dbDel('projects', '__drive');
+    gd.token = 'test'; gd.list = []; syncModal();
+    const cb = document.querySelector('#modal [data-gdpick]'); out.box = !!cb && !cb.checked;
+    const sel = document.querySelector('#modal [data-gdpickmode]'); sel.value = 'chosen'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+    out.mode = gdCfg().pick; out.newDefault = gdWanted('someOtherProject');
+    closeModal(); gd.token = null; gd.list = null; clearTimeout(gd.timer);
+    if (keepCfg == null) localStorage.removeItem('fp_gdrive'); else localStorage.setItem('fp_gdrive', keepCfg);
+    if (keepPick == null) localStorage.removeItem('fp_gdrive_pick'); else localStorage.setItem('fp_gdrive_pick', keepPick);
+    return out;
+  })()`);
+  if (info.def !== true) throw new Error('projects should sync by default (old behaviour)');
+  if (!/Synced/.test(info.card || '') || info.off !== false || !/Not synced/.test(info.card2 || '')) throw new Error('My Projects sync toggle failed: ' + JSON.stringify(info));
+  if (!info.box) throw new Error('sync dialog should show "Sync this project" unticked for a project turned off: ' + JSON.stringify(info));
+  if (info.mode !== 'chosen' || info.newDefault !== false) throw new Error('"only the ones I choose" not applied: ' + JSON.stringify(info));
 });
 
 check('sync & share: ☁ modal, share link + QR round trip, hostile link sanitised, another window updates the project', async page => {

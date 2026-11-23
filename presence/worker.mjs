@@ -309,6 +309,7 @@ export class CollabRoom extends DurableObject {
       drag: p.drag || null,
       view: p.view || null,
       v3d: p.v3d || null,
+      walk: p.walk || null,
       role: p.role || 'editor',
     };
   }
@@ -363,6 +364,7 @@ export class CollabRoom extends DurableObject {
       y: null,
       view: null,
       v3d: null,
+      walk: null,
       role,
     };
     this.savePeer(server, peer);
@@ -465,6 +467,12 @@ export class CollabRoom extends DurableObject {
       } else if (msg.v3d === null) {
         peer.v3d = null;
       }
+      // walk mode position (plan cm on a floor): other editors draw a person there in 3D
+      const wk = msg.walk;
+      if (wk && typeof wk === 'object' && typeof wk.floorId === 'string' && ['x', 'y', 'yaw'].every(k => Number.isFinite(wk[k]))) {
+        const cl = (v, m) => Math.max(-m, Math.min(m, v));
+        peer.walk = { floorId: wk.floorId.slice(0, 64), x: cl(wk.x, 1e7), y: cl(wk.y, 1e7), z: Number.isFinite(wk.z) ? cl(wk.z, 5000) : 0, yaw: cl(wk.yaw, 1e4) };
+      } else peer.walk = null;
       this.savePeer(ws, peer);
       this.broadcast({ type: 'presence', peer: this.publicPeer(peer) }, ws);
       return;

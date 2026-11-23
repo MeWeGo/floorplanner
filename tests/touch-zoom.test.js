@@ -48,7 +48,7 @@ function makeHarness(initialTool = 'select') {
       }
       return out;
     };
-    const scheduleRender = () => {};
+    const scheduleRender = () => {}, zoomPreview = () => {};
     const render = () => {};
     const refresh = () => {};
     const renderProps = () => {};

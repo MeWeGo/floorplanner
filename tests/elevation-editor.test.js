@@ -30,6 +30,8 @@ function makeEnv(floors = []) {
     const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
     const wLen = w => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
     const visFloor = f => f;
+    const groundP = () => ({ plinth: 20 }), groundFloorIdx = () => 0;
+    const terrainObj = () => null, terrainZ = () => -20, groundCuts = () => [];
     const isLowWall = w => w.wt === 'railing' || w.wt === 'fence';
     const railStyle = w => w.rs || 'bars';
     const curtainBays = w => Math.max(2, Math.round(wLen(w) / (w.mul || 120)));

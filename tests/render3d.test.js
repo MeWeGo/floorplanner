@@ -173,11 +173,11 @@ test('everything the sky / toon render changes is restored in finally', () => {
   assert.match(fin, /T3\.ground\.material = oldGroundMat/);
 });
 
-test('auto-generated ground uses a grass texture in sky renders and live realistic mode', () => {
-  const gm = sliceFn('grassGroundMat');
-  assert.match(gm, /floorTexture\(\s*'grass'/, 'grassGroundMat must build a procedural grass texture');
-  assert.match(gm, /repeat\.set\(\s*40000\s*\/\s*240\s*,\s*40000\s*\/\s*240\s*\)/, 'grass texture repeat must scale to the 40000 cm PlaneGeometry');
-  assert.match(gm, /map:\s*_grassGroundTex[\s\S]*bumpMap:\s*_grassGroundTex/, 'grassGroundMat must attach both map and bumpMap');
+test('the project ground (auto = grass) is used in sky renders and live realistic mode (#147)', () => {
+  const gm = sliceFn('groundMat');
+  assert.match(gm, /if \(kind === 'auto'\)[\s\S]*kind = 'grass'/, 'auto ground is grass in the realistic modes');
+  assert.match(gm, /map, shininess[\s\S]*bumpMap: map/, 'realistic ground gets a map and a bump map');
+  assert.match(sliceFn('groundTex'), /t\.repeat\.set\(R2 \/ s, R2 \/ s\)/, 'texture repeat scales to the 40000 cm plane');
   const hq = sliceFn('render3DHQ');
-  assert.match(hq, /backdrop === 'sky'\s*\?\s*grassGroundMat\(\)\s*:/, 'sky backdrop renders must use grassGroundMat()');
+  assert.match(hq, /studioGround = groundMat\(backdrop === 'sky' \? 'real' : 'paper'\)/, 'sky backdrop renders use the realistic ground');
 });
