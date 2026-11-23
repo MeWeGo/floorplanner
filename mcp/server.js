@@ -3057,12 +3057,23 @@ function newProject(a) {
   };
 }
 /* Same defaults as loadProject() in app.js so old/agent-made JSON always loads. */
-// eğimli duvar üstü (#96): [[t, h], …] t 0 → 1 artan, h 10..2000 cm; geçersizse null
+// eğimli duvar üstü (#96, #178): [[t, h], …] veya [[t, hP, hM], …] t 0 → 1 artan, h 10..2000 cm; geçersizse null
 function cleanWallTop(v) {
   if (!Array.isArray(v) || v.length < 2 || v.length > 500) return null;
-  const out = v.map(p => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1]) ? [Math.round(+p[0] * 10000) / 10000, Math.round(+p[1] * 10) / 10] : null);
+  const out = v.map(p => {
+    if (!Array.isArray(p) || !isFinite(p[0]) || !isFinite(p[1])) return null;
+    const t = Math.round(+p[0] * 10000) / 10000, h1 = Math.round(+p[1] * 10) / 10;
+    if (p.length >= 3 && p[2] != null) {
+      if (!isFinite(p[2])) return null;
+      const h2 = Math.round(+p[2] * 10) / 10;
+      return Math.abs(h1 - h2) < 0.1 ? [t, h1] : [t, h1, h2];
+    }
+    return [t, h1];
+  });
   if (!out.every(Boolean) || out[0][0] !== 0 || out[out.length - 1][0] !== 1) return null;
-  for (let i = 0; i < out.length; i++) if (out[i][1] < 10 || out[i][1] > 2000 || (i && out[i][0] < out[i - 1][0])) return null;
+  for (let i = 0; i < out.length; i++) {
+    if (out[i][1] < 10 || out[i][1] > 2000 || (out[i].length >= 3 && (out[i][2] < 10 || out[i][2] > 2000)) || (i && out[i][0] < out[i - 1][0])) return null;
+  }
   return out;
 }
 function normalizeProject(obj) {
@@ -3085,11 +3096,11 @@ function normalizeProject(obj) {
     if (!f || typeof f !== 'object') throw new Error('floors[' + i + '] is not an object');
     f.id = f.id || uid();
     f.name = f.name || ('Floor ' + (i + 1));
-    for (const k in KINDS) f[k] = Array.isArray(f[k]) ? f[k] : [];
+    for (const k in KINDS) { f[k] = Array.isArray(f[k]) ? f[k] : []; for (const o of f[k]) if (o) { if (o.hidden) o.hidden = true; else delete o.hidden; } }
     for (const z of f.zones) cleanZone(z); // site parcel / outdoor zones (#150)
     f.groups = Array.isArray(f.groups) ? f.groups : [];
     for (const o of f.ops) if (o.open == null) o.open = 0;
-    for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.map(p => p[1])); } else delete w.top; } }
+    for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
     for (const sl of f.slabs) { if (!(sl.t > 0)) sl.t = 20; sl.floor = sl.floor || 'concrete'; sl.off = +sl.off || 0; }
     for (const v of f.voids) { if (!VOID_TYPES.includes(v.type)) v.type = 'stair'; if (v.dep != null) { const d = Math.max(0, Math.min(1000, Math.round(+v.dep || 0))); if (d) v.dep = d; else delete v.dep; } } // pit depth (cm)
     if (f.lvl != null) { const n = typeof f.lvl === 'number' || (typeof f.lvl === 'string' && f.lvl.trim()) ? +f.lvl : NaN; if (Number.isFinite(n)) f.lvl = Math.max(-50000, Math.min(50000, Math.round(n))); else delete f.lvl; } // floor level (cm, ±0 = ground)
@@ -3169,15 +3180,113 @@ function mkOp(f, a) {
   f.ops.push(o);
   return o;
 }
-/* ROOF-PARAM:BEGIN — parametrik çatı (#115). Saf JS: app.js ve mcp/server.js'te birebir aynı (tests/parametric-roof.test.js denetler).
+/* ROOF-PARAM:BEGIN — parametrik çatı (#115, #175). Saf JS: app.js ve mcp/server.js'te birebir aynı (tests/parametric-roof.test.js denetler).
    Öğe: { k: 'roof', roofType: flat|gable|hip|shed, pitch°, ridge (mahya kaçıklığı, derinliğin oranı −0.45..0.45),
    ridgeDir: 'w' (mahya genişlik boyunca) | 'd', hip (kırma ucu, yarı genişliğin oranı; yoksa eşit eğim), over (saçak cm), th (kalınlık cm),
-   rmat (kaplama) }. w × d = duvar hattındaki ayak izi; saçak bunun dışına taşar ve eğimle aşağı iner. z = 0 öğenin tabanı (elev = duvar üstü)
+   rmat (kaplama), pts?: [{x, y}, …] }. w × d = duvar hattındaki ayak izi; saçak bunun dışına taşar ve eğimle aşağı iner. z = 0 öğenin tabanı (elev = duvar üstü)
    = çatının alt yüzü duvar hattında. Yüzler yerel cm (merkez 0,0), dışa bakar; IFC çatılarının faces / fbase alanlarına dokunulmaz. */
 const ROOF_TYPES = { flat: ['Düz', 'Flat'], gable: ['Beşik', 'Gable'], hip: ['Kırma', 'Hip'], shed: ['Tek eğimli', 'Shed'] };
 const ROOF_MATS = { tile: ['Kiremit', 'Clay tile'], shingle: ['Şıngıl', 'Shingle'], metal: ['Kenet metal', 'Standing-seam metal'], slate: ['Arduvaz', 'Slate'], concrete: ['Beton / teras', 'Concrete / terrace'], none: ['Düz renk', 'Plain colour'] };
 const ROOF_PITCH_MAX = 75, ROOF_OVER_MAX = 300;
 const isParamRoof = o => !!o && o.k === 'roof' && Object.prototype.hasOwnProperty.call(ROOF_TYPES, o.roofType);
+const hasRoofPts = o => !!o && Array.isArray(o.pts) && o.pts.length >= 3;
+function roofPolyArea(poly) { let A = 0; for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; A += a[0] * b[1] - b[0] * a[1]; } return A / 2; }
+function cleanRoofPts(pts) {
+  if (!Array.isArray(pts) || pts.length < 3 || pts.length > 64) return null;
+  const out = [];
+  for (const p of pts) {
+    if (!p || !isFinite(p.x) || !isFinite(p.y)) return null;
+    const x = Math.round(+p.x * 10) / 10, y = Math.round(+p.y * 10) / 10;
+    if (!out.length || Math.hypot(x - out[out.length - 1].x, y - out[out.length - 1].y) >= 0.5) out.push({ x, y });
+  }
+  if (out.length > 1 && Math.hypot(out[0].x - out[out.length - 1].x, out[0].y - out[out.length - 1].y) < 0.5) out.pop();
+  if (out.length < 3 || Math.abs(roofPolyArea(out.map(p => [p.x, p.y]))) < 25) return null;
+  return out;
+}
+function roofPolyConvex(poly) {
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length], c = poly[(i + 2) % poly.length];
+    if ((b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]) < -1e-5) return false;
+  }
+  return true;
+}
+function roofPolySelfHit(poly) {
+  const n = poly.length, ccw = (a, b, c) => (c[1] - a[1]) * (b[0] - a[0]) - (b[1] - a[1]) * (c[0] - a[0]);
+  for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
+    if (i === 0 && j === n - 1) continue;
+    const a = poly[i], b = poly[(i + 1) % n], c = poly[j], d = poly[(j + 1) % n];
+    const d1 = ccw(a, b, c), d2 = ccw(a, b, d), d3 = ccw(c, d, a), d4 = ccw(c, d, b);
+    if (((d1 > 1e-6 && d2 < -1e-6) || (d1 < -1e-6 && d2 > 1e-6)) && ((d3 > 1e-6 && d4 < -1e-6) || (d3 < -1e-6 && d4 > 1e-6))) return true;
+  }
+  return false;
+}
+function roofOffsetPoly(poly, over) {
+  if (!(over > 0) || poly.length < 3) return poly.map(p => [p[0], p[1]]);
+  const lines = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length], dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    if (L < 1e-4) continue;
+    const nx = dy / L, ny = -dx / L;
+    lines.push({ nx, ny, c: nx * a[0] + ny * a[1] + over, a, b });
+  }
+  if (lines.length < 3) return poly.map(p => [p[0], p[1]]);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const e0 = lines[i], e1 = lines[(i + 1) % lines.length], v = e0.b, det = e0.nx * e1.ny - e0.ny * e1.nx;
+    if (Math.abs(det) > 1e-6) {
+      const ix = (e0.c * e1.ny - e0.ny * e1.c) / det, iy = (e0.nx * e1.c - e0.c * e1.nx) / det;
+      if (Math.hypot(ix - v[0], iy - v[1]) <= Math.max(over * 2.5, 1)) { out.push([ix, iy]); continue; }
+    }
+    out.push([v[0] + e0.nx * over, v[1] + e0.ny * over]);
+    if (e0.nx * e1.nx + e0.ny * e1.ny < 0.99) out.push([v[0] + e1.nx * over, v[1] + e1.ny * over]);
+  }
+  return out;
+}
+function roofSplitHoriz(poly, yr) {
+  const ps = poly.map(p => [p[0], Math.abs(p[1] - yr) < 1e-4 ? yr + 1e-3 : p[1]]);
+  const V = [], xs = [];
+  for (let i = 0; i < ps.length; i++) {
+    const a = ps[i], b = ps[(i + 1) % ps.length];
+    V.push({ p: a, cr: false });
+    if ((a[1] < yr) !== (b[1] < yr)) {
+      const ix = a[0] + (b[0] - a[0]) * (yr - a[1]) / (b[1] - a[1]);
+      const vi = V.length; V.push({ p: [ix, yr], cr: true }); xs.push(vi);
+    }
+  }
+  if (!xs.length) return ps[0][1] < yr ? { n: [poly], s: [] } : { n: [], s: [poly] };
+  const byX = xs.slice().sort((i, j) => V[i].p[0] - V[j].p[0]), partner = new Map();
+  for (let k = 0; k + 1 < byX.length; k += 2) { partner.set(byX[k], byX[k + 1]); partner.set(byX[k + 1], byX[k]); }
+  const out = { n: [], s: [] };
+  for (const [key, isN] of [['n', true], ['s', false]]) {
+    const used = new Set();
+    for (const start of xs) {
+      if (used.has(start) || (V[(start + 1) % V.length].p[1] < yr) !== isN) continue;
+      const loop = []; let cur = start, guard = 0;
+      while (guard++ <= V.length * 2 + 4) {
+        used.add(cur); loop.push(V[cur].p);
+        cur = (cur + 1) % V.length;
+        while (!V[cur].cr && guard++ <= V.length * 2 + 4) { loop.push(V[cur].p); cur = (cur + 1) % V.length; }
+        used.add(cur); loop.push(V[cur].p);
+        cur = partner.get(cur);
+        if (cur == null || cur === start) break;
+      }
+      if (loop.length >= 3 && Math.abs(roofPolyArea(loop)) >= 1) out[key].push(roofPolyArea(loop) < 0 ? loop.slice().reverse() : loop);
+    }
+  }
+  return out;
+}
+function roofOnOuterEdge(a, b, P1) {
+  for (let i = 0; i < P1.length; i++) {
+    const u = P1[i], v = P1[(i + 1) % P1.length], dx = v[0] - u[0], dy = v[1] - u[1], l2 = dx * dx + dy * dy;
+    if (l2 < 1e-6) continue;
+    const l = Math.sqrt(l2);
+    const da = Math.abs((a[0] - u[0]) * dy - (a[1] - u[1]) * dx) / l, db = Math.abs((b[0] - u[0]) * dy - (b[1] - u[1]) * dx) / l;
+    if (da > 1e-2 || db > 1e-2) continue;
+    const ta = ((a[0] - u[0]) * dx + (a[1] - u[1]) * dy) / l2, tb = ((b[0] - u[0]) * dx + (b[1] - u[1]) * dy) / l2;
+    if (ta >= -1e-3 && ta <= 1 + 1e-3 && tb >= -1e-3 && tb <= 1 + 1e-3) return true;
+  }
+  return false;
+}
 // tek okuyucu: eksik / geçersiz alanlar varsayılana düşer
 function roofP(o) {
   o = o || {};
@@ -3204,6 +3313,7 @@ function cleanRoof(o) {
   if (o.hip != null) { if (q.hip == null) delete o.hip; else o.hip = q.hip; }
   if (o.ridgeDir != null && o.ridgeDir !== 'd') delete o.ridgeDir;
   if (o.rmat != null && !ROOF_MATS[o.rmat]) delete o.rmat;
+  if (o.pts != null) { const cp = cleanRoofPts(o.pts); if (cp) o.pts = cp; else delete o.pts; }
   o.h = roofHeight(o);
   return o;
 }
@@ -3219,7 +3329,21 @@ function roofPlanes(q, W, D) {
   return out;
 }
 // mahya yüksekliği (duvar hattından) ve toplam yükseklik (o.h): mahya + kalınlık
-function roofRise(o) { const q = roofP(o), sw = q.dir === 'd', D = sw ? +o.w || 0 : +o.d || 0; return q.flat ? 0 : Math.tan(q.pitch * Math.PI / 180) * (q.type === 'shed' ? D : D / 2); }
+function roofRise(o) {
+  const q = roofP(o), sw = q.dir === 'd';
+  if (q.flat) return 0;
+  if (hasRoofPts(o)) {
+    if (q.type === 'hip') {
+      const fs = roofParamFaces(Object.assign({}, o, { over: 0, th: 0 }));
+      let mz = 0; for (const f of fs) for (const p of f) if (p[2] > mz) mz = p[2];
+      return mz;
+    }
+    const ys = o.pts.map(p => sw ? -p.x : p.y), span = Math.max(...ys) - Math.min(...ys);
+    return Math.tan(q.pitch * Math.PI / 180) * (q.type === 'shed' ? span : span / 2);
+  }
+  const D = sw ? +o.w || 0 : +o.d || 0;
+  return Math.tan(q.pitch * Math.PI / 180) * (q.type === 'shed' ? D : D / 2);
+}
 function roofHeight(o) { return Math.round((roofRise(o) + roofP(o).th) * 10) / 10; }
 // dışbükey çokgeni a·x + b·y + c ≤ 0 yarı düzlemiyle kırp (Sutherland–Hodgman)
 function roofClip(poly, a, b, c) {
@@ -3233,9 +3357,85 @@ function roofClip(poly, a, b, c) {
 }
 // yüzler: her düzlemin en alçak olduğu bölge (min-düzlem yükseklik alanı) üst (+th) ve alt yüz olarak; dış kenarlarda yan yüzler
 function roofParamFaces(o) {
-  const q = roofP(o), sw = q.dir === 'd', W = Math.max(1, sw ? +o.d || 0 : +o.w || 0), D = Math.max(1, sw ? +o.w || 0 : +o.d || 0);
+  const q = roofP(o), sw = q.dir === 'd', z = (P, x, y) => P[0] * x + P[1] * y + P[2];
+  if (hasRoofPts(o)) {
+    let P0 = o.pts.map(p => sw ? [p.y, -p.x] : [p.x, p.y]);
+    if (roofPolyArea(P0) < 0) P0 = P0.slice().reverse();
+    if (P0.length >= 3 && roofPolyArea(P0) >= 10 && !roofPolySelfHit(P0)) {
+      let P1 = q.over > 0 ? roofOffsetPoly(P0, q.over) : P0.map(p => [p[0], p[1]]);
+      if (!P1 || P1.length < 3 || roofPolyArea(P1) < 10 || roofPolySelfHit(P1)) P1 = P0.map(p => [p[0], p[1]]);
+      const faces = [], emit = (poly, P, checkOuter) => {
+        if (poly.length < 3 || Math.abs(roofPolyArea(poly)) < 1) return;
+        const pl = roofPolyArea(poly) < 0 ? poly.slice().reverse() : poly;
+        faces.push(pl.map(p => [p[0], p[1], z(P, p[0], p[1]) + q.th]));
+        faces.push(pl.map(p => [p[0], p[1], z(P, p[0], p[1])]).reverse());
+        for (let k = 0; k < pl.length; k++) {
+          const a = pl[k], b = pl[(k + 1) % pl.length];
+          if (checkOuter && !roofOnOuterEdge(a, b, P1)) continue;
+          const za = z(P, a[0], a[1]), zb = z(P, b[0], b[1]);
+          faces.push([[a[0], a[1], za], [b[0], b[1], zb], [b[0], b[1], zb + q.th], [a[0], a[1], za + q.th]]);
+        }
+      };
+      const t = Math.tan(q.pitch * Math.PI / 180);
+      if (q.flat) emit(P1, [0, 0, 0], false);
+      else if (q.type === 'shed') {
+        const yMax0 = Math.max(...P0.map(p => p[1]));
+        emit(P1, [0, -t, yMax0 * t], false);
+      } else if (q.type === 'gable') {
+        const ys0 = P0.map(p => p[1]), yMin0 = Math.min(...ys0), yMax0 = Math.max(...ys0), span = Math.max(1, yMax0 - yMin0);
+        const yr = (yMin0 + yMax0) / 2 + q.ridge * span, H = (span / 2) * t;
+        const sN = H / Math.max(1, yr - yMin0), sS = H / Math.max(1, yMax0 - yr);
+        const pN = [0, sN, -sN * yMin0], pS = [0, -sS, sS * yMax0];
+        if (roofPolyConvex(P1)) {
+          emit(roofClip(P1, 0, 1, -yr), pN, true);
+          emit(roofClip(P1, 0, -1, yr), pS, true);
+        } else {
+          const sp = roofSplitHoriz(P1, yr);
+          for (const pn of sp.n) emit(pn, pN, true);
+          for (const ps of sp.s) emit(ps, pS, true);
+        }
+      } else if (q.type === 'hip') {
+        if (roofPolyConvex(P0) && roofPolyConvex(P1)) {
+          const pl = [];
+          for (let i = 0; i < P0.length; i++) {
+            const a = P0[i], b = P0[(i + 1) % P0.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+            if (L < 1e-4) continue;
+            const nx = (b[1] - a[1]) / L, ny = -(b[0] - a[0]) / L;
+            pl.push([-t * nx, -t * ny, t * (nx * a[0] + ny * a[1])]);
+          }
+          pl.forEach((P, i) => {
+            let poly = P1;
+            pl.forEach((Q, j) => { if (j !== i && poly.length) poly = roofClip(poly, P[0] - Q[0], P[1] - Q[1], P[2] - Q[2] - (j < i ? 1e-7 : 0)); });
+            emit(poly, P, true);
+          });
+        } else {
+          let sx = 0, sy = 0, sA = 0;
+          for (let i = 0; i < P0.length; i++) { const a = P0[i], b = P0[(i + 1) % P0.length], c = a[0] * b[1] - b[0] * a[1]; sA += c; sx += (a[0] + b[0]) * c; sy += (a[1] + b[1]) * c; }
+          const cx = Math.abs(sA) > 1e-4 ? sx / (3 * sA) : 0, cy = Math.abs(sA) > 1e-4 ? sy / (3 * sA) : 0;
+          const triA = (a, b) => (a[0] - cx) * (b[1] - cy) - (a[1] - cy) * (b[0] - cx);
+          const star = P0.every((a, i) => triA(a, P0[(i + 1) % P0.length]) > 1) && P1.every((a, i) => triA(a, P1[(i + 1) % P1.length]) > 1);
+          if (star) {
+            const dMin = Math.min(...P0.map((a, i) => { const b = P0[(i + 1) % P0.length]; return triA(a, b) / Math.hypot(b[0] - a[0], b[1] - a[1]); }));
+            const H = Math.max(1, dMin) * t, ze = -q.over * t;
+            for (let i = 0; i < P1.length; i++) {
+              const a = P1[i], b = P1[(i + 1) % P1.length];
+              faces.push([[a[0], a[1], ze + q.th], [b[0], b[1], ze + q.th], [cx, cy, H + q.th]]);
+              faces.push([[b[0], b[1], ze], [a[0], a[1], ze], [cx, cy, H]]);
+              faces.push([[a[0], a[1], ze], [b[0], b[1], ze], [b[0], b[1], ze + q.th], [a[0], a[1], ze + q.th]]);
+            }
+          } else emit(P1, [0, 0, 0], false);
+        }
+      }
+      if (faces.length) {
+        const rot = sw ? faces.map(f => f.map(p => [-p[1], p[0], p[2]])) : faces;
+        let V = 0;
+        for (const f of rot) for (let k = 1; k + 1 < f.length; k++) { const a = f[0], b = f[k], c = f[k + 1], ay = -a[1], by = -b[1], cy = -c[1]; V += a[0] * (by * c[2] - b[2] * cy) - ay * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * cy - by * c[0]); }
+        return V < 0 ? rot.map(f => f.slice().reverse()) : rot;
+      }
+    }
+  }
+  const W = Math.max(1, sw ? +o.d || 0 : +o.w || 0), D = Math.max(1, sw ? +o.w || 0 : +o.d || 0);
   const X = W / 2 + q.over, Y = D / 2 + q.over, R = [[-X, -Y], [X, -Y], [X, Y], [-X, Y]], pl = roofPlanes(q, W, D), faces = [];
-  const z = (P, x, y) => P[0] * x + P[1] * y + P[2];
   const edge = (p, k) => (k === 'x' && (Math.abs(p[0] + X) < 1e-6 || Math.abs(p[0] - X) < 1e-6)) || (k === 'y' && (Math.abs(p[1] + Y) < 1e-6 || Math.abs(p[1] - Y) < 1e-6));
   pl.forEach((P, i) => {
     let poly = R;
@@ -3284,10 +3484,18 @@ function mkFurn(f, a) {
     cleanLight(o);
   }
   if (CAT_PARTS[def.id]) { o.parts = CAT_PARTS[def.id](def.w, def.d, def.h); o.pbase = { w: def.w, d: def.d, h: def.h }; o.partsV = PARTS_V; } // multi-part catalogue item
-  if (def.k === 'roof') { // parametric roof (#115): same defaults as the app; elev = top of the walls (floor wall height)
+  if (def.k === 'roof') { // parametric roof (#115, #175): same defaults as the app; elev = top of the walls (floor wall height)
     if (a.roofType != null && !ROOF_TYPES[a.roofType]) throw new Error('roofType must be one of ' + Object.keys(ROOF_TYPES).join(', '));
     if (a.rmat != null && !ROOF_MATS[a.rmat]) throw new Error('rmat must be one of ' + Object.keys(ROOF_MATS).join(', '));
-    o.roofType = a.roofType || 'gable'; const flat = o.roofType === 'flat';
+    if (a.pts != null) {
+      const cp = cleanRoofPts(parsePts(a.pts, 3, 'pts'));
+      if (!cp) throw new Error('pts must be 3+ non-degenerate polygon points');
+      o.pts = cp;
+      const xs = cp.map(p => p.x), ys = cp.map(p => p.y);
+      if (a.w == null) o.w = Math.max(1, Math.round(Math.max(...xs) - Math.min(...xs)));
+      if (a.d == null) o.d = Math.max(1, Math.round(Math.max(...ys) - Math.min(...ys)));
+    }
+    o.roofType = a.roofType || (o.pts ? 'hip' : 'gable'); const flat = o.roofType === 'flat';
     if (!flat) o.pitch = a.pitch != null ? num(a.pitch, 30, 'pitch') : 30;
     if (a.ridge != null) o.ridge = num(a.ridge, 0, 'ridge'); if (a.ridgeDir === 'd') o.ridgeDir = 'd'; if (a.hip != null) o.hip = num(a.hip, 0, 'hip');
     o.over = a.over != null ? num(a.over, 50, 'over') : flat ? 0 : 50; o.th = a.th != null ? num(a.th, 20, 'th') : 20; o.rmat = a.rmat || (flat ? 'concrete' : 'tile');
@@ -3831,6 +4039,7 @@ tool('add_furniture',
     lightColor: { type: 'string', description: 'Light fixtures only: custom light colour #rrggbb (overrides kelvin).' },
     beam: { type: 'number', description: 'Spot fixtures only (downlight, trackSpot): beam angle in degrees (10–120).' },
     rmat: { type: 'string', enum: Object.keys(ROOF_MATS), description: 'Roof only: covering tile | shingle | metal | slate | concrete | none (default tile; flat concrete).' },
+    pts: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, description: 'Roof only: optional custom polygon footprint corners [{x, y}, ...] in local cm relative to centre (x, y) (default hip if roofType omitted).' },
     floorIndex: floorArg,
   },
   ['catalogId', 'x', 'y'],
@@ -4038,7 +4247,7 @@ tool('add_text',
   });
 
 tool('update_object',
-  'Change properties of an existing object (wall t/h/wt or endpoints; a wall may take top: [[t, h], ...] = sloped top profile, t 0 to 1 along a→b, h cm above the wall base, null = flat; opening d/w/side..., furniture x/y/rot..., room name/pts/floor...). Parametric roofs (type "roof" with roofType): roofType flat|gable|hip|shed, pitch, ridge, ridgeDir, hip, over, th, rmat (see add_furniture); h is derived. Ramps (type "ramp"): w = width, d = horizontal length, h = rise, rampType accessible|vehicle|landscape, railing none|left|right|both. Rooms/slabs may use floor "glass" with glass clear|frosted. The "id" property cannot be changed.',
+  'Change properties of an existing object (wall t/h/wt or endpoints; a wall may take top: [[t, h], ...] or [[t, hP, hM], ...] = sloped top profile, t 0 to 1 along a→b, h/hP/hM cm above the wall base, null = flat; opening d/w/side..., furniture x/y/rot..., room name/pts/floor..., or hidden: true/false to hide/show an item (#174)). Parametric roofs (type "roof" with roofType): roofType flat|gable|hip|shed, pitch, ridge, ridgeDir, hip, over, th, rmat, pts (local [{x,y},...], null = rectangular); h is derived. Ramps (type "ramp"): w = width, d = horizontal length, h = rise, rampType accessible|vehicle|landscape, railing none|left|right|both. Rooms/slabs may use floor "glass" with glass clear|frosted. The "id" property cannot be changed.',
   {
     id: { type: 'string', description: 'Object id (see summarize).' },
     props: { type: 'object', description: 'Properties to set, e.g. {"t":30} or {"name":"Mutfak"}.' },
@@ -4055,14 +4264,21 @@ tool('update_object',
     // convenience: rooms store the pattern under "floor" (app schema)
     if ((found.kind === 'room' || found.kind === 'slab') && 'floorPattern' in props) { props.floor = props.floorPattern; delete props.floorPattern; }
     Object.assign(found.o, props);
+    if ('hidden' in props) { if (found.o.hidden) found.o.hidden = true; else delete found.o.hidden; }
     // sanity checks after merge
     if (found.kind === 'op' && found.o.wall && !f.walls.some(w => w.id === found.o.wall))
       throw new Error('props.wall "' + found.o.wall + '" does not exist on this floor');
-    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); if (found.o.top === null) delete found.o.top; if (found.o.top != null) { const tp = cleanWallTop(found.o.top); if (!tp) throw new Error('top must be [[t, h], …]: t from 0 to 1 increasing, h 10–2000 cm (height above the wall base)'); found.o.top = tp; found.o.h = Math.max(...tp.map(p => p[1])); } if (found.o.elev != null) { const e = +found.o.elev || 0; if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm'); if (e) found.o.elev = e; else delete found.o.elev; } }
+    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); if (found.o.top === null) delete found.o.top; if (found.o.top != null) { const tp = cleanWallTop(found.o.top); if (!tp) throw new Error('top must be [[t, h], …] or [[t, hP, hM], …]: t from 0 to 1 increasing, h 10–2000 cm (height above the wall base)'); found.o.top = tp; found.o.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } if (found.o.elev != null) { const e = +found.o.elev || 0; if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm'); if (e) found.o.elev = e; else delete found.o.elev; } }
     if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
     if (found.kind === 'draft') { parsePts(found.o.pts, found.o.shape === 'arc' ? 3 : 2, 'pts'); if (!DRAFT_SHAPES.includes(found.o.shape)) found.o.shape = 'pline'; }
     if (found.kind === 'furn' && 'parts' in props) cleanParts(found.o);
-    if (found.kind === 'furn') { cleanRoof(found.o); cleanLight(found.o); } // parametric roof (#115) / light fields (#120): clamp, drop defaults
+    if (found.kind === 'furn') {
+      if (found.o.k === 'roof' && 'pts' in props) {
+        if (props.pts === null) delete found.o.pts;
+        else if (!cleanRoofPts(parsePts(props.pts, 3, 'pts'))) throw new Error('pts must be 3+ non-degenerate polygon points');
+      }
+      cleanRoof(found.o); cleanLight(found.o);
+    } // parametric roof (#115, #175) / light fields (#120): clamp, drop defaults
     return 'Updated ' + found.kind + ' ' + found.o.id + ':\n' + JSON.stringify(found.o, null, 2);
   });
 

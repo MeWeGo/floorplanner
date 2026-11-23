@@ -80,10 +80,10 @@ P = {
 Floor = {
   "id": "…", "name": "Zemin Kat", "slabFloor": "none", "slabColor": null,   // 3D slab finish (same kinds as room floors)
   "wallH"?: 350, "glass"?: "clear|frosted", "noSlab"?: true,   // optional per-floor wall height (#59; absent = P.wallH), glass kind when slabFloor is "glass" (#57) and noSlab = no automatic floor slab
-  "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain|railing|fence", mul?:cm, mulN?:n (curtain mullions, #71), rs?:"bars|glass|cable|solid" (railing style; also on stairs / ramps), color?:"#hex" (paint; absent = theme default), c1?/c2?:"#hex", f1?/f2?:"tile|…|tex:<id>" (per-face paint / finish, see *Wall faces*), elev?:cm (base offset from the floor, may be negative; absent = 0), top?:[[t, h], …] (sloped top profile, #96), pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
+  "walls":  [ { id, a:{x,y}, b:{x,y}, t, h, wt?:"solid|curtain|railing|fence", mul?:cm, mulN?:n (curtain mullions, #71), rs?:"bars|glass|cable|solid" (railing style; also on stairs / ramps), color?:"#hex" (paint; absent = theme default), c1?/c2?:"#hex", f1?/f2?:"tile|…|tex:<id>" (per-face paint / finish, see *Wall faces*), elev?:cm (base offset from the floor, may be negative; absent = 0), top?:[[t, h], …] | [[t, hP, hM], …] (sloped / transversely beveled top profile, #96/#176/#178; solid & curtain walls), pivot?:"a|b", angles?:[deg,…], posIdx?:0 } ],
   "ops":    [ { id, wall:<wallId>, d, w, h, sill, type, flip:0|1, side:1|-1, open?:0|90, mat?:"wood|glass|paneled|metal", color?:"#hex", frameCol?:"#hex", glass?:"clear|frosted" } ],   // doors & windows
   "furn":   [ { id, type, name, icon, k, w, d, h, color, x, y, rot, label, stepN?, stairType?:"straight|l|u|spiral", railing?:"none|left|right|both", rampType?:"accessible|vehicle|landscape",   // stair fields for k:"stairs" (#33); ramps (k:"ramp", #58) use rampType + railing
-                faces?:[[[x,y,z],…],…], fbase?:{w,d,h} (k:"roof" only: IFC roof faces, local cm, z from the item base),
+                pts?:[{x,y},…] (custom polygon / hexagonal footprint for Draw Roof, #175, local cm around x,y), faces?:[[[x,y,z],…],…], fbase?:{w,d,h} (k:"roof" only: IFC roof faces, local cm, z from the item base),
                 parts?:[{ name?, type:"box|cyl|sphere|extrude", x, y, z, w, d, h, rot?, rx?, ry?, color?, mat?:"gloss|metal|glass", axis?:"x|y", pts? }], pbase?:{w,d,h}, partsV?:1, rx?, ry? (item tilt, see §8) } ],   // multi-part furniture (see §8)
   "rooms":  [ { id, name, color, floor:"none|wood|tile|carpet|marble|concrete|stone|grass|water|gravel|deck|asphalt|glass|tex:<id>", glass?:"clear|frosted", slabT?:20, pts:[{x,y},…], vars?:[{ label, poses:{id:pose}, base?, draft? }], vIdx?:0 } ],
   "slabs":  [ { id, name, floor:"concrete|…", glass?:"clear|frosted", color:null|"#hex", t:20, off:0, pts:[{x,y},…] } ],   // free slabs: balconies / terraces (issue #22)
@@ -97,6 +97,7 @@ Floor = {
   "drafts": [ { id, shape:"pline|circle|arc", pts:[{x,y},…], closed?, w, dash?:"dashed|dotted|center", color?, fill?:"solid|hatch", fillCol? } ]   // 2D-only drafting (#83): never built in 3D
 }
 ```
+*(Any floor object above may carry `hidden?: true` (#174) to hide it from 2D, 3D, exports, picking and snapping until restored from the Hidden items panel.)*
 `Floor.groups` = `[ { id, vars: [{ label, poses: {id: pose}, base?, draft? }], idx } ]` — adjustable layout records for grouped objects (see §8).
 
 Key semantics:

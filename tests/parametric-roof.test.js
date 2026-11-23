@@ -33,11 +33,18 @@ function load(floor = { walls: [], ops: [] }) {
     ${fnSrcOf(src, 'roofCourseSvg')}
     ${fnSrcOf(src, 'roofFitWalls')}
     ${fnSrcOf(src, 'roofDefaults')}
+    ${fnSrcOf(src, 'ifcHull')}
+    ${fnSrcOf(src, 'ifcRect')}
+    ${fnSrcOf(src, 'isRectRoofPts')}
+    const BYID = { roof: { id: 'roof', k: 'roof', w: 500, d: 400, h: 164, color: '#a5523b', icon: '⌂' } };
+    const mkFurn = (def, x, y, rot = 0) => ({ id: 'rf_mk', type: def.id, k: def.k, w: def.w, d: def.d, h: def.h, x, y, rot, color: def.color, icon: '' });
+    const roofDrawElev = () => 270;
+    ${fnSrcOf(src, 'roofFromPts')}
     return {
       ROOF_TYPES, ROOF_MATS, isParamRoof, roofP, cleanRoof, roofPlanes,
-      roofRise, roofHeight, roofClip, roofParamFaces,
+      roofRise, roofHeight, roofClip, roofParamFaces, hasRoofPts, cleanRoofPts,
       roofFaces, surfFaces, surfHits, wallSurfProfile, attachWallTop,
-      roofTopFaces, roofCourseSvg, roofFitWalls, roofDefaults,
+      roofTopFaces, roofCourseSvg, roofFitWalls, roofDefaults, roofFromPts,
       cleanWallTop, wallTopOn, wallTopAt, wallTopPts, wallTopMin,
       wallTopSub, setWallTop, detachWallTop, fitOpsToWall
     };
@@ -208,7 +215,13 @@ test('(6) wall attach (#96) to parametric gable roof', () => {
   approx(peakActual, peakExpected, 5, 'gable-end wall peak: ');
 
   assert.strictEqual(attachWallTop(eaveWall, faces, f), true);
-  assert.strictEqual(eaveWall.top, undefined, 'eave wall stays flat');
+  assert.deepStrictEqual(eaveWall.top, [[0, 275.8, 264.2], [1, 275.8, 264.2]], 'eave wall gets transverse bevel matching 30° roof across wall thickness');
+
+  const flatRoof = { id: 'rf', k: 'roof', roofType: 'flat', over: 0, th: 20, w: 1000, d: 800, x: 0, y: 0, rot: 0, elev: 270 };
+  const flatWall = { id: 'wf', a: { x: -400, y: 0 }, b: { x: 400, y: 0 }, t: 20, h: 250, wt: 'solid' };
+  const f2 = { walls: [flatWall], ops: [] };
+  assert.strictEqual(attachWallTop(flatWall, surfFaces(flatRoof), f2), true);
+  assert.strictEqual(flatWall.top, undefined, 'flat roof leaves eave wall flat');
 });
 
 test('(7) cleanRoof sets o.h = roofHeight and deletes invalid roofType / rmat', () => {
@@ -266,4 +279,81 @@ test('(10) Fit to walls takes the outer wall line and height; 2D covering lines 
   assert.ok(segs.length > 20, 'tile courses drawn');
   for (const m of segs) approx(+m[2], +m[4], 0.11, 'course parallel to the eaves: ');
   assert.strictEqual(roofCourseSvg(Object.assign({}, o, { rmat: 'none' }), roofTopFaces(o), '#000'), '');
+});
+
+test('(11) custom polygon and hexagonal roofs (#175): roofFromPts, hip/flat/gable/shed, wall attach, MCP', async () => {
+  const {
+    roofFromPts, roofParamFaces, roofHeight, roofTopFaces, roofCourseSvg,
+    surfFaces, attachWallTop, wallTopOn,
+  } = load();
+
+  const rect = roofFromPts([{ x: 0, y: 0 }, { x: 600, y: 0 }, { x: 600, y: 400 }, { x: 0, y: 400 }]);
+  assert.ok(rect && rect.pts === undefined, '4-corner rectangle stays a normal rectangular roof without pts');
+
+  const R = 300;
+  const hexPts = Array.from({ length: 6 }, (_, i) => {
+    const a = (i * 60) * Math.PI / 180;
+    return { x: 400 + R * Math.cos(a), y: 300 + R * Math.sin(a) };
+  });
+  const hex = roofFromPts(hexPts);
+  assert.ok(hex, 'hexagonal roof created');
+  assert.strictEqual(hex.pts.length, 6, 'all 6 vertices preserved');
+  assert.strictEqual(hex.roofType, 'hip', 'polygon roof defaults to hip');
+  assert.strictEqual(hex.x, 400);
+  assert.strictEqual(hex.y, 300);
+
+  for (const [roofType, extra] of [['hip', {}], ['flat', {}], ['gable', {}], ['gable', { ridgeDir: 'd' }], ['shed', {}]]) {
+    const r = { ...hex, roofType, pitch: 30, over: roofType === 'flat' ? 0 : 40, th: 20, ...extra };
+    r.h = roofHeight(r);
+    const fs = roofParamFaces(r);
+    assert.ok(fs.length >= 3, `${roofType} produces faces`);
+    assert.ok(signedVolume(fs) > 1000, `${roofType} has positive outward volume`);
+    for (const f of fs) assertPlanar(f);
+    assert.ok(roofTopFaces(r).length >= 1, `${roofType} has upward top faces`);
+  }
+
+  // Regular hexagon hip has 6 upper slope planes meeting at single central apex
+  const hipFaces = roofParamFaces({ ...hex, roofType: 'hip', pitch: 30, over: 0, th: 20 });
+  const maxZ = Math.max(...hipFaces.flatMap(f => f.map(p => p[2])));
+  const apices = hipFaces.flat().filter(p => Math.abs(p[2] - maxZ) < 0.1);
+  assert.ok(apices.length >= 6);
+  for (const p of apices) { approx(p[0], 0, 0.2, 'hex apex x: '); approx(p[1], 0, 0.2, 'hex apex y: '); }
+  const courses = roofCourseSvg({ ...hex, rmat: 'tile' }, roofTopFaces(hex), '#000');
+  assert.ok(courses.includes('M'), 'hexagonal tiled roof draws 2D course lines');
+
+  // Concave L-shape supports gable / flat / shed and star/fallback hip with positive volume
+  const lPts = [
+    { x: -300, y: -250 }, { x: 100, y: -250 }, { x: 100, y: -50 },
+    { x: 300, y: -50 }, { x: 300, y: 250 }, { x: -300, y: 250 },
+  ];
+  for (const roofType of ['gable', 'shed', 'hip', 'flat']) {
+    const lRoof = { k: 'roof', roofType, pitch: 30, over: roofType === 'flat' ? 0 : 20, th: 20, w: 600, d: 500, x: 0, y: 0, rot: 0, pts: lPts };
+    const lFaces = roofParamFaces(lRoof);
+    assert.ok(signedVolume(lFaces) > 1000, `concave L-shape ${roofType} has positive volume`);
+    for (const f of lFaces) assertPlanar(f);
+  }
+
+  // Wall attach works under hexagonal roof
+  const wUnder = { id: 'wh1', a: { x: 400, y: 50 }, b: { x: 400, y: 550 }, t: 20, h: 270, wt: 'solid' };
+  assert.strictEqual(attachWallTop(wUnder, surfFaces(hex), { walls: [wUnder], ops: [] }), true);
+  assert.strictEqual(wallTopOn(wUnder), true);
+
+  // MCP add_furniture + update_object supports pts
+  const c = mcpClient();
+  try {
+    await c.tool('new_project', { name: 'Hex Roof' });
+    const localHex = hexPts.map(p => ({ x: Math.round(p.x - 400), y: Math.round(p.y - 300) }));
+    const add = await c.tool('add_furniture', { catalogId: 'roof', x: 400, y: 300, pts: localHex, pitch: 30 });
+    assert.ok(!add.err, add.text);
+    const id = add.text.match(/\b([a-z0-9]{7})\b/)?.[1];
+    assert.ok(id, 'added roof id returned: ' + add.text);
+    const got = await c.tool('get_project');
+    const pj = JSON.parse(got.text);
+    const rf = pj.floors[0].furn.find(o => o.id === id);
+    assert.ok(rf && Array.isArray(rf.pts) && rf.pts.length === 6 && rf.roofType === 'hip', 'MCP saved hexagonal pts and hip default');
+    const up = await c.tool('update_object', { id, props: { pts: null } });
+    assert.ok(!up.err, up.text);
+  } finally {
+    c.stop();
+  }
 });

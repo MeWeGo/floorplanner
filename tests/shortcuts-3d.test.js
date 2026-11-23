@@ -29,3 +29,66 @@ test('the other editing shortcuts survive 3D too', () => {
   assert.match(branch, /Delete[^\n]*deleteSel\(\)/, 'Delete must remove the 3D selection');
 });
 
+test('Escape in 3D exits walk / group-edit / clears selection and stays in 3D (#180)', () => {
+  const branch = view3dBranch();
+  assert.ok(!/show3D\(false\)/.test(branch), '3D Escape branch must never switch back to 2D');
+
+  const escIdx = branch.indexOf("if (e.key === 'Escape') {");
+  assert.ok(escIdx >= 0, '3D Escape handler block missing');
+  const open = branch.indexOf('{', escIdx);
+  const escBody = branch.slice(open, matchBracket(branch, open) + 1);
+
+  const runEsc = (initState) => {
+    const state = {
+      view3d: true,
+      sel: [],
+      grpEdit: null,
+      walk: false,
+      exitWalkCalls: 0,
+      stopGrpCalls: 0,
+      refreshCalls: 0,
+      refreshSel3DCalls: 0,
+      show3DCalls: 0,
+      ...initState,
+    };
+    const fn = new Function('ui', 'T3', 'exitWalk', 'stopGrpEdit', 'refresh', 'refreshSel3D', 'show3D', 'getSel', 'setSel', `
+      const e = { key: 'Escape' };
+      const sel = { get length() { return getSel().length; } };
+      ${escBody.replace('sel = [];', 'setSel([]);')}
+    `);
+    fn(
+      state,
+      { walk: state.walk },
+      () => { state.walk = false; state.exitWalkCalls++; },
+      () => { state.grpEdit = null; state.stopGrpCalls++; },
+      () => { state.refreshCalls++; },
+      () => { state.refreshSel3DCalls++; },
+      v => { state.view3d = v; state.show3DCalls++; },
+      () => state.sel,
+      v => { state.sel = v; },
+    );
+    return state;
+  };
+
+  const s1 = runEsc({ sel: ['w1', 'f1'] });
+  assert.deepStrictEqual(s1.sel, [], 'Escape clears selection in 3D');
+  assert.strictEqual(s1.refreshCalls, 1);
+  assert.strictEqual(s1.refreshSel3DCalls, 1);
+  assert.strictEqual(s1.view3d, true, 'stays in 3D');
+  assert.strictEqual(s1.show3DCalls, 0);
+
+  const s2 = runEsc({ walk: true, sel: ['w1'] });
+  assert.strictEqual(s2.exitWalkCalls, 1, 'Escape exits walk first');
+  assert.deepStrictEqual(s2.sel, ['w1'], 'walk Escape only exits walk mode');
+  assert.strictEqual(s2.view3d, true);
+
+  const s3 = runEsc({ grpEdit: 'g1', sel: ['w1'] });
+  assert.strictEqual(s3.stopGrpCalls, 1, 'Escape exits group editing before clearing selection');
+  assert.strictEqual(s3.refreshCalls, 1);
+  assert.strictEqual(s3.refreshSel3DCalls, 1);
+  assert.strictEqual(s3.view3d, true);
+
+  assert.doesNotMatch(js, /'2d'[\s\S]{0,120}'Esc \(3B\)'/, '2D command should not claim Esc switches from 3D to 2D');
+});
+
+

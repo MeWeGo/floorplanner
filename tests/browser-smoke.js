@@ -3830,6 +3830,104 @@ check('interactive 2D / CAD elevation view on the main canvas (#bElev, #vElev) a
   return 'main canvas #bElev 2D/CAD toggle, window opT drag 120->150 + undo, door place, SVG export, close';
 });
 
+check('3D selection, Shift+click multi-selection & Esc stays in 3D (#180, #181)', async page => {
+  const r = await page.evaluate(`(() => {
+    if (ui.view3d) show3D(false);
+    loadProject(newProject());
+    const ws = addRectWalls(0, 0, 500, 400);
+    const rm = mkRoom([{ x: 0, y: 0 }, { x: 500, y: 0 }, { x: 500, y: 400 }, { x: 0, y: 400 }], 'Salon');
+    F().rooms.push(rm);
+    const s = mkFurn(BYID.sofa3, 250, 200);
+    F().furn.push(s);
+    commit(); sel = []; refresh(); show3D(true);
+    const in3dBefore = ui.view3d;
+    sel = toggleSel3D([], [ws[0].id], false);
+    sel = toggleSel3D(sel, [s.id], true);
+    sel = toggleSel3D(sel, [rm.id], true);
+    refresh(); refreshSel3D();
+    const multiCount = sel.length, hCount = h3.length;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    const afterEsc = { selLen: sel.length, view3d: ui.view3d, hLen: h3.length };
+    show3D(false);
+    return { in3dBefore, multiCount, hCount, afterEsc };
+  })()`);
+  if (!r.in3dBefore || r.multiCount !== 3 || r.hCount < 3) throw new Error('3D multi-selection failed: ' + JSON.stringify(r));
+  if (r.afterEsc.selLen !== 0 || !r.afterEsc.view3d || r.afterEsc.hLen !== 0) throw new Error('Esc in 3D failed: ' + JSON.stringify(r));
+  return 'Shift+click/toggleSel3D across wall+furn+room (3 helpers), Esc clears sel and stays in 3D';
+});
+
+check('Hide items, Hidden items panel & Show hidden items (#174)', async page => {
+  const r = await page.evaluate(`(() => {
+    if (ui.view3d) show3D(false);
+    loadProject(newProject());
+    const ws = addRectWalls(0, 0, 500, 400);
+    const op = mkOp(OPDEF.door, ws[0], 250);
+    const s = mkFurn(BYID.sofa3, 250, 200);
+    F().ops.push(op); F().furn.push(s);
+    commit(); sel = [ws[0].id, s.id]; refresh();
+    document.querySelector('#props [data-act="hide"]').click();
+    const hiddenOk = !!ws[0].hidden && !!s.hidden && !sel.length && !pickable(ws[0].id) && !pickable(op.id) && !pickable(s.id);
+    const domHidden = !document.querySelector('#gWalls [data-id="' + ws[0].id + '"]')
+      && !document.querySelector('#gOps [data-id="' + op.id + '"]')
+      && !document.querySelector('#gFurn [data-id="' + s.id + '"]');
+    const listedCount = document.querySelectorAll('#props [data-act="unhide"]').length;
+    document.querySelector('#props [data-act="unhide"][data-hid="' + s.id + '"]').click();
+    const unhidOne = !s.hidden && sel.includes(s.id) && hiddenItems().length === 1;
+    const w0Id = ws[0].id;
+    document.querySelector('#props [data-act="unhideall"]').click();
+    const unhidAll = !ws[0].hidden && hiddenItems().length === 0 && !document.querySelector('#props [data-act="unhideall"]');
+    undo();
+    const undoHid = !!F().walls.find(w => w.id === w0Id)?.hidden;
+    return { hiddenOk, domHidden, listedCount, unhidOne, unhidAll, undoHid };
+  })()`);
+  if (!r.hiddenOk || !r.domHidden || r.listedCount !== 2 || !r.unhidOne || !r.unhidAll || !r.undoHid) {
+    throw new Error('Hide/unhide failed: ' + JSON.stringify(r));
+  }
+  return 'hides wall+hosted door+sofa, restores one & Show hidden items + undo';
+});
+
+check('Hexagonal Draw Roof, beveled & curtain wall attach, one-sided resize (#175, #176, #178, #179)', async page => {
+  const r = await page.evaluate(`(() => {
+    if (ui.view3d) show3D(false);
+    loadProject(newProject());
+    const hexPts = Array.from({ length: 6 }, (_, i) => {
+      const a = (i * 60) * Math.PI / 180;
+      return { x: Math.round(400 + 350 * Math.cos(a)), y: Math.round(400 + 350 * Math.sin(a)) };
+    });
+    const rf = addPolyObj('roofd', hexPts);
+    const wA = mkWall({ x: 200, y: 200 }, { x: 600, y: 500 });
+    const wC = mkWall({ x: 250, y: 550 }, { x: 550, y: 250 });
+    wC.wt = 'curtain';
+    F().walls.push(wA, wC);
+    const fs = surfFaces(rf);
+    const attA = attachWallTop(wA, fs, F()), attC = attachWallTop(wC, fs, F());
+    const typesOk = ['hip', 'gable', 'shed', 'flat'].every(rt => {
+      rf.roofType = rt; rf.h = roofHeight(rf);
+      return roofParamFaces(rf).length >= 3;
+    });
+    rf.roofType = 'hip'; rf.h = roofHeight(rf);
+    show3D(true); build3D(true);
+    let meshes = 0; T3.scene.traverse(c => { if (c.isMesh) meshes++; });
+    show3D(false);
+
+    const sofa = mkFurn(BYID.sofa3, 400, 400); F().furn.push(sofa);
+    sel = [sofa.id]; refresh();
+    const cb = document.querySelector('#props [data-k="ui"][data-p="oneSidedResize"]');
+    const origUi = ui.oneSidedResize;
+    if (cb) cb.click();
+    const toggled = ui.oneSidedResize === true;
+    const o0 = { ...sofa }, x0Before = o0.x - o0.w / 2, y0Before = o0.y - o0.d / 2;
+    furnResizeCorner(sofa, o0, 2, { x: o0.x + o0.w / 2 + 40, y: o0.y + o0.d / 2 + 20 }, 1, ui.oneSidedResize);
+    const x0After = sofa.x - sofa.w / 2, y0After = sofa.y - sofa.d / 2;
+    ui.oneSidedResize = origUi;
+    return { hexLen: rf && rf.pts && rf.pts.length, attA, attC, bevelA: wallTopHasBevel(wA), typesOk, meshes, toggled, oppFixed: Math.hypot(x0After - x0Before, y0After - y0Before) < 0.1 };
+  })()`);
+  if (r.hexLen !== 6 || !r.attA || !r.attC || !r.bevelA || !r.typesOk || r.meshes < 10 || !r.toggled || !r.oppFixed) {
+    throw new Error('Hex roof / wall attach / one-sided resize failed: ' + JSON.stringify(r));
+  }
+  return `hex pts=${r.hexLen}, beveled & curtain attached, 3D meshes=${r.meshes}, one-sided opp corner fixed`;
+});
+
 
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();

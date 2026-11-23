@@ -269,17 +269,19 @@ python -m http.server 8080      # then open http://localhost:8080
 | `X` | Trim — cut a crossing wall back to the intersection |
 | `L` | Section line — click both ends; then 3D cutaway or 2D section drawing from the panel |
 | `Z` | Axis — click both ends; numbered / lettered bubbles, walls snap to crossings; ⊞ Axis grid in the panel |
-| `A` | Attach to surface — click a roof or tilted item, then the walls whose top should follow its slope |
+| `A` | Attach to surface — click a roof or tilted item, then the solid or curtain walls whose top should follow its slope cleanly across their thickness (also supports custom hexagonal / polygon roofs drawn with Draw Roof) |
 | `I` | Mirror — mirror the selection about an axis you click (keep or erase the original) |
 | `Shift+H` / `Shift+V` | Flip the selection horizontally / vertically |
 | `:` | **Command line** — type a tool or action by name in English or Turkish (*wall*, *duvar*, *aynala*, *print*, *undo* …; accents optional), see its shortcut, `↑↓` / `Tab` to pick, `Enter` to run. Works in 3D too: view, save and undo run there, drawing tools switch to 2D |
 | `Ctrl+click` | Select the object underneath (repeat to go deeper) |
-| Right-click | List of objects under the cursor + layer order |
+| Right-click | List of objects under the cursor + layer order + **Hide** (restore individually or via **Show hidden items** in the panel) |
 | `Ctrl+]` / `Ctrl+[` | Bring forward / send backward (`Shift`: to front / to back) |
 | `C` | Calibrate background scale |
 | `G` | Toggle snapping |
 | `J` | Toggle 2D Outline / CAD wireframe view (`CAD`) |
-| `Shift` | Hold to bypass snapping · multi-select |
+| `Shift` | Hold to bypass snapping · multi-select (also `Shift+click` in 3D) |
+| `Alt` *(corner resize)* | Toggle one-sided corner resize keeping the opposite corner fixed (persistent checkbox also in the item panel) |
+| `Esc` *(in 3D)* | Exit walk / group-edit or clear 3D selection while staying in 3D |
 | `[` / `]` | Rotate selection −15° / +15° (multi-selections rotate as one rigid layout) |
 | `R` / `S` *(while placing)* | Rotate furniture / flip door hinge · flip swing side |
 | Arrow keys | Nudge selection / background image 1 cm (`Shift` = 10 cm) |
