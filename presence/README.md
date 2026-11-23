@@ -2,7 +2,7 @@
 
 Optional, zero-dependency Cloudflare Worker + Durable Objects that power:
 
-1. **`PresenceRoom` (`/ws`, `/count`):** broadcasts how many browser tabs currently have **Floor Planner** open (`ctx.getWebSockets().length`) using the Durable Objects **WebSocket Hibernation API**. Stores no cookies, user IDs, IP logs, analytics, or floor plan data.
+1. **`PresenceRoom` (`/ws`, `/count`):** broadcasts how many people currently have **Floor Planner** open: open sockets, with tabs of the same browser counted once (the app sends a random anonymous `?d=` id kept in `localStorage['fp_dev']`; the Worker keeps it only in the socket's attachment; sockets without one count on their own) using the Durable Objects **WebSocket Hibernation API**. Stores no cookies, user IDs, IP logs, analytics, or floor plan data.
 2. **`CollabRoom` (`/collab/<roomId>`):** per-room Durable Object relay for simultaneous real-time editing (object-level patches, live cursors, selection highlights, drag ghosts, view-only links via `?v=<viewToken>`, background/texture asset sync up to 400 KB, and follow mode). Ephemeral by default (room state stays in memory while connected and clears when the last participant leaves), with optional editor-toggled room persistence (`ctx.storage`).
 - **Free-tier friendly:** Uses `new_sqlite_classes` (migrations `v1` and `v2`, required on Cloudflare's Workers Free plan) and `setWebSocketAutoResponse('ping', 'pong')` so client keepalive pings are answered at Cloudflare's edge without waking the Durable Object.
 
