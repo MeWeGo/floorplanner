@@ -7082,13 +7082,24 @@ function belStart(f, w) {
   return { a: { ...w.a }, b: { ...w.b } };
 }
 function setBelWall(f, w, on) { if (on) { if (!isBelWall(w)) w.bel = belStart(f, w); } else delete w.bel; }
-function belReset(w) { const o = w.bel || {}; w.bel = { a: { ...w.a }, b: { ...w.b } }; if (o.roof === 0) w.bel.roof = 0; if (o.floor === 0) w.bel.floor = 0; }
+function belReset(w) { const o = w.bel || {}; w.bel = { a: { ...w.a }, b: { ...w.b } }; if (o.roof === 0) w.bel.roof = 0; if (o.floor === 0) w.bel.floor = 0; if (o.mat) w.bel.mat = o.mat; if (o.col) w.bel.col = o.col; }
+/* Körük malzemesi (#183): w.bel.mat (yoksa 'rubber' = eski koyu körük) + isteğe bağlı w.bel.col (renk). 'membrane' = yarı saydam
+   membran: YALNIZCA yan körükler saydam, tavan ve zemin her zaman opak. belMat(w) tek okuyucu → { kind, col, custom }. */
+const BEL_MATS = { rubber: ['Kauçuk (koyu körük)', 'Rubber (dark bellows)'], fabric: ['Branda / kumaş', 'Canvas / fabric'], metal: ['Metal', 'Metal'], membrane: ['Yarı saydam membran', 'Translucent membrane'] };
+const BEL_MAT_COL = { fabric: '#c8b99c', metal: '#9ca3af', membrane: '#dbe7ef' }, BEL_MEM_OP = 0.42;
+function belMat(w, lt) {
+  const b = (w && w.bel) || {}, kind = BEL_MATS[b.mat] ? b.mat : 'rubber', custom = /^#[0-9a-f]{6}$/i.test(b.col || '');
+  const col = custom ? b.col : kind === 'rubber' ? (w && w.color ? shade(w.color, -0.35) : (lt ? '#57534e' : '#3f3f46')) : BEL_MAT_COL[kind];
+  return { kind, col, custom };
+}
 function cleanBel(w) {
   if (w.bel == null) return;
   const pt = p => p && Number.isFinite(+p.x) && Number.isFinite(+p.y) ? { x: +p.x, y: +p.y } : null;
   const a = pt(w.bel.a), b = pt(w.bel.b);
   if (!a || !b) { delete w.bel; return; }
-  const roof = w.bel.roof === 0, floor = w.bel.floor === 0; w.bel = { a, b }; if (roof) w.bel.roof = 0; if (floor) w.bel.floor = 0;
+  const roof = w.bel.roof === 0, floor = w.bel.floor === 0, mt = w.bel.mat, col = w.bel.col; w.bel = { a, b }; if (roof) w.bel.roof = 0; if (floor) w.bel.floor = 0;
+  if (typeof mt === 'string' && BEL_MATS[mt] && mt !== 'rubber') w.bel.mat = mt;
+  if (typeof col === 'string' && /^#[0-9a-f]{6}$/i.test(col)) w.bel.col = col.toLowerCase();
 }
 // 2B: tavan kesik çizgiyle (kesitin üstünde), yanlar zikzak; yana tıklamak duvarı seçer
 function bellowsSvg(f, live) {
@@ -7107,27 +7118,34 @@ function bellowsSvg(f, live) {
   }
   return s;
 }
-// 3B: zikzak yanlar duvar yüksekliğinde, tavan üstlerinde; hepsi duvarın id'sini taşır (tıklayınca duvar seçilir)
-function bellows3D(S, w, y0, H, mat, box, det, lineMat, lt) {
+// 3B: zikzak yanlar duvar yüksekliğinde, tavan üstlerinde; hepsi duvarın id'sini taşır (tıklayınca duvar seçilir).
+// Malzeme belMat(w) (#183): kauçuk = eski görünüm; membran yalnızca yanlarda saydam (memMat), tavan ve zemin opak kalır.
+function bellows3D(S, w, y0, H, mat, box, det, lineMat, lt, memMat) {
   const sides = belSides(w); if (!sides.length || !(H > 0)) return;
-  const col = w.color ? shade(w.color, -0.35) : (lt ? '#57534e' : '#3f3f46'), ht = BEL_T / 2;
+  const bm = belMat(w, lt), col = bm.col, kind = bm.kind, ht = BEL_T / 2;
+  const tag = (k, c) => k === 'rubber' ? c : sf(k, c);
+  const uv = (geo, k) => { const t = SURF_TILE[k], a = geo.attributes.uv; if (!t || !a) return; for (let i = 0; i < a.count; i++) a.setXY(i, a.getX(i) / t, a.getY(i) / t); a.needsUpdate = true; };
+  const sideK = kind, roofK = kind === 'membrane' ? 'plastic' : kind, floorK = kind === 'fabric' || kind === 'membrane' ? 'rubber' : kind;
+  const sideMat = kind === 'membrane' && memMat ? memMat(col) : mat(tag(kind === 'membrane' ? 'plastic' : sideK, col));
   for (const { path } of sides) {
     const shp = new THREE.Shape(accFanOutline(belPathZig(path), 2 * ht).map(v => new THREE.Vector2(v.x, v.y)));
-    const geo = new THREE.ExtrudeGeometry(shp, { depth: H, bevelEnabled: false }); geo.rotateX(Math.PI / 2);
-    const m = new THREE.Mesh(geo, mat(col)); m.position.y = y0 + H;
-    m.castShadow = m.receiveShadow = true; m.userData = { wallId: w.id }; S.add(m);
+    const geo = new THREE.ExtrudeGeometry(shp, { depth: H, bevelEnabled: false }); geo.rotateX(Math.PI / 2); uv(geo, sideK);
+    const m = new THREE.Mesh(geo, sideMat); m.position.y = y0 + H;
+    m.castShadow = !sideMat.transparent; m.receiveShadow = true; m.userData = { wallId: w.id, belPart: 'side' }; S.add(m);
   }
   const fp = belFloorPts(w); // zemin: üstü duvar tabanının 0.3 cm üstünde (döşemeyle z-fighting yok), BEL_FLOOR_T aşağı
   if (fp) {
-    const fg = new THREE.ExtrudeGeometry(new THREE.Shape(fp.map(p => new THREE.Vector2(p.x, p.y))), { depth: BEL_FLOOR_T, bevelEnabled: false }); fg.rotateX(Math.PI / 2);
-    const fm = new THREE.Mesh(fg, mat(shade(col, 0.18))); fm.position.y = y0 + 0.3; fm.castShadow = fm.receiveShadow = true; fm.userData = { wallId: w.id }; S.add(fm);
+    const fg = new THREE.ExtrudeGeometry(new THREE.Shape(fp.map(p => new THREE.Vector2(p.x, p.y))), { depth: BEL_FLOOR_T, bevelEnabled: false }); fg.rotateX(Math.PI / 2); uv(fg, floorK);
+    const fc = kind === 'rubber' ? shade(col, 0.18) : shade(col, -0.3);
+    const fm = new THREE.Mesh(fg, mat(tag(floorK, fc))); fm.position.y = y0 + 0.3; fm.castShadow = fm.receiveShadow = true; fm.userData = { wallId: w.id, belPart: 'floor' }; S.add(fm);
     if (det) fm.add(new THREE.LineSegments(new THREE.EdgesGeometry(fg), lineMat));
   }
   const rp = belRoofPts(w); if (!rp) return;
-  const geo = new THREE.ExtrudeGeometry(new THREE.Shape(rp.map(p => new THREE.Vector2(p.x, p.y))), { depth: BEL_ROOF_T, bevelEnabled: false }); geo.rotateX(Math.PI / 2);
-  const m = new THREE.Mesh(geo, mat(col)); m.position.y = y0 + H + BEL_ROOF_T; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w.id }; S.add(m);
+  const geo = new THREE.ExtrudeGeometry(new THREE.Shape(rp.map(p => new THREE.Vector2(p.x, p.y))), { depth: BEL_ROOF_T, bevelEnabled: false }); geo.rotateX(Math.PI / 2); uv(geo, roofK);
+  const rc = kind === 'membrane' ? shade(col, -0.12) : col;
+  const m = new THREE.Mesh(geo, mat(tag(roofK, rc))); m.position.y = y0 + H + BEL_ROOF_T; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w.id, belPart: 'roof' }; S.add(m);
   if (det) {
-    for (const [p, q] of belRoofFolds(w)) { const L = dist(p, q); if (L >= 1) box(S, L, 3, 4, shade(col, 0.12), (p.x + q.x) / 2, y0 + H + BEL_ROOF_T + 1.5, (p.y + q.y) / 2, -Math.atan2(q.y - p.y, q.x - p.x), undefined, false); }
+    for (const [p, q] of belRoofFolds(w)) { const L = dist(p, q); if (L >= 1) box(S, L, 3, 4, shade(rc, 0.12), (p.x + q.x) / 2, y0 + H + BEL_ROOF_T + 1.5, (p.y + q.y) / 2, -Math.atan2(q.y - p.y, q.x - p.x), undefined, false); }
     m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), lineMat));
   }
 }
@@ -8799,6 +8817,11 @@ function renderProps() {
         h += `<p class="muted" style="margin:0 0 6px">${sd.length ? L(`İlk konumla arası körükle kapalı (${sd.length === 2 ? 'iki yan' : 'yelpaze'})`, `Closed with bellows to the first position (${sd.length === 2 ? 'two sides' : 'fan'})`) : L('Duvarı yeni konuma taşıyın (sürükleyin, düzeni ya da menteşe konumunu değiştirin): ilk konumla arası körükle dolar', 'Move the wall to a new position (drag it, switch the layout or hinge position): the space to its first position fills with bellows')}</p>`;
         h += `<label class="f"><span>${L('Körük tavanı', 'Bellows roof')}</span><input type="checkbox" data-k="wall" data-p="belRoof" ${o.bel.roof !== 0 ? 'checked' : ''}></label>`;
         h += `<label class="f"><span>${L('Körük zemini', 'Bellows floor')}</span><input type="checkbox" data-k="wall" data-p="belFloor" ${o.bel.floor !== 0 ? 'checked' : ''}></label>`;
+        { const bm = belMat(o, isLight());
+          h += fld(L('Körük malzemesi', 'Bellows material'), 'wall', 'belMat', bm.kind, { sel: Object.fromEntries(Object.entries(BEL_MATS).map(([k, v]) => [k, L(...v)])) });
+          if (bm.kind === 'membrane') h += `<p class="muted" style="margin:0 0 6px">${L('Yalnızca yan körükler yarı saydam; tavan ve zemin opak kalır.', 'Only the folded sides are see-through; the roof and floor stay opaque.')}</p>`;
+          h += fld(L('🎨 Körük rengi', '🎨 Bellows colour'), 'wall', 'belCol', bm.col, { type: 'color' });
+          if (bm.custom) h += `<div class="row"><button class="btn sm" data-act="belcolreset">↺ ${L('Varsayılan renk', 'Default colour')}</button></div>`; }
         h += `<div class="row"><button class="btn sm" data-act="belhome" title="${L('Şimdiki yeri ilk konum yap (körük kapanır)', 'Make the current place the first position (the bellows closes)')}">📍 ${L('İlk konum = şimdiki yer', 'First position = here')}</button></div>`;
       } }
     if (os.every(x => x.o.wt === 'railing')) h += fld(L('Korkuluk stili', 'Railing style'), 'wall', 'rs', railStyle(o), { sel: Object.fromEntries(Object.entries(RAIL_STYLES).map(([k, v]) => [k, L(...v)])) });
@@ -9283,6 +9306,8 @@ function applyProp(t, final) {
     else if (k === 'wall' && p === 'bel') { if (final) setBelWall(F(), o, !!v); }
     else if (k === 'wall' && p === 'belRoof') { if (final && o.bel) { if (v) delete o.bel.roof; else o.bel.roof = 0; } }
     else if (k === 'wall' && p === 'belFloor') { if (final && o.bel) { if (v) delete o.bel.floor; else o.bel.floor = 0; } }
+    else if (k === 'wall' && p === 'belMat') { if (final && o.bel) { if (BEL_MATS[v] && v !== 'rubber') o.bel.mat = v; else delete o.bel.mat; } }
+    else if (k === 'wall' && p === 'belCol') { if (o.bel && /^#[0-9a-f]{6}$/i.test(v)) o.bel.col = v.toLowerCase(); }
     else if (k === 'wall' && (p === 'c1' || p === 'c2')) { o[p] = v; }
     else if (k === 'wall' && (p === 'f1' || p === 'f2')) { if (!v || v === 'none') delete o[p]; else o[p] = v; }
     else if (k === 'wall' && p === 'color') { o.color = v; delete o.c1; delete o.c2; } // duvar boyası iki yüzü birden boyar
@@ -9313,7 +9338,7 @@ function applyProp(t, final) {
   if (final && k === 'op' && ['w', 'h', 'sill'].includes(p)) os.forEach(x => rememberOpSize(x.o));
   if (final && k === 'draft' && ['w', 'dash', 'color'].includes(p)) draftUi()[p] = v; // sonraki çizim aynı stille başlar
   if (k === 'zone') { for (const { o } of os) if (o.zt) cleanZone(o); if (p === 'zt') ui.zoneT = v; if (final && (p === 'zt' || p === 'color')) { commit(); return renderProps(); } } // arsa / dış zemin (#150): varsayılanlar düşer, son tür hatırlanır
-  if (final) { commit(); if (['type', 'mat', 'floor', 'len', 'deg', 'pivot', 'wt', 'acc', 'bel', 'mul', 'mulN', 'stepN', 'stairType', 'railing', 'rampType', 'roofType', 'ridgeDir', 'pitch', 'th', 'hip'].includes(p) || (k === 'furn' && (p === 'rx' || p === 'ry')) || (k === 'furn' && os.some(x => x.o.k === 'stairs' || x.o.k === 'ramp') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color') || (k === 'draft' && ['closed', 'fill', 'r'].includes(p))) renderProps(); }
+  if (final) { commit(); if (['type', 'mat', 'floor', 'len', 'deg', 'pivot', 'wt', 'acc', 'bel', 'belMat', 'belCol', 'mul', 'mulN', 'stepN', 'stairType', 'railing', 'rampType', 'roofType', 'ridgeDir', 'pitch', 'th', 'hip'].includes(p) || (k === 'furn' && (p === 'rx' || p === 'ry')) || (k === 'furn' && os.some(x => x.o.k === 'stairs' || x.o.k === 'ramp') && ['h', 'w', 'd'].includes(p)) || ((k === 'wall' || k === 'slab') && p === 'color') || (k === 'draft' && ['closed', 'fill', 'r'].includes(p))) renderProps(); }
 }
 $('#props').addEventListener('input', e => { if (e.target.dataset.p && e.target.type !== 'checkbox') applyProp(e.target, false); });
 $('#props').addEventListener('change', e => { if (e.target.dataset.p) { applyProp(e.target, true); if (e.target.dataset.k === 'layer') renderProps(); } });
@@ -9406,6 +9431,7 @@ function onPropsClick(e) {
     if (ws.length !== 2 || !joinCorner(ws[0].o, ws[1].o)) { toast(L('Paralel duvarlar köşe yapamaz', 'Parallel walls cannot form a corner')); return; }
     commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return;
   }
+  if (a === 'belcolreset') { let n = 0; for (const x of os) if (x.kind === 'wall' && x.o.bel && x.o.bel.col) { delete x.o.bel.col; n++; } if (n) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); } return; }
   if (a === 'belhome') { let n = 0; for (const x of os) if (x.kind === 'wall' && isBelWall(x.o)) { belReset(x.o); n++; } if (n) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); } return; }
   if (a === 'walldetach') { let n = 0; for (const x of os) if (x.kind === 'wall' && detachWallTop(x.o)) n++; if (n) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); } return; }
   if (a === 'splitx') {
@@ -19785,8 +19811,9 @@ function build3D(keepCam = false) {
         sm.position.y = m.position.y - 0.3; sm.receiveShadow = true; sm.castShadow = true; sm.userData.roomId = r.id; S.add(sm);
       }
     });
+    const belMemC = {}, belMem = c => belMemC[c] || (belMemC[c] = (m => (extraMats.push(m), m))(new THREE.MeshPhongMaterial({ color: c, transparent: true, opacity: BEL_MEM_OP, shininess: 40, specular: 0x444444, depthWrite: false, side: THREE.DoubleSide }))); // #183: yarı saydam körük yanı
     f.walls.forEach(w => {
-      const L = wLen(w), H = w.h, we = elev + wallElev(w), g = new THREE.Group(); bellows3D(S, w, we, H, mat, box, det, lineMat, lt);
+      const L = wLen(w), H = w.h, we = elev + wallElev(w), g = new THREE.Group(); bellows3D(S, w, we, H, mat, box, det, lineMat, lt, belMem);
       { const fan = accFan(f, w); if (fan) { accFan3D(S, w, fan, we, H, mat, det, lineMat, lt); return; } } /* akordiyon yelpaze dolgusu */ g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, we, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
       const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
       const wCol = w.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));

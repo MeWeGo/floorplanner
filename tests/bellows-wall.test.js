@@ -314,3 +314,108 @@ test('(12) floor: 0 survives cleanBel and belReset; 3D builds the floor at the w
   assert.match(fnSrc('applyProp'), /p === 'belFloor'[\s\S]*?o\.bel\.floor = 0/);
   assert.match(fnSrc('renderProps'), /data-p="belFloor"/);
 });
+
+/* #183: bellows material. Run the real belMat / cleanBel / belReset / bellows3D with a tiny THREE stub and check that a
+   translucent membrane makes only the folded sides see-through while the roof and floor stay opaque. */
+const B = new Function(`
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  ${fnSrc('hex2rgb')}
+  ${fnSrc('shade')}
+  ${fnSrc('polyArea')}
+  ${constLine('BEL_PITCH')}
+  ${constLine('BEL_MATS')}
+  ${constLine('BEL_MAT_COL')}
+  ${constLine('SURF_TILE')}
+  const sf = (kind, c) => ({ fk: kind, c });
+  const ACC_FAN_T = 3;
+  ${fnSrc('accFanOutline')}
+  ${fnSrc('isBelWall')}
+  ${fnSrc('belPose')}
+  ${fnSrc('belRibs')}
+  ${fnSrc('belSides')}
+  ${fnSrc('belPathZig')}
+  ${fnSrc('belFolds')}
+  ${fnSrc('belSegsCross')}
+  ${fnSrc('belRoofPts')}
+  ${fnSrc('belFloorPts')}
+  ${fnSrc('belAreaPts')}
+  ${fnSrc('belRoofFolds')}
+  ${fnSrc('belReset')}
+  ${fnSrc('cleanBel')}
+  ${fnSrc('belMat')}
+  const uvAttr = () => ({ count: 2, v: [10, 20, 30, 40], getX(i) { return this.v[2 * i]; }, getY(i) { return this.v[2 * i + 1]; }, setXY(i, x, y) { this.v[2 * i] = x; this.v[2 * i + 1] = y; } });
+  const THREE = {
+    DoubleSide: 2,
+    Vector2: function (x, y) { this.x = x; this.y = y; },
+    Shape: function (pts) { this.pts = pts; },
+    ExtrudeGeometry: function () { this.attributes = { uv: uvAttr() }; this.rotateX = () => {}; },
+    EdgesGeometry: function () {}, LineSegments: function () {},
+    Mesh: function (geo, mat) { this.geometry = geo; this.material = mat; this.position = {}; this.add = () => {}; },
+  };
+  ${fnSrc('bellows3D')}
+  return { BEL_MATS, belMat, cleanBel, belReset, bellows3D, BEL_MEM_OP: 0.42 };
+`)();
+
+const slideWall = extra => ({ id: 'w', a: { x: 0, y: 200 }, b: { x: 300, y: 200 }, bel: { a: { x: 0, y: 0 }, b: { x: 300, y: 0 }, ...extra } });
+// mat() as in build3D: one opaque Lambert-like object per colour / tagged colour
+const build = w => {
+  const made = [], S = { kids: [], add(m) { this.kids.push(m); } };
+  const mat = c => { const m = { c, transparent: false, opacity: 1 }; made.push(m); return m; };
+  const memMat = c => ({ c, transparent: true, opacity: B.BEL_MEM_OP, depthWrite: false });
+  B.bellows3D(S, w, 0, 250, mat, () => {}, false, {}, false, memMat);
+  const by = part => S.kids.filter(m => m.userData.belPart === part);
+  return { side: by('side'), roof: by('roof'), floor: by('floor') };
+};
+
+test('(13) #183 belMat: rubber default keeps the old colour, kinds and custom colours', () => {
+  const w = slideWall();
+  assert.deepStrictEqual(B.belMat(w, false), { kind: 'rubber', col: '#3f3f46', custom: false }, 'old dark look in dark theme');
+  assert.strictEqual(B.belMat(w, true).col, '#57534e', 'old look in light theme');
+  assert.strictEqual(B.belMat({ ...w, color: '#ffffff' }, false).col, '#a6a6a6', 'follows the wall paint like before');
+  assert.strictEqual(B.belMat(slideWall({ mat: 'membrane' })).kind, 'membrane');
+  assert.strictEqual(B.belMat(slideWall({ mat: 'bogus' })).kind, 'rubber', 'unknown kind = default');
+  assert.deepStrictEqual(B.belMat(slideWall({ mat: 'fabric', col: '#112233' })), { kind: 'fabric', col: '#112233', custom: true });
+  for (const k of Object.keys(B.BEL_MATS)) assert.strictEqual(B.BEL_MATS[k].length, 2, k + ' is bilingual');
+});
+
+test('(14) #183 cleanBel / belReset keep a valid material and colour, drop bad and default values', () => {
+  const w = slideWall({ mat: 'membrane', col: '#AABBCC', roof: 0 });
+  B.cleanBel(w);
+  assert.deepStrictEqual(w.bel, { a: { x: 0, y: 0 }, b: { x: 300, y: 0 }, roof: 0, mat: 'membrane', col: '#aabbcc' });
+  B.belReset(w);
+  assert.strictEqual(w.bel.mat, 'membrane'); assert.strictEqual(w.bel.col, '#aabbcc'); assert.strictEqual(w.bel.roof, 0);
+  const bad = slideWall({ mat: 'rubber', col: 'red' });
+  B.cleanBel(bad);
+  assert.deepStrictEqual(Object.keys(bad.bel).sort(), ['a', 'b'], 'default kind and bad colour are not stored');
+  const old = slideWall(); B.cleanBel(old);
+  assert.deepStrictEqual(Object.keys(old.bel).sort(), ['a', 'b'], 'old projects load unchanged');
+});
+
+test('(15) #183 bellows3D: membrane makes only the sides translucent; roof and floor stay opaque', () => {
+  const mem = build(slideWall({ mat: 'membrane' }));
+  assert.strictEqual(mem.side.length, 2); assert.strictEqual(mem.roof.length, 1); assert.strictEqual(mem.floor.length, 1);
+  for (const m of mem.side) { assert.strictEqual(m.material.transparent, true); assert.ok(m.material.opacity < 1); assert.strictEqual(m.material.depthWrite, false); assert.strictEqual(m.castShadow, false); }
+  for (const m of [...mem.roof, ...mem.floor]) { assert.strictEqual(m.material.transparent, false, 'opaque'); assert.strictEqual(m.material.opacity, 1); }
+
+  const rub = build(slideWall());
+  for (const m of [...rub.side, ...rub.roof, ...rub.floor]) assert.strictEqual(m.material.transparent, false);
+  assert.strictEqual(rub.side[0].material.c, '#3f3f46', 'default = the old untagged colour');
+  assert.strictEqual(rub.roof[0].material.c, '#3f3f46');
+
+  const fab = build(slideWall({ mat: 'fabric' }));
+  assert.deepStrictEqual(fab.side[0].material.c, { fk: 'fabric', c: '#c8b99c' }, 'fabric sides are tagged for the textured material');
+  for (const m of [...fab.side, ...fab.roof, ...fab.floor]) assert.strictEqual(m.material.transparent, false);
+  assert.ok(fab.side[0].geometry.attributes.uv.v[0] < 1, 'cm UVs scaled to the fabric tile');
+  const met = build(slideWall({ mat: 'metal', col: '#445566' }));
+  assert.deepStrictEqual(met.roof[0].material.c, { fk: 'metal', c: '#445566' });
+});
+
+test('(16) #183 wiring: panel select + colour, applyProp, reset, build3D passes the membrane material', () => {
+  const rp = fnSrc('renderProps');
+  assert.match(rp, /'wall', 'belMat'/); assert.match(rp, /'wall', 'belCol'/); assert.match(rp, /belcolreset/);
+  const ap = fnSrc('applyProp');
+  assert.match(ap, /p === 'belMat'[\s\S]*?delete o\.bel\.mat/); assert.match(ap, /p === 'belCol'/);
+  assert.match(fnSrc('build3D'), /bellows3D\([^)]*belMem\)/);
+  assert.match(fnSrc('build3D'), /belMem = [^;]*transparent: true[^;]*depthWrite: false/);
+});
