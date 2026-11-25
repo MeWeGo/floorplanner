@@ -3543,6 +3543,56 @@ check('drive save interval: after every change or a timer of any seconds / minut
   if ('every' in info.off || 'everyU' in info.off) throw new Error('"after every change" did not clear the timer: ' + JSON.stringify(info));
 });
 
+check('furniture store: Community tab lists items from the store, a card places the item, Save to My Library, hostile names stay text, publish payload', async page => {
+  const info = await page.evaluate(`(async () => {
+    const out = {}, realFetch = window.fetch, calls = [];
+    const thumb = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-70 -40 140 80"><rect x="-60" y="-30" width="120" height="60" fill="#b08968"/></svg>';
+    const preset = { kind: 'furn', type: 'custom', k: 'rect', icon: '🧩', w: 120, d: 60, h: 75, color: '#b08968', extra: { parts: [{ type: 'box', x: 0, y: 0, z: 0, w: 120, d: 60, h: 75 }], pbase: { w: 120, d: 60, h: 75 }, partsV: 1 } };
+    const item = { id: 'abcdefgh23', name: 'Desk "><img src=x onerror=window.__pwn=1>', desc: '', cat: 4, tags: ['desk'], thumb, w: 120, d: 60, author: 'Ada', uses: 3 };
+    window.fetch = async (u, o = {}) => {
+      calls.push((o.method || 'GET') + ' ' + String(u).replace('http://store.test', ''));
+      if (!String(u).startsWith('http://store.test')) return realFetch(u, o);
+      const j = String(u).includes('/store/items/abcdefgh23') && !String(u).includes('/use') ? { item: { ...item, preset } } : String(u).includes('/use') ? { ok: true } : { items: [item], next: null };
+      return new Response(JSON.stringify(j), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    try {
+      out.offMsg = (() => { const u = store.url; store.url = ''; ui.cat = LIB_COMM; buildLib(); const t = document.getElementById('items').textContent; store.url = u; return /online app|çevrimiçi/.test(t); })();
+      store.url = 'http://store.test'; store.key = null; store.full.clear();
+      ui.cat = LIB_COMM; ui.q = ''; buildLib();
+      out.tab = [...document.querySelectorAll('#cats .chip')].some(c => c.classList.contains('on') && /Community|Topluluk/.test(c.textContent));
+      for (let i = 0; i < 20 && !document.querySelector('#items [data-type="store"]'); i++) await new Promise(r => setTimeout(r, 25));
+      const card = document.querySelector('#items [data-type="store"]');
+      out.card = !!card; out.thumb = !!(card && card.querySelector('.st-th svg rect'));
+      out.noImg = !document.querySelector('#items img') && !window.__pwn;
+      card.click();
+      for (let i = 0; i < 20 && !(placing && placing.def.preset); i++) await new Promise(r => setTimeout(r, 25));
+      out.placing = !!(placing && placing.def.preset === 'st_abcdefgh23' && placing.def.extra.parts.length === 1 && placing.def.w === 120);
+      out.used = calls.some(c => c === 'POST /store/items/abcdefgh23/use');
+      setTool('select');
+      const n0 = (P.lib.presets || []).length;
+      storeInfoModal('abcdefgh23'); await new Promise(r => setTimeout(r, 30));
+      out.modalNoImg = !document.querySelector('#modal img');
+      document.querySelector('#modal [data-sta="save"]').click();
+      out.saved = (P.lib.presets || []).length === n0 + 1 && P.lib.presets[P.lib.presets.length - 1].extra.parts.length === 1;
+      closeModal();
+      const o = { id: 'zz', type: 'custom', name: 'Shelf', k: 'rect', w: 80, d: 30, h: 180, color: '#cccccc', x: 0, y: 0, rot: 0, parts: [{ type: 'box', x: 0, y: 0, z: 0, w: 80, d: 30, h: 2 }, { type: 'box', x: 0, y: 0, z: 90, w: 80, d: 30, h: 2 }], pbase: { w: 80, d: 30, h: 180 }, partsV: 1 };
+      const th = storeThumbOf(o), b = storePubBody(o, { name: 'Shelf', cat: 0, tags: 'wood, tall', author: 'Ada', desc: '' }, th, null);
+      out.pub = !!th && storeThumbClean(th) === th && b.preset.kind === 'furn' && b.preset.extra.parts.length === 2 && !b.preset.id && b.tags.join() === 'wood,tall';
+      // a hostile item from the store: bad outline, ids, positions, prototype type name → a plain, drawable box
+      const bad = storeItemPreset({ id: 'abcdefgh99', name: 'x', preset: { kind: 'furn', type: 'constructor', k: 'poly', w: 50, d: 40, h: 30, extra: { pts: [null, null, null], id: 'dup', x: 9e9, layer: '7', parts: [null, { type: 'box', w: 'x' }] } } });
+      out.hostile = bad.type === 'custom' && bad.k === 'rect' && !bad.extra.pts && !('id' in bad.extra) && !('x' in bad.extra) && bad.extra.parts.length === 1;
+      startPlace('furn', presetDef(bad)); render(); out.hostileDraws = !!placing; setTool('select');
+      // a catalogue item's thumbnail is its real top view (not the plain-box fallback)
+      const sofa = storeThumbOf({ type: 'sofa3', k: 'sofa', w: 220, d: 90, h: 85, color: '#64748b' });
+      out.catThumb = !!sofa && (sofa.match(/<(rect|path|ellipse|polygon)/g) || []).length > 2;
+      const sel0 = sel; F().furn.push(o); sel = ['zz']; storePublishSel(); out.pubModal = ui.modal === 'storepub' && !!document.getElementById('stName') && document.querySelector('[data-stsubmit]').disabled;
+      closeModal(); F().furn.pop(); sel = sel0;
+    } catch (e) { out.err = String(e && e.stack || e).slice(0, 400); out.items = document.getElementById("items").textContent.slice(0, 300); out.serr = store.err; } finally { window.fetch = realFetch; store.url = ''; ui.cat = 0; buildLib(); }
+    return out;
+  })()`);
+  for (const k of ['offMsg', 'tab', 'card', 'thumb', 'noImg', 'placing', 'used', 'modalNoImg', 'saved', 'hostile', 'hostileDraws', 'catThumb', 'pub', 'pubModal']) if (!info[k]) throw new Error('furniture store: ' + k + ' failed ' + JSON.stringify(info));
+});
+
 check('one Download menu: opens under its button, runs the export, closes on Esc / outside click', async page => {
   const info = await page.evaluate(`(() => {
     const b = document.getElementById('bDl'), m = document.getElementById('dlMenu'), out = {};
@@ -3944,7 +3994,7 @@ check('Hexagonal Draw Roof, beveled & curtain wall attach, one-sided resize (#17
   const port = server.address().port;
   // ?bridge=off: never reach a real mcp/bridge.js on 127.0.0.1:8787 — the checks load
   // test plans, and a connected tab would push them over the user's live AI plan
-  const url = `http://127.0.0.1:${port}/?bridge=off&presence=off`;
+  const url = `http://127.0.0.1:${port}/?bridge=off&presence=off&store=off`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-smoke-'));
   const debugPort = 9300 + Math.floor(Math.random() * 300);
 

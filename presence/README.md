@@ -31,6 +31,17 @@ Optional, zero-dependency Cloudflare Worker + Durable Objects that power:
    # -> {"online":0}
    ```
 
+## Furniture store (community library)
+
+The same Worker hosts the **🌐 Community** furniture store: a SQLite-backed Durable Object `FurnStore` (migration `v3` in `wrangler.toml`) behind `/store/*`. Deploying it is the same `npx wrangler deploy`; until then the app's Community tab shows an error with a Retry button.
+
+- `GOOGLE_CLIENT_ID` (in `[vars]`) must be the app's Google OAuth client id (`GDRIVE_CLIENT_ID` in `app.js`): it is the audience of the Google ID tokens the Worker accepts. A fork with its own client id changes both. The client's **Authorized JavaScript origins** must include the site origin (it already does for Drive sync).
+- `STORE_ADMINS` (optional) = comma-separated Google account ids (`sub`) that may restore reported items, delete any item and ban authors: `npx wrangler secret put STORE_ADMINS`. Your `sub` is the `sub` field of your ID token (in the browser console after signing in: `storeJwt(store.tok).sub`).
+- Routes: `GET /store/items?q=&cat=&sort=new|popular&cursor=` (list, 40 per page, no preset body), `GET /store/items/:id` (full item), `POST /store/items/:id/use`, and with `Authorization: Bearer <Google ID token>`: `POST /store/items` (publish), `PUT` / `DELETE /store/items/:id` (author), `POST /store/items/:id/report` (3 distinct reports hide an item), `GET /store/mine`, admin `POST /store/items/:id/unhide` and `POST /store/users/:sub/ban`.
+- Limits: 10 publishes per account per day, 200 items per account, preset JSON ≤ 64 KB (≤ 64 parts), thumbnail SVG ≤ 16 KB (shape elements only, re-checked by `storeThumbClean`).
+- Search matches a folded copy of name + tags + description (case, Turkish ı / İ and accents ignored).
+- Reads without an `Origin` header are allowed (the MCP `store_search` / `store_place` tools); writes must come from an allowed origin.
+
 ## Local testing
 
 1. Start the Worker locally with your local static server origin allowed:
@@ -55,4 +66,5 @@ Optional, zero-dependency Cloudflare Worker + Durable Objects that power:
 - **Opt-out / testing overrides:**
   - `?presence=off` disables the live presence socket for that tab (used by `tests/browser-smoke.js`).
   - `?presence=ws://...` or `?presence=wss://...` overrides `PRESENCE_URL` for testing (works on `localhost` and `file://` too; by default local hosts skip `PRESENCE_URL`).
+  - `?store=off` turns the furniture store off; `?store=http://127.0.0.1:8787` points it at `wrangler dev` (only `localhost` / `127.0.0.1` / `[::1]` addresses are accepted, so a link can never send the sign-in token to another server) (Google sign-in needs the page origin to be an authorized origin of the client id).
   - `?collab=off` disables live collaboration sockets; `?collab=ws://127.0.0.1:8787` overrides the collaboration server URL for local `wrangler dev` testing (`http://127.0.0.1:8080/?collab=ws://127.0.0.1:8787`).

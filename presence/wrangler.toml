@@ -4,11 +4,13 @@ compatibility_date = "2025-04-07"
 
 [vars]
 ALLOWED_ORIGINS = "https://mewego.github.io"
+GOOGLE_CLIENT_ID = "995148037458-0su6gsdurmfjs1l0u1kpqgp0tu3rsddd.apps.googleusercontent.com"
 
 [durable_objects]
 bindings = [
   { name = "PRESENCE", class_name = "PresenceRoom" },
-  { name = "COLLAB", class_name = "CollabRoom" }
+  { name = "COLLAB", class_name = "CollabRoom" },
+  { name = "STORE", class_name = "FurnStore" }
 ]
 
 [[migrations]]
@@ -18,3 +20,9 @@ new_sqlite_classes = ["PresenceRoom"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["CollabRoom"]
+
+# Furniture store (community library): Google sign-in audience and admin account ids.
+# Set STORE_ADMINS with `wrangler secret put STORE_ADMINS` or here (comma-separated Google `sub`s).
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["FurnStore"]
