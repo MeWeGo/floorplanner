@@ -9597,6 +9597,7 @@ function buildLib() {
   const matches = d => d.name.toLowerCase().includes(q) || (d.en && d.en.toLowerCase().includes(q));
   const shapes = P && P.lib && P.lib.shapes || [], presets = P && P.lib && P.lib.presets || [];
   const opCard = o => card('op', o, opDefLast(o).w + ' cm'); // son kullanılan ölçü kartta da görünür
+  $('#search').placeholder = ui.cat === LIB_COMM ? L('🔍 Toplulukta ara…', '🔍 Search the community…') : L('🔍 Mobilya ara...', '🔍 Search furniture...');
   if (ui.cat === LIB_COMM) items = storeLibHtml(); // arama kutusu topluluk sekmesinde mağazada arar
   else if (q) {
     items += presets.filter(p => p.name.toLowerCase().includes(q)).map(presetCard).join('');
