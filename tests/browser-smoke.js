@@ -3559,6 +3559,7 @@ check('furniture store: Community tab lists items from the store, a card places 
       out.offMsg = (() => { const u = store.url; store.url = ''; ui.cat = LIB_COMM; buildLib(); const t = document.getElementById('items').textContent; store.url = u; return /online app|çevrimiçi/.test(t); })();
       store.url = 'http://store.test'; store.key = null; store.full.clear();
       ui.cat = LIB_COMM; ui.q = ''; buildLib();
+      out.signChip = !!document.querySelector('#items [data-stsign]');
       out.tab = [...document.querySelectorAll('#cats .chip')].some(c => c.classList.contains('on') && /Community|Topluluk/.test(c.textContent));
       for (let i = 0; i < 20 && !document.querySelector('#items [data-type="store"]'); i++) await new Promise(r => setTimeout(r, 25));
       const card = document.querySelector('#items [data-type="store"]');
@@ -3590,7 +3591,7 @@ check('furniture store: Community tab lists items from the store, a card places 
     } catch (e) { out.err = String(e && e.stack || e).slice(0, 400); out.items = document.getElementById("items").textContent.slice(0, 300); out.serr = store.err; } finally { window.fetch = realFetch; store.url = ''; ui.cat = 0; buildLib(); }
     return out;
   })()`);
-  for (const k of ['offMsg', 'tab', 'card', 'thumb', 'noImg', 'placing', 'used', 'modalNoImg', 'saved', 'hostile', 'hostileDraws', 'catThumb', 'pub', 'pubModal']) if (!info[k]) throw new Error('furniture store: ' + k + ' failed ' + JSON.stringify(info));
+  for (const k of ['offMsg', 'signChip', 'tab', 'card', 'thumb', 'noImg', 'placing', 'used', 'modalNoImg', 'saved', 'hostile', 'hostileDraws', 'catThumb', 'pub', 'pubModal']) if (!info[k]) throw new Error('furniture store: ' + k + ' failed ' + JSON.stringify(info));
 });
 
 check('one Download menu: opens under its button, runs the export, closes on Esc / outside click', async page => {

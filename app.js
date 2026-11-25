@@ -9876,6 +9876,8 @@ function storeLibHtml() {
   const chip = (on, attr, t) => `<button class="chip ${on ? 'on' : ''}" ${attr}>${t}</button>`;
   let h = `<div class="st-bar st-full">${chip(!store.mine && store.sort === 'new', 'data-stsort="new"', L('Yeni', 'New'))}${chip(!store.mine && store.sort === 'popular', 'data-stsort="popular"', L('Popüler', 'Popular'))}`
     + (storeTok() ? chip(store.mine, 'data-stmine="1"', L('Benimkiler', 'Mine')) : '')
+    + (storeTok() ? `<button class="chip" data-stsignout="1" title="${L('Çıkış yap', 'Sign out')}">👤 ${esc(store.given || L('Hesabım', 'Account'))}${store.admin ? ' · 🛡 ' + L('Yönetici', 'Admin') : ''} ✕</button>`
+      : `<button class="chip" data-stsign="1" title="${L('Kendi paylaşımlarını gör, yayınla, şikâyet et', 'See your items, publish and report')}">👤 ${L('Giriş yap', 'Sign in')}</button>`)
     + `<button class="chip" data-stpub="1" title="${L('Seçili mobilyayı ya da stüdyoda tasarladığını paylaş', 'Share the selected item or one you designed in the studio')}">＋ ${L('Yayınla', 'Publish')}</button></div>`;
   if (store.err) h += `<p class="muted st-full">⚠ ${esc(store.err)} <button class="btn sm" data-stretry="1">${L('Tekrar dene', 'Retry')}</button></p>`;
   else if (!store.items) h += `<p class="muted st-full">${L('Yükleniyor…', 'Loading…')}</p>`;
@@ -9888,6 +9890,8 @@ function storeLibClick(e) {
   const t = e.target;
   const s = t.closest('[data-stsort]'); if (s) { store.sort = s.dataset.stsort; store.mine = false; buildLib(); return true; }
   if (t.closest('[data-stmine]')) { store.mine = !store.mine; buildLib(); return true; }
+  if (t.closest('[data-stsign]')) { storeNeedSignIn(L('Google ile giriş yap: kendi paylaşımlarını gör, yayınla ve şikâyet et.', 'Sign in with Google to see your items, publish and report.'), () => storeReload()); return true; }
+  if (t.closest('#items [data-stsignout]')) { storeSignOut(); store.mine = false; store.admin = false; storeReload(); return true; }
   if (t.closest('[data-stretry]')) { storeReload(); return true; }
   if (t.closest('[data-stmore]')) { if (!store.loading) { storeLoad(true); buildLib(); } return true; }
   if (t.closest('[data-stpub]')) { storePublishSel(); return true; }
