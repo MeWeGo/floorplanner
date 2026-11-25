@@ -29,7 +29,8 @@ function sqlStorage() {
   };
 }
 
-function loadWorker(jwks, env0 = {}) {
+const SEED = JSON.parse(/export const STORE_SEED = (\[[\s\S]*\]);/.exec(read('presence/store-seed.mjs'))[1]);
+function loadWorker(jwks, env0 = {}, seed = []) {
   class MockDurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }
   const fetchMock = async url => {
     assert.strictEqual(url, 'https://www.googleapis.com/oauth2/v3/certs');
@@ -39,10 +40,11 @@ function loadWorker(jwks, env0 = {}) {
   };
   fetchMock.calls = 0;
   const transformed = workerSrc
+    .replace(/^\s*import\s+\{\s*STORE_SEED\s*\}\s+from\s+['"]\.\/store-seed\.mjs['"];\s*/m, '')
     .replace(/^\s*import\s+\{\s*DurableObject\s*\}\s+from\s+['"]cloudflare:workers['"];\s*/m, '')
     .replace(/\bexport\s+class\s+/g, 'class ')
     .replace(/\bexport\s+default\s+/, 'const worker = ');
-  const mod = new Function('DurableObject', 'fetch', `${transformed}\nreturn { FurnStore, worker, verifyGoogleToken, storeThumbClean, storePreset };`)(MockDurableObject, fetchMock);
+  const mod = new Function('DurableObject', 'fetch', 'STORE_SEED', `${transformed}\nreturn { FurnStore, worker, verifyGoogleToken, storeThumbClean, storePreset };`)(MockDurableObject, fetchMock, seed);
   let store = null;
   const env = {
     ALLOWED_ORIGINS: ORIGIN, GOOGLE_CLIENT_ID: AUD, ...env0,
@@ -285,6 +287,37 @@ test('a banned author cannot edit or report; Google key rotation and outages are
   const down = loadWorker([KP.jwk]);
   down.fetchMock.fail = true;
   assert.strictEqual((await down.call('GET', '/store/items', { token: ada })).status, 503, 'key fetch failure is not "invalid sign-in"');
+});
+
+test('example furniture is seeded once, searchable in Turkish and English, and a deleted example stays deleted', { skip: sqlSkip }, async () => {
+  assert.ok(SEED.length >= 14, 'examples present');
+  const w = loadWorker([KP.jwk], { STORE_ADMINS: '9000' }, SEED);
+  const list = (await w.call('GET', '/store/items')).json.items;
+  assert.strictEqual(list.length, SEED.length, 'every example passes the publish rules');
+  assert.strictEqual(list[0].id, SEED[0].id, 'first example is newest');
+  assert.ok(list.every(it => it.author === 'Floor Planner' && it.thumb.startsWith('<svg')));
+  for (const [q, id] of [['yemek masası', 'ex-table'], ['dining', 'ex-table'], ['bilardo', 'ex-billiards'], ['gardirop', 'ex-wardrobe'], ['ŞÖMİNE', 'ex-fireplace']]) {
+    assert.ok((await w.call('GET', '/store/items?q=' + encodeURIComponent(q))).json.items.some(it => it.id === id), q);
+  }
+  const full = (await w.call('GET', '/store/items/ex-billiards')).json.item;
+  assert.ok(full.preset.extra.parts.length >= 20);
+  assert.strictEqual((await w.call('DELETE', '/store/items/ex-table', { token: await idToken(KP, { sub: '9000' }) })).status, 200);
+  w.env.STORE.get().seed(SEED); // a restart runs the seed again
+  assert.ok(!(await w.call('GET', '/store/items')).json.items.some(it => it.id === 'ex-table'), 'not re-added');
+});
+
+test('STORE_ADMINS accepts a verified e-mail; the e-mail is never forwarded or stored', { skip: sqlSkip }, async () => {
+  const w = loadWorker([KP.jwk], { STORE_ADMINS: ' 9000 , Boss@Example.com ' });
+  const ada = await idToken(KP);
+  const id = (await w.call('POST', '/store/items', { token: ada, body: ITEM })).json.item.id;
+  const boss = await idToken(KP, { sub: '5005', email: 'boss@example.com', email_verified: true });
+  const fake = await idToken(KP, { sub: '6006', email: 'boss@example.com', email_verified: false });
+  assert.strictEqual((await w.call('GET', '/store/items', { token: boss })).json.admin, true);
+  assert.strictEqual((await w.call('GET', '/store/items', { token: fake })).json.admin, false, 'unverified e-mail is not an admin');
+  assert.strictEqual((await w.call('GET', '/store/items', { token: ada })).json.admin, false);
+  assert.strictEqual((await w.call('DELETE', '/store/items/' + id, { token: boss })).status, 200);
+  const db = JSON.stringify(w.env.STORE.get().rows('SELECT * FROM users'));
+  assert.ok(!/@/.test(db), 'no e-mail in the database: ' + db);
 });
 
 test('publish limits: 10 per day per account', { skip: sqlSkip }, async () => {

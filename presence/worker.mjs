@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { STORE_SEED } from './store-seed.mjs';
 
 /**
  * Parse comma-separated allowed origin strings from env.ALLOWED_ORIGINS.
@@ -731,6 +732,7 @@ function storeCleanPreset(p) {
 function storeFold(s) { return String(s == null ? '' : s).toLowerCase().replace(/ı/g, 'i').normalize('NFD').replace(/[̀-ͯ]/g, ''); }
 /* STORE-PRESET:END */
 
+const STORE_SEED_SUB = 'floorplanner-examples';
 const STORE = { page: 40, preset: 65536, name: 60, desc: 300, tags: 5, tag: 24, author: 40, perDay: 10, perUser: 200, hideAt: 3, cats: 12 };
 
 /** Strip characters that could break out of an HTML attribute (the app interpolates values unescaped). */
@@ -796,12 +798,17 @@ async function verifyGoogleToken(token, env, fetchImpl = fetch, now = Date.now()
     if (body.iss !== 'https://accounts.google.com' && body.iss !== 'accounts.google.com') return null;
     if (body.aud !== env.GOOGLE_CLIENT_ID) return null;
     if (!(body.exp * 1000 > now) || !/^[0-9A-Za-z_-]{1,64}$/.test(String(body.sub || ''))) return null;
-    return { sub: String(body.sub), name: storeStr(body.given_name || body.name || '', STORE.author) };
+    const u = { sub: String(body.sub), name: storeStr(body.given_name || body.name || '', STORE.author) };
+    // the e-mail is only used for the STORE_ADMINS check in storeRoute; it is never forwarded or stored
+    if (body.email_verified === true && typeof body.email === 'string') Object.defineProperty(u, 'email', { value: body.email.toLowerCase() });
+    return u;
   } catch (_) {
     return null;
   }
 }
-const storeAdmins = env => parseOrigins(env && env.STORE_ADMINS);
+const storeAdmins = env => parseOrigins(env && env.STORE_ADMINS).map(s => s.toLowerCase());
+/** STORE_ADMINS lists Google account ids (`sub`) and / or verified e-mail addresses. */
+const storeIsAdmin = (user, env) => { const list = storeAdmins(env); return list.includes(user.sub.toLowerCase()) || (!!user.email && list.includes(user.email)); };
 
 /**
  * Singleton SQLite Durable Object holding the published furniture. The worker verifies the
@@ -818,6 +825,24 @@ export class FurnStore extends DurableObject {
     this.sql.exec('CREATE TABLE IF NOT EXISTS reports (item TEXT, sub TEXT, PRIMARY KEY (item, sub))');
     this.sql.exec('CREATE TABLE IF NOT EXISTS users (sub TEXT PRIMARY KEY, name TEXT, banned INTEGER DEFAULT 0)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS pubs (sub TEXT, t INTEGER)');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS seeded (id TEXT PRIMARY KEY)');
+    this.seed(STORE_SEED);
+  }
+
+  /** Insert example items whose id was never seeded (a deleted example stays deleted). Author: Floor Planner. */
+  seed(list) {
+    if (!Array.isArray(list) || !list.length) return;
+    const now = Date.now();
+    this.sql.exec('INSERT INTO users (sub, name) VALUES (?, ?) ON CONFLICT(sub) DO NOTHING', STORE_SEED_SUB, 'Floor Planner');
+    list.forEach((s, i) => {
+      if (!s || !/^[A-Za-z0-9_-]{6,24}$/.test(String(s.id)) || this.row('SELECT id FROM seeded WHERE id = ?', s.id)) return;
+      try {
+        const meta = storeMeta(s), preset = storePreset(s.preset), t = now - i * 1000; // first example = newest
+        this.sql.exec('INSERT OR IGNORE INTO items (id, sub, name, descr, cat, tags, preset, thumb, w, d, created, updated, search) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          s.id, STORE_SEED_SUB, meta.name, meta.desc, meta.cat, JSON.stringify(meta.tags), JSON.stringify(preset), meta.thumb, preset.w, preset.d, t, t, storeSearch(meta));
+      } catch (_) { /* a bad example is skipped, never blocks the store */ }
+      this.sql.exec('INSERT OR IGNORE INTO seeded (id) VALUES (?)', s.id);
+    });
   }
 
   rows(q, ...b) { return this.sql.exec(q, ...b).toArray(); }
@@ -989,8 +1014,8 @@ async function storeRoute(request, env, url, origin, fetchImpl = fetch) {
   }
   const headers = { 'Content-Type': 'application/json', 'x-fp-ip': request.headers.get('CF-Connecting-IP') || '' };
   if (user) {
-    headers['x-fp-user'] = JSON.stringify(user);
-    if (storeAdmins(env).includes(user.sub)) headers['x-fp-admin'] = '1';
+    headers['x-fp-user'] = JSON.stringify({ sub: user.sub, name: user.name });
+    if (storeIsAdmin(user, env)) headers['x-fp-admin'] = '1';
   }
   const stub = env.STORE.get(env.STORE.idFromName('global'));
   const res = await stub.fetch(new Request('https://store' + url.pathname + url.search, { method: request.method, headers, body }));
