@@ -7668,7 +7668,7 @@ function updateTools() {
     : ((isEN() ? HINTS_EN : HINTS)[ui.btn === 'railing' ? 'railing' : tool] || '');
   $('#hud').style.display = ui.viewElev ? 'none' : '';
   cv.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
-  document.querySelectorAll('#items .item').forEach(el => el.classList.toggle('on', !!placing && el.dataset.id === (el.dataset.type === 'pre' ? placing.def.preset : !placing.def.preset && placing.def.id)));
+  document.querySelectorAll('#items .item').forEach(el => el.classList.toggle('on', !!placing && el.dataset.id === (el.dataset.type === 'pre' || el.dataset.type === 'store' ? placing.def.preset : !placing.def.preset && placing.def.id)));
   const bar = $('#shapeBar'), showShape = (tool === 'shape' || tool === 'draft'), was = bar.dataset.on === '1';
   bar.style.display = showShape ? 'flex' : 'none';
   bar.dataset.on = showShape ? '1' : '0';
@@ -8949,6 +8949,7 @@ function renderProps() {
     }
     if (o.k !== 'stairs' && o.k !== 'roof' && n === 1) h += `<div class="row"><button class="btn sm" data-act="parts" title="${L('Mobilyayı kutu, silindir ve kürelerden kurun: ayaklar, tabla, raflar…', 'Build the item from boxes, cylinders and spheres: legs, top, shelves…')}">🧩 ${Array.isArray(o.parts) && o.parts.length ? L('Parçaları düzenle', 'Edit parts') : L('Parçalardan kur', 'Build from parts')} · ${L('stüdyo', 'studio')}</button></div>`;
     if (o.type !== 'shape' && n === 1) h += `<div class="row"><button class="btn sm" data-act="savepreset" title="${L('Bu ölçü ve rengi kütüphaneye kaydet, tekrar tekrar yerleştir', 'Save this size and colour to the library and place it again')}">💾 ${L('Kütüphaneye kaydet', 'Save to library')}</button></div>`;
+    if (n === 1) h += `<div class="row"><button class="btn sm" data-act="storepub" title="${L('Bu mobilyayı topluluk mağazasında paylaş: herkes kendi planında kullanabilir', 'Share this item in the community store: anyone can use it in their plans')}">🌐 ${L('Toplulukta yayınla', 'Publish to community')}</button></div>`;
     if (o.type === 'shape') h += `<div class="row"><button class="btn sm primary" data-act="saveshape">💾 ${L('Şekli kütüphaneye kaydet', 'Save shape to library')}</button></div>`;
   } else if (k === 'room') {
     h += fld(L('Ad', 'Name'), 'room', 'name', o.name, { type: 'text' }) + fld(L('Renk', 'Color'), 'room', 'color', o.color, { type: 'color' }) + fld(L('Zemin', 'Flooring'), 'room', 'floor', o.floor || 'none', { sel: floorOpts() }) + glassFld('room', o) + (o.floor === 'glass' ? '' : fld(L('Döşeme kalınlığı (cm)', 'Slab thickness (cm)'), 'room', 'slabT', roomSlabT(o), { min: 0, max: 200, step: 5 })) + `<div class="row"><button class="btn sm" data-act="texadd">${L('🎨 Doku oluştur / yükle…', '🎨 Create / upload texture…')}</button></div>`;
@@ -9349,6 +9350,7 @@ function onPropsClick(e) {
   const a = b.dataset.act, os = selObjs(), f = F();
   if (a === 'del') return deleteSel();
   if (a === 'savepreset') return savePresetSel();
+  if (a === 'storepub') return storePublishSel();
   if (a === 'parts') { if (os.length === 1 && os[0].kind === 'furn') pbStart(os[0].o); return; }
   if (a === 'opcolreset') { os.forEach(x => { if (x.kind === 'op') { delete x.o.color; delete x.o.frameCol; } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'texadd') { ui.txWall = 0; return openTexDialog(); }
@@ -9582,11 +9584,12 @@ ui.opLast = {}; ui.opSrc = {};
 const opSrcOf = o => ui.opSrc[o.id] || (o.type !== 'window' && OPDEF[o.type] ? o.type : null);
 function rememberOpSize(o) { const s = opSrcOf(o); if (s) { ui.opLast[s] = { w: o.w, h: o.h, sill: o.sill }; if (ui.cat === 0 || ui.q) buildLib(); } }
 const opDefLast = def => ui.opLast[def.id] ? { ...def, ...ui.opLast[def.id] } : def;
-const LIBCATS = ['Kapı & Pencere', ...CATS, '⬡ Kütüphanem'];
-const LIBCATS_EN = ['Doors & Windows', ...CATS_EN, '⬡ My Library'];
+const LIBCATS = ['Kapı & Pencere', ...CATS, '🌐 Topluluk', '⬡ Kütüphanem'];
+const LIBCATS_EN = ['Doors & Windows', ...CATS_EN, '🌐 Community', '⬡ My Library'];
+const LIB_COMM = LIBCATS.length - 2; // topluluk mağazası sekmesi (⬡ Kütüphanem hep sonda kalır)
 function buildLib() {
   const cats = isEN() ? LIBCATS_EN : LIBCATS;
-  $('#cats').innerHTML = cats.map((c, i) => `<button class="chip ${i === ui.cat && !ui.q ? 'on' : ''}" data-cat="${i}">${c}</button>`).join('');
+  $('#cats').innerHTML = cats.map((c, i) => `<button class="chip ${i === ui.cat && (!ui.q || i === LIB_COMM) ? 'on' : ''}" data-cat="${i}">${c}</button>`).join('');
   const q = ui.q.toLowerCase(); let items = '';
   const card = (type, d, sz) => `<button class="item" data-type="${type}" data-id="${d.id}"><div class="ic">${d.icon || '▭'}</div><div>${itemName(d)}</div><div class="sz">${sz}</div></button>`;
   const shapeCard = d => `<button class="item" data-type="def" data-id="${d.id}"><div class="ic">${d.icon || '⬡'}</div><div>${esc(itemName(d))}</div><div class="sz">${Math.round(d.w)}×${Math.round(d.d)} cm</div><span class="delsh" data-delsh="${d.id}" title="${L('Kütüphaneden sil', 'Remove from library')}">✕</span></button>`;
@@ -9594,7 +9597,8 @@ function buildLib() {
   const matches = d => d.name.toLowerCase().includes(q) || (d.en && d.en.toLowerCase().includes(q));
   const shapes = P && P.lib && P.lib.shapes || [], presets = P && P.lib && P.lib.presets || [];
   const opCard = o => card('op', o, opDefLast(o).w + ' cm'); // son kullanılan ölçü kartta da görünür
-  if (q) {
+  if (ui.cat === LIB_COMM) items = storeLibHtml(); // arama kutusu topluluk sekmesinde mağazada arar
+  else if (q) {
     items += presets.filter(p => p.name.toLowerCase().includes(q)).map(presetCard).join('');
     items += OPENINGS.filter(matches).map(opCard).join('');
     items += CATALOG.filter(matches).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
@@ -9610,6 +9614,7 @@ $('#cats').addEventListener('click', e => { const b = e.target.closest('[data-ca
 $('#search').addEventListener('input', e => { ui.q = e.target.value; buildLib(); });
 $('#items').addEventListener('click', e => {
   if (e.target.closest('[data-fsnew]')) { fsNew(); return; }
+  if (storeLibClick(e)) return;
   const x = e.target.closest('[data-delsh]');
   if (x) {
     const i = (P.lib.shapes || []).findIndex(s => s.id === x.dataset.delsh);
@@ -9628,6 +9633,382 @@ $('#items').addEventListener('click', e => {
   let type = b.dataset.type, def = type === 'op' ? opDefLast(OPDEF[b.dataset.id]) : type === 'def' ? (P.lib.shapes || []).find(s => s.id === b.dataset.id) : BYID[b.dataset.id];
   if (type === 'def') { if (!def) return; type = 'furn'; def = { id: 'sh_' + def.id, name: def.name, en: def.en, k: def.k, pts: def.pts, w: def.w, d: def.d, h: def.h, color: def.color, icon: def.icon, extra: def.parts ? { parts: def.parts, pbase: def.pbase, partsV: def.partsV } : undefined }; }
   startPlace(type, def);
+});
+
+/* ---------- Mobilya mağazası (topluluk kütüphanesi) ----------
+   presence/worker.mjs içindeki FurnStore: herkes gezer ve kullanır, Google ile giriş yapan yayınlar. Mağaza öğesi bir
+   kütüphane ön ayarıdır (presetFromObj) + küçük bir üstten görünüş SVG'si; yerleştirme presetDef + startPlace ile olur.
+   Mağazadan gelen her şey yabancıdandır: ön ayar sanitizePlan'dan, küçük resim storeThumbClean'den geçer.
+   ?store=off kapatır, ?store=http://127.0.0.1:8787 yerel `wrangler dev` için adresi değiştirir — yalnız bu makinedeki bir adres
+   kabul edilir: bir linkle başka bir sunucuya yönlendirilen sekme Google giriş anahtarını oraya gönderirdi. */
+const STORE_BASE = 'https://floorplanner-presence.alieferdinc.workers.dev';
+function storeEndpoint(base = STORE_BASE, loc = location) {
+  let q = '';
+  try { q = (new URLSearchParams(loc.search || '').get('store') || '').trim(); } catch (e) { }
+  if (/^(off|0|false)$/i.test(q)) return '';
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?\/?$/i.test(q)) return q.replace(/\/+$/, '');
+  return /^https?:$/.test(String(loc.protocol || '')) ? base : '';
+}
+/* STORE-PRESET:BEGIN — pasted verbatim into app.js, mcp/server.js and presence/worker.mjs; tests/furniture-store.test.js compares the copies.
+   A shared store item is rebuilt from known fields with checked shapes: a box (furniture kinds only, no stairs / ramps / roofs),
+   an optional outline, parts, height, light and tilt — never ids, positions, layers or anything else the sender adds. */
+const STORE_KINDS = ['rect', 'round', 'bed', 'sofa', 'poly'];
+const storeTxt = (v, max) => String(v == null ? '' : v).replace(/["<>`]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+const storeFin = v => typeof v === 'number' && Number.isFinite(v);
+const storeClampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// catalogue-style type names only; "constructor", "toString"… would hit Object.prototype in lookups
+function storeType(t) { const s = String(t == null ? '' : t); return /^[A-Za-z0-9_-]{1,40}$/.test(s) && !(s in Object.prototype) ? s : 'custom'; }
+function storePts(a, min) {
+  if (!Array.isArray(a) || a.length < min || a.length > 200) return null;
+  return a.every(q => q && storeFin(q.x) && storeFin(q.y) && Math.abs(q.x) < 1e5 && Math.abs(q.y) < 1e5) ? a.map(q => ({ x: q.x, y: q.y })) : null;
+}
+function storePart(p) {
+  const o = { type: /^(box|cyl|sphere|extrude)$/.test(p.type) ? p.type : 'box' };
+  for (const k of ['x', 'y', 'z', 'rot', 'rx', 'ry']) if (storeFin(p[k])) o[k] = storeClampN(p[k], -1e5, 1e5);
+  for (const k of ['w', 'd', 'h']) o[k] = storeFin(p[k]) && p[k] > 0 ? Math.min(p[k], 1e5) : 1;
+  if (typeof p.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(p.color)) o.color = p.color;
+  if (typeof p.mat === 'string' && /^[a-z]{1,12}$/.test(p.mat)) o.mat = p.mat;
+  if (p.axis === 'x' || p.axis === 'y') o.axis = p.axis;
+  const pts = storePts(p.pts, 3); if (pts) o.pts = pts;
+  if (p.name != null) { const n = storeTxt(p.name, 40); if (n) o.name = n; }
+  if (typeof p.gid === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(p.gid)) o.gid = p.gid;
+  if (/^(point|spot|strip)$/.test(p.light)) o.light = p.light;
+  for (const k of ['lm', 'lk', 'beam']) if (storeFin(p[k])) o[k] = storeClampN(p[k], 0, 1e5);
+  if (typeof p.lcol === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.lcol)) o.lcol = p.lcol;
+  return o;
+}
+// the extra fields of a shared item; throws only for a hard limit (too many parts)
+function storeExtra(e) {
+  const out = {};
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return out;
+  const pts = storePts(e.pts, 3); if (pts) out.pts = pts;
+  if (Array.isArray(e.parts) && e.parts.length) {
+    if (e.parts.length > 64) throw new Error('too many parts (max 64)');
+    out.parts = e.parts.filter(p => p && typeof p === 'object' && !Array.isArray(p)).map(storePart);
+    const b = e.pbase;
+    if (b && typeof b === 'object' && [b.w, b.d, b.h].every(v => storeFin(v) && v > 0 && v < 1e5)) out.pbase = { w: b.w, d: b.d, h: b.h };
+    out.partsV = 1;
+  }
+  for (const [k, lo, hi] of [['elev', -3000, 3000], ['lm', 0, 1e5], ['lk', 1000, 20000], ['beam', 1, 180], ['rx', -360, 360], ['ry', -360, 360]]) if (storeFin(e[k])) out[k] = storeClampN(e[k], lo, hi);
+  if (e.lon === 0) out.lon = 0;
+  if (typeof e.lcol === 'string' && /^#[0-9a-fA-F]{6}$/.test(e.lcol)) out.lcol = e.lcol;
+  if (e.mount === 'ceil') out.mount = 'ceil';
+  return out;
+}
+/* A whole shared preset → { kind, type, k, w, d, h, icon?, color?, extra? }. Throws with a reason when the box is unusable. */
+function storeCleanPreset(p) {
+  if (!p || typeof p !== 'object' || p.kind !== 'furn') throw new Error('preset must be a furniture preset');
+  const num = (v, lo, hi, what) => { const n = +v; if (!Number.isFinite(n) || n < lo || n > hi) throw new Error(what + ' out of range'); return Math.round(n * 10) / 10; };
+  const out = { kind: 'furn', type: storeType(p.type), k: STORE_KINDS.includes(p.k) ? p.k : 'rect', w: num(p.w, 1, 5000, 'width'), d: num(p.d, 1, 5000, 'depth'), h: num(p.h, 0, 3000, 'height') };
+  const icon = storeTxt(p.icon, 8); if (icon) out.icon = icon;
+  if (typeof p.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(p.color)) out.color = p.color;
+  const extra = storeExtra(p.extra);
+  if (out.k === 'poly' && !extra.pts) out.k = 'rect';
+  if (Object.keys(extra).length) out.extra = extra;
+  return out;
+}
+// search folding: case, Turkish dotted / dotless i and accents (ç → c, ş → s …), so "cay" finds "Çay masası"
+function storeFold(s) { return String(s == null ? '' : s).toLowerCase().replace(/ı/g, 'i').normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+/* STORE-PRESET:END */
+
+const store = { url: storeEndpoint(), gisCid: '', signCb: null, tok: null, exp: 0, given: '', items: null, next: null, key: null, sort: 'new', mine: false, loading: false, err: '', admin: false, full: new Map(), used: new Set(), seq: 0 };
+
+/* STORE-THUMB:BEGIN — pasted verbatim into app.js; tests/furniture-store.test.js compares the copies */
+const STORE_THUMB_MAX = 16384;
+const STORE_THUMB_TAGS = new Set(['svg', 'g', 'rect', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'line']);
+const STORE_THUMB_ATTRS = new Set(['viewBox', 'xmlns', 'x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'd', 'points', 'x1', 'y1', 'x2', 'y2',
+  'fill', 'stroke', 'stroke-width', 'opacity', 'fill-opacity', 'stroke-opacity', 'transform', 'stroke-linejoin', 'stroke-linecap', 'vector-effect']);
+/* Rebuilds a thumbnail SVG from an allow-list: shape elements only, no text, no script, no
+   event handlers, no links, no url() / style. Returns the clean SVG, or null when anything
+   else is in it. */
+function storeThumbClean(svg) {
+  const s = String(svg || '');
+  if (!s || s.length > STORE_THUMB_MAX) return null;
+  const re = /<(\/?)([a-zA-Z]+)((?:\s+[a-zA-Z:-]+\s*=\s*"[^"<>]*")*)\s*(\/?)>/g;
+  const stack = [];
+  let out = '', pos = 0, m, root = 0;
+  while ((m = re.exec(s))) {
+    if (s.slice(pos, m.index).trim()) return null;
+    pos = re.lastIndex;
+    const [, close, tag, attrs, self] = m;
+    if (!STORE_THUMB_TAGS.has(tag)) return null;
+    if (close) { if (attrs.trim() || self || stack.pop() !== tag) return null; out += `</${tag}>`; continue; }
+    if (tag === 'svg' ? stack.length || root++ : !stack.length) return null;
+    let a = '';
+    const ar = /([a-zA-Z:-]+)\s*=\s*"([^"<>]*)"/g; let x;
+    while ((x = ar.exec(attrs))) {
+      const k = x[1], v = x[2];
+      if (!STORE_THUMB_ATTRS.has(k)) return null;
+      if (k === 'xmlns' ? v !== 'http://www.w3.org/2000/svg' : !/^[-#0-9a-zA-Z.,\s()%]*$/.test(v) || /url|expression|script/i.test(v)) return null;
+      a += ` ${k}="${v}"`;
+    }
+    out += `<${tag}${a}${self ? '/' : ''}>`;
+    if (!self) stack.push(tag);
+  }
+  if (s.slice(pos).trim() || stack.length || root !== 1) return null;
+  return out;
+}
+/* STORE-THUMB:END */
+
+/* Üstten görünüş küçük resmi: beyaz kâğıt paleti (pal() dışa aktarımdaki gibi), sayılar bir ondalığa kısaltılır. */
+function storeThumbOf(o) {
+  const ex = ui.exporting; ui.exporting = true;
+  try {
+    const w = +o.w > 0 ? +o.w : 60, d = +o.d > 0 ? +o.d : 60, pad = Math.max(w, d) * 0.06, C = pal(), col = /^#[0-9a-fA-F]{3,8}$/.test(o.color || '') ? o.color : '#cbd5e1';
+    const st = `stroke="${C.furnStroke}" stroke-width="1" vector-effect="non-scaling-stroke"`;
+    let body = Array.isArray(o.parts) && o.parts.length ? partsSvg(o) : furnPlanSvg(o);
+    if (!body) body = o.k === 'round' ? `<ellipse rx="${w / 2}" ry="${d / 2}" fill="${col}" ${st}/>`
+      : o.k === 'poly' && Array.isArray(o.pts) && o.pts.length > 2 ? `<polygon points="${o.pts.map(q => +q.x + ',' + +q.y).join(' ')}" fill="${col}" ${st}/>`
+        : `<rect x="${-w / 2}" y="${-d / 2}" width="${w}" height="${d}" rx="2" fill="${col}" ${st}/>`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-w / 2 - pad} ${-d / 2 - pad} ${w + 2 * pad} ${d + 2 * pad}">${body}</svg>`.replace(/(\d*\.\d)\d+/g, '$1');
+    return storeThumbClean(svg) || storeThumbClean(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-w / 2 - pad} ${-d / 2 - pad} ${w + 2 * pad} ${d + 2 * pad}"><rect x="${-w / 2}" y="${-d / 2}" width="${w}" height="${d}" fill="${col}" ${st}/></svg>`.replace(/(\d*\.\d)\d+/g, '$1'));
+  } finally { ui.exporting = ex; }
+}
+
+/* Google ID jetonu (yalnız yayınlama / şikâyet için; Drive erişimi istemez). Sekme oturumunda saklanır. */
+function storeJwt(t) {
+  try { const s = String(t).split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(s), c => c.charCodeAt(0)))); } catch (e) { return null; }
+}
+function storeSetTok(t) {
+  const j = storeJwt(t); if (!j || !(j.exp > 0)) return false;
+  store.tok = t; store.exp = j.exp * 1000; store.given = sanitizePlan(String(j.given_name || j.name || '')).slice(0, 40);
+  try { sessionStorage.setItem('fp_store_tok', JSON.stringify({ t, exp: store.exp, g: store.given })); } catch (e) { }
+  return true;
+}
+function storeTok() {
+  if (!store.tok) { try { const s = JSON.parse(sessionStorage.getItem('fp_store_tok') || 'null'); if (s && s.t) { store.tok = s.t; store.exp = +s.exp || 0; store.given = String(s.g || ''); } } catch (e) { } }
+  return store.tok && store.exp > Date.now() + 60000 ? store.tok : null;
+}
+function storeSignOut() {
+  store.tok = null; store.exp = 0;
+  try { sessionStorage.removeItem('fp_store_tok'); } catch (e) { }
+  try { if (window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect(); } catch (e) { }
+}
+// Google'ın kendi düğmesini el içine çizer; giriş bitince then() çalışır
+function storeSignInButton(el, then) {
+  if (!el) return;
+  if (!gdUsable()) { el.innerHTML = `<p class="muted">${L('Google ile giriş yalnız çevrimiçi uygulamada çalışır.', 'Google sign-in only works in the online app.')}</p>`; return; }
+  el.innerHTML = `<p class="muted">${L('Google yükleniyor…', 'Loading Google…')}</p>`;
+  const want = ui.modal;
+  store.signCb = r => { if (!(r && storeSetTok(r.credential))) toast(L('Giriş yapılamadı', 'Sign-in failed')); else if (ui.modal === want) then(); };
+  gdLoadGis().then(() => {
+    const cid = gdClientId();
+    if (store.gisCid !== cid) { google.accounts.id.initialize({ client_id: cid, callback: r => store.signCb && store.signCb(r) }); store.gisCid = cid; }
+    if (!el.isConnected) return;
+    el.innerHTML = '';
+    google.accounts.id.renderButton(el, { theme: isLight() ? 'outline' : 'filled_black', text: 'signin_with', shape: 'pill', locale: isEN() ? 'en' : 'tr' });
+  }, e => { el.innerHTML = `<p class="muted">⚠ ${esc(e.message)}</p>`; });
+}
+function storeNeedSignIn(why, then) {
+  if (storeTok()) { then(); return; }
+  openModal(`<h2>${L('Google ile giriş', 'Sign in with Google')} <button class="btn sm" data-close>✕</button></h2><p>${why}</p><div id="stSignBtn" class="st-sign"></div>${storePrivacyNote()}`, 'storesign');
+  storeSignInButton($('#stSignBtn'), () => { closeModal(); then(); });
+}
+const storePrivacyNote = () => `<p class="muted">${L('Yalnızca Google hesap kimliğin ve seçtiğin görünen ad saklanır; e-postan saklanmaz ve gösterilmez.', 'Only your Google account id and the display name you pick are stored; your email is never stored or shown.')} <a href="privacy.html" target="_blank" rel="noopener">${L('Gizlilik', 'Privacy')}</a></p>`;
+
+// auth: true = sign-in required, 'opt' = send the token when signed in (own / admin flags), false = never send it
+async function storeApi(path, { method = 'GET', body, auth = false } = {}) {
+  if (!store.url) throw new Error(L('Topluluk mağazası kapalı', 'The community store is off'));
+  const tok = storeTok(), headers = {};
+  if (auth === true && !tok) throw Object.assign(new Error(L('Önce Google ile giriş yapın', 'Sign in with Google first')), { auth: true });
+  if (tok && (auth === true || auth === 'opt')) headers.Authorization = 'Bearer ' + tok;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  let res;
+  try { res = await fetch(store.url + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }); } catch (e) { throw new Error(L('Mağazaya ulaşılamadı (internet bağlantısı?)', 'Could not reach the store (internet connection?)')); }
+  let j = null; try { j = await res.json(); } catch (e) { }
+  if (res.status === 401 && headers.Authorization) storeSignOut();
+  if (!res.ok) throw Object.assign(new Error(sanitizePlan(String((j && j.error) || 'HTTP ' + res.status)).slice(0, 120)), { status: res.status });
+  return j || {};
+}
+// liste öğesi: küçük resim ayrıca temizlenir (sanitizePlan tırnakları siler, SVG'yi bozardı)
+function storeLight(it) {
+  const thumb = storeThumbClean(it && it.thumb) || '';
+  const o = sanitizePlan({ ...(it || {}), thumb: '', preset: undefined }) || {};
+  o.id = /^[A-Za-z0-9_-]{6,24}$/.test(o.id) ? o.id : ''; o.thumb = thumb;
+  o.name = String(o.name || '').slice(0, 60); o.author = String(o.author || '').slice(0, 40); o.desc = String(o.desc || '').slice(0, 300);
+  o.tags = Array.isArray(o.tags) ? o.tags.map(String).slice(0, 5) : []; o.w = +o.w || 0; o.d = +o.d || 0; o.uses = +o.uses || 0;
+  return o;
+}
+// mağazadan gelen ön ayar → yerleştirilebilir ön ayar (temiz, parçalar yeniden doğrulanır)
+function storeItemPreset(it) {
+  let p;
+  try { p = storeCleanPreset(sanitizePlan(it && it.preset || {})); } catch (e) { throw new Error(L('Bu mobilya okunamadı', 'This item could not be read')); }
+  if (p.extra) { const t = { type: p.type, ...p.extra }; cleanLight(t); for (const k of ['lon', 'lm', 'lk', 'lcol', 'beam']) if (k in t) p.extra[k] = t[k]; else delete p.extra[k]; }
+  if (p.extra && 'parts' in p.extra) {
+    const tmp = cleanParts({ w: +p.w, d: +p.d, h: +p.h, parts: p.extra.parts, pbase: p.extra.pbase });
+    if (tmp.parts && tmp.parts.length) Object.assign(p.extra, { parts: tmp.parts, pbase: tmp.pbase, partsV: tmp.partsV }); else { delete p.extra.parts; delete p.extra.pbase; delete p.extra.partsV; }
+  }
+  return Object.assign(p, { id: 'st_' + it.id, name: String(sanitizePlan(String(it.name || ''))).slice(0, 60) || L('Mobilya', 'Furniture') });
+}
+async function storeGet(id) {
+  if (store.full.has(id)) return store.full.get(id);
+  const j = await storeApi('/store/items/' + encodeURIComponent(id), { auth: 'opt' });
+  const it = storeLight(j.item); it.preset = storeItemPreset(j.item);
+  store.full.set(id, it);
+  return it;
+}
+function storeLoad(more) {
+  const q = (ui.q || '').trim().slice(0, 60), key = q + '|' + store.sort + '|' + store.mine;
+  if (!more && store.key === key && (store.items || store.loading || store.err)) return;
+  const seq = ++store.seq;
+  store.key = key; store.loading = true; store.err = '';
+  if (!more) { store.items = null; store.next = null; }
+  const path = store.mine ? '/store/mine' : '/store/items?' + new URLSearchParams({ q, sort: store.sort, cursor: String(more ? store.next || 0 : 0) });
+  storeApi(path, { auth: store.mine ? true : 'opt' }).then(j => {
+    if (seq !== store.seq) return;
+    store.items = (more ? store.items || [] : []).concat((j.items || []).map(storeLight).filter(x => x.id));
+    store.next = j.next == null ? null : +j.next; store.admin = !!j.admin;
+  }, e => { if (seq === store.seq) store.err = e.message; }).finally(() => {
+    if (seq !== store.seq) return;
+    store.loading = false; if (ui.cat === LIB_COMM) buildLib();
+  });
+}
+function storeReload() { store.key = null; store.full.clear(); if (ui.cat === LIB_COMM) buildLib(); }
+function storeCardHtml(it) {
+  return `<button class="item st-item" data-type="store" data-id="st_${it.id}" title="${esc(it.name)}${it.desc ? ' — ' + esc(it.desc) : ''}"><div class="ic st-th">${it.thumb || '🧩'}</div><div>${esc(it.name)}</div><div class="sz">${Math.round(it.w)}×${Math.round(it.d)} · ${esc(it.author)}</div>`
+    + (it.hidden ? `<span class="st-flag" title="${L('Şikâyet nedeniyle gizli', 'Hidden after reports')}">⚑</span>` : '')
+    + `<span class="renpre" data-stinfo="${it.id}" title="${L('Ayrıntılar', 'Details')}">ⓘ</span></button>`;
+}
+function storeLibHtml() {
+  if (!store.url) return `<p class="muted st-full">${L('Topluluk mağazası çevrimiçi uygulamada açılır:', 'The community store works in the online app:')} <a href="https://mewego.github.io/floorplanner/" target="_blank" rel="noopener">mewego.github.io/floorplanner</a></p>`;
+  storeLoad();
+  const chip = (on, attr, t) => `<button class="chip ${on ? 'on' : ''}" ${attr}>${t}</button>`;
+  let h = `<div class="st-bar st-full">${chip(!store.mine && store.sort === 'new', 'data-stsort="new"', L('Yeni', 'New'))}${chip(!store.mine && store.sort === 'popular', 'data-stsort="popular"', L('Popüler', 'Popular'))}`
+    + (storeTok() ? chip(store.mine, 'data-stmine="1"', L('Benimkiler', 'Mine')) : '')
+    + `<button class="chip" data-stpub="1" title="${L('Seçili mobilyayı ya da stüdyoda tasarladığını paylaş', 'Share the selected item or one you designed in the studio')}">＋ ${L('Yayınla', 'Publish')}</button></div>`;
+  if (store.err) h += `<p class="muted st-full">⚠ ${esc(store.err)} <button class="btn sm" data-stretry="1">${L('Tekrar dene', 'Retry')}</button></p>`;
+  else if (!store.items) h += `<p class="muted st-full">${L('Yükleniyor…', 'Loading…')}</p>`;
+  else if (!store.items.length) h += `<p class="muted st-full">${ui.q ? L('Sonuç yok', 'No results') : store.mine ? L('Henüz bir şey yayınlamadın.', 'You have not published anything yet.') : L('Henüz paylaşılan mobilya yok. İlk sen ol: bir mobilya seç ve “🌐 Toplulukta yayınla”.', 'No shared furniture yet. Be the first: select an item and use “🌐 Publish to community”.')}</p>`;
+  else h += store.items.map(storeCardHtml).join('') + (store.next != null ? `<button class="btn sm st-full" data-stmore="1">${store.loading ? L('Yükleniyor…', 'Loading…') : L('Daha fazla', 'Load more')}</button>` : '');
+  return h;
+}
+// kütüphane listesindeki mağaza tıklamaları; işlendiyse true
+function storeLibClick(e) {
+  const t = e.target;
+  const s = t.closest('[data-stsort]'); if (s) { store.sort = s.dataset.stsort; store.mine = false; buildLib(); return true; }
+  if (t.closest('[data-stmine]')) { store.mine = !store.mine; buildLib(); return true; }
+  if (t.closest('[data-stretry]')) { storeReload(); return true; }
+  if (t.closest('[data-stmore]')) { if (!store.loading) { storeLoad(true); buildLib(); } return true; }
+  if (t.closest('[data-stpub]')) { storePublishSel(); return true; }
+  const inf = t.closest('[data-stinfo]'); if (inf) { storeInfoModal(inf.dataset.stinfo); return true; }
+  const b = t.closest('.item[data-type="store"]'); if (b) { storePlace(b.dataset.id.slice(3)); return true; }
+  return false;
+}
+function storePlace(id) {
+  storeGet(id).then(it => {
+    if (ui.modal === 'store') closeModal();
+    startPlace('furn', presetDef(it.preset));
+    if (!store.used.has(id)) { store.used.add(id); storeApi(`/store/items/${id}/use`, { method: 'POST' }).catch(() => { }); }
+  }, e => toast('⚠ ' + e.message));
+}
+function storeInfoModal(id) {
+  ui.stId = id;
+  const it0 = (store.items || []).find(x => x.id === id);
+  const draw = (it, full) => {
+    if (ui.modal !== 'store' || ui.stId !== id) return;
+    const p = full && it.preset, sz = p ? `${Math.round(p.w)} × ${Math.round(p.d)} × ${Math.round(p.h)} cm` : `${Math.round(it.w)} × ${Math.round(it.d)} cm`;
+    const cats = isEN() ? CATS_EN : CATS, nParts = p && p.extra && Array.isArray(p.extra.parts) ? p.extra.parts.length : 0;
+    const btn = (a, t, cls = '') => `<button class="btn sm ${cls}" data-sta="${a}">${t}</button>`;
+    $('#modal').innerHTML = `<h2>${esc(it.name)} <button class="btn sm" data-close>✕</button></h2>
+      <div class="st-detail"><div class="st-big">${it.thumb || '🧩'}</div><div>
+        <p><b>${L('Paylaşan', 'By')}:</b> ${esc(it.author)}</p>
+        <p><b>${L('Ölçü', 'Size')}:</b> ${sz}${nParts ? ` · 🧩 ${nParts} ${L('parça', 'parts')}` : ''}</p>
+        <p><b>${L('Kategori', 'Category')}:</b> ${esc(cats[it.cat] || cats[0])} · ${it.uses} ${L('kullanım', 'uses')}</p>
+        ${it.desc ? `<p>${esc(it.desc)}</p>` : ''}${it.tags.length ? `<p class="muted">${it.tags.map(t => '#' + esc(t)).join(' ')}</p>` : ''}
+        ${it.hidden ? `<p class="st-warn">⚑ ${L('Şikâyetler nedeniyle gizli: yalnız sen görüyorsun.', 'Hidden after reports: only you can see it.')}</p>` : ''}
+      </div></div>
+      <div class="row st-acts">${btn('place', '＋ ' + L('Plana yerleştir', 'Place in plan'), 'primary')}${btn('save', '⬡ ' + L('Kütüphaneme kaydet', 'Save to My Library'))}
+        ${it.own ? btn('edit', '✎ ' + L('Bilgileri düzenle', 'Edit details')) + btn('del', '🗑 ' + L('Mağazadan kaldır', 'Remove from store')) : btn('report', '⚑ ' + L('Şikâyet et', 'Report'))}
+        ${store.admin ? (it.hidden ? btn('unhide', '↺ ' + L('Yeniden göster', 'Show again')) : '') + (it.sub ? btn('ban', '⛔ ' + L('Paylaşanı engelle', 'Ban author')) : '') + (it.own ? '' : btn('del', '🗑 ' + L('Sil (yönetici)', 'Delete (admin)'))) : ''}</div>
+      ${full ? '' : `<p class="muted">${L('Yükleniyor…', 'Loading…')}</p>`}`;
+  };
+  openModal('', 'store');
+  if (it0) draw(it0, false);
+  storeGet(id).then(it => draw(it, true), e => { if (ui.modal === 'store') { toast('⚠ ' + e.message); closeModal(); } });
+}
+function storeAct(a) {
+  const id = ui.stId, it = store.full.get(id) || (store.items || []).find(x => x.id === id); if (!id || !it) return;
+  if (a === 'place') return storePlace(id);
+  if (a === 'save') {
+    if (!it.preset) return;
+    P.lib.presets = P.lib.presets || []; P.lib.presets.push({ ...clonePlain(it.preset), id: uid() });
+    commit(); buildLib(); toast(L(`“${it.name}” ⬡ Kütüphanem’e eklendi`, `“${it.name}” added to ⬡ My Library`)); return;
+  }
+  const done = (msg, drop) => { toast(msg); if (drop) { closeModal(); store.full.delete(id); } storeReload(); };
+  const fail = e => toast('⚠ ' + e.message);
+  if (a === 'report') return storeNeedSignIn(L('Şikâyet etmek için giriş yapın (kötüye kullanımı önler).', 'Sign in to report (this prevents abuse).'), () => {
+    if (!confirm(L(`“${it.name}” uygunsuz ya da bozuk olarak şikâyet edilsin mi? Birkaç şikâyetten sonra gizlenir.`, `Report “${it.name}” as inappropriate or broken? It is hidden after a few reports.`))) return;
+    storeApi(`/store/items/${id}/report`, { method: 'POST', auth: true }).then(() => done(L('Teşekkürler, şikâyet alındı', 'Thanks, reported'), true), fail);
+  });
+  if (a === 'del') { if (confirm(L(`“${it.name}” mağazadan kaldırılsın mı? Planlara yerleştirilmiş kopyalar kalır.`, `Remove “${it.name}” from the store? Copies already placed in plans stay.`))) storeApi('/store/items/' + id, { method: 'DELETE', auth: true }).then(() => done(L('Mağazadan kaldırıldı', 'Removed from the store'), true), fail); return; }
+  if (a === 'unhide') return void storeApi(`/store/items/${id}/unhide`, { method: 'POST', auth: true }).then(() => done(L('Yeniden gösteriliyor', 'Shown again'), true), fail);
+  if (a === 'ban') { if (it.sub && confirm(L('Bu kişi engellensin ve tüm mobilyaları gizlensin mi?', 'Ban this author and hide all their items?'))) storeApi(`/store/users/${encodeURIComponent(it.sub)}/ban`, { method: 'POST', auth: true }).then(() => done(L('Engellendi', 'Banned'), true), fail); return; }
+  if (a === 'edit') return storePublishModal(null, it);
+}
+
+/* Yayınlama: o = plandaki mobilya (yeni) ya da edit = mağazadaki kendi öğen (yalnız bilgiler). */
+function storePublishSel() {
+  const os = selObjs();
+  if (os.length !== 1 || os[0].kind !== 'furn') { toast(L('Önce paylaşılacak tek bir mobilya seçin (ya da 🧩 stüdyoda bir tane tasarlayıp 🌐 Yayınla)', 'Select one furniture item to share first (or design one in the 🧩 studio and use 🌐 Publish)')); return; }
+  storePublishModal(os[0].o);
+}
+function storePublishModal(o, edit = null) {
+  if (!store.url) { toast(L('Topluluk mağazası çevrimiçi uygulamada açılır', 'The community store works in the online app')); return; }
+  if (o) {
+    if (o.k === 'roof' || o.k === 'stairs' || o.k === 'ramp') { toast(L('Çatı, merdiven ve rampalar paylaşılamaz; mobilya paylaşın', 'Roofs, stairs and ramps cannot be shared; share furniture')); return; }
+    if (Array.isArray(o.parts) && o.parts.length && !validateParts(o).ok) { toast(L('Önce parçalardaki ⚠ sorunları düzeltin', 'Fix the ⚠ problems in the parts first')); return; }
+  }
+  const prev = ui.stPub && ui.stPub.o === o && ui.stPub.edit === edit ? ui.stPub.vals : null;
+  const cat0 = edit ? edit.cat : o && BYID[o.type] ? BYID[o.type].cat : 0;
+  let author = ''; try { author = localStorage.getItem('fp_store_name') || ''; } catch (e) { }
+  const v = prev || { name: edit ? edit.name : String((o && (o.label || o.name)) || '').slice(0, 60), cat: cat0, desc: edit ? edit.desc : '', tags: edit ? edit.tags.join(', ') : '', author: author || store.given || '' };
+  const thumb = edit ? edit.thumb : storeThumbOf(o);
+  ui.stPub = { o, edit, thumb, vals: v };
+  const cats = isEN() ? CATS_EN : CATS, signed = !!storeTok();
+  const row = (lab, inp) => `<label class="st-f"><span>${lab}</span>${inp}</label>`;
+  openModal(`<h2>🌐 ${edit ? L('Paylaşımı düzenle', 'Edit shared item') : L('Toplulukta yayınla', 'Publish to community')} <button class="btn sm" data-close>✕</button></h2>
+    <div class="st-detail"><div class="st-big">${thumb || '🧩'}</div><div class="st-form">
+      ${row(L('Ad', 'Name'), `<input id="stName" maxlength="60" value="${esc(v.name)}">`)}
+      ${row(L('Kategori', 'Category'), `<select id="stCat">${cats.map((c, i) => `<option value="${i}" ${i === +v.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`)}
+      ${row(L('Açıklama', 'Description'), `<textarea id="stDesc" maxlength="300" rows="3">${esc(v.desc)}</textarea>`)}
+      ${row(L('Etiketler (virgülle)', 'Tags (comma-separated)'), `<input id="stTags" maxlength="130" value="${esc(v.tags)}" placeholder="${L('masa, ahşap', 'desk, wood')}">`)}
+      ${row(L('Görünen adın', 'Your display name'), `<input id="stAuthor" maxlength="40" value="${esc(v.author)}">`)}
+    </div></div>
+    <p class="muted">${L('Yayınlanan mobilyayı herkes görebilir ve kendi planlarında kullanabilir. Yalnız kendi tasarımını paylaş.', 'Anyone can see a published item and use it in their own plans. Only share your own designs.')}</p>
+    ${signed ? '' : `<div id="stSignBtn" class="st-sign"></div>`}${storePrivacyNote()}
+    <div class="row"><button class="btn sm primary" data-stsubmit="1" ${signed ? '' : 'disabled'}>🌐 ${edit ? L('Kaydet', 'Save') : L('Yayınla', 'Publish')}</button>${signed ? `<button class="btn sm" data-stsignout="1">${L('Çıkış yap', 'Sign out')}</button>` : ''}</div>`, 'storepub');
+  if (!signed) storeSignInButton($('#stSignBtn'), () => { storePubVals(); storePublishModal(o, edit); });
+}
+function storePubVals() {
+  const g = id => { const e = $('#' + id); return e ? e.value : ''; };
+  if (ui.stPub && $('#stName')) ui.stPub.vals = { name: g('stName'), cat: +g('stCat') || 0, desc: g('stDesc'), tags: g('stTags'), author: g('stAuthor') };
+  return ui.stPub && ui.stPub.vals;
+}
+// gönderilecek gövde (yalın, test edilir): ön ayar presetFromObj'dan, kimlik ve ad sunucuda yeniden verilir
+function storePubBody(o, vals, thumb, edit) {
+  const b = { name: String(vals.name || '').trim().slice(0, 60), desc: String(vals.desc || '').trim().slice(0, 300), cat: +vals.cat || 0,
+    tags: String(vals.tags || '').split(',').map(t => t.trim()).filter(Boolean).slice(0, 5), author: String(vals.author || '').trim().slice(0, 40), thumb };
+  if (!edit) { const p = presetFromObj('furn', o, b.name || 'x'); delete p.id; delete p.name; b.preset = p; }
+  return b;
+}
+function storePublishSubmit() {
+  const st = ui.stPub; if (!st) return;
+  const vals = storePubVals(), b = storePubBody(st.o, vals, st.thumb, st.edit);
+  if (!b.name) { toast(L('Bir ad yazın', 'Enter a name')); return; }
+  if (!b.thumb) { toast(L('Bu mobilyanın küçük resmi çizilemedi', 'Could not draw a thumbnail for this item')); return; }
+  try { if (b.author) localStorage.setItem('fp_store_name', b.author); } catch (e) { }
+  const btn = $('[data-stsubmit]'); if (btn) { btn.disabled = true; btn.textContent = L('Gönderiliyor…', 'Sending…'); }
+  storeApi(st.edit ? '/store/items/' + st.edit.id : '/store/items', { method: st.edit ? 'PUT' : 'POST', body: b, auth: true }).then(() => {
+    closeModal(); ui.stPub = null; store.sort = 'new'; store.mine = !!st.edit && store.mine;
+    ui.cat = LIB_COMM; ui.q = ''; $('#search').value = ''; storeReload(); buildLib();
+    toast(st.edit ? L('Güncellendi', 'Updated') : L(`“${b.name}” toplulukta yayınlandı 🌐`, `“${b.name}” published to the community 🌐`));
+  }, e => { if (btn) { btn.disabled = false; btn.textContent = '🌐 ' + (st.edit ? L('Kaydet', 'Save') : L('Yayınla', 'Publish')); } if (e.auth || e.status === 401) { storePubVals(); storePublishModal(st.o, st.edit); } toast('⚠ ' + e.message); });
+}
+$('#modal').addEventListener('click', e => {
+  if (ui.modal === 'store') { const b = e.target.closest('[data-sta]'); if (b) storeAct(b.dataset.sta); return; }
+  if (ui.modal !== 'storepub') return;
+  if (e.target.closest('[data-stsubmit]')) storePublishSubmit();
+  else if (e.target.closest('[data-stsignout]')) { storePubVals(); storeSignOut(); storePublishModal(ui.stPub.o, ui.stPub.edit); }
 });
 
 /* ---------- Katlar ---------- */
@@ -16602,6 +16983,7 @@ function openStudio() {
       <label class="chk-pill"><input type="checkbox" id="fsSnap"${ui.pb.snap ? ' checked' : ''}> ${L('Yakala', 'Snap')}</label>
       <span class="spacer"></span>
       <button type="button" class="btn sm" data-fs="cancel">${L('İptal', 'Cancel')}</button>
+      <button type="button" class="btn sm" data-fs="publish" title="${L('Uygular, ⬡ Kütüphanem’e ekler ve topluluk mağazasında paylaşır', 'Applies, adds it to ⬡ My Library and shares it in the community store')}">🌐 ${L('Yayınla', 'Publish')}</button>
       <button type="button" class="btn sm" data-fs="savelib" title="${L('Uygular ve ⬡ Kütüphanem’e ekler', 'Applies and adds it to ⬡ My Library')}">💾 ${L('Kütüphaneye kaydet', 'Save to library')}</button>
       <button type="button" class="btn sm primary" data-fs="apply">✓ ${isNew ? L('Plana yerleştir', 'Place in plan') : L('Uygula', 'Apply')}</button>
     </header>
@@ -16670,6 +17052,7 @@ function pbApply(toLib) {
   closeModal(); sel = [o.id]; commit(); refresh(); buildLib(); if (ui.view3d && T3) schedBuild3D();
   toast(isNew ? L('Plana yerleştirildi ve ⬡ Kütüphanem’e eklendi', 'Placed in the plan and added to ⬡ My Library')
     : toLib ? L('Uygulandı ve ⬡ Kütüphanem’e eklendi', 'Applied and added to ⬡ My Library') : L('Parçalar uygulandı (Ctrl+Z geri alır)', 'Parts applied (Ctrl+Z undoes)'));
+  return o;
 }
 function fsAct(act) {
   const D = ui.pb.d, ids = pbSelIds(), p = D.parts[ui.pb.sel], group = ids.length > 1;
@@ -16777,7 +17160,7 @@ function fsWire(root) {
   });
   root.addEventListener('click', e => {
     const fsb = e.target.closest('[data-fs]');
-    if (fsb) { const a = fsb.dataset.fs; if (a === 'undo') fsUndo(-1); else if (a === 'redo') fsUndo(1); else if (a === 'cancel') fsCancel(); else if (a === 'apply') pbApply(false); else if (a === 'savelib') pbApply(true); return; }
+    if (fsb) { const a = fsb.dataset.fs; if (a === 'undo') fsUndo(-1); else if (a === 'redo') fsUndo(1); else if (a === 'cancel') fsCancel(); else if (a === 'apply') pbApply(false); else if (a === 'savelib') pbApply(true); else if (a === 'publish') { const o = pbApply(true); if (o) storePublishModal(o); } return; }
     const blk = e.target.closest('[data-blk]'); if (blk) { fsAddBlock(blk.dataset.blk); return; }
     const grp = e.target.closest('#pbList [data-pbgrp]');
     if (grp) { const g = grp.dataset.pbgrp, i = ui.pb.d.parts.findIndex(p => p.gid === g); ui.pb.gsel = g; ui.pb.sel = i; ui.pb.multi = []; pbRedraw(); return; }

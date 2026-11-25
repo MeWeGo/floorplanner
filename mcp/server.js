@@ -4179,6 +4179,128 @@ tool('list_textures',
     }).join('\n');
   });
 
+/* ---------- Community furniture store (read-only) ----------
+   The app's 🌐 Community library tab: furniture other people published (presence/worker.mjs FurnStore).
+   Items come from strangers, so strings lose the characters the app interpolates unescaped. */
+/* STORE-PRESET:BEGIN — pasted verbatim into app.js, mcp/server.js and presence/worker.mjs; tests/furniture-store.test.js compares the copies.
+   A shared store item is rebuilt from known fields with checked shapes: a box (furniture kinds only, no stairs / ramps / roofs),
+   an optional outline, parts, height, light and tilt — never ids, positions, layers or anything else the sender adds. */
+const STORE_KINDS = ['rect', 'round', 'bed', 'sofa', 'poly'];
+const storeTxt = (v, max) => String(v == null ? '' : v).replace(/["<>`]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+const storeFin = v => typeof v === 'number' && Number.isFinite(v);
+const storeClampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// catalogue-style type names only; "constructor", "toString"… would hit Object.prototype in lookups
+function storeType(t) { const s = String(t == null ? '' : t); return /^[A-Za-z0-9_-]{1,40}$/.test(s) && !(s in Object.prototype) ? s : 'custom'; }
+function storePts(a, min) {
+  if (!Array.isArray(a) || a.length < min || a.length > 200) return null;
+  return a.every(q => q && storeFin(q.x) && storeFin(q.y) && Math.abs(q.x) < 1e5 && Math.abs(q.y) < 1e5) ? a.map(q => ({ x: q.x, y: q.y })) : null;
+}
+function storePart(p) {
+  const o = { type: /^(box|cyl|sphere|extrude)$/.test(p.type) ? p.type : 'box' };
+  for (const k of ['x', 'y', 'z', 'rot', 'rx', 'ry']) if (storeFin(p[k])) o[k] = storeClampN(p[k], -1e5, 1e5);
+  for (const k of ['w', 'd', 'h']) o[k] = storeFin(p[k]) && p[k] > 0 ? Math.min(p[k], 1e5) : 1;
+  if (typeof p.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(p.color)) o.color = p.color;
+  if (typeof p.mat === 'string' && /^[a-z]{1,12}$/.test(p.mat)) o.mat = p.mat;
+  if (p.axis === 'x' || p.axis === 'y') o.axis = p.axis;
+  const pts = storePts(p.pts, 3); if (pts) o.pts = pts;
+  if (p.name != null) { const n = storeTxt(p.name, 40); if (n) o.name = n; }
+  if (typeof p.gid === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(p.gid)) o.gid = p.gid;
+  if (/^(point|spot|strip)$/.test(p.light)) o.light = p.light;
+  for (const k of ['lm', 'lk', 'beam']) if (storeFin(p[k])) o[k] = storeClampN(p[k], 0, 1e5);
+  if (typeof p.lcol === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.lcol)) o.lcol = p.lcol;
+  return o;
+}
+// the extra fields of a shared item; throws only for a hard limit (too many parts)
+function storeExtra(e) {
+  const out = {};
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return out;
+  const pts = storePts(e.pts, 3); if (pts) out.pts = pts;
+  if (Array.isArray(e.parts) && e.parts.length) {
+    if (e.parts.length > 64) throw new Error('too many parts (max 64)');
+    out.parts = e.parts.filter(p => p && typeof p === 'object' && !Array.isArray(p)).map(storePart);
+    const b = e.pbase;
+    if (b && typeof b === 'object' && [b.w, b.d, b.h].every(v => storeFin(v) && v > 0 && v < 1e5)) out.pbase = { w: b.w, d: b.d, h: b.h };
+    out.partsV = 1;
+  }
+  for (const [k, lo, hi] of [['elev', -3000, 3000], ['lm', 0, 1e5], ['lk', 1000, 20000], ['beam', 1, 180], ['rx', -360, 360], ['ry', -360, 360]]) if (storeFin(e[k])) out[k] = storeClampN(e[k], lo, hi);
+  if (e.lon === 0) out.lon = 0;
+  if (typeof e.lcol === 'string' && /^#[0-9a-fA-F]{6}$/.test(e.lcol)) out.lcol = e.lcol;
+  if (e.mount === 'ceil') out.mount = 'ceil';
+  return out;
+}
+/* A whole shared preset → { kind, type, k, w, d, h, icon?, color?, extra? }. Throws with a reason when the box is unusable. */
+function storeCleanPreset(p) {
+  if (!p || typeof p !== 'object' || p.kind !== 'furn') throw new Error('preset must be a furniture preset');
+  const num = (v, lo, hi, what) => { const n = +v; if (!Number.isFinite(n) || n < lo || n > hi) throw new Error(what + ' out of range'); return Math.round(n * 10) / 10; };
+  const out = { kind: 'furn', type: storeType(p.type), k: STORE_KINDS.includes(p.k) ? p.k : 'rect', w: num(p.w, 1, 5000, 'width'), d: num(p.d, 1, 5000, 'depth'), h: num(p.h, 0, 3000, 'height') };
+  const icon = storeTxt(p.icon, 8); if (icon) out.icon = icon;
+  if (typeof p.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(p.color)) out.color = p.color;
+  const extra = storeExtra(p.extra);
+  if (out.k === 'poly' && !extra.pts) out.k = 'rect';
+  if (Object.keys(extra).length) out.extra = extra;
+  return out;
+}
+// search folding: case, Turkish dotted / dotless i and accents (ç → c, ş → s …), so "cay" finds "Çay masası"
+function storeFold(s) { return String(s == null ? '' : s).toLowerCase().replace(/ı/g, 'i').normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+/* STORE-PRESET:END */
+
+const STORE_URL = String(process.env.FP_STORE_URL || 'https://floorplanner-presence.alieferdinc.workers.dev').replace(/\/+$/, '');
+function storeClean(v, depth = 0) {
+  if (depth > 12) return null;
+  if (typeof v === 'string') return v.replace(/["<>`]/g, '');
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  if (Array.isArray(v)) return v.map(x => storeClean(x, depth + 1));
+  if (v && typeof v === 'object') { const o = {}; for (const k of Object.keys(v)) if (k !== '__proto__' && k !== 'constructor' && k !== 'prototype') o[k] = storeClean(v[k], depth + 1); return o; }
+  return typeof v === 'boolean' || v === null ? v : null;
+}
+async function storeFetch(path) {
+  if (typeof fetch !== 'function') throw new Error('The furniture store needs Node 18 or newer (global fetch).');
+  let res;
+  try { res = await fetch(STORE_URL + path); } catch (e) { throw new Error('Cannot reach the furniture store at ' + STORE_URL + ' (' + e.message + ').'); }
+  const j = await res.json().catch(() => null);
+  if (!res.ok) throw new Error('Furniture store returned HTTP ' + res.status + ((j && j.error) ? ': ' + j.error : ''));
+  return storeClean(j || {});
+}
+
+tool('store_search',
+  'Search the community furniture store (furniture other users published from the app\'s furniture studio). Returns ids, names, sizes and authors; place one with store_place.',
+  {
+    q: { type: 'string', description: 'Search words (name, tags, description). Empty = newest items.' },
+    category: { type: 'integer', description: 'Category index as in list_catalog (0 Living, 1 Bedroom, 2 Kitchen, 3 Bathroom, 4 Office, 5 Structure & Outdoor, 6 Lighting).' },
+    sort: { type: 'string', enum: ['new', 'popular'], description: 'Default new.' },
+  }, [],
+  async a => {
+    const qs = new URLSearchParams({ q: String(a.q || '').slice(0, 60), sort: a.sort === 'popular' ? 'popular' : 'new' });
+    if (Number.isInteger(a.category)) qs.set('cat', String(a.category));
+    const j = await storeFetch('/store/items?' + qs);
+    const items = j.items || [];
+    if (!items.length) return 'No community furniture matches' + (a.q ? ' "' + a.q + '"' : '') + '.';
+    return items.map(it => it.id + ' "' + it.name + '" — ' + Math.round(it.w) + '×' + Math.round(it.d) + ' cm, by ' + it.author + ', used ' + it.uses + '×' + (it.tags && it.tags.length ? ', #' + it.tags.join(' #') : '') + (it.desc ? ' — ' + it.desc : '')).join('\n');
+  });
+
+tool('store_place',
+  'Place a community store item (id from store_search) in the plan at (x, y), centre point, like add_furniture. The item keeps its parts, colours and sizes.',
+  {
+    id: { type: 'string', description: 'Store item id from store_search.' },
+    x: { type: 'number' }, y: { type: 'number' },
+    rot: { type: 'number', description: 'Rotation in degrees, clockwise. Default 0.' },
+    floorIndex: floorArg,
+  },
+  ['id', 'x', 'y'],
+  async a => {
+    if (!/^[A-Za-z0-9_-]{6,24}$/.test(String(a.id || ''))) throw new Error('Invalid store item id');
+    const f = floorOf(a);
+    const it = (await storeFetch('/store/items/' + a.id)).item;
+    let p;
+    try { p = storeCleanPreset(it && it.preset); } catch (e) { throw new Error('This store item has no usable furniture data (' + e.message + ')'); }
+    // known fields first, then the placement — a store item can never set its own id or position
+    const o = { ...(p.extra || {}), type: p.type, name: storeTxt(it.name, 60) || 'Furniture', icon: p.icon || '🧩', k: p.k,
+      w: p.w, d: p.d, h: p.h || 75, color: p.color || '#cbd5e1', id: uid(), x: +a.x || 0, y: +a.y || 0, rot: +a.rot || 0, label: '' };
+    cleanParts(o); cleanLight(o);
+    f.furn.push(o);
+    return 'Placed "' + o.name + '" ' + o.id + ' (' + o.w + '×' + o.d + ' cm' + (Array.isArray(o.parts) ? ', ' + o.parts.length + ' parts' : '') + ') at (' + o.x + ',' + o.y + ') rot=' + o.rot + '°.';
+  });
+
 tool('add_void',
   'Cut a floor void (stairwell, elevator/MEP shaft, atrium) through this floor slab. Draw it on the UPPER floor above the stairs: in 3D it becomes a real hole in that floor (the ceiling of the floor below). 2D shows a dashed outline with an X.',
   {
