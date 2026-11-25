@@ -287,7 +287,7 @@ const ROOM_SLAB_T = 20, roomSlabT = r => (r && r.slabT != null && +r.slabT >= 0 
 // odanın kendi düzenleri ya da içinde olduğu grubun düzenleri var mı (#66)
 const grpHasVars = (gid, min = 1) => !!gid && ((P.floors[fi] && P.floors[fi].groups) || []).some(g => g.id === gid && (g.vars || []).length >= min);
 const FLOOR_LVL_MAX = 50000, VOID_DEP_MAX = 1000; // kat kotu ±500 m; döşeme boşluğunun çukur derinliği en çok 10 m
-const FLOOR_H_MIN = 100, FLOOR_H_MAX = 800; // kat yüksekliği alanı ve MCP add_floor ile aynı aralık
+const FLOOR_H_MIN = 100, FLOOR_H_MAX = 3000, SLAB_OFF_MAX = 3000; // kat yüksekliği (en çok 30 m) ve döşeme kot farkı (±30 m)
 // { key: [tr, en] } → <select> seçenekleri (merdiven / rampa / cam alanları)
 const biOpts = m => Object.fromEntries(Object.entries(m).map(([kk, v]) => [kk, L(...v)]));
 const newFloor = name => ({ id: uid(), name, walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], zones: [], sections: [], axes: [], dims: [], texts: [], sketches: [], drafts: [], groups: [], slabFloor: 'none', slabColor: null });
@@ -4649,13 +4649,13 @@ function ifcToProject(text, opts = {}) {
   eachPt(p => { p.x = r1(p.x - sx); p.y = r1(p.y - sy); });
   const hs = []; for (const { f } of floors) for (const w of f.walls) if (w.wt === 'solid') hs.push(w.h);
   hs.sort((p, q) => p - q);
-  const wallH = Math.max(100, Math.min(800, hs.length ? hs[hs.length >> 1] : 270));
+  const wallH = Math.max(100, Math.min(3000, hs.length ? hs[hs.length >> 1] : 270));
   const ts = new Map(); for (const { f } of floors) for (const w of f.walls) if (w.wt === 'solid') ts.set(w.t, (ts.get(w.t) || 0) + 1);
   const wallT = [...ts].sort((p, q) => q[1] - p[1])[0]?.[0] || 20;
   floors.forEach(({ b, f }, k) => {
     const nx = floors[k + 1]; if (!b.s || !nx || !nx.b.s) return;
     const fh = Math.round(nx.b.s.z - b.s.z - 20);
-    if (fh >= 100 && fh <= 800 && fh !== wallH) f.wallH = fh;
+    if (fh >= 100 && fh <= 3000 && fh !== wallH) f.wallH = fh;
   });
   // bodrum katlı model: zemin altındaki kat varsa her kat gerçek kotunu alır (Floor.lvl, ±0 = zemin); yoksa eskisi gibi dizilir
   if (floors.some(({ b }) => b.s && b.s.z < -50)) floors.forEach(({ b, f }) => { if (b.s && Number.isFinite(b.s.z)) f.lvl = Math.round(b.s.z); });
@@ -8802,7 +8802,7 @@ function renderProps() {
   let h = `<h3>${(isEN() ? KIND_EN : KIND_TR)[k]}${n > 1 ? ` <span class="muted">(${n})</span>` : ''}</h3>`;
   if (k === 'wall') {
     if (n === 1) h += fld(L('Uzunluk (cm)', 'Length (cm)'), 'wall', 'len', wLen(o), { step: 1, min: 1 });
-    h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: 800 }) + fld(L('Taban kotu (cm)', 'Base offset (cm)'), 'wall', 'elev', wallElev(o), { min: -WALL_ELEV_MAX, max: WALL_ELEV_MAX, step: 5 });
+    h += fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'wall', 't', o.t, { min: 3, max: 100 }) + fld(L('Yükseklik (cm)', 'Height (cm)'), 'wall', 'h', o.h, { min: 50, max: FLOOR_H_MAX }) + fld(L('Taban kotu (cm)', 'Base offset (cm)'), 'wall', 'elev', wallElev(o), { min: -WALL_ELEV_MAX, max: WALL_ELEV_MAX, step: 5 });
     if (os.some(x => wallTopOn(x.o))) h += `<div class="row"><span class="muted">⌂ ${L('Üstü eğimli yüzeyi izliyor', 'Top follows a sloped surface')} (${Math.round(Math.min(...wallTopPts(o, 0, wLen(o)).map(q => q[1])))}–${Math.round(o.h)} cm)</span><button class="btn sm" data-act="walldetach" title="${L('Duvarın üstünü yeniden düz yap (en yüksek noktada)', 'Make the wall top flat again (at its highest point)')}">${L('⌂✕ Düz yap', '⌂✕ Make flat')}</button></div>`;
     if (F().walls.length > 1 && os.every(x => x.o.h === o.h)) h += `<div class="row"><button class="btn sm" data-act="wallhfloor" title="${L('Bu yüksekliği kattaki tüm duvarlara ve katın varsayılanına uygula', 'Apply this height to every wall on the floor and make it the floor default')}">⬆ ${L('Kattaki tüm duvarlara uygula', 'Apply to all walls on floor')}</button></div>`;
     h += fld(L('Duvar Tipi', 'Wall Type'), 'wall', 'wt', o.wt || 'solid', { sel: { solid: L('🧱 Dolu', '🧱 Solid'), curtain: L('🪟 Cam Cephe', '🪟 Curtain Wall'), railing: L('🛡 Korkuluk', '🛡 Railing / Balustrade'), fence: L('🌿 Bahçe çiti', '🌿 Garden Fence') } });
@@ -8986,7 +8986,7 @@ function renderProps() {
       h += fld(L('Kaplama', 'Finish'), 'slab', 'floor', o.floor || 'none', { sel: floorOpts() }) + `<div class="row"><button class="btn sm" data-act="texadd">${L('🎨 Doku oluştur / yükle…', '🎨 Create / upload texture…')}</button></div>` + glassFld('slab', o)
         + fld(L('Renk', 'Color'), 'slab', 'color', o.color || '#cbd5e1', { type: 'color' })
         + fld(L('Kalınlık (cm)', 'Thickness (cm)'), 'slab', 't', o.t ?? 20, { min: 5, max: 100 })
-        + fld(L('Kot farkı (cm)', 'Level offset (cm)'), 'slab', 'off', o.off || 0, { min: -200, max: 200 });
+        + fld(L('Kot farkı (cm)', 'Level offset (cm)'), 'slab', 'off', o.off || 0, { min: -SLAB_OFF_MAX, max: SLAB_OFF_MAX });
       if (n === 1 && o.floor !== 'glass') h += slopePanelHtml(o); // eğimli döşeme (teras, rampa, eğimli zemin)
       if (o.color) h += `<div class="row"><button class="btn sm" data-act="slabcolreset">${L('↺ Varsayılan renk', '↺ Default colour')}</button></div>`;
     } else h += fld(L('Tür', 'Type'), 'void', 'type', o.type || 'stair', { sel: Object.fromEntries(Object.entries(VOID_TYPES).map(([id, [tr, en]]) => [id, L(tr, en)])) })
@@ -9102,7 +9102,7 @@ function slopePanelHtml(o) {
 function projectPanel() {
   const f = F(); let h = `<h3>⚙️ ${L('Proje', 'Project')}</h3>`;
   h += `<label class="f"><span>${L('Grup', 'Group')}</span><input type="text" data-k="proj" data-p="group" list="grpList" maxlength="${GROUP_MAX}" value="${esc(projGroup(P))}" placeholder="${L('ör. Ahsen’in projeleri', 'e.g. Ahsen’s projects')}"></label><datalist id="grpList">${knownGroups().map(g => `<option value="${esc(g)}">`).join('')}</datalist>`;
-  h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: 100, max: 600 });
+  h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: FLOOR_H_MIN, max: FLOOR_H_MAX });
   h += `<div class="row"><button class="btn sm" data-act="wallhall" title="${L('Tüm katlardaki mevcut duvarları bu yüksekliğe getirir; kat bazlı yükseklikler sıfırlanır', 'Sets every existing wall on every floor to this height; per-floor heights are cleared')}">⬆ ${L('Mevcut tüm duvarlara uygula', 'Apply to all existing walls')}</button></div>`;
   h += layersPanelHtml();
   h += hiddenPanelHtml(false);
@@ -9297,7 +9297,7 @@ function applyProp(t, final) {
       else if (p === 'rw') { const w0 = rb.x1 - rb.x0 || 1, sc = Math.max(20, v) / w0; o.pts = o.pts.map(q => ({ x: Math.round(rb.x0 + (q.x - rb.x0) * sc), y: q.y })); xfHp(o, o, q => ({ x: rb.x0 + (q.x - rb.x0) * sc, y: q.y })); }
       else if (p === 'rd') { const h0 = rb.y1 - rb.y0 || 1, sc = Math.max(20, v) / h0; o.pts = o.pts.map(q => ({ x: q.x, y: Math.round(rb.y0 + (q.y - rb.y0) * sc) })); xfHp(o, o, q => ({ x: q.x, y: rb.y0 + (q.y - rb.y0) * sc })); }
     } else if (k === 'slab' && p === 't') { o.t = clamp(v, 5, 100); }
-    else if (k === 'slab' && p === 'off') { o.off = clamp(v, -200, 200); }
+    else if (k === 'slab' && p === 'off') { o.off = clamp(v, -SLAB_OFF_MAX, SLAB_OFF_MAX); }
     else if (k === 'wall' && p === 'mul') { if (!final) continue; const m = clamp(Math.round(v), 20, 1000); delete o.mulN; if (m === MUL_DEF) delete o.mul; else o.mul = m; }
     else if (k === 'wall' && p === 'mulN') { if (!final) continue; o.mulN = clamp(Math.round(v), 0, 200); }
     else if (k === 'wall' && p === 'wt') { setWallType(o, v); }

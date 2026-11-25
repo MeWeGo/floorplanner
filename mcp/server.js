@@ -2033,13 +2033,13 @@ function ifcToProject(text, opts = {}) {
   eachPt(p => { p.x = r1(p.x - sx); p.y = r1(p.y - sy); });
   const hs = []; for (const { f } of floors) for (const w of f.walls) if (w.wt === 'solid') hs.push(w.h);
   hs.sort((p, q) => p - q);
-  const wallH = Math.max(100, Math.min(800, hs.length ? hs[hs.length >> 1] : 270));
+  const wallH = Math.max(100, Math.min(3000, hs.length ? hs[hs.length >> 1] : 270));
   const ts = new Map(); for (const { f } of floors) for (const w of f.walls) if (w.wt === 'solid') ts.set(w.t, (ts.get(w.t) || 0) + 1);
   const wallT = [...ts].sort((p, q) => q[1] - p[1])[0]?.[0] || 20;
   floors.forEach(({ b, f }, k) => {
     const nx = floors[k + 1]; if (!b.s || !nx || !nx.b.s) return;
     const fh = Math.round(nx.b.s.z - b.s.z - 20);
-    if (fh >= 100 && fh <= 800 && fh !== wallH) f.wallH = fh;
+    if (fh >= 100 && fh <= 3000 && fh !== wallH) f.wallH = fh;
   });
   // bodrum katlı model: zemin altındaki kat varsa her kat gerçek kotunu alır (Floor.lvl, ±0 = zemin); yoksa eskisi gibi dizilir
   if (floors.some(({ b }) => b.s && b.s.z < -50)) floors.forEach(({ b, f }) => { if (b.s && Number.isFinite(b.s.z)) f.lvl = Math.round(b.s.z); });
@@ -3532,7 +3532,7 @@ function mkSlab(f, a) {
     floor: finishOk(a.floorPattern) ? a.floorPattern : 'concrete',
     color: a.color || null,
     t: Math.min(100, Math.max(5, +a.thickness || 20)),
-    off: Math.min(200, Math.max(-200, +a.offset || 0)),
+    off: Math.min(3000, Math.max(-3000, +a.offset || 0)),
     pts,
   };
   f.slabs.push(s);
@@ -3915,14 +3915,14 @@ tool('add_floor',
   { name: { type: 'string', description: 'Floor name, e.g. "1. Kat" / "First Floor" / "Bodrum Kat".' },
     basement: { type: 'boolean', description: 'true = insert it as the new lowest floor, one storey below the current lowest (which keeps its level, e.g. the ground floor stays at ±0). Every existing floorIndex shifts up by one.' },
     level: { type: 'number', description: 'Optional floor level in cm (±0 = ground, -300 = 3 m underground). Overrides the automatic stacking for this floor.' },
-    wallH: { type: 'number', description: 'Optional wall height of this floor in cm, 100–800 (default: project wallH). New walls on it get this height and the floors above stack on it in 3D.' },
+    wallH: { type: 'number', description: 'Optional wall height of this floor in cm, 100–3000 (default: project wallH). New walls on it get this height and the floors above stack on it in 3D.' },
     noSlab: { type: 'boolean', description: 'true = no automatic floor slab under this floor in 3D and sections (free slabs and room floors still show). Default false.' } },
   [],
   a => {
     const f = newFloor(a.name || ('Floor ' + P.floors.length));
     if (a.wallH != null) {
       const h = num(a.wallH, undefined, 'wallH');
-      if (h < 100 || h > 800) throw new Error('wallH must be between 100 and 800 cm (got ' + h + ')');
+      if (h < 100 || h > 3000) throw new Error('wallH must be between 100 and 3000 cm (got ' + h + ')');
       f.wallH = h;
     }
     if (a.noSlab === true) f.noSlab = true;

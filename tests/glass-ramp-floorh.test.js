@@ -223,3 +223,20 @@ test('(6) MCP server CATALOG has ramp, FLOORPATS has glass, and CAT_DEFS matches
   assert.strictEqual(appRamp[5], mcpRamp.h, `ramp rise/height must match (app: ${appRamp[5]}, mcp: ${mcpRamp.h})`);
   assert.strictEqual(appRamp[7], mcpRamp.k, `ramp shape kind must match (app: ${appRamp[7]}, mcp: ${mcpRamp.k})`);
 });
+
+test('(7) floor height and slab level offset allow tall storeys (>8 m) and deep offsets (>±2 m)', async t => {
+  assert.match(src, /FLOOR_H_MAX\s*=\s*3000/, 'FLOOR_H_MAX raised to 3000 cm (30 m)');
+  assert.match(src, /SLAB_OFF_MAX\s*=\s*3000/, 'SLAB_OFF_MAX raised to 3000 cm (±30 m)');
+  assert.match(src, /'slab',\s*'off'[^\n]*min:\s*-SLAB_OFF_MAX,\s*max:\s*SLAB_OFF_MAX/, 'slab offset input uses ±SLAB_OFF_MAX');
+  assert.match(src, /k === 'slab' && p === 'off'[^\n]*clamp\(v,\s*-SLAB_OFF_MAX,\s*SLAB_OFF_MAX\)/, 'applyProp clamps slab.off to ±SLAB_OFF_MAX');
+  const { mcpClient } = require('./helpers/repo');
+  const c = mcpClient();
+  t.after(() => c.stop());
+  await c.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'limits-test', version: '1' } });
+  assert.ok(!(await c.tool('new_project', { name: 'Tall' })).err);
+  assert.ok(!(await c.tool('add_floor', { name: 'Hall', wallH: 1200 })).err, 'add_floor accepts 12 m wallH');
+  assert.ok(!(await c.tool('add_slab', { floorIndex: 1, pts: [{ x: 0, y: 0 }, { x: 400, y: 0 }, { x: 400, y: 400 }, { x: 0, y: 400 }], offset: -650 })).err, 'add_slab accepts -6.5 m offset');
+  const proj = JSON.parse((await c.tool('get_project')).text);
+  assert.strictEqual(proj.floors[1].wallH, 1200);
+  assert.strictEqual(proj.floors[1].slabs[0].off, -650);
+});
