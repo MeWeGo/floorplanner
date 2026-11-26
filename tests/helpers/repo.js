@@ -201,10 +201,11 @@ function markerBlock(src, tag) {
 /**
  * Minimal JSON-RPC client over mcp/server.js stdio.
  * `call(method, params)` resolves with the raw message; `tool(name, args)` with `{ err, text }`.
+ * `env` adds environment variables for the server process (e.g. FP_MCP_ROOTS).
  */
-function mcpClient() {
+function mcpClient(env) {
   const { spawn } = require('child_process');
-  const proc = spawn(process.execPath, [path.join(ROOT, 'mcp', 'server.js')], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+  const proc = spawn(process.execPath, [path.join(ROOT, 'mcp', 'server.js')], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'], env: env ? { ...process.env, ...env } : process.env });
   const pending = new Map();
   let nextId = 1, buf = '';
   proc.stdout.setEncoding('utf8');

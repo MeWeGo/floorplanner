@@ -421,6 +421,8 @@ test('Phase 3: CollabRoom optional persistent storage survives empty room reload
     headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
   }), env);
   const { room, sockets, ctx, store } = roomFor('room_persist1');
+  const editKey = JSON.parse(sockets[0].sent[0]).editKey;
+  assert.ok(editKey && editKey.length >= 16, 'the first editor receives the edit key');
   const p0 = baseProject();
   await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'seed', state: p0, clientSeq: 1 }));
   await room.webSocketMessage(sockets[0], JSON.stringify({ type: 'set_persist', persist: true }));
@@ -433,11 +435,12 @@ test('Phase 3: CollabRoom optional persistent storage survives empty room reload
 
   // Fresh Durable Object instance reloads persisted room from ctx.storage on next connect.
   const reloaded = new CollabRoom(ctx, env);
-  await reloaded.fetch(new Request('https://x.example/collab/room_persist1', {
+  await reloaded.fetch(new Request('https://x.example/collab/room_persist1?k=' + editKey, {
     headers: { Upgrade: 'websocket', Origin: 'https://mewego.github.io' },
   }));
   const wsReload = ctx.getWebSockets().at(-1);
   const wReload = JSON.parse(wsReload.sent[0]);
+  assert.strictEqual(wReload.role, 'editor', 'the persisted edit key survives a reload');
   assert.strictEqual(wReload.persist, true);
   assert.strictEqual(wReload.rev, 1);
   assert.strictEqual(wReload.state.name, 'Test Plan');

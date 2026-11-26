@@ -28,6 +28,7 @@ IndexedDB lives inside a browser **origin**, so a Node process cannot write it d
 - Bind address: `127.0.0.1` only (dev tool — do not expose it).
 - Port: `8787` (override with `FP_BRIDGE_PORT`); MCP tools accept a `url` argument or `FP_BRIDGE_URL`.
 - Storage note: your projects stay in the origin you already use (Pages or `file://`) — the bridge only exchanges JSON with the page.
+- Origins: only the deployed app, the bridge's own page and `FP_ORIGINS` may use the bridge; every other website gets **403** (it cannot read your plan, overwrite it or queue requests for the agent). A `file://` copy sends `Origin: null`, which sandboxed iframes on any site also send, so it is refused unless you start the bridge with `FP_ALLOW_FILE=1` — or simply open <http://127.0.0.1:8787/>.
 - Chrome/Edge may ask once for **local network** permission when a `https://` page talks to `127.0.0.1`. Allow it; only a local server can answer.
 - The page retries every 10 s while open, so a tab that was already open picks up a bridge started later.
 
@@ -58,7 +59,8 @@ Now `POST /__requests` also prompts the agent's own session, so typing a request
 | Env | Meaning |
 | :-- | :-- |
 | `FP_WAKE_SESSION` | Pin the OpenCode session id to prompt. Default: the newest session whose `location.directory` is this repo, re-checked on every wake. |
-| `FP_WAKE_ORIGINS` | Extra browser origins allowed to wake (comma list). Defaults already include `https://mewego.github.io` and the bridge's own origin. |
+| `FP_ORIGINS` / `FP_WAKE_ORIGINS` | Extra browser origins allowed to use the bridge (and to wake), comma list. Defaults already include `https://mewego.github.io` and the bridge's own origin. |
+| `FP_ALLOW_FILE=1` | Also accept a `file://` copy of the app (`Origin: null`). Off by default, because sandboxed iframes on any website send the same origin. |
 | `FP_WAKE_CMD` | Use another agent command instead of OpenCode; the request text is written to its **stdin** and it runs detached in the repo. |
 | `FP_OPENCODE_CLI` | Explicit path to `opencode-cli` / `opencode` if it is not found automatically. |
 
@@ -88,7 +90,7 @@ load_project                         │
 
 | | Live editing |
 | :-- | :-- |
-| Where | any open app tab (GitHub Pages, `file://`, local) |
+| Where | an open app tab on GitHub Pages or the bridge's own page (`file://` with `FP_ALLOW_FILE=1`) |
 | How | the agent runs `mcp/bridge.js`; the page connects to it by itself and calls `push_to_browser` / `pull_from_browser` |
 | Needs | Node.js + the project folder on the agent's machine |
 | Works on GitHub Pages | ✅ — the page stays on Pages, nothing is installed in the browser |
@@ -102,7 +104,7 @@ The agent runs `node mcp/bridge.js` and the app tab connects automatically; afte
 | Tool | What it does |
 | :-- | :-- |
 | `new_project` | Start an empty project (name, grid, wall thickness/height) |
-| `load_project` / `save_project` | Read / write the app's `.json` project files |
+| `load_project` / `save_project` | Read / write the app's `.json` project files (paths must stay inside the server's working directory or `FP_MCP_ROOTS`; the same applies to `import_ifc`, `import_dxf` and `add_texture`) |
 | `create_texture` | Make a seamless floor texture with the pattern generator (tile, brick, plank, basket, hex, checker, terrazzo, stripe; colours, unit size, joint, variation, seed) and optionally apply it (`applyTo`: room / slab ids, `floorSlab:<i>`) |
 | `add_texture` | Add an image file or `data:image/…` URL (≤ 4 MB) as a texture with its real-world repeat size, optionally applied |
 | `list_textures` | Custom textures, their repeat size and where they are used |

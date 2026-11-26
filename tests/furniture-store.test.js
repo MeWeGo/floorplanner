@@ -218,7 +218,7 @@ test('writes from another origin and invalid tokens are refused; bad bodies give
   assert.strictEqual(opt.status, 204);
 });
 
-test('only the author edits or deletes; 3 reports hide an item until an admin restores it', { skip: sqlSkip }, async () => {
+test('only the author edits or deletes; 5 reports hide an item until an admin restores it', { skip: sqlSkip }, async () => {
   const w = loadWorker([KP.jwk], { STORE_ADMINS: '9000' });
   const ada = await idToken(KP), bob = await idToken(KP, { sub: '2002', given_name: 'Bob' });
   const id = (await w.call('POST', '/store/items', { token: ada, body: ITEM })).json.item.id;
@@ -229,10 +229,10 @@ test('only the author edits or deletes; 3 reports hide an item until an admin re
   assert.strictEqual(upd.json.item.name, 'Oak desk v2');
   assert.strictEqual((await w.call('POST', `/store/items/${id}/report`, { token: ada })).status, 400, 'no self-report');
 
-  for (const sub of ['2002', '2002', '3003']) assert.strictEqual((await w.call('POST', `/store/items/${id}/report`, { token: await idToken(KP, { sub }) })).status, 200);
-  assert.strictEqual((await w.call('GET', '/store/items')).json.items.length, 1, 'two distinct reports: still listed');
-  await w.call('POST', `/store/items/${id}/report`, { token: await idToken(KP, { sub: '4004' }) });
-  assert.strictEqual((await w.call('GET', '/store/items')).json.items.length, 0, 'hidden after 3 reports');
+  for (const sub of ['2002', '2002', '3003', '4004', '5005']) assert.strictEqual((await w.call('POST', `/store/items/${id}/report`, { token: await idToken(KP, { sub }) })).status, 200);
+  assert.strictEqual((await w.call('GET', '/store/items')).json.items.length, 1, 'four distinct reports: still listed');
+  await w.call('POST', `/store/items/${id}/report`, { token: await idToken(KP, { sub: '6006' }) });
+  assert.strictEqual((await w.call('GET', '/store/items')).json.items.length, 0, 'hidden after 5 reports');
   assert.strictEqual((await w.call('GET', '/store/items/' + id)).status, 404);
   const own = await w.call('GET', '/store/mine', { token: ada });
   assert.strictEqual(own.json.items[0].hidden, true, 'the author still sees it, marked hidden');
@@ -248,6 +248,29 @@ test('only the author edits or deletes; 3 reports hide an item until an admin re
   assert.strictEqual((await w.call('POST', '/store/items', { token: ada, body: ITEM })).status, 403);
   assert.strictEqual((await w.call('DELETE', '/store/items/' + id, { token: admin })).status, 200, 'admin deletes');
   assert.strictEqual((await w.call('GET', '/store/mine', { token: ada })).json.items.length, 0);
+});
+
+test('use counts resist pumping and reports cannot hide examples or popular items cheaply', { skip: sqlSkip }, async () => {
+  const w = loadWorker([KP.jwk], {}, SEED.slice(0, 1));
+  const ada = await idToken(KP);
+  const id = (await w.call('POST', '/store/items', { token: ada, body: ITEM })).json.item.id;
+  const uses = async () => (await w.call('GET', '/store/items/' + id)).json.item.uses;
+  // the author's own placements never count; one IP counts once a day, also after a restart
+  await w.call('POST', `/store/items/${id}/use`, { token: ada, ip: '9.9.9.9' });
+  assert.strictEqual(await uses(), 0, 'own uses are not counted');
+  for (let i = 0; i < 3; i++) await w.call('POST', `/store/items/${id}/use`, { ip: '7.7.7.7' });
+  assert.strictEqual(await uses(), 1, 'one use per IP per day');
+  const fresh = new w.FurnStore(w.env.STORE.get().ctx, w.env); // a new instance on the same storage (hibernation / restart)
+  await fresh.fetch(new Request('https://store/store/items/' + id + '/use', { method: 'POST', headers: { 'x-fp-ip': '7.7.7.7' } }));
+  assert.strictEqual(await uses(), 1, 'the dedupe survives a restart');
+  await w.call('POST', `/store/items/${id}/use`, { ip: '' });
+  assert.strictEqual(await uses(), 1, 'no IP and no account: not counted');
+
+  // the built-in example is never hidden by reports
+  const ex = (await w.call('GET', '/store/items')).json.items.find(it => it.id !== id);
+  assert.ok(ex, 'the seeded example is listed');
+  for (let i = 0; i < 8; i++) await w.call('POST', `/store/items/${ex.id}/report`, { token: await idToken(KP, { sub: 'r' + i }) });
+  assert.strictEqual((await w.call('GET', '/store/items/' + ex.id)).status, 200, 'examples stay listed whatever the report count');
 });
 
 test('writes need sign-in before any body is read; oversized bodies are refused', { skip: sqlSkip }, async () => {
