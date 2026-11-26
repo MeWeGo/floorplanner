@@ -11698,7 +11698,9 @@ function aiSyncLiveRow() {
     ? L('Bağlı ✓ — ajanınız planı doğrudan düzenleyebilir (değişiklikler otomatik kaydedilir).',
       'Connected ✓ — your agent can edit the plan directly (changes save automatically).')
     : L('Bağlı değil. Ajanınıza aşağıdaki istemi verin; köprüyü başlattığında bu sayfa kendiliğinden bağlanır.',
-      'Not connected. Give your agent the prompt below; once it starts the bridge this page connects by itself.');
+      'Not connected. Give your agent the prompt below; once it starts the bridge this page connects by itself.')
+      + (location.protocol === 'file:' ? ' ' + L('Bu sayfa file:// üzerinden açık: köprü güvenlik için bunu reddeder. Köprü çalışırken http://127.0.0.1:8787/ adresini açın (ya da köprüyü FP_ALLOW_FILE=1 ile başlatın).',
+        'This page is opened from file://, which the bridge refuses for safety. With the bridge running, open http://127.0.0.1:8787/ instead (or start the bridge with FP_ALLOW_FILE=1).') : '');
   const btn = document.getElementById('aiLiveRetry');
   if (btn) btn.style.display = brgConnected ? 'none' : '';
 }
@@ -12487,10 +12489,10 @@ function freshIdIfTaken(o) {
 }
 // #fp=… (plan linkte), #fpd=… (Drive dosyası) ya da #room=… (canlı oturum) ile açılış; adres çubuğu temizlenir ki yenileme yeniden açmasın
 async function openShareHash() {
-  const rm = /^#room=([A-Za-z0-9_-]{6,64})(?:&v=([A-Za-z0-9_-]{4,64}))?$/.exec(location.hash || '');
+  const rm = /^#room=([A-Za-z0-9_-]{6,64})(?:&v=([A-Za-z0-9_-]{4,64}))?(?:&k=([A-Za-z0-9_-]{8,64}))?$/.exec(location.hash || '');
   if (rm) {
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
-    if (typeof collabJoin === 'function') collabJoin(rm[1], { viewToken: rm[2] || '' });
+    if (typeof collabJoin === 'function') collabJoin(rm[1], { viewToken: rm[2] || '', editKey: rm[3] || '' });
     return;
   }
   const m = /^#(fp|fpd)=(.+)$/.exec(location.hash || '');
@@ -13173,7 +13175,7 @@ function presenceBoot() {
 /* ---------- Canlı birlikte düzenleme (Cloudflare Durable Object) ---------- */
 const COLLAB_MAX_ASSET = 400 * 1024;
 const collab = {
-  ws: null, url: '', room: '', viewToken: '', role: 'editor', persist: false, isHost: false, connectErrShown: false, peerId: '', color: '#2563eb',
+  ws: null, url: '', room: '', viewToken: '', editKey: '', role: 'editor', persist: false, isHost: false, connectErrShown: false, peerId: '', color: '#2563eb',
   name: (() => { try { return localStorage.getItem('fp_collab_name') || ''; } catch (e) { return ''; } })(),
   rev: 0, peers: new Map(), undoStack: [], redoStack: [], lastSnap: null,
   applying: false, ping: null, retry: null, delay: 1500, closed: false, reconnecting: false,
@@ -13255,7 +13257,7 @@ function collabNewRoomId() {
   return out;
 }
 
-function collabEndpoint(roomId, base = PRESENCE_URL, loc = location, viewToken = '') {
+function collabEndpoint(roomId, base = PRESENCE_URL, loc = location, viewToken = '', editKey = '') {
   if (!roomId || !/^[A-Za-z0-9_-]{6,64}$/.test(roomId)) return '';
   let q = '';
   try { q = new URLSearchParams(loc.search || '').get('collab') || ''; } catch (e) { }
@@ -13280,14 +13282,16 @@ function collabEndpoint(roomId, base = PRESENCE_URL, loc = location, viewToken =
     if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return '';
     u.pathname = u.pathname.replace(/\/ws\/?$/, '') .replace(/\/+$/, '') + '/collab/' + roomId;
     if (viewToken) u.searchParams.set('v', viewToken);
+    else if (editKey) u.searchParams.set('k', editKey);
     return u.toString();
   } catch (e) { return ''; }
 }
 
-function collabRoomUrl(roomId = collab.room, viewToken = '') {
+// edit link = #room=ID&k=EDITKEY (the key grants edit rights); view link = #room=ID&v=VIEWTOKEN
+function collabRoomUrl(roomId = collab.room, viewToken = '', editKey = '') {
   if (!roomId) return '';
   const base = location.protocol === 'file:' ? APP_URL : (location.origin + location.pathname + (location.search || ''));
-  return base + '#room=' + encodeURIComponent(roomId) + (viewToken ? '&v=' + encodeURIComponent(viewToken) : '');
+  return base + '#room=' + encodeURIComponent(roomId) + (viewToken ? '&v=' + encodeURIComponent(viewToken) : editKey ? '&k=' + encodeURIComponent(editKey) : '');
 }
 
 function collabExportState(proj = P) {
@@ -13724,7 +13728,8 @@ function collabJoin(roomId, opts = {}) {
   const id = String(roomId || '').trim();
   if (!/^[A-Za-z0-9_-]{6,64}$/.test(id)) { toast(L('Geçersiz oda kodu', 'Invalid room ID')); return; }
   const vt = opts.viewToken || '';
-  const url = collabEndpoint(id, PRESENCE_URL, location, vt);
+  const ek = vt ? '' : (opts.editKey || (collab.room === id ? collab.editKey : '') || '');
+  const url = collabEndpoint(id, PRESENCE_URL, location, vt, ek);
   if (!url || typeof WebSocket !== 'function') {
     toast(L('Canlı düzenleme sunucusu bu adreste etkin değil', 'Live collaboration server is not configured for this address'));
     return;
@@ -13737,6 +13742,7 @@ function collabJoin(roomId, opts = {}) {
   collab.url = url;
   collab.room = id;
   collab.viewToken = vt;
+  collab.editKey = ek;
   collab.role = vt ? 'viewer' : 'editor';
   collab.status = 'busy';
   collab.peers.clear();
@@ -13750,6 +13756,7 @@ function collabJoin(roomId, opts = {}) {
 }
 
 function collabScheduleReconnect(url) {
+  url = collab.url || url; // the welcome may have upgraded the url with the room's edit key
   if (collab.closed || !collab.room || !url) return;
   clearTimeout(collab.retry);
   const wait = Math.round(collab.delay * (1 + Math.random() * 0.25));
@@ -13787,6 +13794,11 @@ function collabConnect(url, opts = {}) {
       collab.role = msg.role || 'editor';
       collab.persist = !!msg.persist;
       if (msg.viewToken) collab.viewToken = msg.viewToken;
+      if (msg.editKey && msg.editKey !== collab.editKey) {
+        collab.editKey = msg.editKey; // reconnects must present the key, or the room would make us view-only
+        collab.url = collabEndpoint(collab.room, PRESENCE_URL, location, '', collab.editKey) || collab.url;
+      }
+      if (msg.needKey) toast(L('Bu link düzenleme anahtarı içermiyor: salt okunur katıldınız. Düzenlemek için güncel düzenleme linkini isteyin.', 'This link has no edit key, so you joined view-only. Ask for the current edit link to make changes.'));
       const wasReconnecting = collab.reconnecting;
       collab.reconnecting = false;
       collab.rev = msg.rev || 0;
@@ -13950,7 +13962,7 @@ function collabLeave(silent = false) {
   const ws = collab.ws; collab.ws = null;
   if (ws) { try { ws.close(1000); } catch (e) { } }
   const was = !!collab.room;
-  collab.room = ''; collab.url = ''; collab.viewToken = ''; collab.role = 'editor'; collab.persist = false; collab.isHost = false; collab.connectErrShown = false; collab.peerId = '';
+  collab.room = ''; collab.url = ''; collab.viewToken = ''; collab.editKey = ''; collab.role = 'editor'; collab.persist = false; collab.isHost = false; collab.connectErrShown = false; collab.peerId = '';
   collab.rev = 0; collab.status = ''; collab.reconnecting = false; collab.followId = ''; collab.followApplying = false; collab.peers.clear();
   collab.remoteQueue = []; collab.pendingPatches = []; collab.sentTexIds.clear(); collab.lastBgKey = '';
   collab.undoStack = []; collab.redoStack = []; collab.lastSnap = null; collab.walkLast = null;
@@ -13985,13 +13997,13 @@ function collabRefreshPeersDom() {
 function collabParseJoinInput(val) {
   const s = String(val || '').trim();
   if (!s) return null;
-  if (/^[A-Za-z0-9_-]{6,64}$/.test(s)) return { roomId: s, viewToken: '' };
-  const m = /#?room=([A-Za-z0-9_-]{6,64})(?:&v=([A-Za-z0-9_-]{4,64}))?/.exec(s);
-  if (m) return { roomId: m[1], viewToken: m[2] || '' };
+  if (/^[A-Za-z0-9_-]{6,64}$/.test(s)) return { roomId: s, viewToken: '', editKey: '' };
+  const m = /#?room=([A-Za-z0-9_-]{6,64})(?:&v=([A-Za-z0-9_-]{4,64}))?(?:&k=([A-Za-z0-9_-]{8,64}))?/.exec(s);
+  if (m) return { roomId: m[1], viewToken: m[2] || '', editKey: m[3] || '' };
   try {
     const u = new URL(s);
     const qr = u.searchParams.get('room');
-    if (qr && /^[A-Za-z0-9_-]{6,64}$/.test(qr)) return { roomId: qr, viewToken: u.searchParams.get('v') || '' };
+    if (qr && /^[A-Za-z0-9_-]{6,64}$/.test(qr)) return { roomId: qr, viewToken: u.searchParams.get('v') || '', editKey: u.searchParams.get('k') || '' };
   } catch (e) { }
   return null;
 }
@@ -14006,7 +14018,7 @@ function collabModal() {
       <div class="row"><input id="collabJoinInp" class="collab-name" placeholder="${L('Oda linki veya kodu yapıştır…', 'Paste room link or ID…')}"><button class="btn" data-cl="join">${L('Katıl', 'Join')}</button></div>`, 'collab');
     return;
   }
-  const url = collabRoomUrl(collab.room);
+  const url = collabRoomUrl(collab.room, '', collab.editKey);
   const viewUrl = collab.role === 'editor' && collab.viewToken ? collabRoomUrl(collab.room, collab.viewToken) : '';
   const qr = url && url.length <= SHARE_QR_MAX ? qrSvg(url, 'M', 4) : '';
   const stTxt = collab.status === 'warn' ? L('⚠ Bağlantı kesildi — yeniden bağlanılıyor', '⚠ Disconnected — reconnecting')
@@ -14064,7 +14076,7 @@ $('#modal').addEventListener('click', e => {
   else if (a === 'join') {
     const parsed = collabParseJoinInput($('#collabJoinInp')?.value);
     if (!parsed) { toast(L('Geçerli bir oda linki veya kodu girin', 'Enter a valid room link or ID')); return; }
-    collabJoin(parsed.roomId, { viewToken: parsed.viewToken });
+    collabJoin(parsed.roomId, { viewToken: parsed.viewToken, editKey: parsed.editKey });
   } else if (a === 'copy') {
     copyText($('#clUrl').value).then(ok => toast(ok ? L('Oda linki kopyalandı', 'Room link copied') : L('Kopyalanamadı', 'Could not copy')));
   } else if (a === 'copyview') {
@@ -14078,13 +14090,14 @@ $('#modal').addEventListener('click', e => {
 
 function collabBoot() {
   collabRenderUI();
-  let qr = '', qv = '';
+  let qr = '', qv = '', qk = '';
   try {
     const sp = new URLSearchParams(location.search || '');
     qr = sp.get('room') || '';
     qv = sp.get('v') || '';
+    qk = sp.get('k') || '';
   } catch (e) { }
-  if (qr && /^[A-Za-z0-9_-]{6,64}$/.test(qr)) collabJoin(qr, { viewToken: qv });
+  if (qr && /^[A-Za-z0-9_-]{6,64}$/.test(qr)) collabJoin(qr, { viewToken: qv, editKey: qk });
   window.addEventListener('online', () => {
     if (collab.room && !collab.closed && !collab.ws && collab.url) { collab.delay = 1500; collabConnect(collab.url); }
   });

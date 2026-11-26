@@ -185,6 +185,26 @@ const COLLAB_COLORS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#
 const COLLAB_ARR_KEYS = ['walls', 'ops', 'furn', 'rooms', 'slabs', 'voids', 'sections', 'axes', 'dims', 'texts', 'sketches', 'drafts'];
 const COLLAB_MAX_MSG = 2 * 1024 * 1024;
 const COLLAB_MAX_ASSET = 400 * 1024;
+const COLLAB_ABC = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+/** Random [A-Za-z0-9] token (room view token, edit key). */
+function collabToken(n) {
+  let out = '';
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const buf = new Uint8Array(n);
+    crypto.getRandomValues(buf);
+    for (let i = 0; i < n; i++) out += COLLAB_ABC[buf[i] % COLLAB_ABC.length];
+  } else {
+    while (out.length < n) out += COLLAB_ABC[Math.floor(Math.random() * COLLAB_ABC.length)];
+  }
+  return out;
+}
+/** Length-independent string compare for secrets. */
+function collabSafeEq(a, b) {
+  a = String(a || ''); b = String(b || '');
+  let d = a.length ^ b.length;
+  for (let i = 0; i < b.length; i++) d |= (a.charCodeAt(i) || 0) ^ b.charCodeAt(i);
+  return d === 0 && b.length > 0;
+}
 
 function collabBlankFloor(id) {
   return {
@@ -271,6 +291,7 @@ export class CollabRoom extends DurableObject {
     this.seq = 0;
     this.assets = { bg: null, tex: new Map() };
     this.viewToken = '';
+    this.editKey = '';
     this.persist = false;
     this.loaded = false;
   }
@@ -286,6 +307,7 @@ export class CollabRoom extends DurableObject {
         this.state = saved.state || null;
         this.rev = typeof saved.rev === 'number' ? saved.rev : 0;
         this.viewToken = typeof saved.viewToken === 'string' ? saved.viewToken : '';
+        this.editKey = typeof saved.editKey === 'string' ? saved.editKey : '';
         this.persist = !!saved.persist;
         this.assets = {
           bg: saved.bg || null,
@@ -297,17 +319,16 @@ export class CollabRoom extends DurableObject {
 
   ensureViewToken() {
     if (this.viewToken) return this.viewToken;
-    const abc = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let out = '';
-    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-      const buf = new Uint8Array(12);
-      crypto.getRandomValues(buf);
-      for (let i = 0; i < buf.length; i++) out += abc[buf[i] % abc.length];
-    } else {
-      while (out.length < 12) out += abc[Math.floor(Math.random() * abc.length)];
-    }
-    this.viewToken = out;
-    return out;
+    this.viewToken = collabToken(12);
+    return this.viewToken;
+  }
+
+  /** Secret carried only by edit links (#room=ID&k=KEY). The room id is part of
+   *  every view link too, so the id alone must never grant edit rights. */
+  ensureEditKey() {
+    if (this.editKey) return this.editKey;
+    this.editKey = collabToken(20);
+    return this.editKey;
   }
 
   async saveRoom() {
@@ -318,6 +339,7 @@ export class CollabRoom extends DurableObject {
         state: this.state,
         rev: this.rev,
         viewToken: this.viewToken,
+        editKey: this.editKey,
         persist: !!this.persist,
         bg: this.assets.bg,
         tex: [...this.assets.tex.entries()],
@@ -391,12 +413,19 @@ export class CollabRoom extends DurableObject {
       return new Response('Expected WebSocket', { status: 426 });
     }
     await this.ensureLoaded();
-    const hadToken = !!this.viewToken;
-    this.ensureViewToken();
-    if (!hadToken) await this.saveRoom();
     const url = new URL(request.url);
     const qv = url.searchParams.get('v') || '';
-    const role = qv || url.searchParams.get('role') === 'viewer' ? 'viewer' : 'editor';
+    const qk = url.searchParams.get('k') || '';
+    const hadToken = !!this.viewToken, hadKey = !!this.editKey;
+    this.ensureViewToken();
+    // Edit rights need the room's edit key. A room without one yet (brand new, or
+    // created before edit keys existed) makes its first non-viewer connection the
+    // editor and hands it the key; any later connection without it is view-only.
+    let role;
+    if (qv || url.searchParams.get('role') === 'viewer') role = 'viewer';
+    else if (!hadKey) { this.ensureEditKey(); role = 'editor'; }
+    else role = collabSafeEq(qk, this.editKey) ? 'editor' : 'viewer';
+    if (!hadToken || !hadKey && this.editKey) await this.saveRoom();
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.ctx.acceptWebSocket(server);
@@ -426,7 +455,8 @@ export class CollabRoom extends DurableObject {
       hasBg: !!this.assets.bg,
       peers: this.publicPeers(server),
     };
-    if (role === 'editor') welcome.viewToken = this.viewToken;
+    if (role === 'editor') { welcome.viewToken = this.viewToken; welcome.editKey = this.editKey; }
+    else if (!qv) welcome.needKey = true; // no / wrong edit key: joined view-only
     this.sendTo(server, welcome);
     this.broadcast({ type: 'peer_join', peer: this.publicPeer(peer) }, server);
     if (!this.state) {
@@ -608,6 +638,7 @@ export class CollabRoom extends DurableObject {
       this.assets.bg = null;
       this.assets.tex.clear();
       this.viewToken = '';
+      this.editKey = '';
       const st = this.ctx && this.ctx.storage;
       if (st && typeof st.delete === 'function') {
         try { await st.delete('room'); } catch (_) { }
@@ -733,7 +764,9 @@ function storeFold(s) { return String(s == null ? '' : s).toLowerCase().replace(
 /* STORE-PRESET:END */
 
 const STORE_SEED_SUB = 'floorplanner-examples';
-const STORE = { page: 40, preset: 65536, name: 60, desc: 300, tags: 5, tag: 24, author: 40, perDay: 10, perUser: 200, hideAt: 3, cats: 12 };
+/** Reports needed to hide an item automatically: grows with how often it is used. */
+const storeHideAt = uses => Math.max(STORE.hideAt, Math.ceil((+uses || 0) * STORE.hideShare));
+const STORE = { page: 40, preset: 65536, name: 60, desc: 300, tags: 5, tag: 24, author: 40, perDay: 10, perUser: 200, hideAt: 5, hideShare: 0.05, usesPerDay: 30, cats: 12 };
 
 /** Strip characters that could break out of an HTML attribute (the app interpolates values unescaped). */
 const storeStr = (v, max) => String(v == null ? '' : v).replace(/["<>`]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -818,7 +851,6 @@ export class FurnStore extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    this.uses = new Map(); // ip|id → last use time (memory only)
     this.sql.exec(`CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY, sub TEXT NOT NULL, name TEXT NOT NULL, descr TEXT, cat INTEGER, tags TEXT, preset TEXT NOT NULL,
       thumb TEXT NOT NULL, w REAL, d REAL, created INTEGER, updated INTEGER, uses INTEGER DEFAULT 0, reports INTEGER DEFAULT 0, hidden INTEGER DEFAULT 0, search TEXT)`);
     this.sql.exec('CREATE INDEX IF NOT EXISTS items_upd ON items (hidden, updated)');
@@ -826,6 +858,9 @@ export class FurnStore extends DurableObject {
     this.sql.exec('CREATE TABLE IF NOT EXISTS users (sub TEXT PRIMARY KEY, name TEXT, banned INTEGER DEFAULT 0)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS pubs (sub TEXT, t INTEGER)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS seeded (id TEXT PRIMARY KEY)');
+    // one counted use per item per source (account, else IP) per day; survives hibernation
+    this.sql.exec('CREATE TABLE IF NOT EXISTS uses (item TEXT, who TEXT, t INTEGER, PRIMARY KEY (item, who))');
+    this.sql.exec('CREATE INDEX IF NOT EXISTS uses_who ON uses (who, t)');
     this.seed(STORE_SEED);
   }
 
@@ -922,12 +957,20 @@ export class FurnStore extends DurableObject {
       if (!act && meth === 'GET') return this.json({ item: { ...this.light(r, user, admin), preset: JSON.parse(r.preset) } });
 
       if (act === 'use' && meth === 'POST') {
-        const key = ip + '|' + id;
-        if (now - (this.uses.get(key) || 0) > 3600000) {
-          this.uses.set(key, now);
-          if (this.uses.size > 5000) this.uses.clear();
-          this.sql.exec('UPDATE items SET uses = uses + 1 WHERE id = ?', id);
+        // Anyone may report a use (placing an item does not need sign-in), so the count is
+        // rate limited per source: once per item per day, at most STORE.usesPerDay items a day.
+        const who = user ? 'u:' + user.sub : ip ? 'ip:' + ip : '';
+        if (!who || mine) return this.json({ ok: true });
+        const day = now - 86400000;
+        const last = this.row('SELECT t FROM uses WHERE item = ? AND who = ?', id, who);
+        if (!last || last.t < day) {
+          const today = this.row('SELECT COUNT(*) AS n FROM uses WHERE who = ? AND t > ?', who, day).n;
+          if (today < STORE.usesPerDay) {
+            this.sql.exec('INSERT INTO uses (item, who, t) VALUES (?, ?, ?) ON CONFLICT(item, who) DO UPDATE SET t = excluded.t', id, who, now);
+            this.sql.exec('UPDATE items SET uses = uses + 1 WHERE id = ?', id);
+          }
         }
+        if (Math.random() < 0.02) this.sql.exec('DELETE FROM uses WHERE t < ?', day);
         return this.json({ ok: true });
       }
 
@@ -937,7 +980,11 @@ export class FurnStore extends DurableObject {
         if (this.banned(user)) return this.json({ error: 'banned' }, 403);
         this.sql.exec('INSERT OR IGNORE INTO reports (item, sub) VALUES (?, ?)', id, user.sub);
         const n = this.row('SELECT COUNT(*) AS n FROM reports WHERE item = ?', id).n;
-        this.sql.exec('UPDATE items SET reports = ?, hidden = CASE WHEN ? >= ? THEN 1 ELSE hidden END WHERE id = ?', n, n, STORE.hideAt, id);
+        // Auto-hide needs more reports the more an item is used, and never hides the built-in
+        // examples (an admin still sees the report count and can delete or ban).
+        const need = storeHideAt(r.uses);
+        const hide = r.sub !== STORE_SEED_SUB && n >= need ? 1 : 0;
+        this.sql.exec('UPDATE items SET reports = ?, hidden = CASE WHEN ? = 1 THEN 1 ELSE hidden END WHERE id = ?', n, hide, id);
         return this.json({ ok: true });
       }
 

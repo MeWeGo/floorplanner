@@ -18,7 +18,12 @@
             FP_WAKE=1              let an "Ask AI" request start an agent turn
             FP_WAKE_SESSION        pin the OpenCode session to prompt (default: newest
                                    session whose location is this repo)
-            FP_WAKE_ORIGINS        extra browser origins allowed to wake (comma list)
+            FP_ORIGINS             extra browser origins allowed to use the bridge (comma list;
+                                   the deployed app and this server's own page always are)
+            FP_WAKE_ORIGINS        same, kept for older setups (also allowed to wake)
+            FP_ALLOW_FILE=1        also accept pages opened from file:// (Origin: null). Off by
+                                   default: sandboxed iframes on any website send Origin: null too.
+                                   Without it, open http://127.0.0.1:8787/ instead of a file:// copy.
             FP_WAKE_CMD            generic agent command instead of OpenCode (stdin = request)
             FP_OPENCODE_CLI        explicit path to opencode-cli(.exe)
             FP_HISTORY=0           disable snapshot files (default: on, .fp-history/)
@@ -36,6 +41,11 @@
      POST /__snapshots/restore { id } — put an old plan back as a new revision
      GET  /health           { ok, rev, clients, planName, updatedAt, pendingRequests,
                               snapshots, wake, wakeAgent, wakeSession }
+
+   Origins: browsers let any website send requests to 127.0.0.1, so every bridge
+   endpoint (except the static app files) refuses a browser Origin that is not
+   allow-listed (403). Requests without an Origin header (the MCP server, curl)
+   are local processes and are allowed.
 
    Bind address defaults to 127.0.0.1 (local only). The bridge is a dev tool:
    do not expose it on a public interface.
@@ -115,9 +125,10 @@ let lastHistJson = '';
 const WAKE = /^(1|true|yes)$/i.test(process.env.FP_WAKE || '');
 const WAKE_CMD = process.env.FP_WAKE_CMD || '';          // alternative agent (stdin = request)
 const WAKE_ORIGINS = new Set(
-  (process.env.FP_WAKE_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean)
+  [process.env.FP_ORIGINS, process.env.FP_WAKE_ORIGINS].join(',').split(',').map(s => s.trim().replace(/\/+$/, '')).filter(Boolean)
     .concat(['https://mewego.github.io', 'http://127.0.0.1:' + PORT, 'http://localhost:' + PORT])
 );
+const ALLOW_FILE = /^(1|true|yes)$/i.test(process.env.FP_ALLOW_FILE || '');
 const wake = { enabled: WAKE, cli: null, session: null, agent: WAKE ? 'resolving' : 'off' };
 let wakeTimer = null;
 let wakeExplicit = false;        // session pinned by env, so do not re-resolve
@@ -229,11 +240,25 @@ async function wakeAgent(text) {
   }
 }
 
-/** Only the app itself may start a turn; a random site may still queue a note. */
-function originMayWake(req) {
+/** Which browser pages may use the bridge at all (read the plan, push, queue, restore).
+ *  No Origin header = a local process (MCP server, curl), not a web page. */
+function originTrusted(req) {
   const o = req.headers.origin;
-  if (!o) return true;                      // curl / local script, not a browser
+  if (o === undefined || o === '') return true;
+  if (o === 'null') return ALLOW_FILE;       // file:// — and sandboxed iframes, hence opt-in
   return WAKE_ORIGINS.has(o);
+}
+/** Only the app itself may start a turn (untrusted origins never get this far). */
+function originMayWake(req) {
+  return originTrusted(req);
+}
+/** CORS headers for this request: echo a trusted Origin, nothing for others. */
+function corsFor(req) {
+  const o = req.headers.origin;
+  const h = { 'Access-Control-Allow-Private-Network': 'true', 'Vary': 'Origin' };
+  if (!o) h['Access-Control-Allow-Origin'] = '*';
+  else if (originTrusted(req)) h['Access-Control-Allow-Origin'] = o;
+  return h;
 }
 
 function scheduleWake(text) {
@@ -243,12 +268,9 @@ function scheduleWake(text) {
 }
 
 /* ---------- helpers ---------- */
-// Shared CORS headers. `Allow-Private-Network` lets the GitHub Pages build
-// (a public origin) reach this local server in Chrome/Edge.
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Private-Network': 'true',
-};
+// CORS headers are set per request by the server handler (corsFor); helpers add none.
+// `Allow-Private-Network` lets the GitHub Pages build reach this local server in Chrome/Edge.
+const CORS = {};
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, Object.assign({
@@ -411,17 +433,24 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://bridge');
   const p = url.pathname;
 
+  const cors = corsFor(req);
+  for (const k in cors) res.setHeader(k, cors[k]);
+  const isStatic = p === '/' || p === '/index.html' || p === '/app.js' || p === '/style.css' || p === '/favicon.ico';
+
   if (req.method === 'OPTIONS') {
+    if (!originTrusted(req)) { res.writeHead(403); return res.end(); }
     res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
       'Access-Control-Max-Age': '86400',
       // Chrome's Private Network Access: a page on a public origin (GitHub
       // Pages) may only reach 127.0.0.1 when the server opts in explicitly.
-      'Access-Control-Allow-Private-Network': 'true',
     });
     return res.end();
+  }
+  if (!isStatic && !originTrusted(req)) {
+    process.stdout.write('[bridge] refused origin "' + req.headers.origin + '" for ' + p + '\n');
+    return sendJson(res, 403, { error: 'origin not allowed', origin: req.headers.origin || null, hint: 'set FP_ORIGINS (or FP_ALLOW_FILE=1 for file://)' });
   }
 
   try {

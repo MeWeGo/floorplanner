@@ -3655,7 +3655,7 @@ check('choose which projects sync with Drive: per-project switch, "only the ones
     await dbPut('projects', { name: '__drive', updatedAt: 9, project: JSON.parse(JSON.stringify(P)) });
     await projectsModal();
     const t = document.querySelector('#modal [data-gdp]'); out.card = t && t.textContent;
-    t.click(); await new Promise(r => setTimeout(r, 50)); out.off = gdWanted(P.id);
+    t.click(); for (let i = 0; i < 60 && (document.querySelector('#modal [data-gdp]') || {}).textContent === out.card; i++) await new Promise(r => setTimeout(r, 50)); out.off = gdWanted(P.id);
     out.card2 = (document.querySelector('#modal [data-gdp]') || {}).textContent;
     closeModal(); await dbDel('projects', '__drive');
     gd.token = 'test'; gd.list = []; syncModal();

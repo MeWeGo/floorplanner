@@ -3648,12 +3648,51 @@ tool('new_project',
   }, [],
   a => { P = newProject(a); return 'Created project "' + P.name + '" with floor 0 "' + P.floors[0].name + '" (id ' + P.floors[0].id + ').' + (a.grid || a.wallT || a.wallH ? '' : ' Tip: all units are cm, Y axis points down.') ; });
 
+/* ---------- file paths: confined to the workspace ----------
+   Tools take paths from the model, and a prompt-injected model must not be able to
+   read ~/.ssh or overwrite a shell profile. Every path must resolve (symlinks
+   included) inside one of the allowed roots: FP_MCP_ROOTS (separated by the
+   platform path delimiter) or, by default, the server's working directory. */
+const FILE_READ_MAX = 256 * 1024 * 1024;
+/** Allowed roots, each in its given and its real (symlink-free) form. */
+function fileRoots() {
+  const env = String(process.env.FP_MCP_ROOTS || '').split(path.delimiter).map(s => s.trim()).filter(Boolean);
+  const out = [];
+  for (const r of env.length ? env : [process.cwd()]) {
+    const abs = path.resolve(r);
+    out.push(abs);
+    try { const real = fs.realpathSync(abs); if (real !== abs) out.push(real); } catch (e) { }
+  }
+  return out;
+}
+function insideRoot(p, roots) {
+  return roots.some(r => { const rel = path.relative(r, p); return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel)); });
+}
+/** Resolve a tool path argument. exts = allowed extensions (lower case, with dot). */
+function fileArg(raw, exts, write) {
+  const s = String(raw == null ? '' : raw);
+  if (!s || s.includes('\0')) throw new Error('A file path is required.');
+  const roots = fileRoots();
+  const p = path.resolve(roots[0], s);
+  const ext = path.extname(p).toLowerCase();
+  if (exts && !exts.includes(ext)) throw new Error('Only ' + exts.join(' / ') + ' files are allowed here, not "' + (ext || path.basename(p)) + '".');
+  // check the plain path first, so nothing outside the roots is even looked up (no probing)
+  if (!insideRoot(p, roots)) throw new Error('Path is outside the allowed folder(s) ' + roots.join(', ') + ': ' + p + '. Start the server in the project folder or set FP_MCP_ROOTS.');
+  let real;
+  try { real = write ? path.join(fs.realpathSync(path.dirname(p)), path.basename(p)) : fs.realpathSync(p); }
+  catch (e) { throw new Error((write ? 'Folder not found: ' + path.dirname(p) : 'File not found: ' + p)); }
+  if (write && fs.existsSync(real) && fs.lstatSync(real).isSymbolicLink()) throw new Error('Refusing to write through a symbolic link: ' + p);
+  if (!insideRoot(real, roots)) throw new Error('Path is outside the allowed folder(s) ' + roots.join(', ') + ': ' + p + '. Start the server in the project folder or set FP_MCP_ROOTS.');
+  if (!write) { const st = fs.statSync(real); if (!st.isFile()) throw new Error('Not a file: ' + p); if (st.size > FILE_READ_MAX) throw new Error('File is too large (' + Math.round(st.size / 1048576) + ' MB).'); }
+  return real;
+}
+
 tool('load_project',
   'Load a floor plan .json file (exported from the app with ⬇ JSON) into the working state.',
-  { path: { type: 'string', description: 'Path to the .json file, relative to the server working directory or absolute.' } },
+  { path: { type: 'string', description: 'Path to the .json file, relative to the server working directory (or absolute, inside it / FP_MCP_ROOTS).' } },
   ['path'],
   a => {
-    const p = path.resolve(String(a.path));
+    const p = fileArg(a.path, ['.json']);
     P = normalizeProject(JSON.parse(fs.readFileSync(p, 'utf8')));
     return 'Loaded "' + P.name + '" from ' + p + '\n\n' + summarize();
   });
@@ -3666,7 +3705,7 @@ tool('import_ifc',
   },
   ['path'],
   a => {
-    const p = path.resolve(String(a.path));
+    const p = fileArg(a.path, ['.ifc']);
     const { project, stats } = ifcToProject(fs.readFileSync(p, 'utf8'), { uid, colors: ROOMCOL, catalog: BYID, name: a.name || path.basename(p).replace(/\.ifc$/i, '') });
     P = normalizeProject(project);
     return 'Imported ' + (stats.schema || 'IFC') + ' "' + P.name + '" from ' + p + ': ' + stats.floors + ' floor(s), ' + stats.walls + ' walls, ' + stats.ops + ' doors/windows, ' + stats.rooms + ' rooms, ' + stats.slabs + ' slabs, ' + stats.voids + ' slab openings, ' + stats.columns + ' column piece(s), ' + stats.railings + ' railing(s), ' + stats.components + ' component(s), ' + stats.roofs + ' roof(s), ' + stats.stairs + ' stair(s), ' + stats.ramps + ' ramp(s)' + (stats.skipped ? ', ' + stats.skipped + ' item(s) skipped' : '') + '.\n\n' + summarize();
@@ -3681,7 +3720,7 @@ tool('import_dxf',
   },
   ['path'],
   a => {
-    const p = path.resolve(String(a.path));
+    const p = fileArg(a.path, ['.dxf']);
     const text = dxfDecode(new Uint8Array(fs.readFileSync(p)));
     const { project, stats } = dxfToProject(text, { uid, colors: ROOMCOL, catalog: BYID, name: a.name || path.basename(p).replace(/\.dxf$/i, ''), units: a.units || null, walls: a.walls !== false, rooms: a.walls !== false });
     P = normalizeProject(project);
@@ -3690,10 +3729,10 @@ tool('import_dxf',
 
 tool('save_project',
   'Write the working project to a .json file. Open it in the app with 📂 Aç (File ▸ Open JSON) to view/edit it in 2D/3D.',
-  { path: { type: 'string', description: 'Destination .json path. Default "floorplan.json" in the working directory.' } },
+  { path: { type: 'string', description: 'Destination .json path inside the working directory (or FP_MCP_ROOTS). Default "floorplan.json".' } },
   [],
   a => {
-    const p = path.resolve(String(a.path || 'floorplan.json'));
+    const p = fileArg(a.path || 'floorplan.json', ['.json'], true);
     fs.writeFileSync(p, JSON.stringify(proj(), null, 2), 'utf8');
     return 'Saved "' + P.name + '" to ' + p + ' — open it in the app via 📂 Aç / File ▸ Open JSON.';
   });
@@ -4149,8 +4188,7 @@ tool('add_texture',
   a => {
     let data, name = a.name, aspect = null;
     if (a.path) {
-      const p = path.resolve(String(a.path)), mime = TEX_MIME[path.extname(p).toLowerCase()];
-      if (!mime) throw new Error('Unsupported image type "' + path.extname(p) + '" — use ' + Object.keys(TEX_MIME).join(' '));
+      const p = fileArg(a.path, Object.keys(TEX_MIME)), mime = TEX_MIME[path.extname(p).toLowerCase()];
       const buf = fs.readFileSync(p);
       if (buf.length > TEX_FILE_MAX) throw new Error('Image is ' + Math.round(buf.length / 1024) + ' KB; the limit is 4 MB. Downscale it (1024 px on the long side is plenty).');
       const sz = pngSize(buf); if (sz && sz.w) aspect = sz.h / sz.w;
