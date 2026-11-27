@@ -37,5 +37,12 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
           fi
+      # Record which browser ran the checks (#193): a smoke failure after a runner image update can then be
+      # told apart from a regression. browser-smoke.js prints the exact version it drove as well.
+      - name: Browser version
+        run: |
+          for b in google-chrome chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then echo "CHROME_BIN=$(command -v "$b")"; "$b" --version; break; fi
+          done
       - name: Boot the app and drive the main flows
         run: node tests/browser-smoke.js

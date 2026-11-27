@@ -4241,6 +4241,85 @@ check('install as an app and work offline: service worker + manifest (#203)', as
   return `cache ${r.key}: app shell + Three.js, app.js served offline${r.controlled ? '' : ' (page not yet controlled)'}`;
 });
 
+// #193: room detection and the white-paper export, the core 2D paths the unit tests cannot reach (canvas, DOM)
+check('room detection: detectRoom and autoRoomAt handle enclosed, open, and on-wall points', async page => {
+  const r = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F();
+    addRectWalls(0, 0, 400, 300);
+    commit();
+    const pts = detectRoom({ x: 200, y: 150 });
+    const area = Array.isArray(pts) ? Math.round(polyArea(pts)) : 0;
+    const rm = autoRoomAt({ x: 200, y: 150 }, true);
+    const outside = detectRoom({ x: 700, y: 700 });
+    const onWall = detectRoom({ x: 200, y: 0 });
+    // Break the enclosure by shortening the top wall to leave a gap
+    f.walls[0].b.x = 200;
+    const gapped = detectRoom({ x: 200, y: 150 });
+    return {
+      ptsLen: Array.isArray(pts) ? pts.length : 0,
+      area,
+      roomCount: f.rooms.length,
+      rmPts: rm ? rm.pts.length : 0,
+      outside,
+      onWall,
+      gapped,
+    };
+  })()`);
+  if (r.ptsLen < 4) throw new Error('detectRoom did not return a closed polygon: ' + JSON.stringify(r));
+  if (Math.abs(r.area - 380 * 280) > 6000) throw new Error('detected room area unexpected: ' + JSON.stringify(r));
+  if (r.roomCount !== 1 || r.rmPts < 4) throw new Error('autoRoomAt did not add room: ' + JSON.stringify(r));
+  if (r.outside !== 'open') throw new Error('outside point should return open: ' + JSON.stringify(r));
+  if (r.onWall !== null) throw new Error('point on wall should return null: ' + JSON.stringify(r));
+  if (r.gapped !== 'open') throw new Error('gapped walls should return open: ' + JSON.stringify(r));
+  return 'enclosed ' + r.ptsLen + ' pts (' + r.area + ' cm2), open/on-wall rejected';
+});
+
+check('2D export uses the white-paper light palette even in dark theme', async page => {
+  const r = await page.evaluate(`(() => {
+    const prevTheme = document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = '';
+    loadProject(newProject());
+    const f = F();
+    const ws = addRectWalls(0, 0, 500, 400);
+    f.ops.push(mkOp(OPDEF.door, ws[0], 250));
+    f.furn.push(mkFurn(BYID.sofa3, 250, 200, 0));
+    f.dims.push({ id: uid(), a: { x: 0, y: 0 }, b: { x: 500, y: 0 }, off: -50 });
+    autoRoomAt({ x: 250, y: 200 }, true);
+    commit(); refresh();
+
+    const darkPal = pal();
+    ui.exporting = true;
+    const exportPal = pal();
+    ui.exporting = false;
+    const res = exportSvg();
+    const restoredExporting = ui.exporting;
+
+    document.documentElement.dataset.theme = prevTheme || '';
+    render();
+
+    const darkHexes = ['#0b0f14', '#d5dee8', '#161e29', '#e6edf5', '#2dd4bf', '#161f2c', '#243244'];
+    const leaked = darkHexes.filter(c => res.svg.toLowerCase().includes(c));
+    return {
+      darkLt: darkPal.lt,
+      exportLt: exportPal.lt,
+      exportBg: exportPal.bg,
+      exportWall: exportPal.wall,
+      hasPaperBg: res.svg.includes('fill="#fff"'),
+      hasLightWall: res.svg.includes(exportPal.wall),
+      leaked,
+      restoredExporting,
+      len: res.svg.length,
+    };
+  })()`);
+  if (r.darkLt !== false) throw new Error('expected dark theme pal().lt === false: ' + JSON.stringify(r));
+  if (r.exportLt !== true || r.exportBg !== '#ffffff') throw new Error('ui.exporting did not switch pal() to light white-paper: ' + JSON.stringify(r));
+  if (!r.hasPaperBg || !r.hasLightWall) throw new Error('exported SVG missing white paper or light wall stroke: ' + JSON.stringify(r));
+  if (r.leaked.length) throw new Error('exported SVG leaked dark-theme colours: ' + r.leaked.join(', '));
+  if (r.restoredExporting !== false) throw new Error('ui.exporting was not reset after exportSvg()');
+  return 'white-paper export (' + r.len + ' bytes, 0 dark-theme colours)';
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {
@@ -4365,7 +4444,8 @@ check('boots and edits with browser storage blocked (#188)', async page => {
     if (!ready) throw new Error('the app never finished booting');
     await sleep(400);
 
-    console.log(`\nBrowser smoke test — ${path.basename(browserPath)} on ${url}\n`);
+    const ver = await page.send('Browser.getVersion').catch(() => null); // recorded in the log (#193)
+    console.log(`\nBrowser smoke test — ${path.basename(browserPath)}${ver && ver.result ? ' ' + ver.result.product : ''} on ${url}\n`);
     const state = {};
     for (const { name, fn } of results) {
       const before = page.problems.length;
