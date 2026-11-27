@@ -12,6 +12,25 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const fmtLen = cm => (cm / 100).toFixed(2) + ' m';
 const fmtArea = c2 => (c2 / 10000).toFixed(2) + ' m²';
 
+/* ---------- Güvenli tarayıcı depolaması (#188) ----------
+   Depolama engellendiğinde (gizli pencere ayarları, site verisi kapalı, sandbox iframe) window.localStorage'a
+   erişmek bile SecurityError fırlatır ve uygulama açılmazdı. Bu sarmalayıcı hiçbir zaman hata atmaz; depolama
+   yoksa değerler bu oturum için bellekte tutulur. Aynı adla genel kapsamda tanımlandığı için (window özelliği
+   yapılandırılabilir, sözcüksel bağlama onu gölgeler) koddaki her localStorage / sessionStorage çağrısı buradan geçer. */
+function safeStore(name) {
+  let s = null;
+  try { s = window[name]; const k = '__fp_probe'; s.setItem(k, '1'); s.removeItem(k); } catch (e) { s = null; }
+  const mem = new Map();
+  return {
+    ok: !!s,
+    getItem(k) { k = String(k); if (mem.has(k)) return mem.get(k); try { return s ? s.getItem(k) : null; } catch (e) { return null; } },
+    setItem(k, v) { k = String(k); v = String(v); try { if (s) { s.setItem(k, v); mem.delete(k); return; } } catch (e) { } mem.set(k, v); },
+    removeItem(k) { k = String(k); mem.delete(k); try { if (s) s.removeItem(k); } catch (e) { } },
+  };
+}
+const localStorage = safeStore('localStorage');
+const sessionStorage = safeStore('sessionStorage');
+
 /* ---------- Dil (i18n: TR / EN) ---------- */
 let lang = (() => {
   try {
@@ -774,8 +793,10 @@ let _dbProm = null;
 function openDB() {
   if (_dbProm) return _dbProm;
   _dbProm = new Promise((res, rej) => {
-    if (!window.indexedDB) return rej(new Error('IndexedDB desteklenmiyor'));
-    const req = indexedDB.open(DB_NAME, DB_VER);
+    let idb = null;
+    try { idb = window.indexedDB; } catch (e) { }
+    if (!idb) return rej(new Error(L('IndexedDB kullanılamıyor', 'IndexedDB is not available')));
+    const req = idb.open(DB_NAME, DB_VER);
     req.onupgradeneeded = e => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains('projects')) db.createObjectStore('projects', { keyPath: 'name' });
@@ -783,8 +804,11 @@ function openDB() {
       if (!db.objectStoreNames.contains('textures')) db.createObjectStore('textures', { keyPath: 'id' }); // özel doku görselleri, P dışında
     };
     req.onsuccess = () => res(req.result);
-    req.onerror = () => rej(req.error);
+    req.onerror = () => rej(req.error || new Error(L('Tarayıcı veritabanı açılamadı', 'Could not open the browser database')));
+    req.onblocked = () => rej(new Error(L('Tarayıcı veritabanı başka bir sekmede kilitli', 'The browser database is blocked by another tab')));
   });
+  // Başarısız bir açılış kalıcı olarak saklanmaz: sonraki çağrı yeniden dener (#188)
+  _dbProm.catch(() => { _dbProm = null; });
   return _dbProm;
 }
 async function dbPut(store, val, key) {
@@ -21104,8 +21128,8 @@ function prewarm3D() {
 applyLangUI();
 (async () => {
   await migrateLegacyStorage();
-  let saved = null;
-  try { saved = await dbGet('state', 'auto'); } catch (e) { }
+  let saved = null, dbOk = true;
+  try { saved = await dbGet('state', 'auto'); } catch (e) { dbOk = false; }
   if (!saved) { try { saved = JSON.parse(localStorage.getItem('fp_auto') || 'null'); } catch (e) { } }
   if (saved && saved.floors) { loadProject(saved); translateDefaultNames(); refresh(); }
   else { P = newProject(); loadProject(P); templatesModal(); }
@@ -21116,4 +21140,6 @@ applyLangUI();
   presenceBoot();          // canlı kullanıcı sayısı göstergesi (ayarlıysa)
   collabBoot();            // canlı birlikte düzenleme (oda bağlantısı varsa)
   prewarm3D();             // 3B'yi boşta hazırla: ilk 3B düğmesi bekletmesin (#106)
+  // Depolama engelliyse uygulama bellekte çalışır; bunu bir kez söyle (#188)
+  if (!dbOk && !localStorage.ok) setTimeout(() => toast(L('Tarayıcı depolaması engelli: çalışmanız bu sekmede kalır, kaydedilmez. Saklamak için ⬇ JSON indirin.', 'Browser storage is blocked: your work stays in this tab and is not saved. Use ⬇ JSON to keep a copy.')), 900);
 })();

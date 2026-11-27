@@ -3980,6 +3980,41 @@ check('Hexagonal Draw Roof, beveled & curtain wall attach, one-sided resize (#17
 });
 
 
+// #188: blocked storage (site data off) made window.localStorage throw a SecurityError at boot. Reload the
+// page with both storages and IndexedDB throwing, check that it boots and draws, then reload it normally.
+check('boots and edits with browser storage blocked (#188)', async page => {
+  const block = `(() => { const no = () => { throw new DOMException('blocked', 'SecurityError'); };
+    for (const k of ['localStorage', 'sessionStorage', 'indexedDB']) Object.defineProperty(window, k, { configurable: true, get: no }); })();`;
+  const { identifier } = (await page.send('Page.addScriptToEvaluateOnNewDocument', { source: block })).result;
+  const boot = async () => {
+    for (let i = 0; i < 80; i++) {
+      try { if (await page.evaluate(`typeof P !== 'undefined' && !!P && !!document.querySelector('#gWalls')`)) return true; } catch (e) { }
+      await sleep(250);
+    }
+    return false;
+  };
+  try {
+    await page.send('Page.reload', { ignoreCache: true });
+    await sleep(500);
+    if (!await boot()) throw new Error('the app did not boot with storage blocked');
+    await sleep(1200);
+    const r = await page.evaluate(`(() => {
+      const warned = /storage|depolama/i.test(document.querySelector('#toast').textContent);
+      closeModal();
+      const n = F().walls.length; addRectWalls(0, 0, 400, 300); commit(); refresh(); undo(); const u = F().walls.length; redo();
+      localStorage.setItem('fp_x', '1');
+      return { blockedOk: localStorage.ok === false, mem: localStorage.getItem('fp_x'), added: F().walls.length - n, undone: u === n, warned };
+    })()`);
+    if (!r.blockedOk || r.mem !== '1' || r.added !== 4 || !r.undone || !r.warned) throw new Error('blocked storage: ' + JSON.stringify(r));
+    return 'boots in memory, edits + undo work, warning shown';
+  } finally {
+    await page.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+    await page.send('Page.reload', { ignoreCache: true });
+    await sleep(500);
+    await boot();
+  }
+});
+
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();
   if (!browserPath) {
