@@ -51,6 +51,7 @@ function makeHistorySandbox(initialP) {
     const syncStairVoids = () => {};
     const syncCeilMounts = () => {};
     const followRooms = () => {}, wallSigReset = () => {}; // #201: own smoke check
+    const tour = null, tourCheck = () => {}; // #197: own smoke check
     const autosave = () => { counts.autosave++; };
     const updateUndo = () => { counts.updateUndo++; };
     const fp3DOn = () => false;
