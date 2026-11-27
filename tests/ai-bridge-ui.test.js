@@ -68,7 +68,7 @@ test('the panel offers a "go back" list backed by real snapshot files', () => {
   assert.match(refresh, /L\(/, 'the saved-versions list must be bilingual');
   const restore = sliceFn('aiRestoreSnapshot');
   assert.match(restore, /\/__snapshots\/restore/, 'restore does not call the restore endpoint');
-  assert.match(restore, /confirm\(/, 'restoring must ask before replacing the plan');
+  assert.match(restore, /askConfirm\(/, 'restoring must ask before replacing the plan');
 });
 
 

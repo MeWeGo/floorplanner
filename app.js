@@ -812,13 +812,18 @@ function parseScale(str, width) {
   if ((m = t.match(/^([\d.]+)\s*%$/))) return parseFloat(m[1]) / 100;
   return parseFloat(t);
 }
-function scaleSelPrompt() {
+async function scaleSelPrompt() {
   const os = selObjs().filter(x => XFORM_KINDS.has(x.kind) || x.kind === 'bg'), bb = selectionBounds(os); if (!bb) return;
-  const v = prompt(L('Ölçek: çarpan (1.5 / 150%), hedef genişlik (=450 cm) veya referans:hedef (300:450)', 'Scale: factor (1.5 / 150%), target width (=450 cm) or reference:target (300:450)'), '1.5');
+  const w0 = bb.x1 - bb.x0, okSc = v => { const s = parseScale(v, w0); return s > 0.01 && s < 100; };
+  const v = await askText(L('Ölçekle', 'Scale'), '1.5', { msg: L('Çarpan (1.5 / 150%), hedef genişlik (=450 cm) veya referans:hedef (300:450)', 'Factor (1.5 / 150%), target width (=450 cm) or reference:target (300:450)'), validate: v => (okSc(v) ? '' : L('Geçersiz ölçek', 'Invalid scale')) });
   if (v == null) return;
-  const sc = parseScale(v, bb.x1 - bb.x0);
-  if (!(sc > 0.01 && sc < 100) || Math.abs(sc - 1) < 1e-6) { if (!(sc > 0.01 && sc < 100)) toast(L('Geçersiz ölçek', 'Invalid scale')); return; }
-  const scaleT = os.some(x => x.kind === 'wall') && confirm(L('Duvar kalınlıkları da ölçeklensin mi? (İptal = kalınlık korunur)', 'Scale wall thickness too? (Cancel = keep thickness)'));
+  const sc = parseScale(v, w0);
+  if (!(sc > 0.01 && sc < 100) || Math.abs(sc - 1) < 1e-6) return;
+  let scaleT = false;
+  if (os.some(x => x.kind === 'wall')) {
+    const r = await askConfirm(L('Duvar kalınlıkları da ölçeklensin mi?', 'Scale wall thickness too?'), { title: L('Duvar kalınlığı', 'Wall thickness'), ok: L('Kalınlığı da ölçekle', 'Scale thickness too'), cancel: L('Kalınlığı koru', 'Keep thickness') });
+    if (r === null) return; scaleT = r;
+  }
   if (scaleSelection(sc, scaleT, os)) { afterXform(); toast(L('Ölçeklendi ×', 'Scaled ×') + Math.round(sc * 1000) / 1000); }
 }
 function contentBounds(f = F()) {
@@ -1336,7 +1341,11 @@ function layerAct(a, lid) {
   else if (a === 'lyrlock') l.lock = !l.lock;
   else if (a === 'lyrprint') l.print = l.print === false;
   else if (a === 'lyrdel') {
-    if (l.id === '0' || !confirm(L(`“${l.name}” katmanı silinsin mi? Nesneleri Varsayılan katmana geçer.`, `Delete layer “${l.name}”? Its objects move to Default.`))) return;
+    if (l.id === '0') return;
+    askConfirm(L(`“${l.name}” katmanı silinsin mi? Nesneleri Varsayılan katmana geçer.`, `Delete layer “${l.name}”? Its objects move to Default.`), { ok: L('Sil', 'Delete'), danger: true }).then(ok => { if (ok === true) layerAct('lyrdelok', l.id); });
+    return;
+  }
+  else if (a === 'lyrdelok') {
     for (const f of P.floors) for (const k in KINDS) for (const o of f[k] || []) if (o.layer === l.id) o.layer = '0';
     P.layers = P.layers.filter(x => x !== l); if (P.activeLayer === l.id) P.activeLayer = '0';
   }
@@ -1741,10 +1750,8 @@ function setProjGroup(v) {
   if (g) { P.group = g; rememberGroup(g); } else delete P.group;
   commit(); renderTabs(); if (!sel.length) renderProps();
 }
-function groupPrompt() {
-  const known = knownGroups();
-  const v = prompt(L(`“${P.name}” hangi grupta olsun? (ör. Ahsen’in projeleri) — boş bırakın: grupsuz${known.length ? '\nVar olanlar: ' + known.join(', ') : ''}`,
-    `Which group should “${P.name}” be in? (e.g. Ahsen’s projects) — leave empty for no group${known.length ? '\nExisting: ' + known.join(', ') : ''}`), projGroup(P));
+async function groupPrompt() {
+  const v = await askText(L('Proje grubu', 'Project group'), projGroup(P), { msg: L(`“${P.name}” hangi grupta olsun? (ör. Ahsen’in projeleri) — boş bırakın: grupsuz`, `Which group should “${P.name}” be in? (e.g. Ahsen’s projects) — leave empty for no group`), list: knownGroups() });
   if (v != null) setProjGroup(v);
 }
 const tabGrpOff = () => new Set(lsArr('fp_tabgrp_off'));
@@ -1790,7 +1797,7 @@ async function closeTab(i) {
   if (i === tabIdx) syncTab();
   const p = tabs[i].P;
   if (!isPristine(p) && !(await savedCopyMatches(p))
-    && !confirm(L(`“${p.name}” kaydedilmemiş. Sekme kapatılırsa değişiklikler kaybolur. Kapatılsın mı?`, `“${p.name}” is not saved. Closing the tab discards its changes. Close it?`))) return;
+    && (await askConfirm(L(`“${p.name}” kaydedilmemiş. Sekme kapatılırsa değişiklikler kaybolur. Kapatılsın mı?`, `“${p.name}” is not saved. Closing the tab discards its changes. Close it?`), { ok: L('Kapat', 'Close'), danger: true })) !== true) return;
   if (tabs.length === 1) { tabs = []; tabIdx = 0; loadProject(newProject()); return; }
   tabs.splice(i, 1);
   if (i === tabIdx) activateTab(Math.min(i, tabs.length - 1));
@@ -1842,8 +1849,7 @@ $('#ptabs').addEventListener('contextmenu', e => { // sağ tık: grubu değişti
 $('#ptabs').addEventListener('dblclick', e => {
   const t = e.target.closest('[data-tab]'); if (!t || e.target.closest('[data-tabclose]')) return;
   if (+t.dataset.tab !== tabIdx) switchTab(+t.dataset.tab);
-  const nm = prompt(L('Proje adı:', 'Project name:'), P.name);
-  if (nm && nm.trim()) { P.name = nm.trim(); $('#pname').value = P.name; commit(); renderTabs(); }
+  askText(L('Proje adı', 'Project name'), P.name).then(nm => { if (nm && nm.trim()) { P.name = nm.trim(); $('#pname').value = P.name; commit(); renderTabs(); } });
 });
 let toastT;
 // act = { label, fn }: isteğe bağlı tek düğme (tıklanabilir bildirim daha uzun kalır)
@@ -8062,9 +8068,9 @@ function cvDbl(e) {
   else if (POLY_TOOLS.has(tool)) finishPoly();
   else if (tool === 'select') {
     const t = e.target.closest('[data-id]'); const o = t && find(t.dataset.id);
-    if (o && o.kind === 'room') { const n = prompt(L('Oda adı:', 'Room name:'), o.o.name); if (n) { o.o.name = n; commit(); refresh(); } }
-    else if (o && (o.kind === 'slab' || o.kind === 'void' || o.kind === 'zone')) { const n = prompt(L('Ad:', 'Name:'), o.o.name || ''); if (n != null) { o.o.name = n; commit(); refresh(); } }
-    else if (o && o.kind === 'text') { const n = prompt(L('Metin:', 'Text:'), o.o.text); if (n) { o.o.text = n; commit(); refresh(); } }
+    if (o && o.kind === 'room') askText(L('Oda adı', 'Room name'), o.o.name).then(n => { if (n) { o.o.name = n; commit(); refresh(); } });
+    else if (o && (o.kind === 'slab' || o.kind === 'void' || o.kind === 'zone')) askText(L('Ad', 'Name'), o.o.name || '').then(n => { if (n != null) { o.o.name = n; commit(); refresh(); } });
+    else if (o && o.kind === 'text') askText(L('Metin', 'Text'), o.o.text).then(n => { if (n) { o.o.text = n; commit(); refresh(); } });
   }
 }
 cv.addEventListener('dblclick', cvDbl);
@@ -8167,7 +8173,45 @@ function stackLevels(list, kind) {
   return lv;
 }
 // Sağ tık (Seç aracı): imlecin altındaki nesnelerin listesi + katman komutları
-function closeCtxMenu() { const m = document.getElementById('ctxMenu'); if (m) { if (m._onClose) m._onClose(); m.remove(); } }
+function closeCtxMenu() {
+  const m = document.getElementById('ctxMenu'); if (!m) return;
+  const back = m.contains(document.activeElement) ? m._opener : null;
+  if (m._onClose) m._onClose(); m.remove();
+  try { if (back && document.contains(back)) back.focus({ preventScroll: true }); } catch (e) { }
+}
+// #195: menü rolü, öğeler menuitem; ↑ ↓ Home End gezinir, Esc / Tab kapatır ve odağı geri verir
+function ctxMenuA11y(m) {
+  m.setAttribute('role', 'menu'); m.setAttribute('aria-label', L('Bağlam menüsü', 'Context menu'));
+  m._opener = document.activeElement;
+  const items = [...m.querySelectorAll('button')];
+  items.forEach(b => { b.setAttribute('role', 'menuitem'); b.tabIndex = -1; });
+  m.querySelectorAll('.cm-sep').forEach(s => s.setAttribute('role', 'separator'));
+  m.querySelectorAll('.cm-h').forEach(s => s.setAttribute('role', 'presentation'));
+  m.addEventListener('keydown', e => {
+    const i = items.indexOf(document.activeElement), go = j => { e.preventDefault(); items[(j + items.length) % items.length].focus(); };
+    if (e.key === 'ArrowDown') go(i + 1); else if (e.key === 'ArrowUp') go(i < 0 ? -1 : i - 1);
+    else if (e.key === 'Home') go(0); else if (e.key === 'End') go(-1);
+    else if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); closeCtxMenu(); }
+  });
+  if (items[0]) items[0].focus({ preventScroll: true });
+}
+/* #195: yalnız simgeden oluşan düğmeler (🗑, ✕, ↶ …) title'ını erişilebilir ad olarak taşır; dil değişince title
+   değiştiği için ad da güncellenir. Kendi etiketi olan ya da yazısı okunabilen düğmelere dokunulmaz. */
+function a11yLabel(b) {
+  if (b.hasAttribute('aria-label') && !b.dataset.al) return;
+  const words = /[\p{L}\p{N}]{2,}/u.test(b.textContent || ''), name = b.getAttribute('title');
+  if (!words && name) { if (b.getAttribute('aria-label') !== name) b.setAttribute('aria-label', name); b.dataset.al = '1'; }
+  else if (b.dataset.al) { b.removeAttribute('aria-label'); delete b.dataset.al; }
+}
+function a11yLabels(root) { if (root && root.querySelectorAll) root.querySelectorAll('button, [role="button"]').forEach(a11yLabel); }
+new MutationObserver(ms => {
+  for (const m of ms) {
+    const t = m.target; if (t.namespaceURI === 'http://www.w3.org/2000/svg') continue; // tuval katmanları: hızlı geç
+    if (m.type === 'attributes') { if (t.matches && t.matches('button, [role="button"]')) a11yLabel(t); continue; }
+    for (const n of m.addedNodes) if (n.nodeType === 1 && n.namespaceURI !== 'http://www.w3.org/2000/svg') { if (n.matches('button, [role="button"]')) a11yLabel(n); a11yLabels(n); }
+  }
+}).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['title'] });
+a11yLabels(document.body); // index.html'deki düğmeler
 /* Nesne kilidi (o.lock): kilitli nesne seçilebilir (kilidi açmak ve panelden düzenlemek için) ama fareyle / klavyeyle
    taşınmaz, boyutlanmaz, döndürülmez, aynalanmaz, silinmez ve silgiyle silinmez; 2B ve 3B. Tutamak yerine 🔒 rozeti çizilir. */
 const isLocked = o => !!(o && o.lock);
@@ -8199,6 +8243,7 @@ function openPickMenu(e, ids) {
     + ids.map(id => `<button data-pk="${id}" class="${keep.length === 1 && keep[0] === id ? 'on' : ''}">${isLocked(find(id)?.o) ? '🔒 ' : ''}${esc(objLabel(id))}</button>`).join('')
     + `<div class="cm-h" style="font-weight:400">${L('Ctrl + tık: sıradakine geç', 'Ctrl + click: next one down')}</div>`;
   document.body.appendChild(m);
+  ctxMenuA11y(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.max(4, Math.min(e.clientX + 8, innerWidth - r.width - 6)) + 'px';
   m.style.top = Math.max(4, Math.min(e.clientY + 8, innerHeight - r.height - 6)) + 'px';
@@ -8243,6 +8288,7 @@ function openCtxMenu(e) {
   }
   if (!h) return;
   m.innerHTML = h; document.body.appendChild(m);
+  ctxMenuA11y(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.min(e.clientX, innerWidth - r.width - 6) + 'px';
   m.style.top = Math.min(e.clientY, innerHeight - r.height - 6) + 'px';
@@ -8500,10 +8546,13 @@ function cvDown(e) {
       if (!ui.mAxis) { ui.mAxis = { x: cur.x, y: cur.y }; drawPreview(); return; }
       const l = dist(ui.mAxis, cur); if (l < 1) return;
       const u = { x: (cur.x - ui.mAxis.x) / l, y: (cur.y - ui.mAxis.y) / l }, o = ui.mAxis;
-      const erase = confirm(L('Orijinal nesneler silinsin mi?\n\nTamam = taşı (sil) • İptal = aynalı kopya oluştur', 'Erase the original objects?\n\nOK = move (erase) • Cancel = keep them and add a mirrored copy'));
-      if (!erase) { sel = [...new Set([...sel, ...F().ops.filter(op => sel.includes(op.wall)).map(op => op.id)])]; paste(true, 0); } // duvarların kapı/pencereleriyle birlikte kopya; kopya seçili hale gelir ve aynalanır
-      mirrorObjs(unlocked(selObjs().filter(x => XFORM_KINDS.has(x.kind))), o, u);
-      ui.mAxis = null; tool = 'select'; ui.btn = 'select'; updateTools(); afterXform();
+      ui.mAxis = null; tool = 'select'; ui.btn = 'select'; updateTools(); drawPreview();
+      askConfirm(L('Orijinal nesneler silinsin mi?', 'Erase the original objects?'), { title: L('Aynala', 'Mirror'), ok: L('Taşı (orijinali sil)', 'Move (erase originals)'), cancel: L('Aynalı kopya ekle', 'Add a mirrored copy') }).then(erase => {
+        if (erase === null) return; // Esc: hiçbir şey değişmez
+        if (!erase) { sel = [...new Set([...sel, ...F().ops.filter(op => sel.includes(op.wall)).map(op => op.id)])]; paste(true, 0); } // duvarların kapı/pencereleriyle birlikte kopya; kopya seçili hale gelir ve aynalanır
+        mirrorObjs(unlocked(selObjs().filter(x => XFORM_KINDS.has(x.kind))), o, u);
+        afterXform();
+      });
       return;
     }
     case 'calib': {
@@ -8511,13 +8560,16 @@ function cvDown(e) {
       if (!ui.calib) ui.calib = { x: cur.x, y: cur.y };
       else {
         const px = dist(ui.calib, cur); if (px < 2) return;
-        const real = parseFloat(String(prompt(L('Bu iki nokta arasındaki gerçek mesafe (metre):', 'Real distance between these two points (meters):'), '3') || '').replace(',', '.'));
+        const calibFrom = ui.calib;
+        askNumber(L('Gerçek mesafe (metre)', 'Real distance (metres)'), '3', { msg: L('Bu iki nokta arasındaki gerçek mesafe', 'The real distance between these two points') }).then(rv => {
+        const real = parseFloat(String(rv || '').replace(',', '.')); ui.calib = calibFrom;
         if (real > 0) {
           const k = real * 100 / px, a = ui.calib, b = P.bg;
           b.x = a.x + (b.x - a.x) * k; b.y = a.y + (b.y - a.y) * k; b.w *= k; b.h *= k;
           commit(); toast(L('Ölçek ayarlandı', 'Scale calibrated')); fit();
         }
-        ui.calib = null;
+        ui.calib = null; render();
+        });
       }
       render(); return;
     }
@@ -9525,7 +9577,7 @@ function onPropsClick(e) {
   if (a === 'axgrid') return axisGridPrompt();
   if (a === 'autodims') return autoDimsRun(); // #200
   if (a === 'axcopy') { const axs = os.filter(x => x.kind === 'axis').map(x => x.o); if (!axs.length) return; if (P.floors.length < 2) return toast(L('Başka kat yok', 'There is no other floor')); axisCopyAll(axs); commit(); toast(L(`⧉ ${axs.length} aks ${P.floors.length - 1} kata kopyalandı`, `⧉ ${axs.length} axis/axes copied to ${P.floors.length - 1} floor(s)`)); return; }
-  if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
+  if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t) askConfirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`), { ok: L('Sil', 'Delete'), danger: true }).then(ok => { if (ok === true) deleteTexture(t.id); }); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
   if (a === 'lock') return toggleLockSel();
@@ -9683,13 +9735,14 @@ function onPropsClick(e) {
       if (o.k === 'roof' && Array.isArray(o.faces)) { o.faces = o.faces.map(f => f.map(q => [q[1], q[0], q[2]]).reverse()); if (o.fbase) o.fbase = { w: o.fbase.d, d: o.fbase.w, h: o.fbase.h }; }
       if (Array.isArray(o.parts)) { o.parts = o.parts.map(q => Object.assign({}, q, { x: -q.y, y: q.x, rot: ((q.rot || 0) + 90) % 360 })); if (o.pbase) o.pbase = { w: o.pbase.d, d: o.pbase.w, h: o.pbase.h }; } }
     if (a === 'saveshape' && kind === 'furn') {
-      const nm = prompt(L('Şekil adı:', 'Shape name:'), o.name || L('Şekil', 'Shape'));
+      askText(L('Şekil adı', 'Shape name'), o.name || L('Şekil', 'Shape')).then(nm => {
       if (nm) {
         P.lib = P.lib || { shapes: [] }; P.lib.shapes = P.lib.shapes || [];
         P.lib.shapes.push({ id: uid(), name: nm, en: nm, k: o.k, pts: o.pts ? JSON.parse(JSON.stringify(o.pts)) : undefined, w: o.w, d: o.d, h: o.h, color: o.color, icon: o.k === 'round' ? '⬤' : '⬡', ...(Array.isArray(o.parts) && o.parts.length ? { parts: clonePlain(o.parts), pbase: clonePlain(o.pbase), partsV: PARTS_V } : {}) });
         commit(); buildLib(); toast(L(`“${nm}” kütüphaneye eklendi (⬡ Kütüphanem)`, `“${nm}” added to the library (⬡ My Library)`));
-        return;
       }
+      });
+      return;
     }
     if (a === 'opflip' && kind === 'op') o.flip = o.flip ? 0 : 1;
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
@@ -9735,12 +9788,12 @@ function presetSize(p) {
   if (p.kind === 'op') return Math.round(p.w) + '×' + Math.round(p.h) + (p.sill > 0 ? ' · ' + L('denizlik', 'sill') + ' ' + Math.round(p.sill) : '');
   return Math.round(p.w) + '×' + Math.round(p.d);
 }
-function savePresetSel() {
+async function savePresetSel() {
   const os = selObjs(); if (os.length !== 1 || (os[0].kind !== 'op' && os[0].kind !== 'furn')) return;
   const { kind, o } = os[0];
   const def0 = kind === 'op' ? (OPENINGS.find(d => opType(d.id) === o.type) || OPDEF.door) : (BYID[o.type] || o);
   const sug = kind === 'op' ? itemName(def0) + ' ' + Math.round(o.w) + '×' + Math.round(o.h) : (o.label || o.name || itemName(def0));
-  const nm = (prompt(L('Ön ayar adı:', 'Preset name:'), sug) || '').trim(); if (!nm) return;
+  const nm = ((await askText(L('Ön ayar adı', 'Preset name'), sug)) || '').trim(); if (!nm) return;
   const p = presetFromObj(kind, o, nm);
   P.lib.presets = P.lib.presets || []; P.lib.presets.push(p);
   commit(); ui.cat = LIBCATS.length - 1; ui.q = ''; $('#search').value = ''; buildLib(); refresh();
@@ -9826,8 +9879,8 @@ function buildLib() {
   $('#cats').innerHTML = cats.map((c, i) => `<button class="chip ${i === ui.cat && (!ui.q || i === LIB_COMM) ? 'on' : ''}" data-cat="${i}">${c}</button>`).join('');
   const q = ui.q.toLowerCase(); let items = '';
   const card = (type, d, sz) => `<button class="item" data-type="${type}" data-id="${d.id}"><div class="ic">${d.icon || '▭'}</div><div>${itemName(d)}</div><div class="sz">${sz}</div></button>`;
-  const shapeCard = d => `<button class="item" data-type="def" data-id="${d.id}"><div class="ic">${d.icon || '⬡'}</div><div>${esc(itemName(d))}</div><div class="sz">${Math.round(d.w)}×${Math.round(d.d)} cm</div><span class="delsh" data-delsh="${d.id}" title="${L('Kütüphaneden sil', 'Remove from library')}">✕</span></button>`;
-  const presetCard = p => { const d = presetDef(p); return `<button class="item" data-type="pre" data-id="${p.id}" title="${esc(p.name)}"><div class="ic">${d.icon || '▭'}</div><div>${esc(p.name)}</div><div class="sz">${presetSize(p)}</div><span class="renpre" data-renpre="${p.id}" title="${L('Yeniden adlandır', 'Rename')}">✎</span><span class="delsh" data-delpre="${p.id}" title="${L('Kütüphaneden sil', 'Remove from library')}">✕</span></button>`; };
+  const shapeCard = d => `<div class="item-c"><button class="item" data-type="def" data-id="${d.id}"><div class="ic">${d.icon || '⬡'}</div><div>${esc(itemName(d))}</div><div class="sz">${Math.round(d.w)}×${Math.round(d.d)} cm</div></button><button type="button" class="delsh" data-delsh="${d.id}" title="${L('Kütüphaneden sil', 'Remove from library')}: ${esc(itemName(d))}">✕</button></div>`;
+  const presetCard = p => { const d = presetDef(p); return `<div class="item-c"><button class="item" data-type="pre" data-id="${p.id}" title="${esc(p.name)}"><div class="ic">${d.icon || '▭'}</div><div>${esc(p.name)}</div><div class="sz">${presetSize(p)}</div></button><button type="button" class="renpre" data-renpre="${p.id}" title="${L('Yeniden adlandır', 'Rename')}: ${esc(p.name)}">✎</button><button type="button" class="delsh" data-delpre="${p.id}" title="${L('Kütüphaneden sil', 'Remove from library')}: ${esc(p.name)}">✕</button></div>`; };
   const matches = d => d.name.toLowerCase().includes(q) || (d.en && d.en.toLowerCase().includes(q));
   const shapes = P && P.lib && P.lib.shapes || [], presets = P && P.lib && P.lib.presets || [];
   const opCard = o => card('op', o, opDefLast(o).w + ' cm'); // son kullanılan ölçü kartta da görünür
@@ -9853,14 +9906,15 @@ $('#items').addEventListener('click', e => {
   const x = e.target.closest('[data-delsh]');
   if (x) {
     const i = (P.lib.shapes || []).findIndex(s => s.id === x.dataset.delsh);
-    if (i >= 0 && confirm(L(`“${itemName(P.lib.shapes[i])}” kütüphaneden silinsin mi?`, `Delete “${itemName(P.lib.shapes[i])}” from the library?`))) { P.lib.shapes.splice(i, 1); commit(); buildLib(); toast(L('Şekil kütüphaneden silindi', 'Shape removed from library')); }
+    if (i >= 0) { const sh = P.lib.shapes[i]; askConfirm(L(`“${itemName(sh)}” kütüphaneden silinsin mi?`, `Delete “${itemName(sh)}” from the library?`), { ok: L('Sil', 'Delete'), danger: true }).then(ok => { const j = P.lib.shapes.indexOf(sh); if (ok === true && j >= 0) { P.lib.shapes.splice(j, 1); commit(); buildLib(); toast(L('Şekil kütüphaneden silindi', 'Shape removed from library')); } }); }
     return;
   }
   const dp = e.target.closest('[data-delpre]'), rp = e.target.closest('[data-renpre]');
   if (dp || rp) {
     const ps = P.lib.presets || [], i = ps.findIndex(p => p.id === (dp || rp).dataset[dp ? 'delpre' : 'renpre']); if (i < 0) return;
-    if (dp) { if (confirm(L(`“${ps[i].name}” kütüphaneden silinsin mi?`, `Delete “${ps[i].name}” from the library?`))) { ps.splice(i, 1); if (placing && placing.def.preset === dp.dataset.delpre) setTool('select'); commit(); buildLib(); toast(L('Ön ayar silindi (Ctrl+Z ile geri al)', 'Preset removed (Ctrl+Z to undo)')); } }
-    else { const nm = (prompt(L('Yeni ad:', 'New name:'), ps[i].name) || '').trim(); if (nm) { ps[i].name = nm.slice(0, 60); commit(); buildLib(); } }
+    const pr = ps[i];
+    if (dp) { askConfirm(L(`“${pr.name}” kütüphaneden silinsin mi?`, `Delete “${pr.name}” from the library?`), { ok: L('Sil', 'Delete'), danger: true }).then(ok => { const ps = P.lib.presets || [], i = ps.indexOf(pr); if (ok === true && i >= 0) { ps.splice(i, 1); if (placing && placing.def.preset === dp.dataset.delpre) setTool('select'); commit(); buildLib(); toast(L('Ön ayar silindi (Ctrl+Z ile geri al)', 'Preset removed (Ctrl+Z to undo)')); } }); }
+    else askText(L('Yeni ad', 'New name'), pr.name).then(nm => { nm = (nm || '').trim(); if (nm) { pr.name = nm.slice(0, 60); commit(); buildLib(); } });
     return;
   }
   const b = e.target.closest('.item'); if (!b) return;
@@ -10176,12 +10230,11 @@ function storeAct(a) {
   const done = (msg, drop) => { toast(msg); if (drop) { closeModal(); store.full.delete(id); } storeReload(); };
   const fail = e => toast('⚠ ' + e.message);
   if (a === 'report') return storeNeedSignIn(L('Şikâyet etmek için giriş yapın (kötüye kullanımı önler).', 'Sign in to report (this prevents abuse).'), () => {
-    if (!confirm(L(`“${it.name}” uygunsuz ya da bozuk olarak şikâyet edilsin mi? Birkaç şikâyetten sonra gizlenir.`, `Report “${it.name}” as inappropriate or broken? It is hidden after a few reports.`))) return;
-    storeApi(`/store/items/${id}/report`, { method: 'POST', auth: true }).then(() => done(L('Teşekkürler, şikâyet alındı', 'Thanks, reported'), true), fail);
+    askConfirm(L(`“${it.name}” uygunsuz ya da bozuk olarak şikâyet edilsin mi? Birkaç şikâyetten sonra gizlenir.`, `Report “${it.name}” as inappropriate or broken? It is hidden after a few reports.`), { ok: L('Şikâyet et', 'Report') }).then(ok => { if (ok === true) storeApi(`/store/items/${id}/report`, { method: 'POST', auth: true }).then(() => done(L('Teşekkürler, şikâyet alındı', 'Thanks, reported'), true), fail); });
   });
-  if (a === 'del') { if (confirm(L(`“${it.name}” mağazadan kaldırılsın mı? Planlara yerleştirilmiş kopyalar kalır.`, `Remove “${it.name}” from the store? Copies already placed in plans stay.`))) storeApi('/store/items/' + id, { method: 'DELETE', auth: true }).then(() => done(L('Mağazadan kaldırıldı', 'Removed from the store'), true), fail); return; }
+  if (a === 'del') { askConfirm(L(`“${it.name}” mağazadan kaldırılsın mı? Planlara yerleştirilmiş kopyalar kalır.`, `Remove “${it.name}” from the store? Copies already placed in plans stay.`), { ok: L('Kaldır', 'Remove'), danger: true }).then(ok => ok === true && storeApi('/store/items/' + id, { method: 'DELETE', auth: true }).then(() => done(L('Mağazadan kaldırıldı', 'Removed from the store'), true), fail)); return; }
   if (a === 'unhide') return void storeApi(`/store/items/${id}/unhide`, { method: 'POST', auth: true }).then(() => done(L('Yeniden gösteriliyor', 'Shown again'), true), fail);
-  if (a === 'ban') { if (it.sub && confirm(L('Bu kişi engellensin ve tüm mobilyaları gizlensin mi?', 'Ban this author and hide all their items?'))) storeApi(`/store/users/${encodeURIComponent(it.sub)}/ban`, { method: 'POST', auth: true }).then(() => done(L('Engellendi', 'Banned'), true), fail); return; }
+  if (a === 'ban') { if (it.sub) askConfirm(L('Bu kişi engellensin ve tüm mobilyaları gizlensin mi?', 'Ban this author and hide all their items?'), { ok: L('Engelle', 'Ban'), danger: true }).then(ok => ok === true && storeApi(`/store/users/${encodeURIComponent(it.sub)}/ban`, { method: 'POST', auth: true }).then(() => done(L('Engellendi', 'Banned'), true), fail)); return; }
   if (a === 'edit') return storePublishModal(null, it);
 }
 
@@ -10266,7 +10319,7 @@ $('#floors').addEventListener('click', e => {
   sel = []; commit(); fit(); refresh(); if (ui.view3d && T3) { sync3DFloors(); schedBuild3D(); } }
   if (a.dataset.fa === 'addb') addBasement();
   if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); const gm = {}; for (const k in KINDS) c[k].forEach(o => { if (o.grp) o.grp = gm[o.grp] || (gm[o.grp] = uid()); }); c.groups = Object.values(gm).map(id => ({ id, vars: [], idx: 0 })); c.rooms.forEach(r => { delete r.vars; delete r.vIdx; }); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
-  if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
+  if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); const fl = F(); askConfirm(L(`“${fl.name}” katı silinsin mi?`, `Delete floor “${fl.name}”?`), { ok: L('Katı sil', 'Delete floor'), danger: true }).then(ok => { const k = P.floors.indexOf(fl); if (ok === true && k >= 0 && P.floors.length > 1) { P.floors.splice(k, 1); fi = Math.max(0, Math.min(fi, k) - (k <= fi ? 1 : 0)); fi = clamp(fi, 0, P.floors.length - 1); sel = []; commit(); refresh(); } }); }
 });
 // bodrum kat: en alta eklenir; en alttaki katın kotu sabitlenir (zemin kat ±0.00'da kalır), bodrum onun bir kat altında başlar
 function addBasement(h = P.wallH) {
@@ -10280,7 +10333,7 @@ function addBasement(h = P.wallH) {
   toast(L(`⬇ ${b.name}: ${fmtLevel(b.lvl)} → ${fmtLevel(b.lvl + h)}`, `⬇ ${b.name}: ${fmtLevel(b.lvl)} → ${fmtLevel(b.lvl + h)}`));
   return b;
 }
-function renameFloor(i) { if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; } const f = P.floors[i]; if (!f) return; const n = (prompt(L('Kat adı:', 'Floor name:'), f.name) || '').trim(); if (n && n !== f.name) { f.name = n; commit(); refresh(); } }
+function renameFloor(i) { if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; } const f = P.floors[i]; if (!f) return; askText(L('Kat adı', 'Floor name'), f.name).then(n => { n = (n || '').trim(); if (n && n !== f.name) { f.name = n; commit(); refresh(); } }); }
 $('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) renameFloor(+t.dataset.fl); });
 function refresh() { if (ui.lenTyped && !(sel.length === 1 && find(sel[0])?.kind === 'wall')) ui.lenTyped = ''; render(); renderProps(); renderFloors(); updateTools(); syncLayerUI(); if (typeof collabSendPresence === 'function') collabSendPresence(true); }
 
@@ -11075,7 +11128,10 @@ function openCmdPalette() {
 }
 window.addEventListener('keydown', e => {
   const tag = e.target.tagName, typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || e.target.isContentEditable;
-  if (typing) { if (e.key === 'Escape') e.target.blur(); return; }
+  if (typing) {
+    if (e.key === 'Escape') { if (e.target.closest('#modal') && $('#modalbg').style.display === 'flex' && ui.modal !== 'parts') closeModal(); else e.target.blur(); }
+    return;
+  }
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
   if (e.key === 'Escape' && document.getElementById('ctxMenu')) { closeCtxMenu(); return; }
   if (ui.modal === 'tex' && ui.txStudio) { if (e.key === 'Escape') closeModal(); return; } // stüdyonun üstündeki doku penceresi: tuşlar plana düşmez, Esc stüdyoya döner
@@ -11205,13 +11261,92 @@ if ($('#bInspect')) $('#bInspect').onclick = () => toggleDrawer('props'); // dar
 $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8); $('#zFit').onclick = fit;
 
 /* ---------- Modal ---------- */
-function openModal(html, kind = null) { ui.modal = kind; $('#modal').innerHTML = html; $('#modalbg').style.display = 'flex'; }
+/* ---------- Uygulama içi soru pencereleri (#196) ve erişilebilir pencereler (#195) ----------
+   askText / askConfirm tarayıcının prompt() / confirm() penceresinin yerine geçer: temaya uyar, iki dillidir,
+   Enter onaylar, Esc / İptal / arka plan hiçbir şey değiştirmeden kapatır, odak pencerenin içinde kalır ve kapanınca
+   açan düğmeye döner. Söz (Promise) döndürür: askText → metin | null, askConfirm → true | false (İptal) | null (Esc).
+   Açık bir #modal'ın üstünde ayrı bir katmanda (#askbg) açılır, alttaki pencereye dokunmaz. */
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
+const focusablesIn = root => [...root.querySelectorAll(FOCUSABLE)].filter(el => !el.closest('[hidden]') && el.getClientRects().length);
+function trapTab(e, root) {
+  if (e.key !== 'Tab') return;
+  const f = focusablesIn(root); if (!f.length) { e.preventDefault(); return; }
+  const i = f.indexOf(document.activeElement);
+  if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+  else if (!e.shiftKey && (i < 0 || i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
+}
+let askOpen = null;
+function askDialog(o) {
+  return new Promise(res => {
+    if (askOpen) askOpen.done(null);
+    const opener = document.activeElement;
+    let bg = $('#askbg'); if (!bg) { bg = document.createElement('div'); bg.id = 'askbg'; document.body.appendChild(bg); }
+    bg.innerHTML = `<div id="ask" role="${o.input ? 'dialog' : 'alertdialog'}" aria-modal="true" aria-labelledby="askT"${o.msg ? ' aria-describedby="askM"' : ''}>
+      <h3 id="askT">${esc(o.title)}</h3>${o.msg ? `<p id="askM">${esc(o.msg)}</p>` : ''}
+      ${o.input ? `<input id="askI" type="text" autocomplete="off" spellcheck="false" value="${esc(o.def == null ? '' : o.def)}"${o.list ? ' list="askL"' : ''}${o.inputmode ? ` inputmode="${o.inputmode}"` : ''} aria-labelledby="askT"${o.msg ? ' aria-describedby="askM askE"' : ' aria-describedby="askE"'}>${o.list ? `<datalist id="askL">${o.list.map(v => `<option value="${esc(v)}">`).join('')}</datalist>` : ''}<p id="askE" class="ask-err" role="alert"></p>` : ''}
+      <div class="ask-btns"><button type="button" class="btn" data-ask="no">${esc(o.cancel || L('İptal', 'Cancel'))}</button><button type="button" class="btn ${o.danger ? 'danger' : 'primary'}" data-ask="ok">${esc(o.ok || L('Tamam', 'OK'))}</button></div>
+    </div>`;
+    bg.style.display = 'flex';
+    const box = bg.firstElementChild, inp = box.querySelector('#askI');
+    const key = e => {
+      e.stopPropagation();
+      if (e.key === 'Escape') { e.preventDefault(); done(null); }
+      else if (e.key === 'Enter' && !(e.target.dataset && e.target.dataset.ask === 'no') && !e.isComposing) { e.preventDefault(); ok(); }
+      else trapTab(e, box);
+    };
+    const done = v => {
+      if (!askOpen || askOpen.res !== res) return;
+      askOpen = null; document.removeEventListener('keydown', key, true);
+      bg.style.display = 'none'; bg.innerHTML = '';
+      try { if (opener && opener.focus && document.contains(opener)) opener.focus({ preventScroll: true }); } catch (e) { }
+      res(v);
+    };
+    const ok = () => {
+      if (!inp) return done(true);
+      const er = o.validate ? o.validate(inp.value) : '';
+      if (er) { box.querySelector('#askE').textContent = er; inp.setAttribute('aria-invalid', 'true'); inp.focus(); return; }
+      done(inp.value);
+    };
+    document.addEventListener('keydown', key, true);
+    box.addEventListener('click', e => { const b = e.target.closest('[data-ask]'); if (b) { if (b.dataset.ask === 'ok') ok(); else done(o.input ? null : false); } });
+    bg.onmousedown = e => { if (e.target === bg) done(null); };
+    askOpen = { res, done };
+    (inp || box.querySelector('[data-ask="ok"]')).focus();
+    if (inp) inp.select();
+  });
+}
+// metin sorar: onaylanınca metin, vazgeçilince null. opts: { msg, ok, validate(v) → hata metni | '', list, inputmode }
+const askText = (title, def = '', opts = {}) => askDialog({ ...opts, title, def, input: true });
+// onay sorar: true = onay düğmesi, false = İptal / ikinci seçenek, null = Esc / arka plan. opts: { title, ok, cancel, danger }
+const askConfirm = (msg, opts = {}) => askDialog({ ...opts, title: opts.title || L('Emin misiniz?', 'Are you sure?'), msg });
+const askNumber = (title, def, opts = {}) => askText(title, def, { inputmode: 'decimal', validate: v => (parseFloat(String(v).replace(',', '.')) > 0 ? '' : L('Sıfırdan büyük bir sayı girin', 'Enter a number greater than zero')), ...opts });
+/* #195: #modal bir iletişim penceresidir (role, aria-modal, başlığıyla adlandırılır). Açılınca odak içine girer, Tab
+   pencerede döner, Esc kapatır (bir giriş alanındayken de), kapanınca odak pencereyi açan düğmeye döner. Yeniden
+   çizimde (aynı pencere yeni içerikle) açan düğme korunur. */
+let modalOpener = null;
+function openModal(html, kind = null) {
+  const m = $('#modal'), bg = $('#modalbg');
+  if (bg.style.display !== 'flex') modalOpener = document.activeElement;
+  ui.modal = kind; m.innerHTML = html; bg.style.display = 'flex';
+  m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true'); m.tabIndex = -1;
+  const h = m.querySelector('h2, h3');
+  if (h) { if (!h.id) h.id = 'modalT'; m.setAttribute('aria-labelledby', h.id); } else m.removeAttribute('aria-labelledby');
+  m.querySelectorAll('[data-close]:not([aria-label])').forEach(b => b.setAttribute('aria-label', L('Kapat', 'Close')));
+  a11yLabels(m);
+  if (!m.contains(document.activeElement)) m.focus({ preventScroll: true });
+}
+function modalRestoreFocus() {
+  const o = modalOpener; modalOpener = null;
+  try { if (o && o.focus && document.contains(o) && o !== document.body) o.focus({ preventScroll: true }); } catch (e) { }
+}
 function closeModal() {
   if (ui.modal === 'tex' && ui.txStudio) { ui.txStudio = null; ui.modal = 'parts'; $('#modalbg').style.display = 'none'; pbRedraw(); return; }
   ui.txWall = 0; if (ui.modal === 'parts') fsClose();
   if (ui.modal === 'arch') { $('#modal').classList.remove('arch-modal'); if (ui.arch) { ui.arch.drag = null; ui.arch.tool = 'select'; } }
   ui.modal = null; $('#modalbg').style.display = 'none';
+  modalRestoreFocus();
 }
+$('#modal').addEventListener('keydown', e => { if (e.key === 'Tab') trapTab(e, $('#modal')); });
 $('#modalbg').addEventListener('mousedown', e => { if (e.target.id === 'modalbg') closeModal(); });
 $('#modal').addEventListener('click', e => { if (e.target.closest('[data-close]')) closeModal(); });
 /* ---------- AI (MCP) help: copy-ready prompt for the user's agent ---------- */
@@ -11904,7 +12039,7 @@ async function aiRefreshSnapshots() {
 }
 
 async function aiRestoreSnapshot(id) {
-  if (!confirm(L('Bu kayıtlı sürüme geri dönülsün mü?', 'Restore this saved version?'))) return;
+  if ((await askConfirm(L('Bu kayıtlı sürüme geri dönülsün mü?', 'Restore this saved version?'), { ok: L('Geri dön', 'Restore') })) !== true) return;
   try {
     const res = await brgFetch('/__snapshots/restore', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
@@ -12484,7 +12619,7 @@ async function projectsModal() {
   $('#modal').querySelectorAll('[data-grp]').forEach(b => b.onclick = async () => {
     const it = list[+b.dataset.grp]; if (!it) return;
     const known = knownGroups(), cur = projGroup(it.project);
-    const v = prompt(L(`“${it.name}” hangi grupta olsun? — boş bırakın: grupsuz${known.length ? '\nVar olanlar: ' + known.join(', ') : ''}`, `Which group should “${it.name}” be in? — leave empty for no group${known.length ? '\nExisting: ' + known.join(', ') : ''}`), cur);
+    const v = await askText(L('Proje grubu', 'Project group'), cur, { msg: L(`“${it.name}” hangi grupta olsun? — boş bırakın: grupsuz`, `Which group should “${it.name}” be in? — leave empty for no group`), list: known });
     if (v == null) return;
     const g = cleanGroup(v); if (g) { it.project.group = g; rememberGroup(g); } else delete it.project.group;
     await dbPut('projects', it);
@@ -12499,7 +12634,7 @@ async function projectsModal() {
   });
   $('#modal').querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
     const it = list[+b.dataset.rm];
-    if (it && confirm(isEN() ? `Delete “${it.name}”?` : `“${it.name}” silinsin mi?`)) { await dbDel('projects', it.name); projectsModal(); }
+    if (it && (await askConfirm(L(`“${it.name}” silinsin mi?`, `Delete “${it.name}”?`), { ok: L('Sil', 'Delete'), danger: true })) === true) { await dbDel('projects', it.name); projectsModal(); }
   });
 }
 
@@ -15686,10 +15821,11 @@ function axisSvg(ax, live) {
   return s + '</g>';
 }
 // ⊞ Aks ızgarası: iki soru (dikey ve yatay aralıklar), ızgara mevcut çizimin sol üst köşesinden (yoksa 0, 0) başlar
-function axisGridPrompt() {
-  const xs = parseAxisSpacing(prompt(L('Dikey akslar (1, 2, 3…) arası mesafeler, cm (ör. 500, 500, 400 ya da 3x500):', 'Spacing between vertical axes (1, 2, 3…), cm (e.g. 500, 500, 400 or 3x500):'), '3x500'));
+async function axisGridPrompt() {
+  const bad = v => (parseAxisSpacing(v) ? '' : L('Örnek: 500, 500, 400 ya da 3x500', 'Example: 500, 500, 400 or 3x500'));
+  const xs = parseAxisSpacing(await askText(L('Dikey akslar (1, 2, 3…)', 'Vertical axes (1, 2, 3…)'), '3x500', { msg: L('Aks arası mesafeler, cm (ör. 500, 500, 400 ya da 3x500)', 'Spacing between the axes, cm (e.g. 500, 500, 400 or 3x500)'), validate: bad }));
   if (!xs) return;
-  const ys = parseAxisSpacing(prompt(L('Yatay akslar (A, B, C…) arası mesafeler, cm:', 'Spacing between horizontal axes (A, B, C…), cm:'), '2x600'));
+  const ys = parseAxisSpacing(await askText(L('Yatay akslar (A, B, C…)', 'Horizontal axes (A, B, C…)'), '2x600', { msg: L('Aks arası mesafeler, cm', 'Spacing between the axes, cm'), validate: bad }));
   if (!ys) return;
   const f = F(), b = contentBounds && contentBounds(), o = b && isFinite(b.x0) && (f.walls.length || f.rooms.length) ? { x: rnd(b.x0, P.grid), y: rnd(b.y0, P.grid) } : { x: 0, y: 0 };
   const made = axisGrid(f, o, xs, ys); sel = made.map(x => x.id); commit(); setTool('select'); refresh();
@@ -17510,8 +17646,8 @@ const pbRedraw = () => {
 function fsClose() {
   fs3DDispose(); document.getElementById('fstudio')?.remove(); document.body.classList.remove('fs-open');
 }
-function fsCancel() {
-  if (fsDirty() && !confirm(L('Uygulanmamış değişiklikler silinsin mi?', 'Discard the changes you have not applied?'))) return;
+async function fsCancel() {
+  if (fsDirty() && (await askConfirm(L('Uygulanmamış değişiklikler silinsin mi?', 'Discard the changes you have not applied?'), { ok: L('Değişiklikleri at', 'Discard'), danger: true })) !== true) return;
   closeModal();
 }
 // taslağı plana yazar: var olan öğe güncellenir, yeni mobilya görünümün ortasına yerleşir; toLib = kütüphaneye de ekle
@@ -17626,11 +17762,16 @@ function fsWire(root) {
     if (t.id === 'fsSnap') { ui.pb.snap = t.checked; return; }
     if (t.id === 'fsTpl') {
       const k = t.value; t.value = ''; if (!k) return;
-      if (ui.pb.d.parts.length && !confirm(L('Şablon, şu anki parçaların yerini alsın mı? (Geri al ile dönebilirsiniz)', 'Replace the current parts with this template? (Undo brings them back)'))) return;
-      const tp = FURN_TEMPLATES[k];
-      ui.pb.d = tp ? { w: tp.w, d: tp.d, h: tp.h, color: tp.color, parts: tp.parts(tp.w, tp.d, tp.h).map(cleanPart) } : { w: ui.pb.d.w, d: ui.pb.d.d, h: ui.pb.d.h, color: ui.pb.d.color, parts: [] };
-      if (tp && !ui.pb.id && (!ui.pb.name || ui.pb.name === ui.pb.name0)) { ui.pb.name = ui.pb.name0 = L(tp.tr, tp.en); const n = root.querySelector('#fsName'); if (n) n.value = ui.pb.name; }
-      ui.pb.sel = ui.pb.d.parts.length ? 0 : -1; fsPush(); pbRedraw(); return;
+      const use = () => {
+        if (!ui.pb) return;
+        const tp = FURN_TEMPLATES[k];
+        ui.pb.d = tp ? { w: tp.w, d: tp.d, h: tp.h, color: tp.color, parts: tp.parts(tp.w, tp.d, tp.h).map(cleanPart) } : { w: ui.pb.d.w, d: ui.pb.d.d, h: ui.pb.d.h, color: ui.pb.d.color, parts: [] };
+        if (tp && !ui.pb.id && (!ui.pb.name || ui.pb.name === ui.pb.name0)) { ui.pb.name = ui.pb.name0 = L(tp.tr, tp.en); const n = root.querySelector('#fsName'); if (n) n.value = ui.pb.name; }
+        ui.pb.sel = ui.pb.d.parts.length ? 0 : -1; fsPush(); pbRedraw();
+      };
+      if (!ui.pb.d.parts.length) { use(); return; }
+      askConfirm(L('Şablon, şu anki parçaların yerini alsın mı? (Geri al ile dönebilirsiniz)', 'Replace the current parts with this template? (Undo brings them back)'), { ok: L('Değiştir', 'Replace') }).then(ok => { if (ok === true) use(); });
+      return;
     }
     const D = ui.pb.d, p = D.parts[ui.pb.sel];
     if (t.dataset.pfall) {
@@ -21306,6 +21447,7 @@ function applyLangUI() {
   $('#bRedo').title = L('Yinele (Ctrl+Y)', 'Redo (Ctrl+Y)');
   $('#bPrint').textContent = L('🖨 PDF / Yazdır', '🖨 PDF / Print');
   $('#bDl').textContent = L('⬇ İndir ▾', '⬇ Download ▾'); $('#bDl').title = L('İndir: görüntü (PNG, SVG, PDF) ya da dosya (JSON, DXF, IFC, Revit)', 'Download: an image (PNG, SVG, PDF) or a file (JSON, DXF, IFC, Revit)');
+  $('#zIn').title = L('Yakınlaştır', 'Zoom in'); $('#zOut').title = L('Uzaklaştır', 'Zoom out'); $('#zFit').title = L('Sığdır (0)', 'Zoom to fit (0)');
   $('#dlHImg').textContent = L('Görüntü', 'Image'); $('#dlHFile').textContent = L('Dosya', 'File');
   $('#bQty').textContent = '📋 ' + L('Metraj / CSV', 'Quantities / CSV'); $('#bQty').title = L('Oda alanları, duvarlar, kapı / pencere ve mobilya adetleri; birim fiyat ve CSV', 'Room areas, walls, door / window and furniture counts; unit prices and CSV');
   $('#b2d').textContent = L('2B', '2D');
@@ -21541,10 +21683,9 @@ function importDxfText(text, fileName = '', units = null, same = false) {
     + (stats.truncated ? L(` · ${stats.truncated} nesne sınırı aştı`, ` · ${stats.truncated} object(s) over the limit`) : '')
     + (stats.skipped ? L(` · ${stats.skipped} öğe atlandı`, ` · ${stats.skipped} item(s) skipped`) : '');
   toast(msg, stats.unitsGuessed || units ? { label: L('Birim…', 'Units…'), fn: () => {
-    const u = prompt(L('Çizim birimi (mm, cm, m, in, ft):', 'Drawing unit (mm, cm, m, in, ft):'), stats.units);
-    const v = u && u.trim().toLowerCase(); if (!v) return;
-    if (!DXF_UNIT_CHOICES.includes(v)) { toast(L('Bilinmeyen birim', 'Unknown unit')); return; }
-    importDxfText(text, fileName, v, true);
+    askText(L('Çizim birimi', 'Drawing unit'), stats.units, { msg: 'mm, cm, m, in, ft', list: DXF_UNIT_CHOICES, validate: u => (DXF_UNIT_CHOICES.includes(String(u).trim().toLowerCase()) ? '' : L('Bilinmeyen birim', 'Unknown unit')) }).then(u => {
+      const v = u && u.trim().toLowerCase(); if (v) importDxfText(text, fileName, v, true);
+    });
   } } : null);
   return stats;
 }

@@ -380,8 +380,8 @@ check('project tabs keep separate plans and undo, and paste across (issue #17)',
     document.querySelector('#ptabs [data-tab="1"]').click();
     r.bStill = F().walls.length;
     r.state = tabsState().tabs.length;
-    window.confirm = () => true;
-    await closeTab(1);
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
+    const closing = closeTab(1); await answer(); await closing;
     r.n2 = tabs.length; r.after = P.name;
     return r;
   })()`);
@@ -1437,10 +1437,10 @@ check('furniture studio: drop, drag, resize, keys, undo, templates, place in pla
     out.lib = (P.lib.presets || []).some(p => p.name === 'Test table' && p.extra && p.extra.parts.length === out.parts);
     // reopen from the panel, switch to a template, Esc (confirm accepted) closes without touching the item
     sel = [o.id]; refresh(); document.querySelector('#props [data-act="parts"]').click(); await frame();
-    const conf = window.confirm; window.confirm = () => true;
-    const tplSel = document.getElementById('fsTpl'); tplSel.value = 'chair'; tplSel.dispatchEvent(new Event('change', { bubbles: true }));
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
+    const tplSel = document.getElementById('fsTpl'); tplSel.value = 'chair'; tplSel.dispatchEvent(new Event('change', { bubbles: true })); await answer();
     out.tpl = D().parts.length; out.tplName = D().parts.some(p => p.name === 'seat' || p.name === 'backrest');
-    key('Escape'); window.confirm = conf; out.escClosed = ui.modal !== 'parts' && !document.getElementById('fstudio');
+    key('Escape'); await answer(); out.escClosed = ui.modal !== 'parts' && !document.getElementById('fstudio');
     out.itemKept = F().furn[0].parts.length === out.parts;
     sel = []; refresh();
     return out;
@@ -1811,11 +1811,11 @@ check('texture dialog: create a pattern, upload tab, AI tab, agent-made SVG text
 });
 
 check('library presets: save a door, place it twice, delete + undo, JSON keeps them (issue #42)', async page => {
-  const info = await page.evaluate(`(() => {
+  const info = await page.evaluate(`(async () => {
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
     loadProject(newProject()); addRectWalls(0, 0, 800, 500); const f = F();
     const door = mkOp(OPDEF.door, f.walls[0], 200); door.w = 85; door.mat = 'glass'; f.ops.push(door); commit();
-    const p0 = window.prompt, c0 = window.confirm; window.prompt = () => 'K1'; window.confirm = () => true;
-    sel = [door.id]; refresh(); const btn = document.querySelector('#props [data-act="savepreset"]'); if (btn) btn.click();
+    sel = [door.id]; refresh(); const btn = document.querySelector('#props [data-act="savepreset"]'); if (btn) btn.click(); await answer('K1');
     const out = { saved: (P.lib.presets || []).length, card: (document.querySelector('#items [data-type="pre"] .sz') || {}).textContent };
     const pr = P.lib.presets[0]; document.querySelector('#items [data-type="pre"][data-id="' + pr.id + '"]').click();
     const r = cv.getBoundingClientRect(), at = (q, type) => { const s = w2s(q); cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 })); };
@@ -1823,9 +1823,8 @@ check('library presets: save a door, place it twice, delete + undo, JSON keeps t
     setTool('select');
     out.placed = F().ops.slice(1).map(o => o.w + ':' + o.mat).join(',');
     out.json = JSON.parse(JSON.stringify(P)).lib.presets.length;
-    document.querySelector('#items [data-delpre="' + pr.id + '"]').click(); out.del = P.lib.presets.length;
+    document.querySelector('#items [data-delpre="' + pr.id + '"]').click(); await answer(); out.del = P.lib.presets.length;
     undo(); out.undo = P.lib.presets.length + '/' + document.querySelectorAll('#items [data-type="pre"]').length;
-    window.prompt = p0; window.confirm = c0;
     return out;
   })()`);
   if (info.saved !== 1 || info.card !== '85×210') throw new Error('door preset not saved to the library: ' + JSON.stringify(info));
@@ -3450,7 +3449,7 @@ check('mobile: context touch bar (placing / drawing), library drawer, long-press
 
 
 check('mobile: exact wall length from the touch bar, multi-select without Shift, rename a floor without double-tap', async page => {
-  const r = await page.evaluate(`(() => {
+  const r = await page.evaluate(`(async () => {
     if (ui.view3d) show3D(false);
     loadProject(newProject()); const f = F(); commit(); refresh();
     document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true }));
@@ -3470,7 +3469,8 @@ check('mobile: exact wall length from the touch bar, multi-select without Shift,
     tap(a); tap(b); const both = sel.includes(a.id) && sel.includes(b.id);
     touchAct('multi'); sel = []; refresh(); tap(a); tap(b); const single = sel.length === 1 && sel[0] === b.id;
     // floor rename button
-    const op = window.prompt; window.prompt = () => 'Zemin X'; document.querySelector('#floors [data-fa="ren"]').click(); window.prompt = op;
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
+    document.querySelector('#floors [data-fa="ren"]').click(); await answer('Zemin X');
     const fname = F().name;
     document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'mouse', bubbles: true }));
     return { len, start, boxGone, multiOn, both, single, fname };
@@ -3627,9 +3627,9 @@ check('project groups: tabs gather behind a folding group chip, panel + right-cl
     out.order = names().join(' ');
     document.querySelector('#ptabs [data-tabgrp="Zehra"]').click(); out.folded = names().join(' ');
     document.querySelector('#ptabs [data-tabgrp="Zehra"]').click();
-    const keep = window.prompt; window.prompt = () => 'Zehra';
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
     const a2 = [...document.querySelectorAll('#ptabs .ptab')].find(e => /A2/.test(e.textContent));
-    a2.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); window.prompt = keep;
+    a2.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); await answer('Zehra');
     out.right = P.group; undo(); out.undo = P.group;
     await dbPut('projects', { name: '__g1', updatedAt: 3, project: { ...mk('__g1'), group: 'Zehra' } });
     await dbPut('projects', { name: '__g2', updatedAt: 2, project: { ...mk('__g2'), group: 'Ahsen' } });
@@ -4118,6 +4118,59 @@ check('quantities & shopping list with unit prices and CSV (#199)', async page =
   const ok = r.sections >= 4 && r.saved && r.oneStep && /[0-9]/.test(r.total) && r.roomSum === r.finSum && r.furn === r.furnInPlan && r.bom && r.csvLines > 10 && r.all && r.undone;
   if (!ok) throw new Error('quantities: ' + JSON.stringify(r));
   return `${r.sections} sections, ${r.furn} furniture items, price saved + undone, CSV with BOM`;
+});
+
+// #195 / #196: in-app ask / confirm dialogs (Enter submits, Esc aborts with no change, focus stays inside and
+// returns to the opener), modal dialog semantics with focus restore, context-menu keys, named icon buttons.
+check('accessible in-app dialogs, modal focus, menu keys and icon-button names (#195, #196)', async page => {
+  const r = await page.evaluate(`(async () => {
+    closeModal(); loadProject(newProject()); addRectWalls(0, 0, 400, 300); commit(); refresh();
+    const tick = () => new Promise(res => setTimeout(res, 20)), key = (k, o = {}) => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...o }));
+    const out = {};
+    // floor rename: Esc leaves the name, Enter applies it, one undo step
+    const ren0 = () => document.querySelector('#floors [data-fa="ren"]'), ren = ren0(); ren.focus(); const name0 = F().name;
+    ren.click(); await tick();
+    const ask = document.querySelector('#ask'); out.role = ask && ask.getAttribute('role'); out.modal = ask && ask.getAttribute('aria-modal');
+    out.focusIn = document.activeElement && document.activeElement.id === 'askI';
+    document.activeElement.value = 'Escaped'; key('Escape'); await tick();
+    out.escKept = F().name === name0 && !document.querySelector('#ask'); out.focusBack = document.activeElement === ren;
+    const h0 = hi; ren0().click(); await tick(); document.activeElement.value = 'Kat Bir'; key('Enter'); await tick();
+    out.entered = F().name === 'Kat Bir' && hi === h0 + 1;
+    // Tab stays inside the dialog
+    ren0().click(); await tick(); const okB = document.querySelector('#ask [data-ask="ok"]'); okB.focus(); key('Tab'); await tick();
+    out.trap = !!document.activeElement.closest('#ask'); key('Escape'); await tick();
+    // the dialog follows the theme: its colours come from the CSS variables
+    document.documentElement.dataset.theme = 'light'; ren0().click(); await tick();
+    const lightBg = getComputedStyle(document.querySelector('#ask')).backgroundColor; key('Escape'); await tick();
+    delete document.documentElement.dataset.theme; ren0().click(); await tick();
+    const darkBg = getComputedStyle(document.querySelector('#ask')).backgroundColor; key('Escape'); await tick();
+    out.themed = lightBg !== darkBg;
+    // a validation error keeps the dialog open
+    sel = F().walls.map(w => w.id); refresh(); scaleSelPrompt(); await tick();
+    document.activeElement.value = 'abc'; key('Enter'); await tick();
+    out.invalid = !!document.querySelector('#ask') && /\\S/.test(document.querySelector('#askE').textContent); key('Escape'); await tick();
+    // #modal: dialog role, labelled by its heading, focus in, Esc from an input closes, focus returns
+    const help = document.querySelector('#bHelp'); help.focus(); help.click(); await tick();
+    const m = document.querySelector('#modal'); out.mRole = m.getAttribute('role') + '/' + m.getAttribute('aria-modal') + '/' + !!document.getElementById(m.getAttribute('aria-labelledby'));
+    out.mFocus = m.contains(document.activeElement); out.closeNamed = !!m.querySelector('[data-close][aria-label]');
+    key('Escape'); await tick(); out.mBack = document.activeElement === help && ui.modal == null;
+    // context menu: role menu, arrow keys move, Esc closes
+    sel = [F().walls[0].id]; refresh();
+    const s = w2s({ x: 200, y: 0 }), rc = cv.getBoundingClientRect();
+    openCtxMenu({ clientX: rc.left + s.x, clientY: rc.top + s.y });
+    const cm = document.getElementById('ctxMenu'); out.menu = cm && cm.getAttribute('role');
+    const first = document.activeElement; key('ArrowDown'); out.arrow = document.activeElement !== first && document.activeElement.getAttribute('role') === 'menuitem';
+    key('Escape'); out.menuClosed = !document.getElementById('ctxMenu');
+    // icon-only buttons carry a name
+    await tick();
+    const bare = [...document.querySelectorAll('header button, #floors button, #zIn, #zOut, #zFit')].filter(b => b.offsetParent && !/[\\p{L}\\p{N}]{2,}/u.test(b.textContent) && !b.getAttribute('aria-label'));
+    out.unnamed = bare.map(b => b.id || b.outerHTML.slice(0, 40));
+    return out;
+  })()`);
+  const ok = r.role === 'dialog' && r.modal === 'true' && r.focusIn && r.escKept && r.focusBack && r.entered && r.trap && r.themed && r.invalid
+    && r.mRole === 'dialog/true/true' && r.mFocus && r.closeNamed && r.mBack && r.menu === 'menu' && r.arrow && r.menuClosed && !r.unnamed.length;
+  if (!ok) throw new Error('a11y dialogs: ' + JSON.stringify(r));
+  return 'ask dialog Enter / Esc / Tab / theme / validation, modal focus restore, menu keys, icon buttons named';
 });
 
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay

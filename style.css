@@ -895,6 +895,13 @@ main {
   margin: 0 3px;
 }
 
+/* kart + kendi düğmeleri yan yana (#195: düğme içinde düğme olmaz) */
+.item-c { position: relative; display: flex; min-width: 0; }
+.item-c > .item { flex: 1; min-width: 0; }
+.item-c .delsh, .item-c .renpre { background: none; border: 0; cursor: pointer; font: inherit; }
+.item-c .delsh:focus-visible, .item-c .renpre:focus-visible { opacity: 1; }
+
+.item-c .delsh,
 .item .delsh {
   position: absolute;
   top: 3px;
@@ -913,6 +920,7 @@ main {
 }
 
 /* ön ayar kartı: ✎ yeniden adlandır, ✕'in solunda (#42) */
+.item-c .renpre,
 .item .renpre {
   position: absolute;
   top: 3px;
@@ -925,11 +933,13 @@ main {
   opacity: 0.55;
 }
 
+.item-c .renpre:hover,
 .item .renpre:hover {
   opacity: 1;
   background: var(--panel);
 }
 
+.item-c .delsh:hover,
 .item .delsh:hover {
   opacity: 1;
   background: var(--panel);
@@ -1314,6 +1324,20 @@ footer input#iGridCustom {
   justify-content: center;
   z-index: 100;
 }
+
+/* uygulama içi soru penceresi (#196): her katmanın (pencere, mobilya stüdyosu) üstünde */
+#askbg { position: fixed; inset: 0; z-index: 200; display: none; align-items: center; justify-content: center; background: rgba(5, 8, 12, 0.55); }
+#ask { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-top: 3px solid var(--accent); border-radius: 6px; width: min(440px, calc(100vw - 32px)); padding: 16px 18px; box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45); }
+#ask h3 { margin: 0 0 8px; font-size: 15px; }
+#ask p { margin: 0 0 10px; color: var(--muted); white-space: pre-line; line-height: 1.45; }
+#ask input { width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 7px 9px; color: var(--text); font: inherit; }
+#ask input:focus { border-color: var(--accent); outline: none; }
+#ask input[aria-invalid="true"] { border-color: var(--danger); }
+#ask .ask-err { color: var(--danger); min-height: 1em; margin: 4px 0 0; font-size: 12px; }
+#ask .ask-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+.btn.danger:hover:not(:disabled) { filter: brightness(1.08); }
+#modal:focus { outline: none; }
 
 #modal {
   background: var(--panel);
