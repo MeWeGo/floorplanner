@@ -159,6 +159,49 @@ function cleanGround(P) {
   if (Object.keys(o).length) P.ground = o; else delete P.ground;
 }
 /* GROUND-PARAM:END */
+/* SITE-SUN:BEGIN — proje konumu ve güneş konumu (#205): saf JS, mcp/server.js ile birebir aynı (tests/site-sun.test.js karşılaştırır).
+   P.site = { lat, lon, tz, north } isteğe bağlı: enlem / boylam (°), saat dilimi (UTC farkı, saat; yaz saati yok sayılır),
+   north = gerçek kuzeyin plan yukarısından (−y) saat yönünde açısı (°). Yok = kuzey plan yukarısı, konum yok.
+   sunPosition = NOAA'nın kısaltılmış güneş formülü (yaklaşık ±0.5°), bağımlılık yok. */
+const SITE_CITIES = {
+  istanbul: ['İstanbul', 'Istanbul', 41.01, 28.98, 3], ankara: ['Ankara', 'Ankara', 39.93, 32.86, 3], izmir: ['İzmir', 'Izmir', 38.42, 27.14, 3],
+  antalya: ['Antalya', 'Antalya', 36.9, 30.7, 3], trabzon: ['Trabzon', 'Trabzon', 41, 39.72, 3], diyarbakir: ['Diyarbakır', 'Diyarbakir', 37.91, 40.24, 3],
+  london: ['Londra', 'London', 51.51, -0.13, 0], berlin: ['Berlin', 'Berlin', 52.52, 13.4, 1], paris: ['Paris', 'Paris', 48.86, 2.35, 1],
+  dubai: ['Dubai', 'Dubai', 25.2, 55.27, 4], newyork: ['New York', 'New York', 40.71, -74.01, -5], losangeles: ['Los Angeles', 'Los Angeles', 34.05, -118.24, -8],
+  tokyo: ['Tokyo', 'Tokyo', 35.68, 139.69, 9], sydney: ['Sidney', 'Sydney', -33.87, 151.21, 10],
+};
+const SITE_DEF = { lat: 41.01, lon: 28.98, tz: 3, north: 0 };
+function siteP(P) {
+  const s = (P && P.site) || {}, n = (v, d) => (Number.isFinite(+v) && v !== null && v !== '' ? +v : d);
+  const has = Number.isFinite(+s.lat) && s.lat !== null && Number.isFinite(+s.lon) && s.lon !== null;
+  return { has, lat: has ? +s.lat : SITE_DEF.lat, lon: has ? +s.lon : SITE_DEF.lon, tz: n(s.tz, has ? Math.round(+s.lon / 15) || 0 : SITE_DEF.tz), north: n(s.north, 0) };
+}
+function cleanSite(P) {
+  const s = P && P.site; if (!s || typeof s !== 'object') { if (P) delete P.site; return; }
+  const o = {}, r = (v, k) => Math.round(v * k) / k, ok = v => v !== null && v !== '' && Number.isFinite(+v);
+  if (ok(s.lat) && ok(s.lon)) { o.lat = r(Math.max(-90, Math.min(90, +s.lat)), 1e4); o.lon = r(Math.max(-180, Math.min(180, +s.lon)), 1e4); }
+  if (ok(s.tz)) o.tz = r(Math.max(-12, Math.min(14, +s.tz)), 4);
+  if (ok(s.north)) { const n = r(((+s.north % 360) + 360) % 360, 10); if (n) o.north = n; }
+  if (Object.keys(o).length) P.site = o; else delete P.site;
+}
+// güneşin gerçek azimutu (kuzeyden saat yönünde) ve ufuktan yüksekliği, derece; t = UTC milisaniye
+function sunPosition(lat, lon, t) {
+  const rad = Math.PI / 180, d = t / 864e5 + 2440587.5 - 2451545;
+  const g = (357.529 + 0.98560028 * d) * rad, q = 280.459 + 0.98564736 * d;
+  const L = (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * rad, e = (23.439 - 3.6e-7 * d) * rad;
+  const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)), dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const H = ((18.697374558 + 24.06570982441908 * d) * 15 + lon) * rad - ra, la = lat * rad;
+  const alt = Math.asin(Math.sin(la) * Math.sin(dec) + Math.cos(la) * Math.cos(dec) * Math.cos(H));
+  const az = Math.atan2(-Math.sin(H), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(H));
+  return { az: ((az / rad) % 360 + 360) % 360, alt: alt / rad };
+}
+// proje konumunda yerel tarih (YYYY-AA-GG) + saat (0–24, ondalık) → plan azimutu (kuzey açısı eklenmiş), yükseklik
+function siteSun(site, date, hour) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || '')); if (!m) return null;
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3]) + (+hour - site.tz) * 36e5, p = sunPosition(site.lat, site.lon, t);
+  return { az: ((p.az + site.north) % 360 + 360) % 360, alt: p.alt, trueAz: p.az };
+}
+/* SITE-SUN:END */
 /* ZONE-PARAM:BEGIN — arsa sınırı ve dış mekân zeminleri (#150): saf JS, mcp/server.js ile birebir aynı (tests/site-zones.test.js karşılaştırır).
    Floor.zones = [{ id, zt, name?, pts, floor?, color?, curb?, setback?, sb? }] — sıradan bir tür (KINDS.zones = 'zone'), yani seçme,
    taşıma, döndürme, aynalama, kopyalama, geri alma, katman hazır gelir. zt: 'parcel' (arsa: sınır + çekme mesafesi, yüzeyi yok) ya da
@@ -1648,6 +1691,7 @@ function normalizeProject(P) {
   if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
   cleanLw(P); // çizgi kalınlıkları
   cleanGround(P); // 3B zemin (#147)
+  cleanSite(P); // konum + plan kuzeyi (#205)
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; for (const k in KINDS) for (const o of f[k]) if (o) { if (o.hidden) o.hidden = true; else delete o.hidden; } f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); cleanWallFaces(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; cleanSurfHp(s); }
     for (const r of f.rooms) cleanSurfHp(r);
@@ -16273,11 +16317,72 @@ function studioHtml(preview) {
       <span>⛰ ${L('Güneş yüksekliği', 'Sun altitude')}</span><input type="range" min="${SUN_ALT_MIN}" max="85" step="1" value="${st.alt}" data-rs="alt"><b>${st.alt}°</b>
     </div>
     <div class="row" style="gap:6px;margin-bottom:8px">${Object.entries(SUN_PRESETS).map(([k, v]) => `<button class="btn sm" data-rs-sun="${k}">${L(...v[0])}</button>`).join('')}</div>
+    ${siteSunHtml()}
     <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 8px;align-items:center" title="${L('Gerçekçi ve Maket stillerinde ışık dengesi', 'Light balance for the Realistic and Maquette styles')}"><span>${L('Atmosfer', 'Atmosphere')}</span>${Object.entries(RENDER_MOODS).map(([k, v]) => `<button class="btn sm${k === (st.mood || 'day') ? ' primary' : ''}" data-rs-mood="${k}">${L(...v)}</button>`).join('')}</div>
     ${st.alt >= 6 ? `<div class="row" style="gap:8px;margin:0 0 8px"><label class="chk-pill"><input type="checkbox" data-rs="dayLights" ${ui.dayLights ? 'checked' : ''}> 💡 ${L('Gündüz ışıkları açık', 'Daytime lights on')}</label></div>` : ''}
     <div class="row" style="gap:10px;margin-bottom:10px;flex-wrap:wrap"><label>${L('Çözünürlük', 'Resolution')} <select data-rs="res">${opt(RENDER_RES, st.res)}</select></label><label>${L('Biçim', 'Format')} <select data-rs="format"><option value="png" ${st.format === 'png' ? 'selected' : ''}>PNG</option><option value="jpeg" ${st.format === 'jpeg' ? 'selected' : ''}>JPEG</option></select></label></div>
     <div class="rs-prev" style="background:${studioBackdrop() === 'sky' ? '#d6e8f5' : '#fff'};border-radius:8px;min-height:120px;display:flex;align-items:center;justify-content:center;overflow:hidden">${preview ? `<img src="${preview}" style="max-width:100%;max-height:40vh;display:block">` : `<span class="muted" style="color:#64748b">${L('Önizleme için 👁 Önizle', 'Press 👁 Preview to see it')}</span>`}</div>
     <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm" data-rs-go="preview">👁 ${L('Önizle', 'Preview')}</button><button class="btn sm primary" data-rs-go="render">🎬 ${L('Render al ve indir', 'Render & download')}</button></div>`;
+}
+/* Konum, tarih ve saate göre güneş (#205). Konum + plan kuzeyi projede (P.site, SITE-SUN bloğu), tarih ve saat
+   görünüm durumu (ui.studio.date / hour). Saat ya da tarih değişince güneş yönü / yüksekliği hesaplanır ve kaydırıcılar
+   da güncellenir (elle sürükleyince elle değer geçerli olur). ▶ gölge çalışması saati gün doğumundan batımına oynatır. */
+const pad2 = n => String(n).padStart(2, '0');
+function todayStr() { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+const fmtHour = h => { const m = Math.round(((+h % 24) + 24) % 24 * 60); return pad2(Math.floor(m / 60) % 24) + ':' + pad2(m % 60); };
+function siteSunHtml() {
+  const s = siteP(P), st = ui.studio, city = Object.keys(SITE_CITIES).find(k => SITE_CITIES[k][2] === s.lat && SITE_CITIES[k][3] === s.lon) || '';
+  const num = (k, v, step, w) => `<input type="number" data-site="${k}" value="${v}" step="${step}" style="width:${w}px">`;
+  const hr = st.hour != null ? st.hour : 12;
+  return `<details class="rs-site" ${st.siteOpen ? 'open' : ''} style="margin:0 0 10px"><summary>📍 ${L('Konum, tarih ve saat', 'Location, date and time')}${s.has ? ` <span class="muted">· ${esc(city ? L(SITE_CITIES[city][0], SITE_CITIES[city][1]) : s.lat + '°, ' + s.lon + '°')}</span>` : ''}</summary>
+    <div class="row" style="flex-wrap:wrap;gap:6px 10px;margin:8px 0;align-items:center">
+      <label>${L('Şehir', 'City')} <select data-site="city"><option value="">${s.has ? L('Özel', 'Custom') : '—'}</option>${Object.entries(SITE_CITIES).map(([k, v]) => `<option value="${k}" ${k === city ? 'selected' : ''}>${L(v[0], v[1])}</option>`).join('')}</select></label>
+      <label>${L('Enlem', 'Lat')} ${num('lat', s.lat, 0.01, 74)}</label><label>${L('Boylam', 'Lon')} ${num('lon', s.lon, 0.01, 78)}</label>
+      <label title="${L('UTC farkı, saat (yaz saati hesaba katılmaz)', 'UTC offset in hours (standard time, no daylight saving)')}">UTC ${num('tz', s.tz, 0.5, 52)}</label>
+      <label title="${L('Gerçek kuzeyin plan yukarısından saat yönünde açısı', 'True north, degrees clockwise from the top of the plan')}">${L('Kuzey', 'North')} ${num('north', s.north, 1, 58)}°</label>
+    </div>
+    <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center">
+      <span>📅 ${L('Tarih', 'Date')}</span><input type="date" data-rs="date" value="${esc(st.date || todayStr())}"><span></span>
+      <span>🕒 ${L('Saat', 'Time')}</span><input type="range" min="0" max="24" step="0.25" value="${hr}" data-rs="hour"><b>${fmtHour(hr)}</b>
+    </div>
+    <div class="row" style="gap:8px;margin-top:6px;align-items:center"><button class="btn sm" data-rs-anim>${studioAnimLabel()}</button><span class="muted" id="rsSunInfo"></span></div>
+  </details>`;
+}
+const studioAnimLabel = () => (ui.studio.anim ? '⏸ ' + L('Durdur', 'Stop') : '▶ ' + L('Gölge çalışması (gün boyu)', 'Shadow study (whole day)'));
+// saat / tarih / konumdan güneşi kur; kaydırıcıları ve etiketleri eşitle. final = bırakıldı (tam kurulum + gece kipi)
+function studioSunFromTime(final) {
+  const st = ui.studio;
+  if (!st.date) st.date = todayStr();
+  if (st.hour == null) st.hour = 12;
+  const p = siteSun(siteP(P), st.date, st.hour); if (!p) return;
+  st.az = Math.round(p.az); st.alt = Math.round(clamp(p.alt, SUN_ALT_MIN, 85) * 10) / 10;
+  for (const k of ['az', 'alt']) { const el = document.querySelector(`#modal [data-rs="${k}"]`); if (el) { el.value = st[k]; if (el.nextElementSibling) el.nextElementSibling.textContent = Math.round(st[k]) + '°'; } }
+  const info = $('#rsSunInfo'); if (info) info.textContent = p.alt < 0 ? L('Güneş ufkun altında', 'Sun below the horizon') : `☀ ${Math.round(p.trueAz)}° · ${Math.round(p.alt)}°`;
+  if (!final) { liveSunSoon(); return; }
+  if (st.alt < 1) { st.mood = 'night'; ensureFixPool(); } else if (st.mood === 'night') st.mood = 'day';
+  syncNightUI(); liveSunDone(); assignFixLights();
+}
+// ▶ gölge çalışması: 12 sn'de gün doğumundan batımına; pencere kapanınca ya da yeniden basınca durur
+function studioSunAnim(on) {
+  const st = ui.studio; st.anim = !!on;
+  const b = document.querySelector('#modal [data-rs-anim]'); if (b) b.textContent = studioAnimLabel();
+  if (!st.anim) { studioSunFromTime(true); return; }
+  if (!ui.live3d) setLive3D(true);
+  const s = siteP(P), d = st.date || (st.date = todayStr());
+  let h0 = 0, h1 = 24;
+  for (let h = 0; h <= 24; h += 0.25) if (siteSun(s, d, h).alt > -2) { h0 = h; break; }
+  for (let h = 24; h >= 0; h -= 0.25) if (siteSun(s, d, h).alt > -2) { h1 = h; break; }
+  if (h1 <= h0) { h0 = 0; h1 = 24; } // kutup gecesi: tüm gün
+  let last = performance.now();
+  if (!(st.hour >= h0 && st.hour < h1)) st.hour = h0;
+  const step = now => {
+    if (!st.anim || ui.modal !== 'studio' || !ui.view3d) { st.anim = false; if (ui.view3d) applyLive3D(); return; }
+    st.hour += (now - last) / 1000 * (h1 - h0) / 12; last = now;
+    if (st.hour > h1) st.hour = h0;
+    const el = document.querySelector('#modal [data-rs="hour"]'); if (el) { el.value = st.hour; if (el.nextElementSibling) el.nextElementSibling.textContent = fmtHour(st.hour); }
+    studioSunFromTime(false); requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 const studioOpts = () => ({ mood: ui.studio.mood || 'day', style: ui.studio.style, backdrop: studioBackdrop(), sun: { az: ui.studio.az, alt: ui.studio.alt }, longSide: RENDER_RES[ui.studio.res][2] || 0, format: ui.studio.format });
 /* ---------- Doku penceresi: oluştur / yükle / AI'dan iste ----------
@@ -16434,13 +16539,33 @@ function openRenderStudio(preview) {
 $('#modal').addEventListener('input', e => {
   if (ui.modal !== 'studio') return;
   const t = e.target.closest('[data-rs]'); if (!t || t.type === 'checkbox') return;
-  const k = t.dataset.rs; ui.studio[k] = k === 'az' || k === 'alt' ? +t.value : t.value;
+  const k = t.dataset.rs;
+  if (k === 'hour' || k === 'date') { // #205
+    ui.studio[k] = k === 'hour' ? +t.value : t.value;
+    if (k === 'hour' && t.nextElementSibling) t.nextElementSibling.textContent = fmtHour(t.value);
+    if (ui.studio.anim) studioSunAnim(false); else studioSunFromTime(false);
+    return;
+  }
+  ui.studio[k] = k === 'az' || k === 'alt' ? +t.value : t.value;
   if (t.nextElementSibling && (k === 'az' || k === 'alt')) t.nextElementSibling.textContent = t.value + '°';
   if (k === 'az' || k === 'alt') { syncLightsUI(); liveSunSoon(); } // canlı gerçekçi görünüm aynı güneşi kullanır (#81); sürüklerken hafif önizleme (#191)
 });
 $('#modal').addEventListener('change', e => {
   if (ui.modal !== 'studio') return;
   const sun = e.target.closest('[data-rs="az"], [data-rs="alt"]'); if (sun) { liveSunDone(); return; } // bırakınca tam kurulum (#191)
+  if (e.target.closest('[data-rs="hour"], [data-rs="date"]')) { studioSunFromTime(true); return; }
+  const sf = e.target.closest('[data-site]');
+  if (sf) { // konum alanları projeye yazılır (tek commit), güneş yeni konuma göre kurulur (#205)
+    const s = Object.assign({}, P.site), k = sf.dataset.site, cur = siteP(P);
+    if (k === 'city') { const cc = SITE_CITIES[sf.value]; if (!cc) return; s.lat = cc[2]; s.lon = cc[3]; s.tz = cc[4]; }
+    else {
+      const v = sf.value === '' ? null : +String(sf.value).replace(',', '.');
+      if ((k === 'lat' || k === 'lon') && !cur.has) { s.lat = cur.lat; s.lon = cur.lon; s.tz = cur.tz; }
+      if (v === null || Number.isFinite(v)) s[k] = v;
+    }
+    P.site = s; cleanSite(P); ui.studio.siteOpen = true; commit();
+    openRenderStudio(); studioSunFromTime(true); return;
+  }
   const t = e.target.closest('[data-rs="dayLights"]'); if (!t) return;
   setDayLights(t.checked);
 });
@@ -16449,6 +16574,8 @@ $('#modal').addEventListener('click', async e => {
   const s = e.target.closest('[data-rs-style]'); if (s) { ui.studio.style = s.dataset.rsStyle; openRenderStudio(); return; }
   const bg = e.target.closest('[data-rs-bg]'); if (bg) { ui.studio.backdrop = bg.dataset.rsBg; openRenderStudio(); return; }
   const p = e.target.closest('[data-rs-sun]'); if (p) { const v = SUN_PRESETS[p.dataset.rsSun]; ui.studio.az = v[1]; ui.studio.alt = v[2]; if (v[2] < 1) { ui.studio.mood = 'night'; ensureFixPool(); } else if (ui.studio.mood === 'night') ui.studio.mood = 'day'; syncNightUI(); applyLive3D(); assignFixLights(); openRenderStudio(); return; }
+  if (e.target.closest('[data-rs-anim]')) { studioSunAnim(!ui.studio.anim); return; } // #205
+  const sm = e.target.closest('.rs-site > summary'); if (sm) { ui.studio.siteOpen = !sm.parentElement.open; return; }
   const md = e.target.closest('[data-rs-mood]');
   if (md) { // sıcak akşam: alçak güneş + sıcak iç dolgu; gün ışığına dönünce güneş yeniden yükselir
     const st = ui.studio; st.mood = md.dataset.rsMood;

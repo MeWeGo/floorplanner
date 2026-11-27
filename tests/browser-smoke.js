@@ -4008,6 +4008,40 @@ check('render studio sun sliders stay light while dragging in the live view (#19
   return 'no realLook while dragging, one full rebuild on release';
 });
 
+// #205: the render studio sets the sun from the project location, date and time; the location is project data
+// (one undo step, survives a save), north turns the sun, and the shadow study animates the hour.
+check('sun from location, date and time in the render studio (#205)', async page => {
+  const r = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 500, 400); sel = []; commit(); refresh();
+    document.getElementById('b3d').click(); if (!ui.view3d) return { err: '3D did not open' };
+    ui.studio.date = '2026-06-21'; ui.studio.hour = 12; ui.studio.siteOpen = true;
+    openRenderStudio();
+    const q = s => document.querySelector('#modal ' + s), fire = (el, ev) => el.dispatchEvent(new Event(ev, { bubbles: true }));
+    const city = q('[data-site="city"]'); if (!city) return { err: 'no city picker' };
+    const h0 = hi;
+    city.value = 'ankara'; fire(city, 'change');
+    const site = JSON.parse(JSON.stringify(P.site || null)), oneStep = hi === h0 + 1;
+    const hour = q('[data-rs="hour"]'); hour.value = '13.25'; fire(hour, 'input'); fire(hour, 'change');
+    const noon = { az: ui.studio.az, alt: ui.studio.alt, slider: +q('[data-rs="az"]').value, label: hour.nextElementSibling.textContent };
+    const north = q('[data-site="north"]'); north.value = '90'; fire(north, 'change');
+    const turned = ui.studio.az;
+    hour.value = '1'; fire(q('[data-rs="hour"]'), 'input'); const nightIn = q('[data-rs="hour"]'); nightIn.value = '1'; fire(nightIn, 'input'); fire(nightIn, 'change');
+    const night = { alt: ui.studio.alt, mood: ui.studio.mood };
+    q('[data-rs-anim]').click(); const hA = ui.studio.hour;
+    await new Promise(res => setTimeout(res, 700));
+    const animated = ui.studio.anim && ui.studio.hour !== hA, live = !!ui.live3d;
+    q('[data-rs-anim]').click();
+    undo(); undo(); const undone = !P.site;
+    closeModal(); setLive3D(false); show3D(false);
+    return { site, oneStep, noon, turned, night, animated, live, undone };  // Ankara solar noon ≈ 12:49, so 13:15 is just past south
+  })()`);
+  if (r.err) throw new Error(r.err);
+  const ok = r.site && r.site.lat === 39.93 && r.oneStep && r.noon.az > 185 && r.noon.az < 215 && r.noon.alt > 70 && r.noon.label === '13:15'
+    && Math.abs(((r.turned - r.noon.az + 360) % 360) - 90) < 1 && r.night.alt < 0 && r.night.mood === 'night' && r.animated && r.live && r.undone;
+  if (!ok) throw new Error('site sun: ' + JSON.stringify(r));
+  return `Ankara 21 June 13:15 → az ${r.noon.az}°, alt ${r.noon.alt}°; north 90° → ${r.turned}°; shadow study runs`;
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {
