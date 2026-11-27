@@ -72,6 +72,7 @@ P = {
   "layers": [ { "id": "0", "name": "Varsayılan", "color": "#64748b", "vis": true, "lock": false, "print": true, "z"?: 150 }, … ],   // drawing layers (issue #32); "0" = Default, cannot be deleted; z = layer height (cm, ±500)
   "activeLayer": "0",            // new objects are stamped with it (any object may carry "layer": id; absent = "0")
   "group"?: "Ahsen’s projects",   // optional project group (≤ 40 chars, cleanGroup in normalizeProject; absent = no group): gathers tabs and My Projects sections
+  "qty"?: { "prices": { "fin:wood": 45, "op:door:90x210": 3500 } },   // optional unit prices per quantities line (#199)
   "site"?: { "lat": 41.01, "lon": 28.98, "tz"?: 3, "north"?: 15 },   // optional project location + true north (° clockwise from plan up) for the 3D sun (#205)
   "lw": { "wall"?: 3, "op"?: 2, "furn"?: 0.5, "room"?: 1.5, "anno"?: 0.75 },   // optional line-weight multipliers (LW_STEPS), absent = ×1
   "textures": [ { "id": "…", "name": "…", "w": 60, "h": 60 }, … ],   // custom texture metadata (issue #40); image data lives in IndexedDB
@@ -195,7 +196,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, ptabs, bNew, bProjects, bSync, bSave, bOpen, bDl, dlMenu, dlHImg, dlHFile, bJson, bDxf, bIfc, bRevit, bUndo, bRedo, bPng, bSvg, bPrint, b2d, bCad, b3d, b3dFit, b3dTop, b3dEye, b3dShot, b3dLive, b3dFloors, bInspect, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, cOutline, lblOutline, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, onlineWrap, onlineCnt, modalbg, modal`.
+`pname, ptabs, bNew, bProjects, bSync, bSave, bOpen, bDl, dlMenu, dlHImg, dlHFile, bJson, bDxf, bIfc, bRevit, bQty, bUndo, bRedo, bPng, bSvg, bPrint, b2d, bCad, b3d, b3dFit, b3dTop, b3dEye, b3dShot, b3dLive, b3dFloors, bInspect, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, cOutline, lblOutline, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, onlineWrap, onlineCnt, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -486,6 +487,9 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - **Sign-in** is separate from Drive: `storeSignInButton()` loads GIS through `gdLoadGis()`, initialises `google.accounts.id` once per client id (`store.gisCid`; the callback goes through `store.signCb`, which only continues if the dialog that asked is still open) and renders Google's button; `storeSetTok()` keeps the ID token in `sessionStorage['fp_store_tok']`; a 401 signs out. The display name is remembered in `localStorage['fp_store_name']`.
 - **MCP:** read-only `store_search { q, category, sort }` and `store_place { id, x, y, rot, floorIndex }` (`FP_STORE_URL` overrides the address; strings cleaned by `storeClean`, parts by `cleanParts`). No publishing from the MCP.
 - Not built: images / photos, ratings or comments, versioning of published items, doors / windows / roofs / stairs, an admin page (admin actions live in the item's ⓘ dialog). Guard: `tests/furniture-store.test.js` (worker on a real `node:sqlite` with test-signed tokens, thumbnail sanitiser, parity, MCP tools, app wiring) + the smoke check "furniture store: …".
+
+### Quantities & shopping list (#199)
+- `#bQty` (📋 in the ⬇ menu, command `qty`) → `qtyModal()` (`ui.modal === 'qty'`, scope `ui.qtyAll` = this floor / whole project, through `visFloor`). `qtyLines(proj, floors)` is pure: room schedule (area, perimeter, finish, net wall surface = perimeter × storey height − openings whose centre lies within half a wall of the room outline, `qtyNearEdge`) and five sections of `{ key, label, unit, qty }` lines: floor finishes (m² per kind), wall surfaces (paint, m²), walls (m per type + thickness), doors / windows (pcs per type + size), furniture (pcs per catalogue item or label). Unit prices live in `P.qty.prices[key]` (`cleanQty` in `normalizeProject`; typing updates amounts live, `change` commits once; the MCP passes the field through). `qtyCsv()` = UTF-8 with BOM, `;` + decimal comma in Turkish, `,` + point in English, lines then the room schedule. Not built: supplier prices, structural quantities. Guard: smoke check "quantities & shopping list …".
 
 ### Download menu
 - **⬇ Download** (`#bDl`) opens `#dlMenu` (`dlMenuOpen(on)`, `position: fixed` under the button because the phone header scrolls sideways; closes on an item click, Esc, an outside pointerdown or a resize). The six export buttons keep their ids inside it (`#bPng #bSvg #bPrint` under **Image**, `#bJson #bIfc #bRevit` under **File**), so their handlers, `applyLangUI`, `syncExportTitles`, the command line and tests are unchanged. Guard: `tests/groups-download-sync.test.js` + the smoke check "one Download menu: …".

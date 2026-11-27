@@ -4095,6 +4095,31 @@ check('one-click dimensions for rooms and outer walls (#200)', async page => {
   return `${r.auto1} dimensions, re-run replaced them, manual kept, undo restores`;
 });
 
+// #199: the quantities view lists rooms, floor finishes, wall surfaces, walls, openings and furniture for a floor
+// or the whole project; unit prices are project data (one undo step); the CSV is UTF-8 with a BOM.
+check('quantities & shopping list with unit prices and CSV (#199)', async page => {
+  const r = await page.evaluate(`(() => {
+    closeModal(); P = newProject(); fi = 0; TEMPLATES[2].build(); loadProject(P); refresh();
+    document.querySelector('#bQty').click();
+    if (ui.modal !== 'qty') return { err: 'modal did not open' };
+    const sections = [...document.querySelectorAll('#modal tr.qty-sec')].map(t => t.textContent);
+    const inp = document.querySelector('#modal [data-qty-price^="fin:"]'), key = inp.dataset.qtyPrice;
+    const h0 = hi; inp.value = '12.5'; inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
+    const saved = P.qty && P.qty.prices[key] === 12.5, oneStep = hi === h0 + 1, total = document.querySelector('#qtyTotal').textContent;
+    const d = qtyData(), roomSum = d.rooms.reduce((s, x) => s + x.area, 0), finSum = d.sections.find(s => s.id === 'fin').lines.reduce((s, l) => s + l.qty, 0);
+    const furn = d.sections.find(s => s.id === 'furn').lines.reduce((s, l) => s + l.qty, 0);
+    const csv = qtyCsv(d, P), bom = csv.charCodeAt(0) === 0xfeff;
+    document.querySelector('#modal [data-qty-scope="all"]').click(); const all = ui.qtyAll;
+    closeModal(); undo(); const undone = !(P.qty && P.qty.prices[key]);
+    ui.qtyAll = false;
+    return { sections: sections.length, saved, oneStep, total, roomSum: Math.round(roomSum * 100), finSum: Math.round(finSum * 100), furn, furnInPlan: F().furn.length, bom, csvLines: csv.split('\\r\\n').length, all, undone };
+  })()`);
+  if (r.err) throw new Error(r.err);
+  const ok = r.sections >= 4 && r.saved && r.oneStep && /[0-9]/.test(r.total) && r.roomSum === r.finSum && r.furn === r.furnInPlan && r.bom && r.csvLines > 10 && r.all && r.undone;
+  if (!ok) throw new Error('quantities: ' + JSON.stringify(r));
+  return `${r.sections} sections, ${r.furn} furniture items, price saved + undone, CSV with BOM`;
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {

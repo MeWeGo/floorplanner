@@ -1692,6 +1692,7 @@ function normalizeProject(P) {
   cleanLw(P); // çizgi kalınlıkları
   cleanGround(P); // 3B zemin (#147)
   cleanSite(P); // konum + plan kuzeyi (#205)
+  cleanQty(P); // metraj birim fiyatları (#199)
   P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; for (const k in KINDS) for (const o of f[k]) if (o) { if (o.hidden) o.hidden = true; else delete o.hidden; } f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); cleanWallFaces(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; cleanSurfHp(s); }
     for (const r of f.rooms) cleanSurfHp(r);
@@ -10985,6 +10986,7 @@ function cmdList() {
     act('png', '🖼', 'PNG dışa aktar', 'Export PNG', '', () => $('#bPng').click(), true, 'image görsel render'),
     act('svg', '⬇', 'SVG dışa aktar', 'Export SVG', '', () => $('#bSvg').click(), false),
     act('json', '⬇', 'JSON indir', 'Download JSON', '', () => downloadJson(P), true, 'export backup yedek'),
+    act('qty', '📋', 'Metraj ve alışveriş listesi (CSV)', 'Quantities & shopping list (CSV)', '', () => qtyModal(), true, 'quantities schedule bill materials cost price csv excel metraj keşif maliyet fiyat liste'),
     act('dxf', '⬇', 'DXF olarak dışa aktar (etkin kat)', 'Export DXF (active floor)', '', () => downloadDxf(), true, 'dxf autocad cad bricscad librecad draftsight export dışa aktar'),
     act('dxfall', '⬇', 'DXF olarak dışa aktar (tüm katlar)', 'Export DXF (all floors)', '', () => downloadDxf(true), true, 'dxf autocad cad all floors tüm katlar export dışa aktar'),
     act('dxfm', '⬇', 'DXF olarak dışa aktar (metre)', 'Export DXF (metres)', '', () => downloadDxf(false, 'm'), true, 'dxf autocad cad metre metres meters m units birim'),
@@ -14431,6 +14433,122 @@ function templatesModal() {
   });
 }
 
+/* ---------- Metraj ve alışveriş listesi (#199) ----------
+   qtyLines(proj, floors) saf: odalar (alan, çevre, kaplama), kaplama başına zemin alanı, duvar tipi + kalınlığı başına
+   uzunluk ve brüt yüz alanı, oda başına net duvar yüzü (çevre × kat yüksekliği − o odaya bakan kapı / pencere),
+   kapı / pencere tip + ölçü başına adet, mobilya katalog ögesi başına adet. Her satırın kalıcı bir anahtarı var;
+   isteğe bağlı birim fiyatlar P.qty.prices[anahtar] içinde durur (geri alınabilir). CSV: UTF-8 + BOM (Excel'de
+   Türkçe karakterler düzgün açılır), Türkçede ; ayırıcı ve ondalık virgül. */
+const r2 = v => Math.round(v * 100) / 100;
+function qtyFinishName(kind, proj) {
+  if (!kind || kind === 'none') return L('Kaplamasız', 'No finish');
+  const id = typeof kind === 'string' && kind.startsWith('tex:') ? kind.slice(4) : null;
+  if (id) { const t = ((proj && proj.textures) || []).find(x => x.id === id); return t ? '🖼 ' + t.name : L('Özel doku', 'Custom texture'); }
+  return getFloors()[kind] || kind;
+}
+const qtyNearEdge = (p, pts, tol) => pts.some((a, i) => { const b = pts[(i + 1) % pts.length], L2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2; if (!L2) return false; const t = clamp(((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / L2, 0, 1); return Math.hypot(a.x + (b.x - a.x) * t - p.x, a.y + (b.y - a.y) * t - p.y) <= tol; });
+function qtyLines(proj, floors) {
+  const rooms = [], groups = { fin: new Map(), wall: new Map(), paint: new Map(), op: new Map(), furn: new Map() };
+  const add = (g, key, label, unit, q) => { const m = groups[g], e = m.get(key) || { key, label, unit, qty: 0 }; e.qty += q; m.set(key, e); };
+  for (const f of floors) {
+    const h = (f.wallH || proj.wallH || 270), walls = (f.walls || []).filter(w => !w.hidden), byId = new Map(walls.map(w => [w.id, w]));
+    const ops = (f.ops || []).filter(o => !o.hidden && byId.has(o.wall)).map(o => {
+      const w = byId.get(o.wall), len = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1;
+      return { o, w, p: { x: w.a.x + (w.b.x - w.a.x) * o.d / len, y: w.a.y + (w.b.y - w.a.y) * o.d / len } };
+    });
+    for (const r of (f.rooms || []).filter(r => !r.hidden && r.pts && r.pts.length > 2)) {
+      const area = polyArea(r.pts) / 1e4, per = r.pts.reduce((s, p, i) => s + Math.hypot(r.pts[(i + 1) % r.pts.length].x - p.x, r.pts[(i + 1) % r.pts.length].y - p.y), 0) / 100;
+      const opA = ops.filter(x => qtyNearEdge(x.p, r.pts, x.w.t / 2 + 3)).reduce((s, x) => s + x.o.w * Math.min(x.o.h, h) / 1e4, 0);
+      const wallA = Math.max(0, per * h / 100 - opA), kind = r.floor || 'none';
+      rooms.push({ floor: f.name, name: r.name || L('Oda', 'Room'), area: r2(area), per: r2(per), finish: qtyFinishName(kind, proj), wall: r2(wallA) });
+      add('fin', 'fin:' + kind, qtyFinishName(kind, proj), 'm²', area);
+      add('paint', 'paint', L('Duvar yüzeyi (boya, net)', 'Wall surface (paint, net)'), 'm²', wallA);
+    }
+    for (const w of walls) {
+      const wt = w.wt || 'solid', len = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) / 100;
+      const name = { solid: L('Duvar', 'Wall'), curtain: L('Giydirme cephe', 'Curtain wall'), railing: L('Korkuluk', 'Railing'), fence: L('Çit', 'Fence') }[wt] || wt;
+      add('wall', `wall:${wt}:${Math.round(w.t)}`, `${name} ${Math.round(w.t)} cm`, 'm', len);
+    }
+    for (const { o } of ops) {
+      const def = OPENINGS.find(d => opType(d.id) === o.type) || null, nm = def ? itemName(def) : o.type;
+      add('op', `op:${o.type}:${Math.round(o.w)}x${Math.round(o.h)}`, `${nm} ${Math.round(o.w)} × ${Math.round(o.h)} cm`, L('adet', 'pcs'), 1);
+    }
+    for (const o of (f.furn || []).filter(o => !o.hidden)) {
+      const d = BYID[o.type], nm = o.label || (d ? itemName(d) : o.name || o.type);
+      add('furn', 'furn:' + (d ? o.type : 'x:' + nm), nm, L('adet', 'pcs'), 1);
+    }
+  }
+  const out = g => [...groups[g].values()].map(e => ({ ...e, qty: e.unit === 'm²' || e.unit === 'm' ? r2(e.qty) : e.qty })).sort((a, b) => a.label.localeCompare(b.label));
+  return { rooms, sections: [
+    { id: 'fin', title: L('Zemin kaplamaları', 'Floor finishes'), lines: out('fin') },
+    { id: 'paint', title: L('Duvar yüzeyleri', 'Wall surfaces'), lines: out('paint') },
+    { id: 'wall', title: L('Duvarlar', 'Walls'), lines: out('wall') },
+    { id: 'op', title: L('Kapı ve pencereler', 'Doors & windows'), lines: out('op') },
+    { id: 'furn', title: L('Mobilya ve donatı', 'Furniture & fittings'), lines: out('furn') },
+  ].filter(s => s.lines.length) };
+}
+const qtyPrice = (proj, key) => { const v = proj && proj.qty && proj.qty.prices && proj.qty.prices[key]; return Number.isFinite(+v) && +v > 0 ? +v : 0; };
+function cleanQty(P) {
+  const q = P.qty; if (!q || typeof q !== 'object') { delete P.qty; return; }
+  const prices = {};
+  for (const [k, v] of Object.entries(q.prices || {})) if (/^[\w:.\-x ]{1,80}$/u.test(k) && Number.isFinite(+v) && +v > 0) prices[k] = Math.round(+v * 100) / 100;
+  if (Object.keys(prices).length) P.qty = { prices }; else delete P.qty;
+}
+function qtyCsv(data, proj) {
+  const tr = !isEN(), sep = tr ? ';' : ',', num = v => (v === '' || v == null ? '' : tr ? String(v).replace('.', ',') : String(v));
+  const cell = v => { const s = String(v ?? ''); return /[";,\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const rows = [[L('Bölüm', 'Section'), L('Kalem', 'Item'), L('Miktar', 'Quantity'), L('Birim', 'Unit'), L('Birim fiyat', 'Unit price'), L('Tutar', 'Amount')]];
+  let total = 0;
+  for (const s of data.sections) for (const l of s.lines) { const p = qtyPrice(proj, l.key), a = r2(p * l.qty); total += a; rows.push([s.title, l.label, num(l.qty), l.unit, p ? num(p) : '', p ? num(a) : '']); }
+  rows.push(['', L('Toplam', 'Total'), '', '', '', num(r2(total))], []);
+  rows.push([L('Kat', 'Floor'), L('Oda', 'Room'), L('Alan (m²)', 'Area (m²)'), L('Çevre (m)', 'Perimeter (m)'), L('Kaplama', 'Finish'), L('Net duvar yüzü (m²)', 'Net wall surface (m²)')]);
+  for (const r of data.rooms) rows.push([r.floor, r.name, num(r.area), num(r.per), r.finish, num(r.wall)]);
+  return '﻿' + rows.map(r => r.map(cell).join(sep)).join('\r\n') + '\r\n';
+}
+function qtyData() { return qtyLines(P, ui.qtyAll ? P.floors.map(f => visFloor(f)) : [visFloor(F())]); }
+function qtyModal() {
+  const d = qtyData(), money = v => v ? v.toLocaleString(isEN() ? 'en-US' : 'tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+  let total = 0, h = `<h2>📋 ${L('Metraj ve alışveriş listesi', 'Quantities & shopping list')} <button class="btn sm" data-close>✕</button></h2>
+  <div class="row" style="gap:6px;margin:0 0 10px;flex-wrap:wrap"><button class="btn sm${ui.qtyAll ? '' : ' primary'}" data-qty-scope="floor">${L('Bu kat', 'This floor')}: ${esc(F().name)}</button><button class="btn sm${ui.qtyAll ? ' primary' : ''}" data-qty-scope="all">${L('Tüm proje', 'Whole project')}</button><span style="flex:1"></span><button class="btn sm primary" data-qty-csv>⬇ CSV</button></div>`;
+  if (!d.sections.length && !d.rooms.length) h += `<p class="muted">${L('Henüz ölçülecek bir şey yok: duvar, oda, kapı ya da mobilya ekleyin.', 'Nothing to measure yet: add walls, rooms, doors or furniture.')}</p>`;
+  h += `<div class="qty-wrap"><table class="qty"><thead><tr><th>${L('Kalem', 'Item')}</th><th class="n">${L('Miktar', 'Qty')}</th><th>${L('Birim', 'Unit')}</th><th class="n">${L('Birim fiyat', 'Unit price')}</th><th class="n">${L('Tutar', 'Amount')}</th></tr></thead><tbody>`;
+  for (const s of d.sections) {
+    h += `<tr class="qty-sec"><th colspan="5">${esc(s.title)}</th></tr>`;
+    for (const l of s.lines) {
+      const p = qtyPrice(P, l.key), a = r2(p * l.qty); total += a;
+      h += `<tr><td>${esc(l.label)}</td><td class="n">${l.qty}</td><td>${esc(l.unit)}</td><td class="n"><input type="number" min="0" step="0.01" data-qty-price="${esc(l.key)}" value="${p || ''}" placeholder="—" aria-label="${esc(L('Birim fiyat: ', 'Unit price: ') + l.label)}"></td><td class="n" data-qty-amt="${esc(l.key)}">${money(a)}</td></tr>`;
+    }
+  }
+  h += `</tbody><tfoot><tr><th colspan="4">${L('Toplam', 'Total')}</th><th class="n" id="qtyTotal">${money(r2(total)) || '—'}</th></tr></tfoot></table>`;
+  if (d.rooms.length) {
+    h += `<h4 style="margin:14px 0 6px">${L('Oda listesi', 'Room schedule')}</h4><table class="qty"><thead><tr>${ui.qtyAll ? `<th>${L('Kat', 'Floor')}</th>` : ''}<th>${L('Oda', 'Room')}</th><th class="n">${L('Alan', 'Area')} m²</th><th class="n">${L('Çevre', 'Perimeter')} m</th><th>${L('Kaplama', 'Finish')}</th><th class="n">${L('Net duvar', 'Net wall')} m²</th></tr></thead><tbody>`;
+    for (const r of d.rooms) h += `<tr>${ui.qtyAll ? `<td>${esc(r.floor)}</td>` : ''}<td>${esc(r.name)}</td><td class="n">${r.area}</td><td class="n">${r.per}</td><td>${esc(r.finish)}</td><td class="n">${r.wall}</td></tr>`;
+    h += `</tbody></table>`;
+  }
+  h += `</div><p class="muted" style="margin:10px 0 0">${L('Birim fiyatlar projeye kaydedilir. Duvar yüzeyi: oda çevresi × kat yüksekliği − odaya bakan kapı ve pencereler.', 'Unit prices are saved with the project. Wall surface: room perimeter × storey height − the doors and windows facing the room.')}</p>`;
+  openModal(h, 'qty');
+}
+$('#modal').addEventListener('click', e => {
+  if (ui.modal !== 'qty') return;
+  const s = e.target.closest('[data-qty-scope]'); if (s) { ui.qtyAll = s.dataset.qtyScope === 'all'; qtyModal(); return; }
+  if (e.target.closest('[data-qty-csv]')) { download(fname('csv').replace(/\.csv$/, '') + '-' + L('metraj', 'quantities') + '.csv', new Blob([qtyCsv(qtyData(), P)], { type: 'text/csv;charset=utf-8' })); }
+});
+$('#modal').addEventListener('input', e => {
+  if (ui.modal !== 'qty') return;
+  const t = e.target.closest('[data-qty-price]'); if (!t) return;
+  // canlı: tutar ve toplam yenilenir; geçmişe yazmak change'te (tek geri alma adımı)
+  const v = parseFloat(String(t.value).replace(',', '.')), k = t.dataset.qtyPrice;
+  P.qty = P.qty || { prices: {} }; P.qty.prices = P.qty.prices || {};
+  if (v > 0) P.qty.prices[k] = v; else delete P.qty.prices[k];
+  const d = qtyData(), money = x => x ? x.toLocaleString(isEN() ? 'en-US' : 'tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+  let tot = 0;
+  for (const s of d.sections) for (const l of s.lines) { const a = r2(qtyPrice(P, l.key) * l.qty); tot += a; const c = [...document.querySelectorAll('#modal [data-qty-amt]')].find(x => x.dataset.qtyAmt === l.key); if (c) c.textContent = money(a); }
+  const T = $('#qtyTotal'); if (T) T.textContent = money(r2(tot)) || '—';
+});
+$('#modal').addEventListener('change', e => {
+  if (ui.modal !== 'qty' || !e.target.closest('[data-qty-price]')) return;
+  cleanQty(P); commit();
+});
 /* ---------- Dışa aktarma ---------- */
 function exportSvg() {
   if (ui.viewElev) {
@@ -21189,6 +21307,7 @@ function applyLangUI() {
   $('#bPrint').textContent = L('🖨 PDF / Yazdır', '🖨 PDF / Print');
   $('#bDl').textContent = L('⬇ İndir ▾', '⬇ Download ▾'); $('#bDl').title = L('İndir: görüntü (PNG, SVG, PDF) ya da dosya (JSON, DXF, IFC, Revit)', 'Download: an image (PNG, SVG, PDF) or a file (JSON, DXF, IFC, Revit)');
   $('#dlHImg').textContent = L('Görüntü', 'Image'); $('#dlHFile').textContent = L('Dosya', 'File');
+  $('#bQty').textContent = '📋 ' + L('Metraj / CSV', 'Quantities / CSV'); $('#bQty').title = L('Oda alanları, duvarlar, kapı / pencere ve mobilya adetleri; birim fiyat ve CSV', 'Room areas, walls, door / window and furniture counts; unit prices and CSV');
   $('#b2d').textContent = L('2B', '2D');
   $('#b2d').title = L('2B Katı Görünüm', '2D Solid View');
   if ($('#bCad')) {
@@ -21294,6 +21413,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#dlMen
 window.addEventListener('resize', () => dlMenuOpen(false));
 $('#bJson').onclick = () => downloadJson(P);
 $('#bDxf').onclick = () => downloadDxf();
+$('#bQty').onclick = () => qtyModal(); // #199
 $('#bRevit').onclick = () => exportBim('revit');
 $('#bIfc').onclick = () => exportBim('ifc');
 $('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpModal; $('#bAi').onclick = () => aiModal();

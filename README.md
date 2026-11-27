@@ -120,6 +120,9 @@ Tools: `new_project` · `load_project` / `import_ifc` / `import_dxf` / `save_pro
 - **Site parcel & outdoor zones (🌳)** — draw a **parcel boundary** (edge lengths, area, uniform or per-edge **setbacks**) and outdoor zones — road, path / sidewalk, driveway, lawn, patio, gravel, pond — with the **🌳 Site zone** tool; each takes an outdoor finish or your own texture, a tint and a curb height. Zones are not rooms (no effect on room areas), show on every floor as site context, sit on the ground or the terrain in 3D and can be walked on.
 
 ### 🏢 Project Tools
+- **📐 Auto-dimension** (project panel): one click adds the width and depth of every room and dimension chains (doors / windows, wall pieces, overall) on every side of the building. They are ordinary dimensions you can edit; clicking again replaces only the automatic ones.
+- **Library size filter (📏 under the search box):** show only items up to a given width, depth and height, or press **⤢ Fits the selection** to take the sizes from the selected room, wall or the gap between two walls.
+- **Sun for a real place and time:** in the 🎨 render studio, **📍 Location, date and time** puts the 3D sun where it really is — pick a city or type latitude / longitude, set the plan's north, choose a date and drag the time; **▶ Shadow study** plays the whole day.
 - **Multiple floors** — add, duplicate, rename, delete; the floor below is shown faintly for alignment.
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
 - Object snap tracking: while drawing walls / rooms / dimensions or dragging wall ends and room corners, the cursor aligns with existing corners horizontally and vertically and shows a dashed guide (Shift or Snap off disables it).
@@ -182,6 +185,7 @@ The public site needs a Google OAuth client ID once (forks and self-hosted copie
 
 ### 📤 Export
 - **PNG** and **SVG** with title block and scale bar.
+- **📋 Quantities / CSV** (⬇ Download menu): room areas and perimeters, floor finish areas, net wall surfaces (minus doors and windows), wall lengths, door / window and furniture counts — for one floor or the whole project. Type a unit price next to any line to get a total (prices are saved with the project) and download it as a CSV that opens cleanly in Excel.
 - **🖨 PDF / Print** opens a **plot setup** dialog: paper **A4–A0**, landscape / portrait, a true architectural **scale** (1:50, 1:100, 1:200, 1:500 — 1:100 prints 1 m as 10 mm) or *fit to paper*, the area to print (**whole plan**, **current view** or a **window** you drag on the canvas), centring and margins. The preview warns when the plan does not fit; print it (or save as PDF from the print dialog) or download the sheet as SVG.
 - Exports always render on **white paper** regardless of the editor theme.
 - **3D render:** while the 3D view is open, the **🖼 PNG** button renders the scene (and the **🎬** button in the 3D overlay does the same from inside the view). This is a real render, not a screenshot: the camera outlines are removed, the backdrop becomes a studio white, shadows are rebuilt at high resolution and several supersampled passes are averaged, so edges come out smooth instead of jagged. Files are named `<project>-3d-render.png`. **Shift-click** either button for a quick capture of exactly what is on screen (`-3d-view.png`). SVG and PDF always describe the **2D plan**.

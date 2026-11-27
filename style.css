@@ -1374,6 +1374,17 @@ footer input#iGridCustom {
   margin-bottom: 10px;
 }
 
+/* metraj tablosu (#199) */
+.qty-wrap { max-height: 60vh; overflow: auto; }
+table.qty { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.qty th, table.qty td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; }
+table.qty thead th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; }
+table.qty .n { text-align: right; font-variant-numeric: tabular-nums; }
+table.qty tr.qty-sec th { background: var(--panel2); color: var(--text); padding-top: 8px; }
+table.qty tfoot th { border-top: 2px solid var(--line); font-size: 13px; }
+table.qty input { width: 90px; text-align: right; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; color: var(--text); font: inherit; }
+table.qty input:focus { border-color: var(--accent); outline: none; }
+
 table.kb {
   width: 100%;
   border-collapse: collapse;
