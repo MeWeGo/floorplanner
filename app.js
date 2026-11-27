@@ -1127,6 +1127,7 @@ function commit() {
   if (typeof collabReadOnly === 'function' && collabReadOnly()) return;
   if (typeof grpEditAbsorb === 'function') grpEditAbsorb(); // grup düzenleme modunda yeni çizilenler gruba katılır
   for (const fl of P.floors) syncAccWalls(fl, true); // akordiyon duvarlar bağlı uçları izler (düzen pozundan önce)
+  followRooms(); // #201: duvarlarını izleyen odalar duvar değişikliğinden sonra yeniden algılanır
   if (typeof syncActiveVars === 'function') syncActiveVars();
   stampLayers(); // yeni nesneler etkin katmana (#32)
   for (const fl of P.floors) for (const o of fl.furn) if (isParamRoof(o)) o.h = roofHeight(o); // çatı yüksekliği parametrelerden (boyutlandırma / ölçek sonrası) (#115)
@@ -1167,6 +1168,7 @@ function syncGridUI() {
 }
 function restore(s) {
   P = JSON.parse(s); P.gridType = P.gridType || 'square';
+  wallSigReset(); // #201: geri alınan durum odaların duvar izlemesi için yeni taban
   fi = clamp(fi, 0, P.floors.length - 1);
   sel = sel.filter(id => find(id));
   $('#pname').value = P.name; syncGridUI();
@@ -1718,7 +1720,7 @@ function loadProject(obj, msg) {
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
   $('#pname').value = P.name; syncGridUI();
-  setTool('select'); fit(); syncTab(); refresh(); updateUndo(); autosave(); buildLib();
+  setTool('select'); fit(); syncTab(); refresh(); updateUndo(); autosave(); buildLib(); wallSigReset(); // #201
   if (msg) toast(msg);
 }
 /* ---------- Proje sekmeleri (issue #17) ----------
@@ -1780,7 +1782,7 @@ function activateTab(i) {
   $('#pname').value = P.name; syncGridUI();
   if (t.view) Object.assign(view, t.view); else fit();
   if (tool === 'place') setTool('select');
-  refresh(); updateUndo(); renderTabs(); autosave(); buildLib();
+  refresh(); updateUndo(); renderTabs(); autosave(); buildLib(); wallSigReset(); // #201
   if (ui.viewElev) archRedraw(true);
   if (ui.view3d && T3) schedBuild3D();
 }
@@ -7651,7 +7653,34 @@ function autoRoomAt(p, silent) {
   const r = detectRoom(p);
   if (r === 'open') { if (!silent) toast(L('Alan kapalı değil – duvarlar arasında boşluk var', 'Area is not enclosed – there is a gap between walls')); return null; }
   if (!r) { if (!silent) toast(L('Burada oda algılanamadı (duvarın üzerine tıkladınız mı?)', 'No room detected here (did you click on a wall?)')); return null; }
-  const rm = mkRoom(r); F().rooms.push(rm); return rm;
+  const rm = mkRoom(r); rm.wb = 1; F().rooms.push(rm); return rm; // #201: duvarlarını izler
+}
+/* ---------- Duvarlarını izleyen odalar (#201) ----------
+   Algılamayla oluşan oda (Oto oda aracı, ↻ Yeniden algıla) r.wb = 1 taşır. Bir duvar değişikliği commit edilince
+   (etkin katın duvar imzası değişti) her bağlı oda kendi eski çokgeninin içinden yeniden algılanır, köşeleri ve alanı
+   güncellenir. Algılama açıksa / başarısızsa eski köşeler kalır ve bir kez uyarılır. Elle çizilen, köşesi elle
+   taşınan, panelden bağı kesilen ve düzenleri (vars / grup düzeni) olan odalar serbesttir. İmza P'de değil; geri al,
+   proje açma ve sekme geçişi onu o anki duvarlara eşitler (wallSigReset), böylece yalnız gerçek düzenlemeler tetikler. */
+const wallSig = new Map();
+const wallSigOf = f => (f.walls || []).filter(w => !w.hidden).map(w => [w.a.x, w.a.y, w.b.x, w.b.y, w.t, w.wt || '', w.elev || 0].join(',')).join(';');
+function wallSigReset() { wallSig.clear(); if (P && P.floors) for (const f of P.floors) wallSig.set(f.id, wallSigOf(f)); }
+const roomFollows = (r, f) => !!(r && r.wb && !r.hidden && !(Array.isArray(r.vars) && r.vars.length) && !(r.grp && (f.groups || []).some(g => g.id === r.grp && g.vars && g.vars.length)));
+// bağlı odayı şimdiki duvarlardan yeniden algılar: true = güncel, false = algılanamadı (eski köşeler kalır)
+function roomRedetect(r) {
+  for (const s of [rvInsidePt(r.pts), polyCentroid(r.pts), ...r.pts.map((p, i) => { const q = r.pts[(i + 2) % r.pts.length]; return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }; })]) {
+    if (!pointInPoly(s, r.pts)) continue;
+    const d = detectRoom(s);
+    if (Array.isArray(d) && d.length > 2) { if (JSON.stringify(d) !== JSON.stringify(r.pts)) r.pts = d; return true; }
+  }
+  return false;
+}
+function followRooms() {
+  const f = F(); if (!f || typeof document === 'undefined') return;
+  const sig = wallSigOf(f), old = wallSig.get(f.id); wallSig.set(f.id, sig);
+  if (old === undefined || old === sig) return;
+  const rs = (f.rooms || []).filter(r => roomFollows(r, f)); if (!rs.length) return;
+  const lost = rs.filter(r => !roomRedetect(r));
+  if (lost.length) toast(L(`⚠ ${lost.map(r => '“' + r.name + '”').join(', ')} duvarlarını izleyemedi (aralık var ya da kapalı değil); eski köşeler korundu`, `⚠ ${lost.map(r => '“' + r.name + '”').join(', ')} could not follow its walls (a gap or not enclosed); the previous corners were kept`));
 }
 
 /* ---------- 3B zemin plakası: duvarların dış konturunu izleyen poligon (taşma yok) ---------- */
@@ -8872,6 +8901,7 @@ function startHandle(h, raw, e) {
 }
 function doHandle(raw, e) {
   const d = ui.drag, h = d.h, o = selObjs()[0]?.o; if (!o) return; d.moved = true;
+  if (o.wb && /^[ve]\d/.test(h) && selObjs()[0].kind === 'room') delete o.wb; // #201: köşesi elle taşınan oda serbest kalır
   const sh = e.shiftKey;
   if (h === 'wa' || h === 'wb') {
     const ek = h === 'wa' ? 'a' : 'b', other = h === 'wa' ? o.b : o.a;
@@ -9183,7 +9213,7 @@ function renderProps() {
       h += `<div class="stat"><span>${L('Alan', 'Area')}</span><b>${fmtArea(polyArea(o.pts))}</b></div><div class="stat"><span>${L('Çevre', 'Perimeter')}</span><b>${fmtLen(polyPerim(o.pts))}</b></div><div class="stat"><span>${L('Köşe sayısı', 'Vertices')}</span><b>${o.pts.length}</b></div>`;
     }
     if (n === 1 && o.floor !== 'glass') h += slopePanelHtml(o); // eğimli zemin
-    h += acts(`<button class="btn sm" data-act="redetect">${L('↻ Yeniden algıla', '↻ Redetect')}</button>`);
+    h += acts(`<button class="btn sm" data-act="redetect">${L('↻ Yeniden algıla', '↻ Redetect')}</button>` + (n === 1 ? `<button class="btn sm${o.wb ? ' on' : ''}" data-act="roomwb" aria-pressed="${!!o.wb}" title="${L('Açıkken oda, bir duvar taşınınca köşelerini ve alanını kendiliğinden günceller', 'When on, the room updates its corners and area by itself when a wall moves')}">🔗 ${o.wb ? L('Duvarlarını izliyor', 'Follows its walls') : L('Duvarlarını izlesin', 'Follow its walls')}</button>` : ''));
     if (n === 1) { const ls = roomLights(o); if (ls.length) { const on = ls.filter(litOn).length; h += `<div class="stat"><span>💡 ${L('Işıklar', 'Lights')}</span><b>${on} / ${ls.length} ${L('açık', 'on')}</b></div><div class="row"><button class="btn sm" data-act="roomlights" data-on="1">${L('Hepsini aç', 'All on')}</button><button class="btn sm" data-act="roomlights" data-on="0">${L('Hepsini kapat', 'All off')}</button></div>`; } }
   } else if (k === 'zone') { // arsa / dış zemin (#150)
     h += fld(L('Tür', 'Type'), 'zone', 'zt', o.zt, { sel: Object.fromEntries(Object.entries(ZONE_TYPES).map(([id, [tr, en]]) => [id, L(tr, en)])) }) + fld(L('Ad', 'Name'), 'zone', 'name', o.name || '', { type: 'text' });
@@ -9746,7 +9776,8 @@ function onPropsClick(e) {
     }
     if (a === 'opflip' && kind === 'op') o.flip = o.flip ? 0 : 1;
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
-    if (a === 'redetect' && kind === 'room') { const c = polyCentroid(o.pts); const r = detectRoom(pointInPoly(c, o.pts) ? c : o.pts[0]); if (Array.isArray(r)) o.pts = r; else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
+    if (a === 'redetect' && kind === 'room') { if (roomRedetect(o)) o.wb = 1; else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
+    if (a === 'roomwb' && kind === 'room') { if (o.wb) delete o.wb; else if (roomRedetect(o)) o.wb = 1; else toast(L('Oda duvarlardan algılanamadı: kapalı bir alan olmalı', 'The room could not be found from the walls: it must be enclosed')); }
     if (a === 'split' && kind === 'wall') {
       const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; if (o.color) nw.color = o.color; if (o.mul) nw.mul = o.mul; if (o.rs) nw.rs = o.rs; const L = wLen(o), old = o.b;
       o.b = m; f.walls.push(nw);

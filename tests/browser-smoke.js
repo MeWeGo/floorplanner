@@ -4173,6 +4173,39 @@ check('accessible in-app dialogs, modal focus, menu keys and icon-button names (
   return 'ask dialog Enter / Esc / Tab / theme / validation, modal focus restore, menu keys, icon buttons named';
 });
 
+// #201: rooms found by detection follow their walls on commit; manual / unbound rooms stay; a leak keeps the old
+// corners with a warning; undo and redo do not re-trigger it.
+check('rooms that follow their walls (#201)', async page => {
+  const r = await page.evaluate(`(() => {
+    closeModal(); loadProject(newProject());
+    const [t, rt, b, l] = addRectWalls(0, 0, 400, 300) || F().walls; commit(); refresh();
+    const auto = autoRoomAt({ x: 200, y: 150 }, true); commit();
+    const man = mkRoom([{ x: 20, y: 20 }, { x: 120, y: 20 }, { x: 120, y: 120 }, { x: 20, y: 120 }]); man.name = 'Manual'; F().rooms.push(man); commit();
+    const a0 = polyArea(auto.pts), m0 = JSON.stringify(man.pts);
+    // move the right wall 100 cm out, with its corners (as a drag with connected walls would)
+    const right = F().walls.find(w => Math.min(w.a.x, w.b.x) > 300);
+    for (const w of F().walls) for (const k of ['a', 'b']) if (w[k].x > 300) w[k].x += 100;
+    const h0 = hi; commit(); refresh();
+    const room = F().rooms.find(x => x.id === auto.id), a1 = polyArea(room.pts), oneStep = hi === h0 + 1, manKept = JSON.stringify(F().rooms.find(x => x.id === man.id).pts) === m0;
+    undo(); const undone = Math.round(polyArea(F().rooms.find(x => x.id === auto.id).pts)) === Math.round(a0); redo();
+    // a gap: the room keeps its corners and warns
+    const before = JSON.stringify(F().rooms.find(x => x.id === auto.id).pts);
+    const wl = F().walls.find(w => Math.max(w.a.x, w.b.x) < 50); const save = JSON.parse(JSON.stringify(wl));
+    wl.b = { x: wl.a.x, y: (wl.a.y + wl.b.y) / 2 }; commit();
+    const leakKept = JSON.stringify(F().rooms.find(x => x.id === auto.id).pts) === before, warned = /could not follow|izleyemedi/.test(document.querySelector('#toast').textContent);
+    undo();
+    // unbinding from the panel stops following
+    sel = [auto.id]; refresh(); const btn = document.querySelector('#props [data-act="roomwb"]'); const pressed = btn && btn.getAttribute('aria-pressed'); btn.click();
+    const unbound = !F().rooms.find(x => x.id === auto.id).wb;
+    for (const w of F().walls) for (const k of ['a', 'b']) if (w[k].x > 450) w[k].x += 50;
+    const a2 = polyArea(F().rooms.find(x => x.id === auto.id).pts); commit(); const stays = polyArea(F().rooms.find(x => x.id === auto.id).pts) === a2;
+    return { wb: auto.wb, a0: Math.round(a0 / 1e4), a1: Math.round(a1 / 1e4), oneStep, manKept, undone, leakKept, warned, pressed, unbound, stays };
+  })()`);
+  const ok = r.wb === 1 && r.a1 > r.a0 && r.oneStep && r.manKept && r.undone && r.leakKept && r.warned && r.pressed === 'true' && r.unbound && r.stays;
+  if (!ok) throw new Error('rooms follow walls: ' + JSON.stringify(r));
+  return `room ${r.a0} → ${r.a1} m² with the wall, manual room kept, gap warned, unlink works`;
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {
