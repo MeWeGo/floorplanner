@@ -38,7 +38,7 @@ function loadEnv(initialP) {
     const LAYER_Z_MAX = 500, FLOOR_LVL_MAX = 50000, VOID_DEP_MAX = 1000, GROUP_MAX = 40;
     const VOID_TYPES = { stair: 1 };
     const cleanGroup = g => String(g || '').trim().slice(0, GROUP_MAX);
-    const cleanLw = () => {}, cleanGround = () => {}, cleanAcc = () => {}, cleanBel = () => {}, cleanWallFaces = () => {}, cleanWallTop = v => v;
+    const cleanLw = () => {}, cleanGround = () => {}, cleanSite = () => {}, cleanAcc = () => {}, cleanBel = () => {}, cleanWallFaces = () => {}, cleanWallTop = v => v;
     const cleanSurfHp = () => {}, cleanZone = () => {}, cleanParts = () => {}, cleanRoof = () => {}, cleanLight = () => {};
     let ui = { snap: true, angle: false, view3d: false };
     let view = { x: 0, y: 0, z: 1 };
@@ -148,7 +148,7 @@ function makeSandbox(initialP) {
     const LAYER_Z_MAX = 500, FLOOR_LVL_MAX = 50000, VOID_DEP_MAX = 1000, GROUP_MAX = 40, SURF_HP_MAX = 64;
     const VOID_TYPES = { stair: 1 };
     const cleanGroup = g => String(g || '').trim().slice(0, GROUP_MAX);
-    const cleanLw = () => {}, cleanGround = () => {}, cleanAcc = () => {}, cleanBel = () => {}, cleanWallFaces = () => {}, cleanWallTop = v => v;
+    const cleanLw = () => {}, cleanGround = () => {}, cleanSite = () => {}, cleanAcc = () => {}, cleanBel = () => {}, cleanWallFaces = () => {}, cleanWallTop = v => v;
     const cleanSurfHp = () => {}, cleanZone = () => {}, cleanParts = () => {}, cleanRoof = () => {}, cleanLight = () => {};
     const newFloor = name => ({ id: uid(), name: name || 'Floor', walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], axes: [], dims: [], texts: [], sketches: [], drafts: [] });
     const F = () => P.floors[fi];

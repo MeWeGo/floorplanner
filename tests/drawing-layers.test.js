@@ -57,7 +57,7 @@ function makeEnv(initialP) {
     ${fnSrc('cleanAcc')}
     ${fnSrc('cleanBel')}
     const cleanWallFaces = () => {}; // wall faces: wall-faces.test.js
-    const cleanLw = () => {}, cleanGround = () => {}; // line weights / ground: their own tests
+    const cleanLw = () => {}, cleanGround = () => {}, cleanSite = () => {}; // line weights / ground: their own tests
     ${fnSrc('normalizeProject')}
     return {
       get P() { return P; },
