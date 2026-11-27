@@ -57,6 +57,7 @@ function makeEnv(floors = []) {
     ${fnSrc('sectionFrame')}
     ${fnSrc('archPrims')}
     ${fnSrc('railElevSvg')}
+    const scaleBarSpec = () => ({ len: 200, mid: '1 m', end: '2 m' });
     ${fnSrc('archSvg')}
     ${fnSrc('archSnapVal')}
     ${fnSrc('archApplyDrag')}

@@ -185,7 +185,17 @@
           <option value="100">1 m (100 cm)</option>
           <option value="300">3 m (300 cm)</option>
           <option value="500">5 m (500 cm)</option>
+          <option value="2.54" hidden>1 in</option>
+          <option value="15.24" hidden>6 in</option>
+          <option value="30.48" hidden>1 ft</option>
+          <option value="91.44" hidden>3 ft</option>
           <option value="custom">Özel...</option>
+        </select>
+      </label>
+      <label class="ctl-field"><span id="lblUnits">Birim</span>
+        <select id="sUnits">
+          <option value="metric">m / cm</option>
+          <option value="imperial">ft / in</option>
         </select>
       </label>
       <label id="lblGridCustom" class="ctl-field" style="display:none">

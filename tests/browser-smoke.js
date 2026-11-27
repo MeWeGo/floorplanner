@@ -4320,6 +4320,38 @@ check('2D export uses the white-paper light palette even in dark theme', async p
   return 'white-paper export (' + r.len + ' bytes, 0 dark-theme colours)';
 });
 
+// #194: feet and inches as a per-browser display / input unit; the project stays in centimetres.
+check('imperial units: labels, panel fields, typed lengths, grid steps, scale bar (#194)', async page => {
+  const r = await page.evaluate(`(async () => {
+    closeModal(); loadProject(newProject()); addRectWalls(0, 0, 400, 300); commit(); autoRoomAt({ x: 200, y: 150 }, true); commit(); refresh();
+    const u = document.querySelector('#sUnits'); u.value = 'imperial'; u.dispatchEvent(new Event('change', { bubbles: true }));
+    const out = { stored: localStorage.getItem('fp_units'), wallsLbl: /13' 1"/.test(document.querySelector('#gWalls').textContent + document.querySelector('#gDims').textContent + document.body.textContent) };
+    out.area = (document.querySelector('#cv').textContent.match(/[0-9.]+ ft²/) || [''])[0];
+    // panel: the length field is a feet-inch text field that accepts 12'6"
+    const w = F().walls[0]; sel = [w.id]; refresh();
+    const f = document.querySelector('#props [data-k="wall"][data-p="len"]');
+    out.fieldType = f && f.type; out.fieldVal = f && f.value;
+    f.value = "12'6\\""; f.dispatchEvent(new Event('change', { bubbles: true }));
+    out.len = Math.round(wLen(F().walls[0]) * 100) / 100;
+    // typed length while drawing: a bare number is feet
+    sel = []; refresh(); setTool('wall'); ui.draw = { start: { x: 0, y: 600 } };
+    const rc = cv.getBoundingClientRect(), sp = w2s({ x: 50, y: 600 }); cv.dispatchEvent(new PointerEvent('pointermove', { clientX: rc.left + sp.x, clientY: rc.top + sp.y, bubbles: true, pointerId: 1 }));
+    for (const k of ['1', '0', 'Enter']) window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+    const nw = F().walls[F().walls.length - 1]; out.typed = Math.round(wLen(nw) * 100) / 100; setTool('select');
+    // grid presets and the export scale bar
+    out.ftOption = !document.querySelector('#sGrid option[value="30.48"]').hidden && document.querySelector('#sGrid option[value="300"]').hidden;
+    out.bar = /6'/.test(exportSvg().svg);
+    // back to metric; the project never changed unit
+    u.value = 'metric'; u.dispatchEvent(new Event('change', { bubbles: true }));
+    out.back = localStorage.getItem('fp_units') === 'metric' && /m²/.test(document.querySelector('#cv').textContent);
+    out.projCm = JSON.stringify(P).includes('"wallT":20');
+    return out;
+  })()`);
+  const ok = r.stored === 'imperial' && r.wallsLbl && /ft²/.test(r.area) && r.fieldType === 'text' && /'/.test(r.fieldVal) && r.len === 381 && r.typed === 304.8 && r.ftOption && r.bar && r.back && r.projCm;
+  if (!ok) throw new Error('imperial units: ' + JSON.stringify(r));
+  return `labels in ft-in, ${r.area}, field 12'6" → 381 cm, typed 10 → 304.8 cm, 6' scale bar`;
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {
@@ -4353,7 +4385,7 @@ check('PNG export reports a failed canvas instead of throwing (#189)', async pag
     const orig = HTMLCanvasElement.prototype.toBlob; let calls = 0;
     HTMLCanvasElement.prototype.toBlob = function (cb) { calls++; setTimeout(() => cb(null), 0); };
     try {
-      exportPng();
+      svgToPng('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><rect width="40" height="30" fill="#08f"/></svg>', 40, 30, 'x.png'); // exportPng() hands its SVG to svgToPng
       for (let i = 0; i < 200 && !/PNG/.test(document.querySelector('#toast').textContent); i++) await new Promise(r => setTimeout(r, 50));
       return { calls, msg: document.querySelector('#toast').textContent };
     } finally { HTMLCanvasElement.prototype.toBlob = orig; }

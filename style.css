@@ -968,6 +968,12 @@ main {
 }
 
 /* Sentence-case structured section headers (no generic ALL-CAPS tracking) */
+/* kısa panel (#198): sabit eylemler + katlanır "Diğer ayarlar" */
+#props .acts-pin { padding-bottom: 6px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+#props .props-adv { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; }
+#props .props-adv > summary { cursor: pointer; padding: 6px 2px; font-weight: 600; font-size: 12px; color: var(--muted); list-style-position: inside; }
+#props .props-adv > summary:hover, #props .props-adv[open] > summary { color: var(--text); }
+
 #props h4 {
   margin: 16px 0 8px;
   padding-left: 8px;

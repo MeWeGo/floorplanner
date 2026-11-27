@@ -16,7 +16,7 @@ Authoritative guide for anyone (human or AI) modifying **Kat Planı Çizici**, a
 | UI language | **Bilingual: Turkish & English (`tr` / `en`)** — auto-detected from `navigator.language`, toggled via `#bLang`, saved in `localStorage['fp_lang']` |
 | Rendering | 2D → SVG (re-rendered from state) · 3D → Three.js r128 + OrbitControls (CDN) |
 | Storage | IndexedDB (`FloorPlannerDB`) + JSON import/export; `localStorage` for theme, language and Drive sync settings; optional Google Drive sync and share links (§8 *Project sync*) |
-| Units | **Everything is centimetres.** Y axis points **down** (SVG convention) |
+| Units | **Everything is centimetres.** Y axis points **down** (SVG convention). Feet and inches are a per-browser *display / input* unit only (#194) |
 
 ### Files
 
@@ -197,7 +197,7 @@ When `live=false` (export, thumbnails) builders omit `data-id` and hit shapes.
 
 Do not rename without updating `app.js`:
 
-`pname, ptabs, bNew, bProjects, bSync, bSave, bOpen, bDl, dlMenu, dlHImg, dlHFile, bJson, bDxf, bIfc, bRevit, bQty, bUndo, bRedo, bPng, bSvg, bPrint, b2d, bCad, b3d, b3dFit, b3dTop, b3dEye, b3dShot, b3dLive, b3dFloors, bInspect, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, cOutline, lblOutline, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, onlineWrap, onlineCnt, modalbg, modal`.
+`sUnits, lblUnits, pname, ptabs, bNew, bProjects, bSync, bSave, bOpen, bDl, dlMenu, dlHImg, dlHFile, bJson, bDxf, bIfc, bRevit, bQty, bUndo, bRedo, bPng, bSvg, bPrint, b2d, bCad, b3d, b3dFit, b3dTop, b3dEye, b3dShot, b3dLive, b3dFloors, bInspect, bTheme, bAi, bHelp, fileOpen, fileBg, tools, lib, search, cats, items, cv, defs, world, gBg…gPv, v3d, hud, zIn, zOut, zFit, toast, props, floors, cSnap, cAngle, lblAngle, cDims, cOutline, lblOutline, sLayer, lblLayer, b3dN, b3dE, b3dS, b3dW, b3dStudio, sGridType, sGrid, lblGridCustom, iGridCustom, coords, gridlbl, zoomlbl, onlineWrap, onlineCnt, modalbg, modal`.
 
 Properties-panel inputs carry `data-k` (kind: `wall|op|furn|room|dim|text|proj|bg|layer`) and `data-p` (property). `applyProp()` handles `input` (live, no history) and `change` (commit).
 
@@ -449,6 +449,12 @@ Wall bodies end **butt** (flat) at their endpoints in 2D and 3D. `wallJoints(f)`
 - **Context / pick menu:** `ctxMenuA11y(m)` gives `#ctxMenu` `role="menu"`, `menuitem` buttons, separators; ↑ ↓ Home End move, Esc / Tab close; `closeCtxMenu()` returns focus to the opener when focus was in the menu.
 - **Icon-only buttons:** `a11yLabel(b)` copies `title` into `aria-label` when the button text has no word (two letters / digits), marked `data-al` so a later language switch (title mutation) updates it; one `MutationObserver` on `body` (SVG targets skipped, so canvas renders cost nothing) plus `a11yLabels(document.body)` at boot. Give new icon buttons a bilingual `title` and they are named automatically. Library cards are `.item-c` wrappers: the card `button.item` and its ✎ / ✕ buttons are siblings (no button inside a button).
 - Guard: `tests/dialogs.test.js` + the smoke check "accessible in-app dialogs …".
+
+### Imperial units (#194)
+- `units` (`'metric' | 'imperial'`, `localStorage['fp_units']`, footer `#sUnits`, command `units`, `setUnits(u)`) changes only what is shown and how typed text is read; `P`, files, exports' geometry and the MCP stay in cm. Readers: `isImp()`, `fmtLen` / `fmtArea` (ft-in, ft²), `fmtFtIn(cm, den)` (fractions reduced, 1/8" in fields), `parseLen(text, bare)` (`12'6"`, `12' 6`, `12ft 6in`, `6"`, `1/2"`, `150cm`, `1.5m`, `30mm`; a bare number is `bare`), `typedCm()` (typed lengths: a bare number is cm in metric, feet in imperial; `lenKey()` accepts `' "` / and space while drawing, dragging a wall end, typing a wall length or a drafting size), `typedUnit()` (preview text), `gridStepLabel`, `libSz` (library cards: inches), `scaleBarSpec()` (export / elevation scale bar: 2 m or 6 ft). Panel: `fld()` turns every `… (cm)` number field into a `(ft-in)` text field with `data-len`; `applyProp` parses it with `parseLen(v, 'ft')` before anything else. Grid steps: `GRID_PRESETS` has 1 in / 6 in / 1 ft / 3 ft (`syncUnitsUI` shows the set for the active unit). Not built: per-project units, US architectural plot scales, imperial dimensions in DXF / IFC exports (they stay metric files). Guard: smoke check "imperial units …".
+
+### Properties panel: pinned actions, basic and advanced (#198)
+- `acts()` wraps the common action rows in `.acts-pin`; at the end of `renderProps()` `propsTidy(el, k)` moves that block right under the heading and, for kinds in `PROPS_BASIC` (wall, op, furn, room, slab, text), moves every top-level row that is not a basic field (`label.f` with a listed `data-p`), a `.stat` readout, the paint swatches or the lock note into one `<details class="props-adv">` **⚙ More settings** at the end, in the original order (nothing is removed; handlers are delegated, so moved fields work unchanged). Its open state is remembered per kind in `localStorage['fp_props_adv']`. A new field shows under More settings unless you add its `data-p` to `PROPS_BASIC`. Guard: the existing panel smoke checks (they query fields inside the closed section).
 
 ### Command line (issue #43)
 - `:` (any layout that produces `e.key === ":"`, no Ctrl/Alt, no open modal) opens `openCmdPalette()` — checked in the window `keydown` handler **before** the 3D branch, after the `typing` early return, so text / number fields never trigger it and wall-length digits are untouched. The overlay (`#cmdPal` / `#cmdIn`, created on demand like `#ctxMenu`, not in `index.html`) stops propagation of its own keys, so walk keys and single-key tools never fire while typing.

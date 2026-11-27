@@ -35,6 +35,8 @@ const api = new Function(`
   ${lineSrc('clonePlain')}
   ${fnSrc('presetFromObj')}
   ${fnSrc('presetDef')}
+  const isImp = () => false;
+  ${fnSrc('libSz')}
   ${fnSrc('presetSize')}
   ui.opLast = {}; ui.opSrc = {};
   const buildLib = () => {};

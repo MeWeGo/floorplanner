@@ -9,8 +9,36 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 const rnd = (v, n = 1) => Math.round(v / n) * n;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const fmtLen = cm => (cm / 100).toFixed(2) + ' m';
-const fmtArea = c2 => (c2 / 10000).toFixed(2) + ' m²';
+/* Birimler (#194): görünüm ve giriş metrik (m / cm) ya da emperyal (fit-inç) olabilir; tarayıcı başına saklanır
+   (localStorage['fp_units']). Proje, MCP ve dosyalar her zaman santimetredir: yalnız gösterim ve okunuş değişir. */
+let units = 'metric';
+const isImp = () => units === 'imperial';
+// cm → 12' 6" (en yakın 1/den inç; 1 ft altı yalnız inç)
+function fmtFtIn(cm, den = 1) {
+  const neg = cm < 0, inch = Math.round(Math.abs(cm) / 2.54 * den) / den, ft = Math.floor(inch / 12 + 1e-9), r = +(inch - ft * 12).toFixed(3);
+  let num = Math.round((r % 1) * den), dd = den; while (num && num % 2 === 0 && dd % 2 === 0) { num /= 2; dd /= 2; } // 4/8 → 1/2
+  const ri = r === Math.floor(r) ? String(r) : den >= 2 ? (Math.floor(r) ? Math.floor(r) + ' ' : '') + num + '/' + dd : r.toFixed(1);
+  return (neg ? '−' : '') + (ft ? ft + "' " + ri + '"' : ri + '"');
+}
+const fmtLen = cm => (isImp() ? fmtFtIn(cm) : (cm / 100).toFixed(2) + ' m');
+const fmtArea = c2 => (isImp() ? (c2 / 929.0304).toFixed(1) + ' ft²' : (c2 / 10000).toFixed(2) + ' m²');
+// metin → cm. 12'6", 12' 6, 12ft 6in, 6", 6in, 1/2", 150cm, 1.5m, 30mm; birimsiz sayı = bare ('ft' | 'in' | 'cm' | 'm')
+function parseLen(s, bare = 'cm') {
+  let t = String(s == null ? '' : s).trim().toLowerCase().replace(/,/g, '.').replace(/[″“”]/g, '"').replace(/[′‘’]/g, "'");
+  if (!t) return null;
+  let sign = 1; if (/^[-−]/.test(t)) { sign = -1; t = t.slice(1).trim(); }
+  const frac = x => { x = x.trim(); let m = /^(\d+(?:\.\d+)?)(?:\s+(\d+)\/(\d+))?$/.exec(x); if (m) return +m[1] + (m[2] ? m[2] / m[3] : 0); m = /^(\d+)\/(\d+)$/.exec(x); return m && +m[2] ? m[1] / m[2] : NaN; };
+  const fm = /^(.*?)\s*(?:'|ft|feet|foot)\s*(.*)$/.exec(t);
+  if (fm) { const ft = fm[1] ? frac(fm[1]) : 0, rest = fm[2].replace(/\s*(?:"|inches|inch|in)\s*$/, ''), inch = rest ? frac(rest) : 0; return ft >= 0 && inch >= 0 ? sign * (ft * 30.48 + inch * 2.54) : null; }
+  const im = /^(.*?)\s*(?:"|inches|inch|in)$/.exec(t); if (im) { const v = frac(im[1]); return v >= 0 ? sign * v * 2.54 : null; }
+  const um = /^(.*?)\s*(mm|cm|m)$/.exec(t); if (um) { const v = frac(um[1]); return v >= 0 ? sign * v * { mm: 0.1, cm: 1, m: 100 }[um[2]] : null; }
+  const v = frac(t); return v >= 0 ? sign * v * ({ mm: 0.1, cm: 1, m: 100, ft: 30.48, in: 2.54 }[bare] || 1) : null;
+}
+// çizerken yazılan uzunluk: metrikte cm, emperyalde birimsiz sayı fit (12'6" de olur)
+const typedCm = s => (isImp() ? parseLen(s, 'ft') : parseFloat(s));
+const typedUnit = () => (isImp() ? '' : ' cm');
+// dışa aktarma ölçek çubuğu: 2 m ya da 6 ft
+const scaleBarSpec = () => (isImp() ? { len: 182.88, mid: "3'", end: "6'" } : { len: 200, mid: '1 m', end: '2 m' });
 
 /* ---------- Güvenli tarayıcı depolaması (#188) ----------
    Depolama engellendiğinde (gizli pencere ayarları, site verisi kapalı, sandbox iframe) window.localStorage'a
@@ -39,6 +67,7 @@ let lang = (() => {
   } catch (e) { }
   return /^tr\b/i.test((typeof navigator !== 'undefined' && navigator.language) || '') ? 'tr' : 'en';
 })();
+units = localStorage.getItem('fp_units') === 'imperial' ? 'imperial' : 'metric'; // #194
 const isEN = () => lang === 'en';
 const L = (tr, en) => (lang === 'en' ? en : tr);
 const itemName = d => (lang === 'en' && d.en ? d.en : d.name);
@@ -1152,7 +1181,18 @@ function autosave() {
     }
   }, 350);
 }
-const GRID_PRESETS = ['5', '10', '25', '50', '100', '300', '500'];
+const GRID_PRESETS = ['5', '10', '25', '50', '100', '300', '500', '2.54', '15.24', '30.48', '91.44']; // emperyal: 1 in, 6 in, 1 ft, 3 ft (#194)
+// birim seçimine göre ızgara adımı seçenekleri (metrik ya da emperyal adımlar)
+function syncUnitsUI() {
+  const s = $('#sUnits'); if (s) s.value = units;
+  for (const o of $('#sGrid').options) { const imp = /\.\d/.test(o.value); if (o.value !== 'custom') o.hidden = imp !== isImp() && String(P && P.grid) !== o.value; }
+}
+function setUnits(u) {
+  units = u === 'imperial' ? 'imperial' : 'metric';
+  localStorage.setItem('fp_units', units);
+  syncUnitsUI(); applyView(); refresh(); buildLib();
+  toast(isImp() ? L('Birimler: fit-inç', 'Units: feet and inches') : L('Birimler: metre / cm', 'Units: metres / cm'));
+}
 function syncGridUI() {
   const g = String(P.grid);
   if (GRID_PRESETS.includes(g)) {
@@ -1164,6 +1204,7 @@ function syncGridUI() {
     $('#iGridCustom').value = P.grid;
   }
   $('#sGridType').value = P.gridType || 'square';
+  syncUnitsUI();
   $('#lblAngle').textContent = P.gridType === 'triangle' ? L('Açı 30°', 'Angle 30°') : L('Açı 15°', 'Angle 15°');
 }
 function restore(s) {
@@ -1960,6 +2001,7 @@ function gridScale(z = view.z) {
 }
 /** Izgara aralığını okunur yazar: 25 cm · 1 m · 2.5 m · 500 m. */
 function gridStepLabel(cm) {
+  if (isImp()) return fmtFtIn(cm).replace(/ 0"$/, ""); // #194: 12' / 6"
   if (cm >= 100) { const m = cm / 100; return (Number.isInteger(m) ? m : +m.toFixed(2)) + ' m'; }
   return +(Math.round(cm * 10) / 10) + ' cm';
 }
@@ -6312,8 +6354,8 @@ const draftRect = (a, b) => [{ x: a.x, y: a.y }, { x: b.x, y: a.y }, { x: b.x, y
 function draftTypedPt(a, cur, typed, mode) {
   const dx = cur.x - a.x, dy = cur.y - a.y;
   if (mode === 'arc') return cur;
-  if (mode === 'rect') { const [w, d] = typed.split('x').map(parseFloat), W = w > 0 ? w : 0, D = d > 0 ? d : W; return { x: a.x + (dx < 0 ? -W : W), y: a.y + (dy < 0 ? -D : D), hit: null }; }
-  const l = parseFloat(typed) || 0, m = Math.hypot(dx, dy) || 1;
+  if (mode === 'rect') { const [w, d] = typed.split('x').map(s => typedCm(s)), W = w > 0 ? w : 0, D = d > 0 ? d : W; return { x: a.x + (dx < 0 ? -W : W), y: a.y + (dy < 0 ? -D : D), hit: null }; }
+  const l = typedCm(typed) || 0, m = Math.hypot(dx, dy) || 1;
   return { x: a.x + dx / m * l, y: a.y + dy / m * l, hit: null };
 }
 function addDraft(spec) {
@@ -7953,7 +7995,7 @@ function drawPreview() {
     else { o = { shape: 'pline', pts: [...ps, cur] }; t = `${fmtLen(dist(a, cur))}  •  ${Math.round((Math.atan2(a.y - cur.y, cur.x - a.x) * 180 / Math.PI + 360) % 360)}°`; }
     const dd = draftPathD(o);
     if (dd) s += `<path d="${dd}" fill="none" stroke="${ac}" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
-    if (ui.typed) t = `[${ui.typed} cm]`;
+    if (ui.typed) t = `[${ui.typed}${typedUnit()}]`;
     if (t) s += lbl((a.x + cur.x) / 2, (a.y + cur.y) / 2 - 10 / z, t);
   }
   if (cur && cur.hit === 'end') s += `<circle cx="${cur.x}" cy="${cur.y}" r="${8 / z}" fill="none" stroke="#10b981" stroke-width="${2 / z}"/>`;
@@ -7965,7 +8007,7 @@ function drawPreview() {
   }
   if (ui.lenTyped && tool === 'select' && sel.length === 1) {
     const fw = find(sel[0]);
-    if (fw && fw.kind === 'wall') { const w = fw.o; s += lbl((w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2 - w.t / 2 - 22 / z, `[${ui.lenTyped} cm] ↵`); }
+    if (fw && fw.kind === 'wall') { const w = fw.o; s += lbl((w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2 - w.t / 2 - 22 / z, `[${ui.lenTyped}${typedUnit()}] ↵`); }
   }
   if (cur && cur.typed) s += lbl(cur.x, cur.y - 18 / z, `[${cur.typed} cm]`);
   if (tool === 'wall' && cur) {
@@ -7973,7 +8015,7 @@ function drawPreview() {
       const a = ui.draw.start;
       s += `<line x1="${a.x}" y1="${a.y}" x2="${cur.x}" y2="${cur.y}" stroke="${ac}" stroke-opacity=".65" stroke-width="${P.wallT}" stroke-linecap="square"/>`;
       const L = dist(a, cur), ang = (Math.atan2(cur.y - a.y, cur.x - a.x) * 180 / Math.PI + 360) % 360;
-      s += lbl((a.x + cur.x) / 2, (a.y + cur.y) / 2 - P.wallT / 2 - 8 / z, ui.typed ? `[${ui.typed} cm]` : `${fmtLen(L)}  •  ${Math.round(ang)}°`);
+      s += lbl((a.x + cur.x) / 2, (a.y + cur.y) / 2 - P.wallT / 2 - 8 / z, ui.typed ? `[${ui.typed}${typedUnit()}]` : `${fmtLen(L)}  •  ${Math.round(ang)}°`);
       s += `<circle cx="${a.x}" cy="${a.y}" r="${4 / z}" fill="${ac}"/>`;
     } else s += `<circle cx="${cur.x}" cy="${cur.y}" r="${4 / z}" fill="${ac}"/>`;
   }
@@ -8082,10 +8124,10 @@ function setCursor(e) {
   ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'zone', 'roofd', 'dim', 'calib', 'shape', 'mirror', 'section', 'axis', 'draft'].includes(tool) ? snapPt(raw, from, e) : null;
   if (tool === 'draft' && ui.dr && ui.dr.pts.length && ui.typed) ui.cur = draftTypedPt(ui.dr.pts[ui.dr.pts.length - 1], ui.cur, ui.typed, draftUi().mode);
   if (tool === 'wall' && ui.draw && ui.typed) {
-    const a = ui.draw.start, l = parseFloat(ui.typed) || 0, dx = ui.cur.x - a.x, dy = ui.cur.y - a.y, m = Math.hypot(dx, dy) || 1;
+    const a = ui.draw.start, l = typedCm(ui.typed) || 0, dx = ui.cur.x - a.x, dy = ui.cur.y - a.y, m = Math.hypot(dx, dy) || 1;
     ui.cur = { x: a.x + dx / m * l, y: a.y + dy / m * l, hit: null };
   }
-  $('#coords').textContent = `x: ${(raw.x / 100).toFixed(2)} m   y: ${(raw.y / 100).toFixed(2)} m`;
+  $('#coords').textContent = `x: ${fmtLen(raw.x)}   y: ${fmtLen(raw.y)}`;
 }
 cv.addEventListener('contextmenu', e => { e.preventDefault(); if (lpress || performance.now() - lpressAt < 1500) return; /* dokunmatik uzun basma kendi yolundan açar */ if (tool === 'select') { openCtxMenu(e); return; } if (tool === 'place' || tool === 'wall' || POLY_TOOLS.has(tool) || tool === 'pen' || tool === 'draft') { setTool('select'); } });
 cv.addEventListener('wheel', e => {
@@ -8907,7 +8949,7 @@ function doHandle(raw, e) {
     const ek = h === 'wa' ? 'a' : 'b', other = h === 'wa' ? o.b : o.a;
     const ign = new Set([o.id, ...d.conn.map(c => c.w.id)]);
     let p = snapPt(raw, other, e, ign); ui.cur = p;
-    const tl = parseFloat(d.typed);
+    const tl = typedCm(d.typed);
     if (tl > 0) { // yazılan uzunluk (#36): imleç yönünde, karşı uçtan tam bu uzaklıkta
       let dx = p.x - other.x, dy = p.y - other.y, m = Math.hypot(dx, dy);
       if (m < 1e-6) { dx = d.orig ? d.orig[ek].x - other.x : 1; dy = d.orig ? d.orig[ek].y - other.y : 0; m = Math.hypot(dx, dy) || 1; }
@@ -9010,6 +9052,8 @@ function floorLevelHtml(f) {
 const fld = (lbl, k, p, v, o = {}) => {
   if (o.sel) return `<label class="f"><span>${lbl}</span><select data-k="${k}" data-p="${p}">${Object.entries(o.sel).map(([a, b]) => `<option value="${a}" ${String(a) === String(v) ? 'selected' : ''}>${b}</option>`).join('')}</select></label>`;
   const type = o.type || 'number';
+  if (isImp() && type === 'number' && / \(cm\)$/.test(lbl) && Number.isFinite(+v)) // #194: uzunluk alanı fit-inç yazılır ve okunur
+    return `<label class="f"><span>${lbl.replace(/ \(cm\)$/, ' (ft-in)')}</span><input type="text" inputmode="text" data-len="1" data-k="${k}" data-p="${p}" value="${esc(fmtFtIn(+v, 8))}" spellcheck="false" autocomplete="off"></label>`;
   const val = type === 'number' ? Math.round(v * 100) / 100 : v;
   return `<label class="f"><span>${lbl}</span><input type="${type}" data-k="${k}" data-p="${p}" value="${esc(val)}" ${o.step ? `step="${o.step}"` : ''} ${o.min != null ? `min="${o.min}"` : ''} ${o.max != null ? `max="${o.max}"` : ''}></label>`;
 };
@@ -9040,7 +9084,7 @@ function renderProps() {
   const lockBtn = lockable.length ? `<button class="btn sm${allLk ? ' on' : ''}" data-act="lock" title="${L('Kilitli nesne fareyle / klavyeyle taşınmaz, boyutlanmaz, silinmez', 'A locked object cannot be moved, resized or deleted by mouse or keys')}">${allLk ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button>` : '';
   const hideBtn = lockable.length ? `<button class="btn sm" data-act="hide" title="${L('Bu ögeyi gizle (Gizli ögeler panelinden geri açılabilir)', 'Hide this item (restore later from Hidden items)')}">🙈 ${L('Gizle', 'Hide')}</button>` : '';
   const lockNote = allLk ? `<p class="muted lockline">🔒 ${L('Kilitli: sürüklenmez, boyutlanmaz, silinmez. Alanlar yine düzenlenebilir.', 'Locked: no dragging, resizing or deleting. The fields below still edit it.')}</p>` : '';
-  const acts = (extra = '') => floorBadgeHtml() + lockNote + selLayerHtml(os) + xf + `<div class="row">${extra}${lockBtn}${hideBtn}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+  const acts = (extra = '') => '<div class="acts-pin">' + floorBadgeHtml() + lockNote + selLayerHtml(os) + xf + `<div class="row">${extra}${lockBtn}${hideBtn}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div></div>`;
   if (kinds.length > 1) {
     const gs = os.filter(x => GROUPABLE[x.kind]);
     const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
@@ -9297,6 +9341,40 @@ function renderProps() {
   h += variantUIHtml();
   h += hiddenPanelHtml(true);
   el.innerHTML = h;
+  propsTidy(el, k);
+}
+/* Daha kısa özellik paneli (#198): ortak eylemler (kopyala, çoğalt, sil, kilit, aynala…) başlığın hemen altında sabit
+   durur; sonra o tür için temel alanlar (PROPS_BASIC: ölçü, tip, renk …) ve ölçüm satırları; geri kalan her şey sırası
+   bozulmadan "⚙ Diğer ayarlar" açılır bölümüne gider. Bölümün açık / kapalı hâli türe göre hatırlanır
+   (localStorage['fp_props_adv']). Hiçbir alan kaldırılmaz, davranış değişmez: yalnızca yer değiştirir. */
+const PROPS_BASIC = {
+  wall: ['len', 't', 'h', 'wt', 'color'],
+  op: ['type', 'w', 'h', 'sill'],
+  furn: ['label', 'w', 'd', 'h', 'rot', 'color', 'roofType', 'pitch', 'stairType', 'stepN', 'rampType', 'lon', 'lm'],
+  room: ['name', 'floor', 'color'],
+  slab: ['floor', 't', 'off'],
+  text: ['text', 'size', 'color', 'rot'],
+};
+function propsAdvState() { try { return JSON.parse(localStorage.getItem('fp_props_adv') || '{}') || {}; } catch (e) { return {}; } }
+function propsTidy(el, k) {
+  const pin = el.querySelector('.acts-pin'), h3 = el.querySelector(':scope > h3');
+  if (pin && h3) h3.after(pin);
+  const basic = PROPS_BASIC[k]; if (!basic) return;
+  const isBasic = n => {
+    if (n === h3 || n === pin || n.tagName === 'H3') return true;
+    if (n.classList && (n.classList.contains('stat') || n.classList.contains('swatches') || n.classList.contains('lockline'))) return true;
+    const f = n.matches && n.matches('label.f') ? n.querySelector('[data-p]') : null;
+    return !!(f && basic.includes(f.dataset.p));
+  };
+  const rest = [...el.children].filter(n => !isBasic(n));
+  if (rest.length < 2) return; // tek bir ek satır için katlamaya değmez
+  const st = propsAdvState(), d = document.createElement('details');
+  d.className = 'props-adv'; d.dataset.advk = k; d.open = !!st[k];
+  const sm = document.createElement('summary');
+  sm.textContent = '⚙ ' + L('Diğer ayarlar', 'More settings');
+  d.append(sm, ...rest);
+  el.append(d);
+  d.addEventListener('toggle', () => { const s = propsAdvState(); if (d.open) s[k] = 1; else delete s[k]; try { localStorage.setItem('fp_props_adv', JSON.stringify(s)); } catch (e) { } });
 }
 // cam döşeme (#57): şeffaf / buzlu seçimi yalnızca zemin 'glass' iken görünür
 // duvar alçalınca kapı / pencere duvarın üstünden taşmasın (#59): önce yükseklik, gerekirse denizlik düşer
@@ -9449,6 +9527,7 @@ function applyProp(t, final) {
   const render = final ? window.render : scheduleRender; // canlı giriş: karede bir çizim
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
+  if (t.dataset.len) { v = parseLen(v, 'ft'); if (v == null || !Number.isFinite(v)) return; v = Math.round(v * 100) / 100; } // #194: fit-inç → cm
   if (k === 'grplink') { if (final && v) linkGroupTo(v); return; }
   if (k === 'lyr') {
     const l = layerById(t.dataset.lid); if (!l) return;
@@ -9815,9 +9894,11 @@ function presetDef(p) {
   return { id: p.type, name: p.name, en: p.name, icon: p.icon || (cat && cat.icon) || '▭', k: p.k || (cat && cat.k) || 'rect', w: p.w, d: p.d, h: p.h, color: p.color, pts: p.extra && p.extra.pts, extra: p.extra, preset: p.id };
 }
 // kartta görünen ölçü: 85×210 · 100×70 · denizlik 110 · 200×90
+// kütüphane kartı ölçüsü: metrikte cm, emperyalde inç (#194)
+function libSz(w, d) { const f = v => Math.round(isImp() ? v / 2.54 : v); return (d == null ? f(w) : f(w) + '×' + f(d)) + (isImp() ? ' in' : d == null ? ' cm' : ''); }
 function presetSize(p) {
-  if (p.kind === 'op') return Math.round(p.w) + '×' + Math.round(p.h) + (p.sill > 0 ? ' · ' + L('denizlik', 'sill') + ' ' + Math.round(p.sill) : '');
-  return Math.round(p.w) + '×' + Math.round(p.d);
+  if (p.kind === 'op') return libSz(p.w, p.h) + (p.sill > 0 ? ' · ' + L('denizlik', 'sill') + ' ' + (isImp() ? libSz(p.sill) : Math.round(p.sill)) : '');
+  return libSz(p.w, p.d);
 }
 async function savePresetSel() {
   const os = selObjs(); if (os.length !== 1 || (os[0].kind !== 'op' && os[0].kind !== 'furn')) return;
@@ -9910,22 +9991,22 @@ function buildLib() {
   $('#cats').innerHTML = cats.map((c, i) => `<button class="chip ${i === ui.cat && (!ui.q || i === LIB_COMM) ? 'on' : ''}" data-cat="${i}">${c}</button>`).join('');
   const q = ui.q.toLowerCase(); let items = '';
   const card = (type, d, sz) => `<button class="item" data-type="${type}" data-id="${d.id}"><div class="ic">${d.icon || '▭'}</div><div>${itemName(d)}</div><div class="sz">${sz}</div></button>`;
-  const shapeCard = d => `<div class="item-c"><button class="item" data-type="def" data-id="${d.id}"><div class="ic">${d.icon || '⬡'}</div><div>${esc(itemName(d))}</div><div class="sz">${Math.round(d.w)}×${Math.round(d.d)} cm</div></button><button type="button" class="delsh" data-delsh="${d.id}" title="${L('Kütüphaneden sil', 'Remove from library')}: ${esc(itemName(d))}">✕</button></div>`;
+  const shapeCard = d => `<div class="item-c"><button class="item" data-type="def" data-id="${d.id}"><div class="ic">${d.icon || '⬡'}</div><div>${esc(itemName(d))}</div><div class="sz">${libSz(d.w, d.d)}</div></button><button type="button" class="delsh" data-delsh="${d.id}" title="${L('Kütüphaneden sil', 'Remove from library')}: ${esc(itemName(d))}">✕</button></div>`;
   const presetCard = p => { const d = presetDef(p); return `<div class="item-c"><button class="item" data-type="pre" data-id="${p.id}" title="${esc(p.name)}"><div class="ic">${d.icon || '▭'}</div><div>${esc(p.name)}</div><div class="sz">${presetSize(p)}</div></button><button type="button" class="renpre" data-renpre="${p.id}" title="${L('Yeniden adlandır', 'Rename')}: ${esc(p.name)}">✎</button><button type="button" class="delsh" data-delpre="${p.id}" title="${L('Kütüphaneden sil', 'Remove from library')}: ${esc(p.name)}">✕</button></div>`; };
   const matches = d => d.name.toLowerCase().includes(q) || (d.en && d.en.toLowerCase().includes(q));
   const shapes = P && P.lib && P.lib.shapes || [], presets = P && P.lib && P.lib.presets || [];
-  const opCard = o => card('op', o, opDefLast(o).w + ' cm'); // son kullanılan ölçü kartta da görünür
+  const opCard = o => card('op', o, libSz(opDefLast(o).w)); // son kullanılan ölçü kartta da görünür
   $('#search').placeholder = ui.cat === LIB_COMM ? L('🔍 Toplulukta ara…', '🔍 Search the community…') : L('🔍 Mobilya ara...', '🔍 Search furniture...');
   if (ui.cat === LIB_COMM) items = storeLibHtml(); // arama kutusu topluluk sekmesinde mağazada arar
   else if (q) {
     items += presets.filter(p => p.name.toLowerCase().includes(q) && preFits(p)).map(presetCard).join('');
     items += OPENINGS.filter(o => matches(o) && opFits(opDefLast(o))).map(opCard).join('');
-    items += CATALOG.filter(c => matches(c) && fits(c)).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
+    items += CATALOG.filter(c => matches(c) && fits(c)).map(c => card('furn', c, libSz(c.w, c.d))).join('');
     items += shapes.filter(s => matches(s) && fits(s)).map(shapeCard).join('');
   } else if (ui.cat === 0) items = OPENINGS.filter(o => opFits(opDefLast(o))).map(opCard).join('') + presets.filter(p => p.kind === 'op' && preFits(p)).map(presetCard).join('');
   else if (ui.cat === LIBCATS.length - 1) items = `<button class="item fs-new" data-fsnew="1" title="${L('Kendi mobilyanı parçalardan tasarla', 'Design your own furniture from parts')}"><div class="ic">🧩</div><div>${L('Mobilya oluştur', 'Create furniture')}</div><div class="sz">${L('stüdyo', 'studio')}</div></button>` + presets.filter(preFits).map(presetCard).join('') + shapes.filter(fits).map(shapeCard).join('')
     + (presets.length || shapes.length ? '' : `<p class="muted">${L('Bir kapı, pencere ya da mobilyayı seçip “💾 Kütüphaneye kaydet” ile buraya ekle.', 'Select a door, window or furniture item and use “💾 Save to library” to add it here.')}</p>`);
-  else items = CATALOG.filter(c => c.cat === ui.cat - 1 && fits(c)).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
+  else items = CATALOG.filter(c => c.cat === ui.cat - 1 && fits(c)).map(c => card('furn', c, libSz(c.w, c.d))).join('');
   $('#items').innerHTML = items || `<p class="muted">${libSizeOn() && ui.cat !== LIB_COMM ? L('Bu ölçülere sığan öğe yok', 'Nothing here fits these sizes') : L('Sonuç yok', 'No results')}</p>`;
   updateTools();
 }
@@ -11094,6 +11175,7 @@ function cmdList() {
     act('group', '⛓', 'Grupla', 'Group', 'Ctrl+G', groupSel, false),
     act('ungroup', '⛓', 'Grubu çöz', 'Ungroup', 'Ctrl+Shift+G', ungroupSel, false),
     act('autodims', '📐', 'Otomatik ölçülendir (odalar + dış zincirler)', 'Auto-dimension (rooms + outer chains)', '', () => autoDimsRun(), false, 'dimension dimensions ölçü ölçülendirme otomatik auto chain zincir'),
+    act('units', '📏', 'Birim: metre ↔ fit-inç', 'Units: metric ↔ feet & inches', '', () => setUnits(isImp() ? 'metric' : 'imperial'), true, 'units imperial metric feet inches ft in birim fit inç metre'),
     act('axgrid', '⊞', 'Aks ızgarası oluştur', 'Create an axis grid', '', () => axisGridPrompt(), false, 'grid ızgara aks axis column kolon structure yapı'),
     act('elev', '📐', 'Görünüşler ve kesitler', 'Elevations & sections', '', () => archModal('elev:south'), true, 'facade cephe drawing çizim'),
     act('elevmain', '📐', 'Ana tuvalde görünüş / kesit', 'Elevation / section on main canvas', '', () => showElev(!ui.viewElev), true, 'facade cephe elevation section görünüş kesit'),
@@ -11228,19 +11310,20 @@ window.addEventListener('keydown', e => {
   // sayıyla uzunluk (#36): seçili tek duvar → rakam + Enter; duvar ucu sürüklenirken → rakam yazınca uç o uzaklığa kilitlenir
   const hd = ui.drag && ui.drag.type === 'handle' && (ui.drag.h === 'wa' || ui.drag.h === 'wb') ? ui.drag : null;
   const sw = !hd && tool === 'select' && sel.length === 1 && find(sel[0])?.kind === 'wall' ? find(sel[0]).o : null;
-  if (hd && (/^[0-9.,]$/.test(e.key) || e.key === 'Backspace')) {
+  const lenKey = k0 => /^[0-9.,]$/.test(k0) || (isImp() && /^['" /]$/.test(k0)); // #194: fit-inç işaretleri
+  if (hd && (lenKey(e.key) || e.key === 'Backspace')) {
     hd.typed = e.key === 'Backspace' ? (hd.typed || '').slice(0, -1) : (hd.typed || '') + (e.key === ',' ? '.' : e.key);
     if (ui.raw) doHandle(ui.raw, ui.lastE || { shiftKey: false }); render(); e.preventDefault(); return;
   }
-  if (sw && (/^[0-9.,]$/.test(e.key) || (ui.lenTyped && (e.key === 'Backspace' || e.key === 'Enter' || e.key === 'Escape')))) {
+  if (sw && (lenKey(e.key) || (ui.lenTyped && (e.key === 'Backspace' || e.key === 'Enter' || e.key === 'Escape')))) {
     e.preventDefault();
-    if (e.key === 'Enter') { const v = parseFloat(ui.lenTyped); ui.lenTyped = ''; if (applyWallLength(sw, v)) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); } else render(); return; }
+    if (e.key === 'Enter') { const v = typedCm(ui.lenTyped); ui.lenTyped = ''; if (applyWallLength(sw, v)) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); } else render(); return; }
     ui.lenTyped = e.key === 'Escape' ? '' : e.key === 'Backspace' ? ui.lenTyped.slice(0, -1) : (ui.lenTyped || '') + (e.key === ',' ? '.' : e.key);
     drawPreview(); return;
   }
   if (ui.lenTyped && !sw) ui.lenTyped = '';
   if (tool === 'wall' && ui.draw) {
-    if (/^[0-9.]$/.test(e.key)) { ui.typed += e.key; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
+    if (lenKey(e.key)) { ui.typed += e.key === ',' ? '.' : e.key; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Backspace') { ui.typed = ui.typed.slice(0, -1); if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Enter') {
       if (ui.typed && ui.cur && dist(ui.draw.start, ui.cur) > 1) { F().walls.push(toolWall(ui.draw.start, ui.cur)); ui.draw = { start: { x: ui.cur.x, y: ui.cur.y } }; ui.typed = ''; commit(); render(); renderProps(); }
@@ -11251,7 +11334,7 @@ window.addEventListener('keydown', e => {
   if (tool === 'draft' && ui.dr && ui.dr.pts.length) {
     // ölçü yazma (#83): rakamlar uzunluk / yarıçap, dikdörtgende "300x200"; Enter uygular ya da çoklu çizgiyi bitirir
     const k = e.key.toLowerCase(), sep = draftUi().mode === 'rect' && ui.typed && !ui.typed.includes('x') && (k === 'x' || k === '*');
-    if (/^[0-9.,]$/.test(k) || sep) { ui.typed += sep ? 'x' : k === ',' ? '.' : k; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
+    if (lenKey(e.key) || sep) { ui.typed += sep ? 'x' : k === ',' ? '.' : e.key; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Backspace') { ui.typed = ui.typed.slice(0, -1); if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Enter') { if (ui.typed && ui.cur) draftClick(ui.cur); else finishDraft(); return; }
   }
@@ -14729,9 +14812,10 @@ function exportSvg() {
   try { LS = layerStrings(f, false); defs = defsSvg(); }
   finally { view.z = z0; ui.exporting = false; }
   const date = new Date().toLocaleDateString(isEN() ? 'en-US' : 'tr-TR');
+  const sbS = scaleBarSpec();
   const sb = `<g transform="translate(${x0 + 30} ${y0 + h - 70})" font-family="Segoe UI,sans-serif"><rect width="${Math.min(w - 60, 560)}" height="56" fill="none" stroke="#334155" stroke-width="2"/>
     <text x="12" y="24" font-size="22" font-weight="700" fill="#0f172a">${esc(P.name)} – ${esc(f.name)}</text><text x="12" y="46" font-size="14" fill="#475569">${date}  •  ${L('Toplam oda alanı', 'Total room area')}: ${fmtArea(f.rooms.reduce((s, r) => s + polyArea(r.pts), 0))}</text></g>
-    <g transform="translate(${x0 + w - 230} ${y0 + h - 40})" font-family="Segoe UI,sans-serif"><path d="M0 0H200M0 -6V6M100 -6V6M200 -6V6" stroke="#0f172a" stroke-width="2" fill="none"/><text x="0" y="-12" font-size="13">0</text><text x="100" y="-12" font-size="13" text-anchor="middle">1 m</text><text x="200" y="-12" font-size="13" text-anchor="end">2 m</text></g>`;
+    <g transform="translate(${x0 + w - 230} ${y0 + h - 40})" font-family="Segoe UI,sans-serif"><path d="M0 0H${sbS.len}M0 -6V6M${sbS.len / 2} -6V6M${sbS.len} -6V6" stroke="#0f172a" stroke-width="2" fill="none"/><text x="0" y="-12" font-size="13">0</text><text x="${sbS.len / 2}" y="-12" font-size="13" text-anchor="middle">${sbS.mid}</text><text x="${sbS.len}" y="-12" font-size="13" text-anchor="end">${sbS.end}</text></g>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x0} ${y0} ${w} ${h}" width="${w}" height="${h}"><defs>${defs}</defs><rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="#fff"/>${P.bg && layersVis.bg ? bgSvg(false) : ''}${LS.rooms}${LS.walls}${LS.ops}${LS.furn}${LS.roomLabels}${LS.dims}${LS.texts}${LS.sketches}${sb}</svg>`;
   return { svg, w, h };
 }
@@ -15021,8 +15105,8 @@ function archSvg(spec, title, opts) {
   const ty = h - 30;
   out += `<text x="${LM}" y="${ty}" font-size="24" font-weight="700" fill="${C.text}" font-family="Segoe UI,sans-serif">${esc(title)}</text>`;
   out += `<text x="${LM}" y="${ty + 22}" font-size="14" fill="${C.sub}" font-family="Segoe UI,sans-serif">${esc(P.name)} · ${mode.toUpperCase()} · ${new Date().toLocaleDateString()}</text>`;
-  const bx = w - M / 2 - 200;
-  out += `<g font-family="Segoe UI,sans-serif" font-size="13" fill="${C.text}"><rect x="${bx}" y="${ty - 10}" width="100" height="8" fill="${st}"/><rect x="${bx + 100}" y="${ty - 10}" width="100" height="8" fill="#fff" stroke="${st}"/><text x="${bx}" y="${ty + 12}">0</text><text x="${bx + 100}" y="${ty + 12}" text-anchor="middle">1 m</text><text x="${bx + 200}" y="${ty + 12}" text-anchor="end">2 m</text></g>`;
+  const sbS = scaleBarSpec(), bx = w - M / 2 - 200;
+  out += `<g font-family="Segoe UI,sans-serif" font-size="13" fill="${C.text}"><rect x="${bx}" y="${ty - 10}" width="${sbS.len / 2}" height="8" fill="${st}"/><rect x="${bx + sbS.len / 2}" y="${ty - 10}" width="${sbS.len / 2}" height="8" fill="#fff" stroke="${st}"/><text x="${bx}" y="${ty + 12}">0</text><text x="${bx + sbS.len / 2}" y="${ty + 12}" text-anchor="middle">${sbS.mid}</text><text x="${bx + sbS.len}" y="${ty + 12}" text-anchor="end">${sbS.end}</text></g>`;
   return { svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><defs>${defs}</defs><rect width="${w}" height="${h}" fill="#fff"/>${out}</svg>`, w, h, s0, s1, zLow, zTop, prims, levels, mode };
 }
 function elevationSpec(dir) {
@@ -21528,6 +21612,7 @@ function applyLangUI() {
     gtOpts[3].textContent = L('∅ Kapalı (Serbest)', '∅ Off (Free)');
   }
   $('#lblGridStep').textContent = L('Adım', 'Step');
+  $('#lblUnits').textContent = L('Birim', 'Units'); $('#sUnits').title = L('Uzunluk birimi (bu tarayıcı için): metre / santimetre ya da fit / inç', 'Length units (this browser): metres / centimetres or feet / inches');
   const gsCustom = $('#sGrid').querySelector('option[value="custom"]');
   if (gsCustom) gsCustom.textContent = L('Özel...', 'Custom...');
   $('#iGridCustom').title = L('Özel ızgara adımı (cm)', 'Custom grid step (cm)');
@@ -21631,6 +21716,7 @@ $('#sBoxSel').onchange = e => { ui.boxSel = e.target.value; };
 $('#cAngle').onchange = e => { ui.angle = e.target.checked; };
 $('#cDims').onchange = e => { ui.dims = e.target.checked; render(); };
 if ($('#cOutline')) $('#cOutline').onchange = e => setOutline(e.target.checked);
+$('#sUnits').onchange = e => setUnits(e.target.value); // #194
 $('#sGrid').onchange = e => {
   if (e.target.value === 'custom') {
     $('#lblGridCustom').style.display = 'inline-flex';

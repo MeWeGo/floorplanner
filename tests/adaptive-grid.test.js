@@ -29,6 +29,7 @@ function gridApi(grid, z = 1) {
     const GRID_MINOR_PX = ${GRID_MINOR_PX}, GRID_MAJOR_PX = ${GRID_MAJOR_PX};
     ${sliceFunc('gridFactor')}
     ${sliceFunc('gridScale')}
+    const isImp = () => false;
     ${sliceFunc('gridStepLabel')}
     return { gridFactor, gridScale, gridStepLabel };
   `)({ grid }, { x: 0, y: 0, z });
