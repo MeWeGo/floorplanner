@@ -59,6 +59,7 @@ function makeDriveEnv(initialP) {
     const dbGet = async () => null;
     const dbPut = async () => {};
     const cacheTex = () => {};
+    ${constLineOf(src, 'texRefIds')}
     const adoptActive = o => { P = o; return true; };
     const syncIdle = () => true;
     ${fnSrc('isPristine')}

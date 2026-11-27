@@ -1342,17 +1342,38 @@ function cacheTex(id, data) {
   e.img.src = data;
   TEX.set(id, e); return e;
 }
-// projenin dokularını IndexedDB'den önbelleğe al (açılış, sekme geçişi, dosya açma)
+/* Arka plan görseli (#187): baytlar da dokular gibi P'nin dışında (IndexedDB 'textures' + TEX) durur;
+   P.bg yalnız künyedir { id: 'bg', img: <görsel id>, x, y, w, h, op, lock }. Eskiden src'deki birkaç MB'lık
+   dataURL her geri-al anlık görüntüsüne, her otomatik kayda ve her render karşılaştırmasına giriyordu.
+   Eski kayıtlar (src içinde dataURL) normalizeProject'te bgAbsorb ile bir kez dışarı taşınır; link, canlı oda
+   ve eski sürümler için bgInline görseli yeniden src'ye koyar. */
+const BG_MAX = 4096;              // yüklenen arka planın en uzun kenarı (px): çizim ve ölçek ayarı için yeterli
+const bgData = b => (b ? (typeof b.src === 'string' && b.src) || ((b.img && TEX.get(b.img)) || {}).data || '' : '');
+function bgAbsorb(b) {
+  if (!b || typeof b.src !== 'string' || !b.src.startsWith('data:image/')) return b;
+  const id = 'bg' + uid() + uid(); cacheTex(id, b.src);
+  dbPut('textures', { id, data: b.src }).catch(() => { });
+  b.img = id; delete b.src; return b;
+}
+// görsel src'ye gömülü kopya (paylaşım linki, canlı oda); görsel yoksa null
+function bgInline(b) {
+  const d = bgData(b); if (!b || !d) return null;
+  const o = { ...b, src: d }; delete o.img; return o;
+}
+const texRefIds = proj => [...((proj && proj.textures) || []).map(t => t.id), ...(proj && proj.bg && proj.bg.img ? [proj.bg.img] : [])];
+// projenin dokularını (ve arka plan görselini) IndexedDB'den önbelleğe al (açılış, sekme geçişi, dosya açma)
 async function ensureTextures(proj = P) {
-  for (const t of (proj && proj.textures) || []) {
-    if (TEX.has(t.id)) continue;
-    try { const r = await dbGet('textures', t.id); if (r && r.data) cacheTex(t.id, r.data); } catch (e) { }
+  for (const id of texRefIds(proj)) {
+    if (TEX.has(id)) continue;
+    try { const r = await dbGet('textures', id); if (r && r.data) cacheTex(id, r.data); } catch (e) { }
   }
 }
 // ⬇ JSON: görsel verisi dosyayla birlikte gider, böylece başka bilgisayarda da açılır
 function bundleTextures(proj) {
   const texData = {};
   for (const t of proj.textures || []) { const e = TEX.get(t.id); if (e) texData[t.id] = e.data; }
+  // arka plan görseli dosyada src içinde gömülü gider (eski sürümler de açar); açılışta bgAbsorb yeniden dışarı alır
+  if (proj.bg && proj.bg.img) { const b = bgInline(proj.bg); if (b) proj = { ...proj, bg: b }; }
   return Object.keys(texData).length ? { ...proj, texData } : proj;
 }
 // 📂 Aç: texData → önbellek + IndexedDB; P'ye (ve geri-al geçmişine) girmez
@@ -1616,7 +1637,7 @@ function normalizeProject(P) {
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
   P.lib.presets = (Array.isArray(P.lib.presets) ? P.lib.presets : []).filter(p => p && p.id && (p.kind === 'op' || p.kind === 'furn') && +p.w > 0); // #42
-  if (P.bg) P.bg.id = 'bg';
+  if (P.bg) { P.bg.id = 'bg'; if (P.bg.src) bgAbsorb(P.bg); } // #187: eski kayıtlardaki gömülü görsel dışarı
   P.textures = (Array.isArray(P.textures) ? P.textures : []).filter(t => t && /^[\w-]{1,32}$/.test(t.id))
     .map(t => ({ id: t.id, name: String(t.name || t.id).slice(0, 60), w: clamp(+t.w || 60, 1, 5000), h: clamp(+t.h || +t.w || 60, 1, 5000) }));
   if (!Array.isArray(P.layers) || !P.layers.length) P.layers = [defaultLayer()];
@@ -1956,8 +1977,11 @@ function gridSvg() {
 }
 function bgSvg(live = true) {
   const b = P.bg; if (!b) return '';
+  // tuvalde kısa blob: adresi (DOM ve setLayerHtml karşılaştırması hafif kalır), dışa aktarımda kendi başına geçerli dataURL
+  const e = b.img ? TEX.get(b.img) : null, href = b.src || (e ? (live && !ui.exporting ? e.url : e.data) : '');
+  if (!href) return '';
   const hit = live && !b.lock ? `data-id="bg" style="cursor:move"` : `pointer-events="none"`;
-  return `<image href="${b.src}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" opacity="${b.op}" preserveAspectRatio="none" ${hit}/>`;
+  return `<image href="${href}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" opacity="${b.op}" preserveAspectRatio="none" ${hit}/>`;
 }
 function roomSvg(r, live) {
   const C = pal(), pts = r.pts.map(p => p.x + ',' + p.y).join(' ');
@@ -11761,7 +11785,7 @@ function saveDriveStep(msg) {
   ui.saveDriveHint = true;
   toast(msg, { label: L("☁ Google Drive'a da kaydet", "☁ Also save to Google Drive"), fn: syncModal });
 }
-function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+function download(name, blob) { if (!blob) { toast(L('Dosya oluşturulamadı', 'Could not create the file')); return; } const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
 const fname = ext => (P.name || 'plan').replace(/[^\w\-çğıöşüÇĞİÖŞÜ ]+/g, '_') + '.' + ext;
 function downloadJson(proj = P) { download(fname('json'), new Blob([JSON.stringify(bundleTextures(proj), null, 2)], { type: 'application/json' })); }
 /* ---------- Revit dışa aktarma (floorplanner → Revit) ----------
@@ -12474,7 +12498,7 @@ async function shareDecode(s) {
   if (!o || !Array.isArray(o.floors)) throw new Error(L('geçersiz plan', 'invalid plan'));
   return o;
 }
-const shareLink = async (p = P) => APP_URL + '#fp=' + await shareEncode(JSON.parse(JSON.stringify(p)));
+const shareLink = async (p = P) => { const c = JSON.parse(JSON.stringify(p)); if (c.bg) c.bg = bgInline(c.bg); return APP_URL + '#fp=' + await shareEncode(c); };
 const driveLink = fileId => APP_URL + '#fpd=' + fileId;
 // aynı projeyi (P.id) taşıyan sekme: etkin olan önce
 function tabIndexOf(id) {
@@ -12707,15 +12731,16 @@ async function gdUpload(id, meta, blob) {
 }
 const gdTexFile = async id => (await gdList(`appProperties has { key='fpTex' and value='${gdQ(id)}' }`, 'files(id)'))[0];
 async function gdPushTex(p) {
-  for (const t of p.textures || []) {
-    if (gd.texDone.has(t.id)) continue;
-    const e = TEX.get(t.id); if (!e || !e.data) continue;
-    if (!(await gdTexFile(t.id))) await gdUpload(null, { name: 'texture-' + t.id, parents: [await gdFolder()], appProperties: { fpTex: t.id } }, dataUrlBlob(e.data));
-    gd.texDone.add(t.id);
+  for (const id of texRefIds(p)) { // özel dokular + arka plan görseli (#187)
+    if (gd.texDone.has(id)) continue;
+    const e = TEX.get(id); if (!e || !e.data) continue;
+    if (!(await gdTexFile(id))) await gdUpload(null, { name: 'texture-' + id, parents: [await gdFolder()], appProperties: { fpTex: id } }, dataUrlBlob(e.data));
+    gd.texDone.add(id);
   }
 }
 async function gdPullTex(p) {
-  for (const t of p.textures || []) {
+  for (const id of texRefIds(p)) {
+    const t = { id };
     if (TEX.has(t.id)) continue;
     try { const r = await dbGet('textures', t.id); if (r && r.data) { cacheTex(t.id, r.data); continue; } } catch (e) { }
     const f = await gdTexFile(t.id); if (!f) continue;
@@ -13320,7 +13345,7 @@ function collabRoomUrl(roomId = collab.room, viewToken = '', editKey = '') {
 
 function collabExportState(proj = P) {
   const copy = JSON.parse(JSON.stringify(proj));
-  if (copy.bg && copy.bg.src && copy.bg.src.length > 100000) copy.bg = null;
+  if (copy.bg) { const b = bgInline(copy.bg); copy.bg = b && b.src.length <= 100000 ? b : null; } // büyük görsel ayrı varlık olarak gider
   return copy;
 }
 
@@ -13367,6 +13392,7 @@ function collabBgKey(bg) {
 function collabSendBgAsset(bg) {
   if (!collab.room || collab.role !== 'editor' || !collab.ws || collab.ws.readyState !== 1) return;
   if (!bg) { collabSend({ type: 'asset', kind: 'bg', data: null }); return; }
+  bg = bgInline(bg); if (!bg) return; // görsel henüz yüklenmedi
   const raw = JSON.stringify(bg);
   if (raw.length > COLLAB_MAX_ASSET) {
     toast(L('Arka plan görseli canlı aktarım için çok büyük (> 400 KB)', 'Background image is too large to sync live (> 400 KB)'));
@@ -13400,8 +13426,8 @@ function collabSyncAssetsAfterCommit() {
 
 async function collabRequestMissingAssets(hasBg = false) {
   if (!collab.room || !collab.ws || collab.ws.readyState !== 1) return;
-  if (hasBg && !P.bg) collabSend({ type: 'asset_req', kind: 'bg' });
   await ensureTextures(P);
+  if (hasBg && (!P.bg || !bgData(P.bg))) collabSend({ type: 'asset_req', kind: 'bg' });
   for (const t of P.textures || []) {
     if (!TEX.has(t.id)) collabSend({ type: 'asset_req', kind: 'tex', id: t.id });
   }
@@ -13904,7 +13930,7 @@ function collabConnect(url, opts = {}) {
       if (msg.kind === 'bg') {
         collab.applying = true;
         try {
-          P.bg = msg.data ? collabClone(msg.data) : null;
+          P.bg = msg.data ? bgAbsorb(collabClone(msg.data)) : null;
           collab.lastBgKey = collabBgKey(P.bg);
           collab.lastSnap = JSON.parse(JSON.stringify(P));
           refresh();
@@ -15206,10 +15232,29 @@ function archModal(key) {
   archRedraw(fresh || tabChanged);
   archRenderProps();
 }
+/* SVG → PNG (#189): tarayıcı tuvali çok büyük bulursa toBlob null döner (önceden download(null) hata atıyordu).
+   O zaman ölçek yarıya indirilip yeniden denenir; en küçükte de olmazsa SVG / PDF önerilir. */
+const PNG_MAX_PX = 6e7;
 function svgToPng(svg, w, h, name) {
-  const sc = Math.min(3, 3200 / Math.max(w, h)) * (w < 1200 ? 1.5 : 1), img = new Image();
-  img.onload = () => { const c = document.createElement('canvas'); c.width = Math.round(w * sc); c.height = Math.round(h * sc); const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height); c.toBlob(b => download(name, b)); };
-  img.onerror = () => toast(L('PNG oluşturulamadı', 'Failed to generate PNG'));
+  const fail = () => toast(L('PNG oluşturulamadı: çizim çok büyük olabilir. SVG veya PDF (Yazdır) deneyin.', 'Could not create the PNG: the drawing may be too large. Try SVG or PDF (Print).'));
+  const img = new Image();
+  img.onload = () => {
+    let sc = Math.min(3, 3200 / Math.max(w, h)) * (w < 1200 ? 1.5 : 1);
+    while (sc > 0.25 && w * h * sc * sc > PNG_MAX_PX) sc /= 2;
+    const tryAt = s => {
+      let c = null;
+      try {
+        c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+        const x = c.getContext('2d'); if (!x) throw new Error('no 2d context');
+        x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height);
+      } catch (e) { c = null; }
+      const retry = () => (s > 0.3 ? tryAt(s / 2) : fail());
+      if (!c) return retry();
+      c.toBlob(b => { if (b) download(name, b); else retry(); });
+    };
+    tryAt(sc);
+  };
+  img.onerror = fail;
   img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
 $('#modal').addEventListener('click', e => {
@@ -15341,11 +15386,8 @@ function nextSectionName() {
   return 'S' + (used.size + 1);
 }
 function exportPng() {
-  const { svg, w, h } = exportSvg(), sc = Math.min(3, 3200 / Math.max(w, h)) * (w < 1200 ? 1.5 : 1);
-  const img = new Image();
-  img.onload = () => { const c = document.createElement('canvas'); c.width = Math.round(w * sc); c.height = Math.round(h * sc); const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height); c.toBlob(b => download(fname('png'), b)); };
-  img.onerror = () => toast(L('PNG oluşturulamadı', 'Failed to generate PNG'));
-  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  const { svg, w, h } = exportSvg();
+  svgToPng(svg, w, h, fname('png'));
 }
 // Yazdır düğmesi doğrudan yazdırmaz: önce çıktı ayarları (#35)
 function exportPrint() { openPlotDialog(); }
@@ -16296,6 +16338,7 @@ function txLoadFile(file) {
       openTexDialog('up');
     } catch (er) { toast(L('Doku eklenemedi: ', 'Could not add texture: ') + er.message); }
   };
+  r.onerror = () => toast(L('Dosya okunamadı: ', 'Could not read the file: ') + file.name);
   r.readAsDataURL(file);
 }
 function txPickFile() {
@@ -21017,6 +21060,7 @@ function openPlanFile(file) {
     toast(L('DXF okunuyor…', 'Reading DXF…'));
     const rb = new FileReader();
     rb.onload = () => setTimeout(() => { try { importDxfText(dxfDecode(new Uint8Array(rb.result)), file.name); } catch (er) { toast(L('DXF açılamadı: ', 'Could not open DXF: ') + dxfErr(er)); } }, 30);
+    rb.onerror = () => toast(L('Dosya okunamadı: ', 'Could not read the file: ') + file.name);
     rb.readAsArrayBuffer(file); return;
   }
   const r = new FileReader();
@@ -21027,6 +21071,7 @@ function openPlanFile(file) {
       freshIdIfTaken(o); newTabSlot(); loadProject(o, L('Dosya açıldı', 'File opened')); closeModal();
     } catch (er) { toast(L('Dosya açılamadı: ', 'Could not open file: ') + er.message); }
   }, 30);
+  r.onerror = () => toast(L('Dosya okunamadı: ', 'Could not read the file: ') + file.name);
   r.readAsText(file);
 }
 function importIfcText(text, fileName = '') {
@@ -21090,7 +21135,12 @@ $('#stage').addEventListener('dragover', e => { if ([...(e.dataTransfer.types ||
 $('#stage').addEventListener('drop', e => { const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (!f) return; e.preventDefault(); openPlanFile(f); });
 $('#fileBg').onchange = e => {
   const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-  r.onload = () => { const im = new Image(); im.onload = () => { const w = 1200; P.bg = { id: 'bg', src: r.result, x: 0, y: 0, w, h: Math.round(w * im.height / im.width), op: 0.5, lock: false }; sel = ['bg']; setTool('select'); commit(); fit(); refresh(); toast(L('Görsel eklendi – sürükleyerek taşıyabilir, köşe ve kenarlarından boyutlandırabilir veya sağ panelden konumunu ayarlayabilirsiniz', 'Image added – drag on canvas to move, drag corners or edges to resize, or adjust position in the right panel')); }; im.src = r.result; };
+  r.onerror = () => toast(L('Görsel okunamadı: ', 'Could not read the image: ') + file.name);
+  r.onload = async () => {
+    // #187: uzun kenar BG_MAX'a indirilir, baytlar IndexedDB'ye gider; P.bg yalnız künye taşır
+    let img; try { img = await downscaleImage(r.result, BG_MAX, file.type === 'image/png' ? 'image/png' : 'image/jpeg'); } catch (er) { toast(L('Görsel okunamadı: ', 'Could not read the image: ') + file.name); return; }
+    const w = 1200; P.bg = bgAbsorb({ id: 'bg', src: img.data, x: 0, y: 0, w, h: Math.round(w * img.h / img.w), op: 0.5, lock: false }); sel = ['bg']; setTool('select'); commit(); fit(); refresh(); toast(L('Görsel eklendi – sürükleyerek taşıyabilir, köşe ve kenarlarından boyutlandırabilir veya sağ panelden konumunu ayarlayabilirsiniz', 'Image added – drag on canvas to move, drag corners or edges to resize, or adjust position in the right panel'));
+  };
   r.readAsDataURL(file); e.target.value = '';
 };
 $('#tools').addEventListener('click', e => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); });

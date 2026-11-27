@@ -3980,6 +3980,47 @@ check('Hexagonal Draw Roof, beveled & curtain wall attach, one-sided resize (#17
 });
 
 
+// #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
+// small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
+check('large background image stays out of undo history and autosave (#187)', async page => {
+  const r = await page.evaluate(`(async () => {
+    closeModal(); P = newProject(); loadProject(P);
+    const cv = document.createElement('canvas'); cv.width = 5000; cv.height = 1000;
+    const g = cv.getContext('2d'); for (let i = 0; i < 400; i++) { g.fillStyle = 'hsl(' + i + ',60%,50%)'; g.fillRect((i * 97) % 5000, (i * 53) % 1000, 40, 40); }
+    const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
+    const dt = new DataTransfer(); dt.items.add(new File([blob], 'plan.png', { type: 'image/png' }));
+    const inp = document.querySelector('#fileBg'); inp.files = dt.files; inp.dispatchEvent(new Event('change'));
+    for (let i = 0; i < 80 && !(P.bg && P.bg.img); i++) await new Promise(r => setTimeout(r, 100));
+    const data = bgData(P.bg);
+    const im = new Image(); await new Promise(r => { im.onload = r; im.onerror = r; im.src = data; });
+    render();
+    const live = document.querySelector('#gBg').innerHTML, ex = exportSvg().svg;
+    const file = JSON.parse(JSON.stringify(bundleTextures(P)));
+    const legacy = JSON.parse(JSON.stringify(P)); legacy.bg = bgInline(P.bg);
+    loadProject(legacy);
+    const migrated = !!(P.bg && P.bg.img && !P.bg.src && bgData(P.bg) === data);
+    return { img: !!P.bg.img, noSrc: !('src' in P.bg), dataLen: data.length, snap: hist[hi].length, longSide: Math.max(im.width, im.height),
+      liveBlob: /href="blob:/.test(live), exportData: ex.includes('href="data:image/'), fileInline: !!(file.bg && String(file.bg.src).startsWith('data:image/')), migrated };
+  })()`);
+  if (!r.img || !r.noSrc || r.dataLen < 50000 || r.snap > 20000 || r.longSide !== 4096 || !r.liveBlob || !r.exportData || !r.fileInline || !r.migrated) throw new Error('background image: ' + JSON.stringify(r));
+  return `image ${Math.round(r.dataLen / 1024)} KB outside P, undo snapshot ${(r.snap / 1024).toFixed(1)} KB, downscaled to ${r.longSide} px`;
+});
+
+// #189: a null blob (canvas too large) no longer throws in download(); the user gets a toast instead
+check('PNG export reports a failed canvas instead of throwing (#189)', async page => {
+  const r = await page.evaluate(`(async () => {
+    const orig = HTMLCanvasElement.prototype.toBlob; let calls = 0;
+    HTMLCanvasElement.prototype.toBlob = function (cb) { calls++; setTimeout(() => cb(null), 0); };
+    try {
+      exportPng();
+      for (let i = 0; i < 60 && !/PNG/.test(document.querySelector('#toast').textContent); i++) await new Promise(r => setTimeout(r, 50));
+      return { calls, msg: document.querySelector('#toast').textContent };
+    } finally { HTMLCanvasElement.prototype.toBlob = orig; }
+  })()`);
+  if (r.calls < 2 || !/SVG/.test(r.msg)) throw new Error('PNG failure handling: ' + JSON.stringify(r));
+  return `retried ${r.calls}× at smaller scales, then: "${r.msg.slice(0, 50)}…"`;
+});
+
 // #188: blocked storage (site data off) made window.localStorage throw a SecurityError at boot. Reload the
 // page with both storages and IndexedDB throwing, check that it boots and draws, then reload it normally.
 check('boots and edits with browser storage blocked (#188)', async page => {
