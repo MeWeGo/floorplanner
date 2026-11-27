@@ -9679,8 +9679,73 @@ const opDefLast = def => ui.opLast[def.id] ? { ...def, ...ui.opLast[def.id] } : 
 const LIBCATS = ['Kapı & Pencere', ...CATS, '🌐 Topluluk', '⬡ Kütüphanem'];
 const LIBCATS_EN = ['Doors & Windows', ...CATS_EN, '🌐 Community', '⬡ My Library'];
 const LIB_COMM = LIBCATS.length - 2; // topluluk mağazası sekmesi (⬡ Kütüphanem hep sonda kalır)
+/* Ölçüye göre süzme (#204): en fazla genişlik / derinlik / yükseklik (cm). Bir öğe iki yönde de sığabilir
+   (döndürülüp konur), yüksekliği olmayan sınır yoktur. "Seçime sığanlar" sınırı seçili odadan (en küçük dikdörtgen,
+   kat yüksekliği), iki duvarın arasındaki açıklıktan ya da tek duvarın boyundan alır. Arama ve kategoriyle birlikte çalışır. */
+ui.libSize = { w: null, d: null, h: null };
+const libSizeOn = (s = ui.libSize) => !!(s && (s.w > 0 || s.d > 0 || s.h > 0));
+function libFits(it, s = ui.libSize) {
+  if (!libSizeOn(s)) return true;
+  const W = s.w > 0 ? s.w : Infinity, D = s.d > 0 ? s.d : Infinity, H = s.h > 0 ? s.h : Infinity;
+  const w = +it.w || 0, d = +it.d || 0, h = +it.h || 0;
+  return h <= H && ((w <= W && d <= D) || (w <= D && d <= W));
+}
+// seçimden sınır: oda → en küçük dikdörtgen + kat yüksekliği; iki paralel duvar → aradaki net açıklık; tek duvar → net boy
+function libLimitsFrom(os, floorH = 270) {
+  const rooms = os.filter(x => x.kind === 'room' || x.kind === 'slab'), walls = os.filter(x => x.kind === 'wall').map(x => x.o);
+  if (rooms.length === 1) {
+    const r = ifcRect(rooms[0].o.pts.map(p => [p.x, p.y])); if (!r) return null;
+    return { w: Math.floor(Math.max(r.w, r.d)), d: Math.floor(Math.min(r.w, r.d)), h: Math.floor(floorH) };
+  }
+  if (walls.length === 2) {
+    const [a, b] = walls, ux = a.b.x - a.a.x, uy = a.b.y - a.a.y, L = Math.hypot(ux, uy); if (L < 1) return null;
+    const vx = b.b.x - b.a.x, vy = b.b.y - b.a.y, M = Math.hypot(vx, vy); if (M < 1 || Math.abs(ux * vy - uy * vx) / (L * M) > 0.09) return null; // ~5° içinde paralel
+    const off = p => ((p.x - a.a.x) * -uy + (p.y - a.a.y) * ux) / L, gap = Math.abs((off(b.a) + off(b.b)) / 2) - (a.t + b.t) / 2;
+    const s0 = Math.max(0, Math.min(...[b.a, b.b].map(p => ((p.x - a.a.x) * ux + (p.y - a.a.y) * uy) / L))), s1 = Math.min(L, Math.max(...[b.a, b.b].map(p => ((p.x - a.a.x) * ux + (p.y - a.a.y) * uy) / L)));
+    if (gap < 1) return null;
+    return { w: Math.floor(gap), d: s1 - s0 > 1 ? Math.floor(s1 - s0) : null, h: Math.floor(Math.min(a.h, b.h)) };
+  }
+  if (walls.length === 1) { const w = walls[0]; return { w: Math.floor(Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) - w.t), d: null, h: Math.floor(w.h) }; }
+  return null;
+}
+function libSizeUI() {
+  let box = $('#libSize');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'libSize'; $('#search').insertAdjacentElement('afterend', box);
+    box.addEventListener('input', e => {
+      const t = e.target.closest('[data-ls]'); if (!t) return;
+      const v = parseFloat(String(t.value).replace(',', '.')); ui.libSize[t.dataset.ls] = v > 0 ? v : null; buildLib();
+    });
+    box.addEventListener('click', e => {
+      const b = e.target.closest('[data-lsact]'); if (!b) return;
+      const a = b.dataset.lsact;
+      if (a === 'toggle') ui.libSizeOpen = !ui.libSizeOpen;
+      else if (a === 'clear') ui.libSize = { w: null, d: null, h: null };
+      else if (a === 'fit') {
+        const lim = libLimitsFrom(selObjs(), curFloorH());
+        if (!lim) { toast(L('Önce bir oda, bir duvar ya da karşılıklı iki duvar seçin', 'Select a room, a wall or two facing walls first')); return; }
+        ui.libSize = lim; ui.libSizeOpen = true;
+        toast(L('Seçime sığanlar: ', 'Fits the selection: ') + [lim.w, lim.d, lim.h].map(v => (v ? v : '–')).join(' × ') + ' cm');
+      }
+      libSizePaint(true); buildLib();
+    });
+  }
+  libSizePaint(false);
+}
+function libSizePaint(full) {
+  const box = $('#libSize'); if (!box) return;
+  const s = ui.libSize, on = libSizeOn(s), open = !!ui.libSizeOpen || on, val = v => (v > 0 ? +(+v).toFixed(1) : '');
+  const sum = on ? [s.w, s.d, s.h].map(v => (v > 0 ? Math.round(v) : '–')).join(' × ') + ' cm' : L('Ölçüye göre süz', 'Filter by size');
+  const head = box.querySelector('[data-lsact="toggle"]');
+  if (!full && head && !!box.querySelector('.ls-row') === open) { head.textContent = '📏 ' + sum; head.classList.toggle('on', on); box.querySelector('[data-lsact="clear"]').hidden = !on; return; }
+  const inp = (k, ph) => `<label>${ph} <input type="number" min="0" step="1" inputmode="decimal" data-ls="${k}" value="${val(s[k])}" placeholder="${L('en fazla', 'max')}"></label>`;
+  box.innerHTML = `<div class="ls-head"><button type="button" class="chip${on ? ' on' : ''}" data-lsact="toggle" aria-expanded="${open}">📏 ${esc(sum)}</button><button type="button" class="chip" data-lsact="clear" ${on ? '' : 'hidden'} aria-label="${L('Ölçü süzgecini temizle', 'Clear the size filter')}">✕</button></div>`
+    + (open ? `<div class="ls-row">${inp('w', L('G', 'W'))}${inp('d', L('D', 'D'))}${inp('h', L('Y', 'H'))}</div><button type="button" class="chip" data-lsact="fit" title="${L('Seçili odaya, duvara ya da iki duvarın arasına sığanlar', 'Items that fit the selected room, wall or the gap between two walls')}">⤢ ${L('Seçime sığanlar', 'Fits the selection')}</button>` : '');
+}
 function buildLib() {
   const cats = isEN() ? LIBCATS_EN : LIBCATS;
+  libSizeUI();
+  const fits = libFits, opFits = o => libFits({ w: o.w, d: 0, h: o.h }), preFits = p => (p.kind === 'op' ? opFits(p) : libFits(p));
   $('#cats').innerHTML = cats.map((c, i) => `<button class="chip ${i === ui.cat && (!ui.q || i === LIB_COMM) ? 'on' : ''}" data-cat="${i}">${c}</button>`).join('');
   const q = ui.q.toLowerCase(); let items = '';
   const card = (type, d, sz) => `<button class="item" data-type="${type}" data-id="${d.id}"><div class="ic">${d.icon || '▭'}</div><div>${itemName(d)}</div><div class="sz">${sz}</div></button>`;
@@ -9692,15 +9757,15 @@ function buildLib() {
   $('#search').placeholder = ui.cat === LIB_COMM ? L('🔍 Toplulukta ara…', '🔍 Search the community…') : L('🔍 Mobilya ara...', '🔍 Search furniture...');
   if (ui.cat === LIB_COMM) items = storeLibHtml(); // arama kutusu topluluk sekmesinde mağazada arar
   else if (q) {
-    items += presets.filter(p => p.name.toLowerCase().includes(q)).map(presetCard).join('');
-    items += OPENINGS.filter(matches).map(opCard).join('');
-    items += CATALOG.filter(matches).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
-    items += shapes.filter(matches).map(shapeCard).join('');
-  } else if (ui.cat === 0) items = OPENINGS.map(opCard).join('') + presets.filter(p => p.kind === 'op').map(presetCard).join('');
-  else if (ui.cat === LIBCATS.length - 1) items = `<button class="item fs-new" data-fsnew="1" title="${L('Kendi mobilyanı parçalardan tasarla', 'Design your own furniture from parts')}"><div class="ic">🧩</div><div>${L('Mobilya oluştur', 'Create furniture')}</div><div class="sz">${L('stüdyo', 'studio')}</div></button>` + presets.map(presetCard).join('') + shapes.map(shapeCard).join('')
+    items += presets.filter(p => p.name.toLowerCase().includes(q) && preFits(p)).map(presetCard).join('');
+    items += OPENINGS.filter(o => matches(o) && opFits(opDefLast(o))).map(opCard).join('');
+    items += CATALOG.filter(c => matches(c) && fits(c)).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
+    items += shapes.filter(s => matches(s) && fits(s)).map(shapeCard).join('');
+  } else if (ui.cat === 0) items = OPENINGS.filter(o => opFits(opDefLast(o))).map(opCard).join('') + presets.filter(p => p.kind === 'op' && preFits(p)).map(presetCard).join('');
+  else if (ui.cat === LIBCATS.length - 1) items = `<button class="item fs-new" data-fsnew="1" title="${L('Kendi mobilyanı parçalardan tasarla', 'Design your own furniture from parts')}"><div class="ic">🧩</div><div>${L('Mobilya oluştur', 'Create furniture')}</div><div class="sz">${L('stüdyo', 'studio')}</div></button>` + presets.filter(preFits).map(presetCard).join('') + shapes.filter(fits).map(shapeCard).join('')
     + (presets.length || shapes.length ? '' : `<p class="muted">${L('Bir kapı, pencere ya da mobilyayı seçip “💾 Kütüphaneye kaydet” ile buraya ekle.', 'Select a door, window or furniture item and use “💾 Save to library” to add it here.')}</p>`);
-  else items = CATALOG.filter(c => c.cat === ui.cat - 1).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
-  $('#items').innerHTML = items || `<p class="muted">${L('Sonuç yok', 'No results')}</p>`;
+  else items = CATALOG.filter(c => c.cat === ui.cat - 1 && fits(c)).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
+  $('#items').innerHTML = items || `<p class="muted">${libSizeOn() && ui.cat !== LIB_COMM ? L('Bu ölçülere sığan öğe yok', 'Nothing here fits these sizes') : L('Sonuç yok', 'No results')}</p>`;
   updateTools();
 }
 $('#cats').addEventListener('click', e => { const b = e.target.closest('[data-cat]'); if (b) { ui.cat = +b.dataset.cat; ui.q = ''; $('#search').value = ''; buildLib(); } });

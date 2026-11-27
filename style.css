@@ -483,6 +483,16 @@ main {
   background: var(--bg);
 }
 
+/* ölçüye göre süzme (#204) */
+#libSize { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+#libSize .ls-head { display: flex; gap: 4px; }
+#libSize .ls-head .chip:first-child { flex: 1; text-align: left; }
+#libSize [hidden] { display: none; }
+#libSize .ls-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+#libSize .ls-row label { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); }
+#libSize .ls-row input { width: 100%; min-width: 0; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 4px 5px; font-size: 12px; color: var(--text); }
+#libSize .ls-row input:focus { border-color: var(--accent); outline: none; }
+
 #cats {
   display: flex;
   flex-wrap: wrap;

@@ -4042,6 +4042,40 @@ check('sun from location, date and time in the render studio (#205)', async page
   return `Ankara 21 June 13:15 → az ${r.noon.az}°, alt ${r.noon.alt}°; north 90° → ${r.turned}°; shadow study runs`;
 });
 
+// #204: the library can be filtered by maximum width / depth / height, together with search and categories,
+// and "fits the selection" takes the limits from a selected room or the gap between two facing walls.
+check('library size filter and "fits the selection" (#204)', async page => {
+  const r = await page.evaluate(`(async () => {
+    loadProject(newProject()); closeModal();
+    ui.cat = 1; ui.q = ''; document.querySelector('#search').value = ''; ui.libSize = { w: null, d: null, h: null }; ui.libSizeOpen = false; buildLib();
+    const count = () => document.querySelectorAll('#items .item').length;
+    const all = count();
+    document.querySelector('#libSize [data-lsact="toggle"]').click();
+    const w = document.querySelector('#libSize [data-ls="w"]'); w.value = '90'; w.dispatchEvent(new Event('input', { bubbles: true }));
+    const small = count(), focusKept = document.activeElement === w || !!document.querySelector('#libSize [data-ls="w"]');
+    const ids = [...document.querySelectorAll('#items .item')].map(b => BYID[b.dataset.id]).filter(Boolean);
+    const allFit = ids.every(c => Math.min(c.w, c.d) <= 90);
+    ui.libSize.w = 80; ui.q = 'sofa'; document.querySelector('#search').value = 'sofa'; buildLib();
+    const sofas = [...document.querySelectorAll('#items .item')].map(b => b.dataset.id);
+    ui.q = ''; document.querySelector('#search').value = ''; document.querySelector('#libSize [data-lsact="clear"]').click();
+    const cleared = count() === all && !libSizeOn();
+    // a 300 × 250 room, then two facing walls 120 cm apart (clear gap 100 with 20 cm walls)
+    addRectWalls(0, 0, 300, 250); commit();
+    P.floors[fi].rooms.push({ id: 'rmA', name: 'Box', color: '#ccc', floor: 'none', pts: [{ x: 0, y: 0 }, { x: 300, y: 0 }, { x: 300, y: 250 }, { x: 0, y: 250 }] });
+    sel = ['rmA']; document.querySelector('#libSize [data-lsact="fit"]').click();
+    const room = { ...ui.libSize };
+    const wa = mkWall({ x: 1000, y: 0 }, { x: 1000, y: 300 }), wb = mkWall({ x: 1120, y: 0 }, { x: 1120, y: 300 });
+    F().walls.push(wa, wb); sel = [wa.id, wb.id]; document.querySelector('#libSize [data-lsact="fit"]').click();
+    const gap = { ...ui.libSize };
+    ui.libSize = { w: null, d: null, h: null }; buildLib();
+    return { all, small, allFit, sofas, cleared, focusKept, room, gap };
+  })()`);
+  const ok = r.small > 0 && r.small < r.all && r.allFit && r.cleared && r.room.w === 300 && r.room.d === 250 && r.room.h > 200
+    && r.gap.w === 100 && r.gap.d === 300 && !r.sofas.includes('sofa3');
+  if (!ok) throw new Error('library size filter: ' + JSON.stringify(r));
+  return `${r.all} → ${r.small} items at ≤ 90 cm; room → ${r.room.w}×${r.room.d}×${r.room.h}, gap → ${r.gap.w} cm`;
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {
