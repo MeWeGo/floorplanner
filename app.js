@@ -1169,6 +1169,7 @@ function commit() {
   if (typeof collabOnCommit === 'function') collabOnCommit(s);
   autosave(); updateUndo();
   if (fp3DOn()) schedBuild3D(); // 3B'de çizim aracıyla eklenen / değişen nesne sahnede görünsün
+  if (tour) tourCheck(); // #197: ilk açılış turu yapılanı görünce ilerler
 }
 function autosave() {
   clearTimeout(saveTimer);
@@ -11489,6 +11490,76 @@ function aiSetupPrompt() {
     ? 'Set up live editing for my floor planner so you can change my plan directly:\n1. In the project folder, run the bridge in the background and keep it running — do not close it. If you are OpenCode, start it with wake enabled so requests I type in the app start a turn for you: "FP_WAKE=1 node mcp/bridge.js" (Windows PowerShell: "$env:FP_WAKE=\'1\'; node mcp/bridge.js"). Any other agent runs plain "node mcp/bridge.js" — then I will ask you to check the queue.\n2. Tell me when it is running; my floor planner page (https://mewego.github.io/floorplanner/ or the local copy) connects to it automatically.\n3. Then call pull_from_browser to read my current plan. Apply every change with push_to_browser — it appears in my open tab and is saved automatically. Read anything I type in the app panel with get_user_requests (ack them with ack_user_requests).'
     : 'Kat planımı doğrudan düzenleyebilmen için canlı köprüyü kur:\n1. Proje klasöründe köprüyü arka planda çalıştır ve açık bırak — kapatma. OpenCode kullanıyorsan uyandırma açık başlat, böylece uygulamaya yazdığım istekler senin için bir tur başlatır: "FP_WAKE=1 node mcp/bridge.js" (Windows PowerShell: "$env:FP_WAKE=\'1\'; node mcp/bridge.js"). Başka bir ajan kullanıyorsan "node mcp/bridge.js" yeterli — o zaman kuyruğu kontrol etmeni ben söylerim.\n2. Çalıştığını bana söyle; kat planı sayfam (https://mewego.github.io/floorplanner/ veya yerel kopya) ona kendiliğinden bağlanır.\n3. Sonra pull_from_browser ile güncel planımı oku. Her değişikliği push_to_browser ile uygula — açık sekmemde görünür ve otomatik kaydedilir. Uygulama panelinde yazdıklarımı get_user_requests ile oku (işleyince ack_user_requests ile kapat).';
 }
+/* ---------- İlk açılış turu (#197) ----------
+   Yeni bir tarayıcıda şablon (ya da boş proje) seçilince beş adım: duvar çiz, oda yap, kapı ekle, mobilya koy, 3B'ye bak.
+   Her adım gerçek düğmeyi halkayla gösterir ve iş yapılınca (commit / 3B açılınca tourCheck) kendiliğinden ilerler;
+   "Atla" turu kapatır ve bir daha kendiliğinden açmaz (localStorage['fp_tour'] = skip | done), Yardım'daki düğme yeniden
+   başlatır. Kutucuk modal değildir: çizim, klavye ve dokunmatik çalışmaya devam eder. Hiçbir şey P'ye yazılmaz. */
+const TOUR_STEPS = [
+  { t: ['Duvar çizin', 'Draw walls'], d: ['🧱 Duvar aracını seçin, köşeleri tıklayarak duvar çizin. Bitirmek için Esc ya da çift tık.', 'Pick the 🧱 Wall tool and click to place the corners. Press Esc or double-click to finish.'], at: ['#tools [data-tool="wall"]'], n: f => f.walls.length },
+  { t: ['Oda yapın', 'Make a room'], d: ['🏠 Oda algıla aracını seçin ve duvarların içine tıklayın: alanı ve adı olan bir oda oluşur.', 'Pick 🏠 Auto Room and click inside the walls: you get a room with its area and name.'], at: ['#tools [data-tool="room"]'], n: f => f.rooms.length },
+  { t: ['Kapı ekleyin', 'Add a door'], d: ['🚪 Kapı aracını seçin ve bir duvarın üstüne tıklayın.', 'Pick the 🚪 Door tool and click on a wall.'], at: ['#tools [data-tool="door"]'], n: f => f.ops.length },
+  { t: ['Mobilya koyun', 'Place furniture'], d: ['Kütüphaneden bir eşya seçip plana tıklayın (R döndürür).', 'Pick an item in the library and click in the plan (R turns it).'], at: ['#lib', '#bLib', '#tools [data-tool="furn"]'], n: f => f.furn.length },
+  { t: ['3B olarak görün', 'See it in 3D'], d: ['3B düğmesine basın; sürükleyerek döndürün, 👁 ile içinde gezin.', 'Press 3D; drag to orbit, use 👁 to walk inside.'], at: ['#b3d'], v3d: true },
+];
+const TOUR_OFF = /[?&]tour=off/.test(location.search); // test tarayıcısı: tur kendiliğinden açılmaz
+const tourSeen = () => TOUR_OFF || !!localStorage.getItem('fp_tour');
+let tour = null;
+function tourTarget(st) { for (const s of st.at) { const el = document.querySelector(s); if (el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden') return el; } return null; }
+function startTour(force) {
+  if (!force && tourSeen()) return;
+  tour = { i: 0, base: 0, tick: 0 }; tourStep(0);
+  tour.tick = setInterval(tourPlace, 500); // araç çubuğu kayınca / pencere boyutu değişince yer tutsun
+  window.addEventListener('resize', tourPlace);
+}
+function endTour(how) {
+  if (!tour) return;
+  clearInterval(tour.tick); window.removeEventListener('resize', tourPlace); tour = null;
+  localStorage.setItem('fp_tour', how || 'done');
+  $('#tourBox')?.remove(); $('#tourRing')?.remove();
+}
+function tourStep(i) {
+  if (!tour) return;
+  tour.i = i;
+  if (i >= TOUR_STEPS.length) { tourDone(); return; }
+  const st = TOUR_STEPS[i]; tour.base = st.n ? st.n(F()) : 0;
+  let box = $('#tourBox');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'tourBox'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-live', 'polite'); box.setAttribute('aria-labelledby', 'tourT');
+    document.body.appendChild(box);
+    box.addEventListener('click', e => { const b = e.target.closest('[data-tour]'); if (!b) return; if (b.dataset.tour === 'skip') endTour('skip'); else if (b.dataset.tour === 'next') tourStep(tour.i + 1); else endTour('done'); });
+  }
+  box.innerHTML = `<div class="tour-n">${L('Adım', 'Step')} ${i + 1} / ${TOUR_STEPS.length}</div><h4 id="tourT">${L(...st.t)}</h4><p>${L(...st.d)}</p>
+    <div class="tour-btns"><button type="button" class="btn sm" data-tour="skip">${L('Turu atla', 'Skip tour')}</button><button type="button" class="btn sm" data-tour="next">${L('Sonraki ›', 'Next ›')}</button></div>`;
+  tourPlace();
+}
+function tourDone() {
+  const box = $('#tourBox'); if (!box) return;
+  $('#tourRing')?.remove();
+  box.innerHTML = `<h4 id="tourT">🎉 ${L('Hazırsınız', 'You are all set')}</h4><p>${L('Kalanı ❓ Yardım’da: kısayollar, dışa aktarma ve daha fazlası. Turu oradan yeniden açabilirsiniz.', 'The rest is in ❓ Help: shortcuts, exports and more. You can restart the tour from there.')}</p><div class="tour-btns"><button type="button" class="btn sm primary" data-tour="end">${L('Tamam', 'OK')}</button></div>`;
+  box.style.left = Math.max(16, (innerWidth - box.offsetWidth) / 2) + 'px'; box.style.top = Math.max(16, innerHeight / 2 - box.offsetHeight / 2) + 'px';
+  localStorage.setItem('fp_tour', 'done');
+}
+function tourPlace() {
+  if (!tour || tour.i >= TOUR_STEPS.length) return;
+  const box = $('#tourBox'), el = tourTarget(TOUR_STEPS[tour.i]); if (!box) return;
+  let ring = $('#tourRing'); if (!ring) { ring = document.createElement('div'); ring.id = 'tourRing'; document.body.appendChild(ring); }
+  if (!el) { ring.hidden = true; box.style.left = '16px'; box.style.top = Math.max(16, innerHeight - box.offsetHeight - 70) + 'px'; return; }
+  const r = el.getBoundingClientRect(), pad = 4;
+  ring.hidden = false; Object.assign(ring.style, { left: r.left - pad + 'px', top: r.top - pad + 'px', width: r.width + pad * 2 + 'px', height: r.height + pad * 2 + 'px' });
+  const bw = box.offsetWidth, bh = box.offsetHeight, gap = 12;
+  // sağına sığarsa sağına, yoksa altına, yoksa üstüne; ekrandan taşmaz (telefon dahil)
+  let x = r.right + gap, y = r.top;
+  if (x + bw > innerWidth - 8) { x = r.left; y = r.bottom + gap; if (y + bh > innerHeight - 8) y = r.top - bh - gap; }
+  box.style.left = clamp(x, 8, Math.max(8, innerWidth - bw - 8)) + 'px'; box.style.top = clamp(y, 8, Math.max(8, innerHeight - bh - 8)) + 'px';
+}
+// iş yapıldıysa sonraki adıma geç: commit() ve 3B açılışı çağırır
+function tourCheck() {
+  if (!tour || tour.i >= TOUR_STEPS.length) return;
+  const st = TOUR_STEPS[tour.i];
+  if (st.v3d ? ui.view3d : st.n(F()) > tour.base) setTimeout(() => tour && tourStep(tour.i + 1), 250);
+}
+$('#modal').addEventListener('click', e => { if (e.target.closest('#helpTour')) { closeModal(); startTour(true); } }); // #197: Yardım'dan turu yeniden başlat
 function helpModal() {
   const rows = isEN() ? [
     [':', 'Command line: run any tool or action by name (English or Turkish), shortcut keys shown'],
@@ -11620,6 +11691,7 @@ function helpModal() {
     'This needs Node.js and the project folder on the agent side; your plan still stays in this tab (in your own storage).'
   )}</p>`;
   openModal(`<h2>${L('Kısayollar & İpuçları', 'Shortcuts & Tips')} <button class="btn sm" data-close>✕</button></h2>
+  <div class="row" style="margin:0 0 12px"><button class="btn sm primary" data-act="tour" id="helpTour">▶ ${L('Rehberli turu başlat', 'Start the guided tour')}</button></div>
   ${aiBlock}
   <h3 style="margin:22px 0 8px">${L('Klavye kısayolları', 'Keyboard shortcuts')}</h3>
   <table class="kb">${rows.map(r => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
@@ -14679,6 +14751,7 @@ function templatesModal() {
   $('#modal').querySelectorAll('[data-tpl]').forEach(c => c.onclick = () => {
     const i = +c.dataset.tpl, t = TEMPLATES[i]; const np = newProject(); np.name = i ? (isEN() ? t.en : t.name).replace(/ \(.*/, '') : L('Yeni Proje', 'New Project');
     newTabSlot(); P = np; fi = 0; t.build(); loadProject(P); closeModal();
+    if (!tourSeen()) setTimeout(() => startTour(), 400); // #197: yeni tarayıcıda ilk şablondan sonra tur
   });
 }
 
@@ -18267,6 +18340,7 @@ function show3D(on) {
     T3.run = false;
     fp3DPreview(); render(); // 3B araç önizlemesi gizlenir; 2B tuval 3B'de değişen planı ve ölçeği yeniden çizer
   }
+  if (on && ui.view3d) tourCheck(); // #197
 }
 function init3D() {
   if (T3) { resize3D(); return; }

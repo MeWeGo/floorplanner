@@ -4352,6 +4352,37 @@ check('imperial units: labels, panel fields, typed lengths, grid steps, scale ba
   return `labels in ft-in, ${r.area}, field 12'6" → 381 cm, typed 10 → 304.8 cm, 6' scale bar`;
 });
 
+// #197: the guided tour highlights the real control, advances when the step is done, can be skipped (remembered)
+// and restarted from Help. The smoke page runs with ?tour=off, so the tour is started from Help here.
+check('first-run guided tour: highlight, advance on action, skip remembered, restart from Help (#197)', async page => {
+  const r = await page.evaluate(`(async () => {
+    const wait = ms => new Promise(res => setTimeout(res, ms));
+    closeModal(); loadProject(newProject()); localStorage.removeItem('fp_tour');
+    document.querySelector('#bHelp').click(); document.querySelector('#helpTour').click(); await wait(50);
+    const out = { open: !!document.querySelector('#tourBox') && ui.modal == null, steps: [] };
+    const ringOn = sel => { const g = document.querySelector('#tourRing'), t = document.querySelector(sel); if (!g || g.hidden || !t) return false; const a = g.getBoundingClientRect(), b = t.getBoundingClientRect(); return a.left <= b.left && a.right >= b.right && a.top <= b.top && a.bottom >= b.bottom; };
+    out.ringWall = ringOn('#tools [data-tool="wall"]');
+    const step = () => (document.querySelector('#tourBox .tour-n') || {}).textContent || 'done';
+    const ws = addRectWalls(0, 0, 400, 300); commit(); await wait(350); out.steps.push(step());
+    autoRoomAt({ x: 200, y: 150 }, true); commit(); await wait(350); out.steps.push(step());
+    F().ops.push(mkOp(OPDEF.door, ws[0], 200)); commit(); await wait(350); out.steps.push(step());
+    F().furn.push(mkFurn(BYID.sofa3, 200, 150, 0)); commit(); await wait(350); out.steps.push(step());
+    out.ring3d = ringOn('#b3d');
+    document.querySelector('#b3d').click(); await wait(400); out.steps.push(step());
+    out.done = localStorage.getItem('fp_tour'); out.doneText = document.querySelector('#tourBox').textContent;
+    show3D(false); document.querySelector('#tourBox [data-tour="end"]').click(); out.closed = !document.querySelector('#tourBox');
+    // skip is remembered; Help restarts it anyway
+    startTour(true); document.querySelector('#tourBox [data-tour="skip"]').click();
+    out.skip = localStorage.getItem('fp_tour') === 'skip' && !document.querySelector('#tourBox');
+    startTour(); out.noAuto = !document.querySelector('#tourBox');
+    localStorage.removeItem('fp_tour');
+    return out;
+  })()`);
+  const ok = r.open && r.ringWall && r.steps.join('|') === 'Step 2 / 5|Step 3 / 5|Step 4 / 5|Step 5 / 5|done' && r.ring3d && r.done === 'done' && r.closed && r.skip && r.noAuto;
+  if (!ok) throw new Error('tour: ' + JSON.stringify(r));
+  return 'walls → room → door → furniture → 3D, skip remembered, Help restarts';
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {
@@ -4445,7 +4476,8 @@ check('boots and edits with browser storage blocked (#188)', async page => {
   const port = server.address().port;
   // ?bridge=off: never reach a real mcp/bridge.js on 127.0.0.1:8787 — the checks load
   // test plans, and a connected tab would push them over the user's live AI plan
-  const url = `http://127.0.0.1:${port}/?bridge=off&presence=off&store=off`;
+  // tour=off: the first-run tour (#197) would otherwise open over the canvas after the first template click
+  const url = `http://127.0.0.1:${port}/?bridge=off&presence=off&store=off&tour=off`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-smoke-'));
   const debugPort = 9300 + Math.floor(Math.random() * 300);
 

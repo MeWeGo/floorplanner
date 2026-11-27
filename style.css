@@ -1331,6 +1331,16 @@ footer input#iGridCustom {
   z-index: 100;
 }
 
+/* ilk açılış turu (#197): modal değil, çizim sürerken açık kalır */
+#tourBox { position: fixed; z-index: 96; width: min(300px, calc(100vw - 32px)); background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-left: 3px solid var(--accent); border-radius: 6px; padding: 12px 14px; box-shadow: 0 14px 34px rgba(0, 0, 0, 0.35); }
+#tourBox h4 { margin: 2px 0 6px; font-size: 14px; }
+#tourBox p { margin: 0 0 10px; color: var(--muted); line-height: 1.45; font-size: 12.5px; }
+#tourBox .tour-n { font-size: 11px; color: var(--accent); font-weight: 600; letter-spacing: .02em; }
+#tourBox .tour-btns { display: flex; justify-content: space-between; gap: 8px; }
+#tourRing { position: fixed; z-index: 95; pointer-events: none; border: 2px solid var(--accent); border-radius: 8px; box-shadow: 0 0 0 4px var(--accent-soft); animation: tourPulse 1.6s ease-in-out infinite; }
+@keyframes tourPulse { 50% { box-shadow: 0 0 0 9px var(--accent-soft); } }
+@media (prefers-reduced-motion: reduce) { #tourRing { animation: none; } }
+
 /* uygulama içi soru penceresi (#196): her katmanın (pencere, mobilya stüdyosu) üstünde */
 #askbg { position: fixed; inset: 0; z-index: 200; display: none; align-items: center; justify-content: center; background: rgba(5, 8, 12, 0.55); }
 #ask { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-top: 3px solid var(--accent); border-radius: 6px; width: min(440px, calc(100vw - 32px)); padding: 16px 18px; box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45); }

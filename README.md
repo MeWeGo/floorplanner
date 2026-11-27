@@ -162,6 +162,9 @@ Tools: `new_project` · `load_project` / `import_ifc` / `import_dxf` / `save_pro
 ### 📲 Install & offline
 Open the live app in Chrome, Edge or Safari and use **Install app** (or *Add to Home Screen* on a phone): it opens in its own window and keeps working without internet — 2D and 3D included. When a new version is published, the app tells you and a **Reload** button switches to it.
 
+### 🧭 Guided tour
+The first time you open the app, a short tour shows the five basics on the real buttons — draw walls, make a room, add a door, place furniture, look at it in 3D — and moves on by itself as you do each one. Skip it any time; **❓ Help ▸ ▶ Start the guided tour** brings it back.
+
 ### 📏 Units & a shorter panel
 - **Feet and inches:** pick **ft / in** in the footer's **Units** box. Lengths, areas (ft²), the panel fields (type `12'6"`, `6"`, `1.5m` …), lengths typed while drawing (a plain number is feet), grid steps (1 in – 3 ft), library sizes and the export scale bar follow it. Projects are still saved in centimetres, so a plan opens the same for everyone.
 - **Shorter properties panel:** the common actions (copy, duplicate, delete, lock, mirror) sit at the top of the panel, followed by the main fields; everything else is under **⚙ More settings**, which remembers whether you left it open.
