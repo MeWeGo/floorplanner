@@ -7488,6 +7488,80 @@ function joinCorner(w1, w2, f = F()) {
 }
 
 /* ---------- Oda algılama (raster flood-fill) ---------- */
+/* ---------- Tek tıkla ölçülendirme (#200) ----------
+   autoDims(f) sıradan, düzenlenebilir ölçüler üretir ({ a, b, off, auto: 1 }): her odanın eni ve boyu (oda içinde,
+   etiketten çeyrek mesafe uzakta) ve binanın dört yüzünde dışarıda üç sıra zincir — en içte kapı / pencere kenarları,
+   ortada duvar parçaları, en dışta toplam. Bir yüze "görünen" duvarlar o yöne paralel ve önünde başka duvar olmayanlardır.
+   Yeniden çalıştırmak yalnız auto işaretli ölçüleri değiştirir; elle çizilenler kalır. Eğik duvarlar dış zincire girmez. */
+const AUTO_DIM_GAP = 60, AUTO_DIM_STEP = 45;
+const AUTO_SIDES = {
+  top: { u: p => p.x, v: p => p.y, back: (u, v) => ({ x: u, y: v }), hor: true },
+  bottom: { u: p => p.x, v: p => -p.y, back: (u, v) => ({ x: u, y: -v }), hor: true },
+  left: { u: p => p.y, v: p => p.x, back: (u, v) => ({ x: v, y: u }), hor: false },
+  right: { u: p => p.y, v: p => -p.x, back: (u, v) => ({ x: -v, y: u }), hor: false },
+};
+function autoDimUniq(us, tol = 2) {
+  const s = us.filter(Number.isFinite).sort((a, b) => a - b), out = [];
+  for (const u of s) if (!out.length || u - out[out.length - 1] > tol) out.push(u);
+  return out;
+}
+// a → b ölçüsü: a, b yüzdeki noktalar; ölçü çizgisi dışa doğru D kadar ötede (off işareti normal yönünden bulunur)
+function autoDimAt(S, u0, u1, vFace, D) {
+  const a = S.back(u0, vFace), b = S.back(u1, vFace), L = Math.hypot(b.x - a.x, b.y - a.y); if (L < 1) return null;
+  const n = { x: a.x - (b.y - a.y) / L, y: a.y + (b.x - a.x) / L };
+  return { a, b, off: S.v(n) < vFace ? D : -D, auto: 1 };
+}
+function autoDims(f) {
+  const out = [], walls = (f.walls || []).filter(w => !w.hidden && isSolidWall(w) && Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) > 1);
+  // odalar: en küçük dikdörtgenin eni ve boyu, odanın içinde
+  for (const r of f.rooms || []) {
+    if (r.hidden || !r.pts || r.pts.length < 3) continue;
+    const q = ifcRect(r.pts.map(p => [p.x, p.y])); if (!q || q.w < 50 || q.d < 50) continue;
+    const t = q.rot * Math.PI / 180, ux = Math.cos(t), uy = Math.sin(t), vx = -uy, vy = ux, c = { x: q.cx, y: q.cy };
+    const at = (s, k) => ({ x: c.x + ux * s + vx * k, y: c.y + uy * s + vy * k });
+    out.push({ a: at(-q.w / 2, q.d / 4), b: at(q.w / 2, q.d / 4), off: 0, auto: 1 });
+    out.push({ a: { x: c.x - vx * q.d / 2 + ux * q.w / 4, y: c.y - vy * q.d / 2 + uy * q.w / 4 }, b: { x: c.x + vx * q.d / 2 + ux * q.w / 4, y: c.y + vy * q.d / 2 + uy * q.w / 4 }, off: 0, auto: 1 });
+  }
+  if (!walls.length) return out;
+  for (const S of Object.values(AUTO_SIDES)) {
+    const par = walls.filter(w => { const dx = Math.abs(w.b.x - w.a.x), dy = Math.abs(w.b.y - w.a.y); return S.hor ? dy <= dx * 0.035 : dx <= dy * 0.035; });
+    if (!par.length) continue;
+    const info = par.map(w => ({ w, u0: Math.min(S.u(w.a), S.u(w.b)), u1: Math.max(S.u(w.a), S.u(w.b)), face: Math.min(S.v(w.a), S.v(w.b)) - w.t / 2 }));
+    // bu yüzden görünen duvarlar: üç örnek noktadan en az birinde önünde (daha dışarıda) başka paralel duvar yok
+    const vis = info.filter(I => [0.15, 0.5, 0.85].some(k => { const u = I.u0 + (I.u1 - I.u0) * k; return !info.some(J => J !== I && J.face < I.face - 1 && J.u0 - J.w.t / 2 <= u && J.u1 + J.w.t / 2 >= u); }));
+    if (!vis.length) continue;
+    // her görünen duvarın yalnız önü açık kısmı sayılır (köşede öndeki duvarın arkasında kalan uç sayılmaz)
+    const vFace = Math.min(...vis.map(I => I.face)), ends = [];
+    for (const I of vis) {
+      let segs = [[I.u0 - I.w.t / 2, I.u1 + I.w.t / 2]];
+      for (const J of info) if (J !== I && J.face < I.face - 1) {
+        const j0 = J.u0 - J.w.t / 2, j1 = J.u1 + J.w.t / 2;
+        segs = segs.flatMap(([s0, s1]) => (j1 <= s0 || j0 >= s1 ? [[s0, s1]] : [[s0, j0], [j1, s1]].filter(([x, y]) => y - x > 1)));
+      }
+      for (const [s0, s1] of segs) ends.push(s0, s1);
+    }
+    const all = autoDimUniq(ends), lo = all[0], hi = all[all.length - 1];
+    const opPts = [];
+    for (const I of vis) {
+      const L = Math.hypot(I.w.b.x - I.w.a.x, I.w.b.y - I.w.a.y), ua = S.u(I.w.a), ub = S.u(I.w.b);
+      for (const o of f.ops || []) if (o.wall === I.w.id && !o.hidden) { const m = ua + (ub - ua) * o.d / L; opPts.push(m - o.w / 2, m + o.w / 2); }
+    }
+    let row = 0;
+    const chain = us => { for (let i = 0; i + 1 < us.length; i++) { const d = autoDimAt(S, us[i], us[i + 1], vFace, AUTO_DIM_GAP + row * AUTO_DIM_STEP); if (d) out.push(d); } row++; };
+    if (opPts.length) chain(autoDimUniq([...all, ...opPts]));
+    if (all.length > 2) chain(all);
+    chain([lo, hi]);
+  }
+  return out;
+}
+function autoDimsRun() {
+  const f = F(), keep = (f.dims || []).filter(d => !d.auto), made = autoDims(f).map(d => ({ id: uid(), ...d }));
+  const removed = (f.dims || []).length - keep.length;
+  if (!made.length) { toast(L('Ölçülendirilecek oda ya da duvar yok', 'No rooms or walls to dimension')); return; }
+  f.dims = [...keep, ...made]; sel = sel.filter(id => f.dims.some(d => d.id === id) || find(id));
+  layersVis.dims = true; commit(); refresh();
+  toast(L(`📐 ${made.length} ölçü eklendi` + (removed ? ` (${removed} eski otomatik ölçü değişti)` : ''), `📐 ${made.length} dimensions added` + (removed ? ` (${removed} earlier automatic ones replaced)` : '')));
+}
 function detectRoom(p) {
   const f = F(); if (!f.walls.length) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -9197,6 +9271,7 @@ function projectPanel() {
   h += `<label class="f"><span>${L('Grup', 'Group')}</span><input type="text" data-k="proj" data-p="group" list="grpList" maxlength="${GROUP_MAX}" value="${esc(projGroup(P))}" placeholder="${L('ör. Ahsen’in projeleri', 'e.g. Ahsen’s projects')}"></label><datalist id="grpList">${knownGroups().map(g => `<option value="${esc(g)}">`).join('')}</datalist>`;
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: FLOOR_H_MIN, max: FLOOR_H_MAX });
   h += `<div class="row"><button class="btn sm" data-act="wallhall" title="${L('Tüm katlardaki mevcut duvarları bu yüksekliğe getirir; kat bazlı yükseklikler sıfırlanır', 'Sets every existing wall on every floor to this height; per-floor heights are cleared')}">⬆ ${L('Mevcut tüm duvarlara uygula', 'Apply to all existing walls')}</button></div>`;
+  h += `<div class="row"><button class="btn sm" data-act="autodims" title="${L('Her odanın enini ve boyunu, binanın dış yüzlerine de kapı / pencere, duvar ve toplam zincirlerini ekler; yeniden basınca yalnız otomatik ölçüler yenilenir', 'Adds the width and depth of each room, and opening, wall and overall chains outside the building; pressing it again only replaces the automatic dimensions')}">📐 ${L('Otomatik ölçülendir', 'Auto-dimension')}</button></div>`;
   h += layersPanelHtml();
   h += hiddenPanelHtml(false);
   h += lwPanelHtml();
@@ -9447,6 +9522,7 @@ function onPropsClick(e) {
   if (a === 'opcolreset') { os.forEach(x => { if (x.kind === 'op') { delete x.o.color; delete x.o.frameCol; } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'texadd') { ui.txWall = 0; return openTexDialog(); }
   if (a === 'axgrid') return axisGridPrompt();
+  if (a === 'autodims') return autoDimsRun(); // #200
   if (a === 'axcopy') { const axs = os.filter(x => x.kind === 'axis').map(x => x.o); if (!axs.length) return; if (P.floors.length < 2) return toast(L('Başka kat yok', 'There is no other floor')); axisCopyAll(axs); commit(); toast(L(`⧉ ${axs.length} aks ${P.floors.length - 1} kata kopyalandı`, `⧉ ${axs.length} axis/axes copied to ${P.floors.length - 1} floor(s)`)); return; }
   if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
@@ -10931,6 +11007,7 @@ function cmdList() {
     act('unhideall', '👁', 'Gizli ögeleri aç', 'Show hidden items', '', () => unhideAll(), true, 'göster unhide restore hidden items gizli'),
     act('group', '⛓', 'Grupla', 'Group', 'Ctrl+G', groupSel, false),
     act('ungroup', '⛓', 'Grubu çöz', 'Ungroup', 'Ctrl+Shift+G', ungroupSel, false),
+    act('autodims', '📐', 'Otomatik ölçülendir (odalar + dış zincirler)', 'Auto-dimension (rooms + outer chains)', '', () => autoDimsRun(), false, 'dimension dimensions ölçü ölçülendirme otomatik auto chain zincir'),
     act('axgrid', '⊞', 'Aks ızgarası oluştur', 'Create an axis grid', '', () => axisGridPrompt(), false, 'grid ızgara aks axis column kolon structure yapı'),
     act('elev', '📐', 'Görünüşler ve kesitler', 'Elevations & sections', '', () => archModal('elev:south'), true, 'facade cephe drawing çizim'),
     act('elevmain', '📐', 'Ana tuvalde görünüş / kesit', 'Elevation / section on main canvas', '', () => showElev(!ui.viewElev), true, 'facade cephe elevation section görünüş kesit'),

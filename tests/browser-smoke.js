@@ -4076,6 +4076,25 @@ check('library size filter and "fits the selection" (#204)', async page => {
   return `${r.all} → ${r.small} items at ≤ 90 cm; room → ${r.room.w}×${r.room.d}×${r.room.h}, gap → ${r.gap.w} cm`;
 });
 
+// #200: one click dimensions every room and the outside of the building; a second click replaces only the
+// automatic dimensions (manual ones stay) and each run is one undo step.
+check('one-click dimensions for rooms and outer walls (#200)', async page => {
+  const r = await page.evaluate(`(() => {
+    closeModal(); P = newProject(); fi = 0; TEMPLATES[2].build(); loadProject(P); refresh();
+    F().dims.push({ id: 'manual1', a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, off: 40 }); commit();
+    const h0 = hi, n0 = F().dims.length;
+    document.querySelector('#props [data-act="autodims"]') ? document.querySelector('#props [data-act="autodims"]').click() : autoDimsRun();
+    const n1 = F().dims.length, auto1 = F().dims.filter(d => d.auto).length, oneStep = hi === h0 + 1;
+    autoDimsRun();
+    const n2 = F().dims.length, manualKept = F().dims.some(d => d.id === 'manual1');
+    const svg = exportSvg().svg;
+    undo(); undo(); const back = F().dims.length === n0;
+    return { n0, n1, auto1, n2, oneStep, manualKept, back, svgOk: svg.length > 1000 };
+  })()`);
+  if (!(r.auto1 > 8 && r.n1 === r.n0 + r.auto1 && r.n2 === r.n1 && r.oneStep && r.manualKept && r.back && r.svgOk)) throw new Error('auto dimensions: ' + JSON.stringify(r));
+  return `${r.auto1} dimensions, re-run replaced them, manual kept, undo restores`;
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {
