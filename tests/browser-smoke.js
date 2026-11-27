@@ -4202,11 +4202,12 @@ check('large background image stays out of undo history and autosave (#187)', as
 // #189: a null blob (canvas too large) no longer throws in download(); the user gets a toast instead
 check('PNG export reports a failed canvas instead of throwing (#189)', async page => {
   const r = await page.evaluate(`(async () => {
+    closeModal(); loadProject(newProject()); addRectWalls(0, 0, 400, 300); commit(); refresh(); toast('');
     const orig = HTMLCanvasElement.prototype.toBlob; let calls = 0;
     HTMLCanvasElement.prototype.toBlob = function (cb) { calls++; setTimeout(() => cb(null), 0); };
     try {
       exportPng();
-      for (let i = 0; i < 60 && !/PNG/.test(document.querySelector('#toast').textContent); i++) await new Promise(r => setTimeout(r, 50));
+      for (let i = 0; i < 200 && !/PNG/.test(document.querySelector('#toast').textContent); i++) await new Promise(r => setTimeout(r, 50));
       return { calls, msg: document.querySelector('#toast').textContent };
     } finally { HTMLCanvasElement.prototype.toBlob = orig; }
   })()`);
@@ -4231,15 +4232,16 @@ check('boots and edits with browser storage blocked (#188)', async page => {
     await page.send('Page.reload', { ignoreCache: true });
     await sleep(500);
     if (!await boot()) throw new Error('the app did not boot with storage blocked');
-    await sleep(1200);
+    // the warning comes ~1 s after boot; wait for it instead of reading the toast once
+    let warned = false;
+    for (let i = 0; i < 40 && !warned; i++) { warned = await page.evaluate("/storage|depolama/i.test(document.querySelector('#toast').textContent)"); if (!warned) await sleep(100); }
     const r = await page.evaluate(`(() => {
-      const warned = /storage|depolama/i.test(document.querySelector('#toast').textContent);
       closeModal();
       const n = F().walls.length; addRectWalls(0, 0, 400, 300); commit(); refresh(); undo(); const u = F().walls.length; redo();
       localStorage.setItem('fp_x', '1');
-      return { blockedOk: localStorage.ok === false, mem: localStorage.getItem('fp_x'), added: F().walls.length - n, undone: u === n, warned };
+      return { blockedOk: localStorage.ok === false, mem: localStorage.getItem('fp_x'), added: F().walls.length - n, undone: u === n };
     })()`);
-    if (!r.blockedOk || r.mem !== '1' || r.added !== 4 || !r.undone || !r.warned) throw new Error('blocked storage: ' + JSON.stringify(r));
+    if (!r.blockedOk || r.mem !== '1' || r.added !== 4 || !r.undone || !warned) throw new Error('blocked storage: ' + JSON.stringify({ ...r, warned }));
     return 'boots in memory, edits + undo work, warning shown';
   } finally {
     await page.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
