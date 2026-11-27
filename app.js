@@ -11234,13 +11234,17 @@ function aiModal() {
   };
   $('#aiLiveRetry').onclick = async () => {
     $('#aiLiveRetry').disabled = true;
+    brgWant();
     const ok = await brgConnect();
+    if (!ok) brgStartProbe();
     $('#aiLiveRetry').disabled = false;
     if (!ok) setState('aiLiveState2', L('Bağlanamadı — köprü çalışmıyor ya da tarayıcı izin istedi.', 'Could not connect — bridge not running, or the browser needs permission.'));
     else { setState('aiLiveState2', ''); brgInitialSync(); }
     aiSyncLiveRow();
   };
   aiSyncLiveRow();
+  // pencere açılınca köprü aranmaya başlar (#192): ajan sonra başlatılsa da sayfa kendiliğinden bağlanır
+  if (!BRIDGE_OFF && !brgEs) { brgWant(); brgProbe(); }
 }
 /* ---------- AI köprüsü istemcisi / AI bridge client ----------
    Makes the app itself talk to the local bridge (mcp/bridge.js), so the page on
@@ -11371,6 +11375,7 @@ async function brgConnect() {
     es.addEventListener('requests-changed', () => { brgRefreshPending(); });
     es.addEventListener('request', () => { brgRefreshPending(); });
     es.onopen = () => {
+      brgWanted = true; brgFails = 0; localStorage.setItem(BRIDGE_USED, '1'); // bir dahaki açılışta da ara
       brgSetConnected(true);
       if (!brgHydrated) brgInitialSync(); else brgSync();
       brgRefreshPending();
@@ -11386,20 +11391,33 @@ function brgDisconnect() {
   brgSetConnected(false);
 }
 
-/* keep looking for the bridge while the app stays open: it can be started,
-   restarted or stopped at any time, and a dropped SSE stream must not be final */
+/* #192: look for the bridge only when the user wants it. A fresh browser makes no request to 127.0.0.1 at boot
+   (the Local Network Access prompt and a failed request every 10 s for everyone who never uses AI); the probe
+   starts when the AI dialog opens or 🔌 is pressed, and at boot only for a browser that connected before
+   (BRIDGE_USED, or the older BRIDGE_SEEN revision). Once wanted it keeps looking — the bridge can be started,
+   restarted or stopped at any time — with a backoff (10 s → 1 min → 5 min), and not while the tab is hidden. */
+const BRIDGE_USED = 'fp_bridge_used';
+const BRIDGE_DELAYS = [10000, 60000, 300000];
+let brgWanted = false, brgFails = 0;
+const brgProbeDelay = fails => BRIDGE_DELAYS[Math.min(Math.max(0, fails | 0), BRIDGE_DELAYS.length - 1)];
+const brgUsedBefore = store => { try { return !!(store.getItem(BRIDGE_USED) || store.getItem(BRIDGE_SEEN)); } catch (e) { return false; } };
+function brgWant() { brgWanted = true; brgFails = 0; brgStopProbe(); }
 function brgStartProbe() {
-  if (BRIDGE_OFF) return;
+  if (BRIDGE_OFF || !brgWanted) return;
   if (brgProbeTimer || brgEs) return;
-  brgProbeTimer = setInterval(async () => {
-    if (brgEs) { brgStopProbe(); return; }
-    if (await brgConnect()) brgStopProbe();
-  }, 10000);
+  brgProbeTimer = setTimeout(async () => {
+    brgProbeTimer = null;
+    if (brgEs) return;
+    if (document.hidden) { brgStartProbe(); return; } // gizli sekme denemez; görünür olunca hemen dener
+    if (await brgConnect()) { brgFails = 0; return; }
+    brgFails++; brgStartProbe();
+  }, brgProbeDelay(brgFails));
 }
 function brgProbe() {
-  brgConnect().then(ok => { if (!ok) brgStartProbe(); });
+  brgConnect().then(ok => { if (ok) brgFails = 0; else brgStartProbe(); });
 }
-function brgStopProbe() { clearInterval(brgProbeTimer); brgProbeTimer = null; }
+function brgStopProbe() { clearTimeout(brgProbeTimer); brgProbeTimer = null; }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && brgWanted && !brgEs && brgProbeTimer) { brgStopProbe(); brgProbe(); } });
 
 /* mirror local edits to the bridge (debounced) — the agent's pull_from_browser sees them */
 const aiOrigAutosave = autosave;
@@ -11736,7 +11754,7 @@ async function aiSendRequest() {
 }
 
 /* boot: try once now, then keep probing in the background while the app is open */
-function aiBridgeBoot() { brgProbe(); }
+function aiBridgeBoot() { if (!BRIDGE_OFF && brgUsedBefore(localStorage)) { brgWanted = true; brgProbe(); } }
 
 /* status row inside the AI modal (updated live) */
 function aiSyncLiveRow() {
