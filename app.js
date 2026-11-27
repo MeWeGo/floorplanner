@@ -16436,10 +16436,11 @@ $('#modal').addEventListener('input', e => {
   const t = e.target.closest('[data-rs]'); if (!t || t.type === 'checkbox') return;
   const k = t.dataset.rs; ui.studio[k] = k === 'az' || k === 'alt' ? +t.value : t.value;
   if (t.nextElementSibling && (k === 'az' || k === 'alt')) t.nextElementSibling.textContent = t.value + '°';
-  if (k === 'az' || k === 'alt') { syncLightsUI(); applyLive3D(); } // canlı gerçekçi görünüm aynı güneşi kullanır (#81)
+  if (k === 'az' || k === 'alt') { syncLightsUI(); liveSunSoon(); } // canlı gerçekçi görünüm aynı güneşi kullanır (#81); sürüklerken hafif önizleme (#191)
 });
 $('#modal').addEventListener('change', e => {
   if (ui.modal !== 'studio') return;
+  const sun = e.target.closest('[data-rs="az"], [data-rs="alt"]'); if (sun) { liveSunDone(); return; } // bırakınca tam kurulum (#191)
   const t = e.target.closest('[data-rs="dayLights"]'); if (!t) return;
   setDayLights(t.checked);
 });
@@ -18580,6 +18581,12 @@ function contactTex(radial) {
   g.fillStyle = gd; g.fillRect(0, 0, 64, 64);
   return new THREE.CanvasTexture(c);
 }
+// güneşe bağlı ışık değerleri (#87, #122): realLook ve kaydırıcı önizlemesi (liveSunPreview, #191) aynı formülü kullanır
+function realSunLight(o, sk, sinA, eve, nt, moonC) {
+  if (o.isHemisphereLight) { o.color.copy(sk.hor).lerp(new THREE.Color(0xffffff), 0.5).lerp(new THREE.Color(0x5a6b9a), nt); o.groundColor.setHex(eve ? 0xffb877 : 0xb9a58c).multiplyScalar(1 - 0.8 * nt); o.intensity = (eve ? 0.5 : 0.2 + 0.12 * sinA) * (1 - 0.72 * nt); }
+  else if (o.isDirectionalLight && o.castShadow) { o.intensity = (0.75 + 0.75 * sinA) * (eve ? 0.75 : 1) * (1 - nt) + 0.16 * nt; if (nt) o.color.lerp(moonC, nt); } // gece: ay ışığı (#122)
+  else if (o.isDirectionalLight) { o.color.setHex(eve ? 0xffc58a : 0xffe9cf); o.intensity = (eve ? 0.5 : 0.22) * (1 - 0.85 * nt); }
+}
 function realLook(S, sv, opts = {}) {
   const alt = Math.asin(clamp(sv.y, -1, 1)) * 180 / Math.PI, sinA = Math.sin(clamp(alt, 2, 89) * Math.PI / 180);
   const swaps = [], made = [], texs = [], decals = [], C = { floorTex: {}, texs }, cache = new Map(), furnCls = new Map();
@@ -18630,9 +18637,7 @@ function realLook(S, sv, opts = {}) {
   S.traverse(o => {
     if (!o.isLight || o.userData.fix) return; // armatür havuzu kendi değerlerini taşır; geri yüklemek açılıp kapanan lambayı eski haline döndürürdü
     lit.push({ l: o, i: o.intensity, c: o.color.clone(), g: o.groundColor ? o.groundColor.clone() : null });
-    if (o.isHemisphereLight) { o.color.copy(sk.hor).lerp(new THREE.Color(0xffffff), 0.5).lerp(new THREE.Color(0x5a6b9a), nt); o.groundColor.setHex(eve ? 0xffb877 : 0xb9a58c).multiplyScalar(1 - 0.8 * nt); o.intensity = (eve ? 0.5 : 0.2 + 0.12 * sinA) * (1 - 0.72 * nt); }
-    else if (o.isDirectionalLight && o.castShadow) { o.intensity = (0.75 + 0.75 * sinA) * (eve ? 0.75 : 1) * (1 - nt) + 0.16 * nt; if (nt) o.color.lerp(moonC, nt); } // gece: ay ışığı (#122)
-    else if (o.isDirectionalLight) { o.color.setHex(eve ? 0xffc58a : 0xffe9cf); o.intensity = (eve ? 0.5 : 0.22) * (1 - 0.85 * nt); }
+    realSunLight(o, sk, sinA, eve, nt, moonC);
   });
   const oldEnv = S.environment; S.environment = opts.mats !== false ? realEnv(sv) : oldEnv;
   // gece (#122): pozlama hafif artar; pencere camları içeriden sıcak parlar (dışarıdan bakınca ev yaşıyor görünür)
@@ -18712,6 +18717,30 @@ function applyLive3D() {
   T3.live = { sky: sky.mesh, fog: sky.fog, mats: [ground, slab], real };
   markScene3D(); req3D();
 }
+/* Güneş kaydırıcısı sürüklenirken (#191) applyLive3D her adımda gerçekçi malzemeleri, gökyüzünü ve zemini baştan
+   kuruyordu. Sürükleme sırasında yalnız güneş / gölge ışığı, ışık renkleri ve gökyüzü uniform'ları güncellenir (kare
+   başına en fazla bir kez); bırakınca (change) applyLive3D bir kez çalışır ve yansıma haritası dahil son görüntüyü kurar. */
+let liveSunRaf = 0;
+function liveSunPreview() {
+  if (!T3 || !T3.scene || !ui.live3d || !T3.live || !T3.live.sky) { applyLive3D(); return; }
+  const S = T3.scene, st = ui.studio, sv = sunVector(st.az, st.alt), lv = litVector(st.az, st.alt);
+  const alt = Math.asin(clamp(sv.y, -1, 1)) * 180 / Math.PI, sinA = Math.sin(clamp(alt, 2, 89) * Math.PI / 180);
+  const sk = skyColors(alt), nt = nightOf(alt), eve = st.mood === 'evening', moonC = new THREE.Color(0xa9bfff);
+  for (const l of shadowLights(S)) {
+    const tg = l.target.position, d0 = l.position.distanceTo(tg);
+    l.position.set(tg.x + lv.x * d0, tg.y + lv.y * d0, tg.z + lv.z * d0);
+    l.color.setHex(st.alt < 20 && st.alt >= 1 ? 0xffc58a : 0xfff6e8);
+  }
+  S.traverse(o => { if (o.isLight && !o.userData.fix) realSunLight(o, sk, sinA, eve, nt, moonC); });
+  const u = T3.live.sky.material.uniforms;
+  u.zen.value.copy(sk.zen); u.hor.value.copy(sk.hor); u.gnd.value.copy(sk.gnd); u.glow.value.copy(sk.glow);
+  u.sun.value.set(sv.x, sv.y, sv.z).normalize(); u.moon.value.set(-sv.x, 0.57, -sv.z).normalize(); u.night.value = Math.pow(nt, 1.5);
+  if (T3.live.fog) T3.live.fog.color.copy(sk.hor);
+  if (S.background && S.background.isColor) S.background.copy(sk.hor);
+  markShadows(); req3D();
+}
+function liveSunSoon() { if (!liveSunRaf) liveSunRaf = requestAnimationFrame(() => { liveSunRaf = 0; liveSunPreview(); }); }
+function liveSunDone() { if (liveSunRaf) { cancelAnimationFrame(liveSunRaf); liveSunRaf = 0; } applyLive3D(); }
 function syncLiveUI() { const b = $('#b3dLive'); if (b) b.classList.toggle('on', !!ui.live3d); syncNightUI(); }
 function setLive3D(on) {
   ui.live3d = !!on; syncLiveUI();

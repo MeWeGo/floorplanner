@@ -3980,6 +3980,34 @@ check('Hexagonal Draw Roof, beveled & curtain wall attach, one-sided resize (#17
 });
 
 
+// #191: dragging a sun slider in the render studio with the live view on only moves lights and sky uniforms;
+// the full applyLive3D (realistic materials, sky, ground) runs once on release, and matches a direct rebuild.
+check('render studio sun sliders stay light while dragging in the live view (#191)', async page => {
+  const r = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 500, 400); sel = []; commit(); refresh();
+    document.getElementById('b3d').click(); if (!ui.view3d) return { err: '3D did not open' };
+    if (!ui.live3d) setLive3D(true);
+    openRenderStudio();
+    const az = document.querySelector('[data-rs="az"]'); if (!az) return { err: 'no azimuth slider' };
+    const origReal = realLook; let reals = 0; realLook = function () { reals++; return origReal.apply(this, arguments); };
+    const sky0 = T3.live.sky, sun0 = sky0.material.uniforms.sun.value.clone(), l0 = shadowLights(T3.scene)[0].position.clone();
+    const frame = () => new Promise(res => requestAnimationFrame(() => res()));
+    try {
+      for (let i = 1; i <= 12; i++) { az.value = String(20 * i); az.dispatchEvent(new Event('input', { bubbles: true })); if (i % 3 === 0) await frame(); }
+      await frame();
+      const during = { reals, sameSky: T3.live.sky === sky0, sunMoved: sky0.material.uniforms.sun.value.distanceTo(sun0) > 0.05, lightMoved: shadowLights(T3.scene)[0].position.distanceTo(l0) > 1 };
+      az.dispatchEvent(new Event('change', { bubbles: true }));
+      const released = { reals, newSky: T3.live.sky !== sky0, sun: T3.live.sky.material.uniforms.sun.value.clone() };
+      applyLive3D();
+      const direct = T3.live.sky.material.uniforms.sun.value;
+      return { ...during, afterRelease: released.reals, newSky: released.newSky, matches: released.sun.distanceTo(direct) < 1e-6 };
+    } finally { realLook = origReal; closeModal(); setLive3D(false); show3D(false); }
+  })()`);
+  if (r.err) throw new Error(r.err);
+  if (r.reals !== 0 || !r.sameSky || !r.sunMoved || !r.lightMoved || r.afterRelease !== 1 || !r.newSky || !r.matches) throw new Error('sun slider: ' + JSON.stringify(r));
+  return 'no realLook while dragging, one full rebuild on release';
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {
