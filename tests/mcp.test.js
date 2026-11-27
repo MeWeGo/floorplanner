@@ -89,14 +89,22 @@ test('MCP catalogue mirror stays in sync with app.js', () => {
     return src.slice(start, end);
   };
 
+  // Evaluate both literal arrays: a regex tuned to one format silently matched
+  // nothing in the other (the server uses objects), so the check never failed.
+  const literal = (src, name) => new Function('return ' + block(src, name).slice(`const ${name} = `.length) + '\n];')();
   // app.js: ['sofa3', 0, 'TR name', w, d, h, 'icon', 'shape', '#colour', 'EN name']
-  const appIds = new Set([...block(appJs, 'CAT_DEFS').matchAll(/\n\s*\['([a-z0-9]+)',/g)].map(m => m[1]));
-  const srvBlock = block(serverJs, 'CATALOG');
-  const srvIds = new Set([...srvBlock.matchAll(/\n\s*\['([a-z0-9]+)',/g)].map(m => m[1]));
+  const app = new Map(literal(appJs, 'CAT_DEFS').map(a => [a[0], { cat: a[1], w: a[3], d: a[4], h: a[5] }]));
+  const srv = new Map(literal(serverJs, 'CATALOG').map(o => [o.id, { cat: o.cat, w: o.w, d: o.d, h: o.h }]));
 
-  assert.ok(appIds.size > 20, 'app catalogue looks empty');
-  const extraInServer = [...srvIds].filter(id => !appIds.has(id));
+  assert.ok(app.size > 20, 'app catalogue looks empty');
+  assert.ok(srv.size > 20, 'server catalogue looks empty');
+  const extraInServer = [...srv.keys()].filter(id => !app.has(id));
   assert.deepStrictEqual(extraInServer, [], 'mcp/server.js offers furniture the app does not know');
+  const missingInServer = [...app.keys()].filter(id => !srv.has(id));
+  assert.deepStrictEqual(missingInServer, [], 'app.js furniture missing from mcp/server.js');
+  const drift = [...app].filter(([id, v]) => JSON.stringify(v) !== JSON.stringify(srv.get(id)))
+    .map(([id, v]) => `${id}: app ${JSON.stringify(v)} server ${JSON.stringify(srv.get(id))}`);
+  assert.deepStrictEqual(drift, [], 'catalogue sizes / categories drifted between app.js and mcp/server.js');
 
   const openingIds = new Set([...block(serverJs, 'OPENINGS').matchAll(/id:\s*'([a-z0-9]+)'/g)].map(m => m[1]));
   const appOpeningIds = new Set([...block(appJs, 'OPENINGS').matchAll(/id:\s*'([a-z0-9]+)'/g)].map(m => m[1]));
