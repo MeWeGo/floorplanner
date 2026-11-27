@@ -1858,7 +1858,7 @@ let toastT;
 function toast(m, act) {
   const t = $('#toast'); t.textContent = m; t.classList.toggle('act', !!act);
   if (act) { const b = document.createElement('button'); b.className = 'btn sm'; b.textContent = act.label; b.onclick = () => { t.classList.remove('show'); act.fn(); }; t.append(' ', b); }
-  t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), act ? 6000 : 2600);
+  t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), act ? act.ms || 6000 : 2600);
 }
 
 /* ---------- Görünüm ---------- */
@@ -21756,6 +21756,30 @@ new ResizeObserver(() => { if (P && !ui.view3d) render(); if (T3 && ui.view3d) r
 window.addEventListener('beforeunload', () => { if (P) { dbPut('state', P, 'auto').catch(() => {}); dbPut('state', tabsState(), 'tabs').catch(() => {}); } });
 if (localStorage.getItem('fp_theme') === 'light') document.documentElement.dataset.theme = 'light';
 
+/* ---------- Uygulama olarak yükleme ve çevrimdışı (#203) ----------
+   sw.js yalnız http(s) üzerinde kaydedilir (file:// açılışında hiç denenmez), ?sw=off kapatır. Yeni bir sürüm
+   yayınlanınca tarayıcı yeni çalışanı eskisinin yanına kurar; sayfa bunu bir kez söyler ve "Yenile" düğmesi yeni
+   çalışanı devreye alıp sayfayı yeniden yükler. Çizim sürerken zorla yenilenmez. */
+const SW_OFF = /[?&]sw=off\b/.test(location.search);
+function swBoot() {
+  if (SW_OFF || !/^https?:$/.test(location.protocol) || !('serviceWorker' in navigator)) return;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (reloading) location.reload(); });
+  const offer = w => {
+    if (!w || !navigator.serviceWorker.controller) return; // ilk kurulum: güncelleme değil
+    toast(L('🔄 Yeni sürüm hazır', '🔄 A new version is ready'), { label: L('Yenile', 'Reload'), ms: 30000, fn: () => { reloading = true; autosave(); w.postMessage('skip-waiting'); } });
+  };
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    if (reg.waiting) offer(reg.waiting);
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing; if (!w) return;
+      w.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); });
+    });
+    // açık kalan sekme de yeni sürümü görsün: saatte bir ve sekmeye dönüldüğünde kontrol
+    setInterval(() => reg.update().catch(() => { }), 3600e3);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => { }); });
+  }).catch(() => { });
+}
 /* ---------- 3B ön ısıtma (#106) ----------
    İlk 3B girişinin bedeli (WebGL bağlamı, sahne, shader derleme) proje açıldıktan sonra boşta geçen zamana dağıtılır:
    her adım ayrı bir requestIdleCallback'te çalışır, böylece 2B tuval arada yanıt vermeye devam eder.
@@ -21798,6 +21822,7 @@ applyLangUI();
   presenceBoot();          // canlı kullanıcı sayısı göstergesi (ayarlıysa)
   collabBoot();            // canlı birlikte düzenleme (oda bağlantısı varsa)
   prewarm3D();             // 3B'yi boşta hazırla: ilk 3B düğmesi bekletmesin (#106)
+  swBoot();                // uygulama olarak yükleme + çevrimdışı (#203)
   // Depolama engelliyse uygulama bellekte çalışır; bunu bir kez söyle (#188)
   if (!dbOk && !localStorage.ok) setTimeout(() => toast(L('Tarayıcı depolaması engelli: çalışmanız bu sekmede kalır, kaydedilmez. Saklamak için ⬇ JSON indirin.', 'Browser storage is blocked: your work stays in this tab and is not saved. Use ⬇ JSON to keep a copy.')), 900);
 })();

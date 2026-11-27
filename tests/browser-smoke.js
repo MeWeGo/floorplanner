@@ -4206,6 +4206,41 @@ check('rooms that follow their walls (#201)', async page => {
   return `room ${r.a0} → ${r.a1} m² with the wall, manual room kept, gap warned, unlink works`;
 });
 
+// #203: over http the app registers sw.js, which caches the app shell and the pinned Three.js scripts, so the app
+// files still load with the network off; the manifest is linked and names the icons.
+check('install as an app and work offline: service worker + manifest (#203)', async page => {
+  const r = await page.evaluate(`(async () => {
+    if (!('serviceWorker' in navigator)) return { skip: true };
+    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise(res => setTimeout(() => res(null), 15000))]);
+    if (!reg) return { err: 'service worker never became ready' };
+    for (let i = 0; i < 50 && !(await caches.keys()).some(k => k.startsWith('fp-')); i++) await new Promise(res => setTimeout(res, 100));
+    const key = (await caches.keys()).find(k => k.startsWith('fp-')), c = key && await caches.open(key);
+    const has = async u => !!(c && await c.match(u));
+    const man = document.querySelector('link[rel="manifest"]'), mj = man ? await (await fetch(man.href)).json() : null;
+    return { scope: reg.scope, key, shell: await has('app.js') && await has('index.html') && await has('style.css'),
+      three: await has('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'),
+      icons: mj ? mj.icons.map(i => i.sizes).join(',') : '', display: mj && mj.display, controlled: !!navigator.serviceWorker.controller };
+  })()`);
+  if (r.skip) return 'no service worker support in this browser';
+  if (r.err) throw new Error(r.err);
+  // offline: the app files come from the worker's cache
+  await page.send('Network.enable');
+  await page.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+  let off;
+  try {
+    off = await page.evaluate(`(async () => { try { await fetch('README.md?x=' + Date.now(), { cache: 'no-store' }); return { ok: false, why: 'the network was not offline' }; } catch (e) { } // control: a file the worker does not cache fails
+      try { const t = await (await fetch('app.js')).text(); return { ok: t.includes('Kat Planı Çizici') }; } catch (e) { return { ok: false, why: String(e) }; } })()`);
+  } finally {
+    await page.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    // the offline control request logs its own (expected) network error
+    await sleep(200);
+    for (let i = page.problems.length - 1; i >= 0; i--) if (/ERR_INTERNET_DISCONNECTED/.test(page.problems[i])) page.problems.splice(i, 1);
+  }
+  const ok = r.key && r.shell && r.three && /192x192/.test(r.icons) && /512x512/.test(r.icons) && r.display === 'standalone' && off.ok;
+  if (!ok) throw new Error('PWA: ' + JSON.stringify({ ...r, off }));
+  return `cache ${r.key}: app shell + Three.js, app.js served offline${r.controlled ? '' : ' (page not yet controlled)'}`;
+});
+
 // #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
 // small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
 check('large background image stays out of undo history and autosave (#187)', async page => {

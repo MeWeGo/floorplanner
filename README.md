@@ -159,6 +159,9 @@ Tools: `new_project` · `load_project` / `import_ifc` / `import_dxf` / `save_pro
 - Unlimited **undo / redo**, copy / paste / duplicate, box & multi-select with a **box-select scope** (All / Walls / Furniture) in the footer.
 - Starter templates: Blank · Studio 1+0 · 2+1 Apartment · Office.
 
+### 📲 Install & offline
+Open the live app in Chrome, Edge or Safari and use **Install app** (or *Add to Home Screen* on a phone): it opens in its own window and keeps working without internet — 2D and 3D included. When a new version is published, the app tells you and a **Reload** button switches to it.
+
 ### 💾 Storage — fully local
 | Layer | Used for |
 | :-- | :-- |
