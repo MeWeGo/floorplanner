@@ -470,6 +470,34 @@ check('adjustable groups merge (#207): a second adjustable group / room joins an
   if (!info.split) throw new Error('undo did not bring the two groups back: ' + JSON.stringify(info));
 });
 
+check('groups across floors: objects on two floors become one linked group, merging keeps the link, a 2D move drags the other floor, ungroup clears both', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    P.floors.push(newFloor('Floor 1')); fi = 0;
+    const f0 = P.floors[0], f1 = P.floors[1];
+    const a = mkFurn(BYID.chair, 0, 0), c = mkFurn(BYID.chair, 200, 0), d = mkFurn(BYID.chair, 300, 0), b = mkFurn(BYID.chair, 0, 0);
+    f0.furn.push(a, c, d); f1.furn.push(b); commit(); setTool('select');
+    const m1 = groupObjs([{ kind: 'furn', o: a, floorIdx: 0 }, { kind: 'furn', o: b, floorIdx: 1 }]); commit();
+    const linked = { same: !!a.grp && a.grp === b.grp, recs: grpLinked(a.grp).length, floors: m1.floors };
+    sel = [c.id, d.id]; groupSel();
+    sel = [a.id, c.id]; refresh();
+    const label = (document.querySelector('#props [data-act="group"]') || {}).textContent || '';
+    groupSel();
+    const merged = { all: [a, b, c, d].every(o => o.grp === a.grp), recs: grpLinked(a.grp).length, g0: f0.groups.length, g1: f1.groups.length };
+    fi = 0; sel = groupMemberIds(a.grp);
+    startMove({ x: 0, y: 0 }, {}); doMove({ x: 100, y: 0 }, { shiftKey: false }); ui.drag = null; commit();
+    const moved = { a: a.x, b: b.x, d: d.x };
+    ungroupSel();
+    const un = { a: a.grp || null, b: b.grp || null, g0: f0.groups.length, g1: f1.groups.length };
+    return { linked, label, merged, moved, un };
+  })()`);
+  if (!info.linked.same || info.linked.recs !== 2 || info.linked.floors !== 2) throw new Error('cross-floor group not linked: ' + JSON.stringify(info));
+  if (!/Merge groups|Grupları birleştir/.test(info.label)) throw new Error('no merge label for two groups: ' + JSON.stringify(info));
+  if (!info.merged.all || info.merged.recs !== 2 || info.merged.g0 !== 1 || info.merged.g1 !== 1) throw new Error('merging a linked group dropped the link: ' + JSON.stringify(info));
+  if (info.moved.a !== 100 || info.moved.b !== 100 || info.moved.d !== 400) throw new Error('2D move did not drag the other floor: ' + JSON.stringify(info));
+  if (info.un.a || info.un.b || info.un.g0 !== 0 || info.un.g1 !== 0) throw new Error('ungroup did not clear both floors: ' + JSON.stringify(info));
+});
+
 check('changes history (#208): labelled steps, current step marked, jump back and forward', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject());
