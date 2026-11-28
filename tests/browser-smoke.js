@@ -437,6 +437,64 @@ check('adjustable group: edit members adds a new wall and places it per layout w
   if (info.after) throw new Error('Esc did not leave group editing: ' + JSON.stringify(info));
 });
 
+check('adjustable groups merge (#207): a second adjustable group / room joins and one click cycles everything, undo splits them', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F(), a1 = mkFurn(BYID.chair, 0, 0), a2 = mkFurn(BYID.chair, 100, 0), b1 = mkFurn(BYID.chair, 0, 300);
+    f.furn.push(a1, a2, b1); commit(); setTool('select');
+    sel = [a1.id, a2.id]; groupSel(); varAction('varInit'); varAction('varNew');
+    a1.x += 50; a2.x += 50; commit();
+    sel = [b1.id]; varAction('varInit'); varAction('varNew'); b1.y += 80; commit();
+    const groups0 = f.groups.length;
+    sel = [a1.id, a2.id, b1.id]; refresh();
+    const btn = document.querySelector('#props [data-act="grpJoin"]');
+    const label = btn ? btn.textContent : '';
+    btn && btn.click();
+    const one = f.groups.length === 1 && a1.grp === b1.grp && a2.grp === b1.grp;
+    const rec = f.groups[0];
+    const before = [a1.x, b1.y], idx0 = rec.idx;
+    // a plain click on b1 cycles every member
+    view.z = 1; view.x = 150; view.y = -150; render();
+    const r = cv.getBoundingClientRect(), s = w2s({ x: b1.x, y: b1.y });
+    const ev = type => cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 }));
+    ev('pointerdown'); ev('pointerup');
+    const after = [a1.x, b1.y];
+    undo(); undo();
+    const split = F().groups.length === 2;
+    return { groups0, label, one, n: rec.vars.length, idx0, idx1: rec.idx, before, after, split };
+  })()`);
+  if (info.groups0 !== 2) throw new Error('setup did not make two adjustable groups: ' + JSON.stringify(info));
+  if (!/Merge|Birleştir/.test(info.label)) throw new Error('no merge button for two adjustable groups: ' + JSON.stringify(info));
+  if (!info.one || info.n !== 2) throw new Error('merge did not make one adjustable group with 2 layouts: ' + JSON.stringify(info));
+  if (info.idx1 === info.idx0 || info.after[0] === info.before[0] || info.after[1] === info.before[1]) throw new Error('one click did not switch both former groups: ' + JSON.stringify(info));
+  if (!info.split) throw new Error('undo did not bring the two groups back: ' + JSON.stringify(info));
+});
+
+check('changes history (#208): labelled steps, current step marked, jump back and forward', async page => {
+  const info = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F();
+    f.walls.push(mkWall({ x: 0, y: 0 }, { x: 300, y: 0 })); commit();
+    f.furn.push(mkFurn(BYID.chair, 50, 50)); commit();
+    f.furn[0].x += 40; commit();
+    document.getElementById('bHist').click();
+    const m = document.getElementById('histMenu'), rows = [...m.querySelectorAll('[data-hist]')];
+    const labels = rows.map(b => b.querySelector('.hist-l').textContent), cur = m.querySelectorAll('.cur').length;
+    rows.find(b => b.dataset.hist === '1').click();
+    const back = { hi, walls: F().walls.length, furn: F().furn.length, fut: m.querySelectorAll('.fut').length, open: !m.hidden };
+    m.querySelector('[data-hist="3"]').click();
+    const fwd = { hi, x: F().furn[0].x };
+    cv.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 5, clientY: 5 }));
+    return { labels, cur, back, fwd, closed: m.hidden };
+  })()`);
+  const want = ['Move item', 'Add item', 'Add wall', 'Initial state'];
+  if (info.labels.join('|') !== want.join('|') && info.labels.join('|') !== ['Eşya taşı', 'Eşya ekle', 'Duvar ekle', 'Başlangıç'].join('|')) throw new Error('history labels: ' + JSON.stringify(info));
+  if (info.cur !== 1) throw new Error('current step not marked once: ' + JSON.stringify(info));
+  if (info.back.hi !== 1 || info.back.walls !== 1 || info.back.furn !== 0 || info.back.fut !== 2 || !info.back.open) throw new Error('jump back: ' + JSON.stringify(info));
+  if (info.fwd.hi !== 3 || info.fwd.x !== 90) throw new Error('jump forward: ' + JSON.stringify(info));
+  if (!info.closed) throw new Error('outside click did not close the list: ' + JSON.stringify(info));
+});
+
 check('wall faces: each face painted / covered on its own in 2D and 3D, named after its room, undo', async page => {
   const info = await page.evaluate(`(async () => {
     loadProject(newProject());
