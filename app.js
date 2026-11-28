@@ -1252,7 +1252,7 @@ function collabInvert(prev, patch) {
 /* ---------- Geçmiş & kayıt ---------- */
 let saveTimer = null;
 let terrRev = 0; // içerik sürümü: commit() ve canlı ortak düzenleme yamaları artırır (arazi önbelleği, #149)
-function commit() {
+function commit(label) {
   terrRev++;
   if (typeof collab !== 'undefined' && collab.applying) return;
   if (typeof collabReadOnly === 'function' && collabReadOnly()) return;
@@ -1266,8 +1266,10 @@ function commit() {
   syncCeilMounts(); // tavana sabit eşyalar (armatürler) kat yüksekliğini izler (#120)
   const s = JSON.stringify(P);
   if (hist[hi] === s) return;
+  const prev = hist[hi];
   hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 150) hist.shift();
   hi = hist.length - 1;
+  histNote(s, label, prev); // #208: adım adı (verilmediyse farktan) + zaman
   if (typeof collabOnCommit === 'function') collabOnCommit(s);
   autosave(); updateUndo();
   if (fp3DOn()) schedBuild3D(); // 3B'de çizim aracıyla eklenen / değişen nesne sahnede görünsün
@@ -1330,6 +1332,112 @@ function updateUndo() {
     return;
   }
   $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = hi >= hist.length - 1; syncTouchBar();
+  const hm = $('#histMenu'); if (hm && !hm.hidden) histMenuOpen(true); // açık geçmiş listesi güncel kalır (#208)
+}
+/* ---------- Değişiklik geçmişi (#208) ----------
+   hist[] anlık görüntüleri isimsizdir; adlar iki yerden gelir: commit(label) verdiyse histNames (anlık görüntü metni → { l, t }),
+   yoksa iki komşu görüntünün farkından (histDiffLabel, sonuç önbellekte). Paralel dizi tutulmaz: sekmeler, dokunmatik geri alma,
+   dışarıdan gelen sürümler hist'i nasıl değiştirirse değiştirsin adlar görüntünün kendisine bağlı kalır. */
+const histNames = new Map(), histDiffCache = new Map();
+function histNote(s, label, prev) {
+  const e = histNames.get(s) || {}; e.t = e.t || Date.now(); if (prev !== undefined && e.p === undefined) e.p = prev; if (label) e.l = String(label).slice(0, 80); histNames.set(s, e);
+  if (histNames.size > 600) histPrune();
+}
+// hiçbir sekmenin geçmişinde olmayan görüntülerin adları atılır (bellek düz kalır)
+function histPrune() {
+  const live = new Set(hist); for (const t of (typeof tabs !== 'undefined' && tabs) || []) for (const s of t.hist || []) live.add(s);
+  for (const k of histNames.keys()) if (!live.has(k)) histNames.delete(k);
+  for (const k of histDiffCache.keys()) if (!live.has(k)) histDiffCache.delete(k);
+}
+const HIST_KIND = {
+  wall: ['duvar', 'wall', 'walls'], op: ['kapı / pencere', 'opening', 'openings'], furn: ['eşya', 'item', 'items'], room: ['oda', 'room', 'rooms'],
+  slab: ['döşeme', 'slab', 'slabs'], void: ['boşluk', 'void', 'voids'], zone: ['alan', 'zone', 'zones'], section: ['kesit', 'section', 'sections'],
+  axis: ['aks', 'axis', 'axes'], dim: ['ölçü', 'dimension', 'dimensions'], text: ['yazı', 'text', 'texts'], sketch: ['kalem çizimi', 'sketch', 'sketches'], draft: ['çizgi', 'drafting line', 'drafting lines'],
+};
+const HIST_POS = new Set(['x', 'y', 'a', 'b', 'pts', 'rot', 'd', 'hp', 'bel']);
+const histCap = s => s.charAt(0).toLocaleUpperCase(lang === 'tr' ? 'tr' : 'en') + s.slice(1);
+function histKindName(k, n) { const d = HIST_KIND[k] || ['nesne', 'object', 'objects']; return L(d[0], n === 1 ? d[1] : d[2]); }
+// iki proje görüntüsü arasındaki farkı kısa bir eylem adına çevirir (saf: P'ye dokunmaz)
+function histDiffLabel(a, b) {
+  if (!a) return L('Başlangıç', 'Initial state');
+  let A, B; try { A = JSON.parse(a); B = JSON.parse(b); } catch (_) { return L('Değişiklik', 'Change'); }
+  const fa = A.floors || [], fb = B.floors || [];
+  if (fb.length > fa.length) return L('Kat ekle', 'Add floor');
+  if (fb.length < fa.length) return L('Kat sil', 'Delete floor');
+  const add = {}, del = {}, mov = {}, ed = {}; let n = 0;
+  const bump = (m, k) => { m[k] = (m[k] || 0) + 1; n++; };
+  fb.forEach((f, i) => {
+    const g = fa[i] || {};
+    for (const [arr, k] of Object.entries(KINDS)) {
+      const old = new Map((g[arr] || []).map(o => [o.id, o])), now = new Set();
+      for (const o of f[arr] || []) {
+        now.add(o.id); const p = old.get(o.id);
+        if (!p) { bump(add, k); continue; }
+        let pos = false, other = false;
+        for (const key of new Set([...Object.keys(o), ...Object.keys(p)])) if (JSON.stringify(o[key]) !== JSON.stringify(p[key])) { if (HIST_POS.has(key)) pos = true; else other = true; }
+        if (other) bump(ed, k); else if (pos) bump(mov, k);
+      }
+      for (const id of old.keys()) if (!now.has(id)) bump(del, k);
+    }
+  });
+  if (!n) {
+    if (A.name !== B.name) return L('Projeyi yeniden adlandır', 'Rename project');
+    if (fb.some((f, i) => f.name !== (fa[i] || {}).name)) return L('Katı yeniden adlandır', 'Rename floor');
+    if (JSON.stringify(A.layers) !== JSON.stringify(B.layers) || A.activeLayer !== B.activeLayer) return L('Katmanlar', 'Layers');
+    if (JSON.stringify(A.lib) !== JSON.stringify(B.lib)) return L('Kütüphane', 'Library');
+    return L('Proje ayarları', 'Project settings');
+  }
+  const one = (m, tr, en) => { const ks = Object.keys(m); if (ks.length !== 1) return null; const c = m[ks[0]], nm = histKindName(ks[0], c); return c === 1 ? L(histCap(nm) + ' ' + tr, en + ' ' + nm) : L(c + ' ' + nm + ' ' + tr, en + ' ' + c + ' ' + nm); };
+  const parts = [[add, 'ekle', 'Add'], [del, 'sil', 'Delete'], [mov, 'taşı', 'Move'], [ed, 'düzenle', 'Edit']].filter(([m]) => Object.keys(m).length);
+  if (parts.length === 1) { const r = one(...parts[0]); if (r) return r; const [, tr, en] = parts[0]; return L(n + ' nesne ' + tr, en + ' ' + n + ' objects'); }
+  // bir kapı / eşya eklemek ya da silmek komşu nesneleri de dokundurur (duvar, oda düzeni): ana eylem eklenen / silinen nesnedir
+  if (Object.keys(add).length === 1 && !Object.keys(del).length) return one(add, 'ekle', 'Add');
+  if (Object.keys(del).length === 1 && !Object.keys(add).length) return one(del, 'sil', 'Delete');
+  return L(n + ' nesne değişti', n + ' objects changed');
+}
+// i. adımın adı (commit(label) > fark), önbellekli
+function histLabel(i, h = hist) {
+  const s = h[i], e = histNames.get(s); if (e && e.l) return e.l;
+  const prev = e && e.p !== undefined ? e.p : i > 0 ? h[i - 1] : null, c = histDiffCache.get(s); // önceki görüntü kayıtlıysa o (150 sınırında baş kayar)
+  if (c && c.p === prev && c.lang === lang) return c.l;
+  const l = histDiffLabel(prev, s); histDiffCache.set(s, { p: prev, l, lang }); return l;
+}
+function histAgo(t) {
+  if (!t) return '';
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 60) return L('az önce', 'just now');
+  const m = Math.round(s / 60); if (m < 60) return L(m + ' dk önce', m + ' min ago');
+  const h = Math.round(m / 60); return L(h + ' sa önce', h + ' h ago');
+}
+// geçmişte i. adıma atla; sonraki adımlar yeni bir düzenlemeye kadar yinelenebilir kalır
+function histJump(i) {
+  if (typeof collab !== 'undefined' && collab.room) { toast(L('Canlı odada geçmiş listesi kullanılamaz — Geri al / Yinele kullanın', 'The history list is not available in a live room — use Undo / Redo')); return false; }
+  i = Math.round(+i); if (!(i >= 0 && i < hist.length) || i === hi) return false;
+  hi = i; restore(hist[hi]); autosave(); updateUndo();
+  return true;
+}
+function histMenuHtml() {
+  const rows = [];
+  for (let i = hist.length - 1; i >= 0; i--) {
+    const e = histNames.get(hist[i]), cls = i === hi ? ' cur' : i > hi ? ' fut' : '';
+    rows.push(`<button class="btn hist-row${cls}" data-hist="${i}"${i === hi ? ' aria-current="step"' : ''}><span class="hist-n">${i + 1}</span><span class="hist-l">${esc(histLabel(i))}</span><span class="hist-t">${i === hi ? L('şu an', 'now') : esc(histAgo(e && e.t))}</span></button>`);
+  }
+  return `<div class="dl-h">${L('Değişiklik geçmişi', 'Changes history')} · ${hist.length}</div><div class="hist-list">${rows.join('')}</div>`;
+}
+function histMenuOpen(on) {
+  let m = $('#histMenu'); const b = $('#bHist'); if (!b) return;
+  if (on == null) on = !m || m.hidden;
+  if (on && typeof collab !== 'undefined' && collab.room) { histJump(-1); on = false; }
+  if (!m) {
+    if (!on) return;
+    m = document.createElement('div'); m.id = 'histMenu'; m.className = 'dl-menu hist-menu'; m.hidden = true; document.body.appendChild(m);
+    m.addEventListener('click', e => { const r = e.target.closest('[data-hist]'); if (!r) return; histJump(r.dataset.hist); histMenuOpen(true); });
+  }
+  m.hidden = !on; b.setAttribute('aria-expanded', String(on)); b.classList.toggle('on', on);
+  if (!on) return;
+  m.innerHTML = histMenuHtml();
+  const r = b.getBoundingClientRect(); m.style.top = Math.round(r.bottom + 4) + 'px'; m.style.left = Math.round(Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))) + 'px';
+  const cur = m.querySelector('.cur'); if (cur) cur.scrollIntoView({ block: 'nearest' });
 }
 /* ---------- Çizim katmanları (issue #32) ----------
    P.layers = [{ id, name, color, vis, lock, print }], P.activeLayer = id. '0' = Varsayılan katman, silinemez.
@@ -9944,7 +10052,7 @@ function onPropsClick(e) {
   if (a === 'grpUnlink') { const c = varContainer(); if (c && c.type === 'group') unlinkGroup(c.rec); return; }
   if (a === 'group') return groupSel();
   if (a === 'ungroup') return ungroupSel();
-  if (a === 'grpJoin') { const c = varContainer(); if (c && c.type === 'join') { joinGroup(c.rec, c.os); sel = groupMemberIds(c.rec.id); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L('Gruba eklendi – düzenler korundu', 'Added to the group – layouts kept')); } return; }
+  if (a === 'grpJoin') { const c = varContainer(); if (c && c.type === 'merge') { const m = mergeAdjustable(c.os); if (m) { sel = groupMemberIds(m.rec.id); commit(L('Grupları birleştir', 'Merge groups')); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L(`Tek ayarlanabilir grup – ${m.n} düzen`, `One adjustable group – ${m.n} layouts`)); } return; } if (c && c.type === 'join') { joinGroup(c.rec, c.os); sel = groupMemberIds(c.rec.id); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L('Gruba eklendi – düzenler korundu', 'Added to the group – layouts kept')); } return; }
   if (a === 'grpEdit') { const c = varContainer(); if (ui.grpEdit && (!c || c.type !== 'group' || c.rec.id === ui.grpEdit.id)) stopGrpEdit(); else if (c && c.type === 'group') startGrpEdit(c.rec); refresh(); return; }
   if (a === 'varInit' || a === 'varSave' || a === 'varNew' || a === 'varDel' || a === 'varGo' || a === 'varNext') return varAction(a, b.dataset.idx != null ? +b.dataset.idx : null);
   for (const { kind, o } of os) {
@@ -10598,16 +10706,12 @@ function groupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind]);
   if (gs.length < 2) { toast(L('Gruplamak için en az 2 nesne seçin', 'Select at least 2 objects to group')); return; }
   if (new Set(gs.map(x => x.floorIdx ?? fi)).size > 1) { toast(L('Gruplamak için aynı kattaki nesneleri seçin (katlar arası için 🔗 bağla)', 'Select objects on the same floor to group (use 🔗 link across floors)')); return; }
-  const grps = [...new Set(gs.map(x => x.o.grp).filter(Boolean))];
-  const g = grps.length === 1 ? grps[0] : uid(); // tek grup seçiliyse onu genişlet (düzenler korunur)
-  const f = F(); f.groups = f.groups || [];
-  const old = grps.length === 1 && f.groups.find(x => x.id === g);
-  if (old) joinGroup(old, gs.filter(x => !x.o.grp)); // yeni üyeler diğer düzenlere de mevcut konumlarıyla girer
-  gs.forEach(({ o }) => o.grp = g);
-  if (!f.groups.some(x => x.id === g)) f.groups.push({ id: g, vars: [], idx: 0 });
-  pruneGroups();
-  commit(); refresh();
-  toast(L('Seçili nesneler gruplandı – birlikte taşınırlar', 'Selected objects grouped – they move together'));
+  const m = mergeAdjustable(gs); // #207: düzenli gruplar / odalar tek ayarlanabilir grupta birleşir, düzenler korunur
+  if (!m) return;
+  sel = groupMemberIds(m.rec.id);
+  commit(L('Grupla', 'Group')); refresh();
+  if (ui.view3d && T3) schedBuild3D();
+  toast(m.n ? L(`Tek ayarlanabilir grup – ${m.n} düzen, tıklayınca hepsi birlikte değişir`, `One adjustable group – ${m.n} layouts, a click switches all members together`) : L('Seçili nesneler gruplandı – birlikte taşınırlar', 'Selected objects grouped – they move together'));
 }
 /* ---------- Grup üyelerini düzenleme (gruba duvar/nesne ekle, düzene göre tek tek konumla) ---------- */
 function joinGroup(rec, objs) {
@@ -10623,6 +10727,68 @@ function joinGroup(rec, objs) {
     }
   }
   return objs.length;
+}
+/* #207: ayarlanabilir şeyleri (düzenli gruplar, kendi düzenleri olan odalar, düz nesneler) TEK ayarlanabilir grupta birleştirir.
+   Hedef = en çok düzeni olan grup (kimliği korunur, katlar arası bağ sürer). Düzen k'de her üye kendi kaynağının k. pozunu alır;
+   kaynağın o kadar düzeni yoksa ya da düz nesneyse mevcut pozunu. Etkin düzende herkes şu anki yerinde kalır (hiçbir şey zıplamaz).
+   Birleşen odaların r.vars / r.vIdx kayıtları ve eski grup kayıtları kalkar; başka kayıtlarda kalan pozları temizlenir. */
+function mergeAdjustable(objs, f = F()) {
+  objs = objs.filter(x => GROUPABLE[x.kind]); if (!objs.length) return null;
+  f.groups = f.groups || [];
+  const recs = [], rooms = [], plain = [];
+  for (const x of objs) {
+    const rec = x.o.grp && f.groups.find(g => g.id === x.o.grp);
+    if (rec) { if (!recs.includes(rec)) recs.push(rec); }
+    else if (x.kind === 'room' && (x.o.vars || []).length) { if (!rooms.includes(x.o)) rooms.push(x.o); }
+    else if (!x.o.grp || !recs.some(r => r.id === x.o.grp)) plain.push(x);
+  }
+  const own = new Set(recs.map(r => r.id)), byId = id => find(id, f);
+  const ok = fd => fd && GROUPABLE[fd.kind] && (!fd.o.grp || own.has(fd.o.grp)); // başka bir gruba ait iç nesne alınmaz (ilk-gelen sahiplik)
+  const memb = gid => { const ids = []; for (const k in KINDS) for (const o of f[k] || []) if (o.grp === gid) ids.push(o.id); return ids; };
+  const src = [];
+  for (const rec of recs) src.push({ rec, ids: memb(rec.id), vars: clonePoses(rec.vars || []), idx: rec.idx ?? 0 });
+  for (const r of rooms) {
+    const ids = new Set([r.id]); for (const v of r.vars) for (const id in v.poses || {}) ids.add(id);
+    src.push({ room: r, ids: [...ids].filter(id => ok(byId(id))), vars: clonePoses(r.vars), idx: r.vIdx ?? 0 });
+  }
+  const taken = new Set(src.flatMap(s => s.ids));
+  const rest = plain.filter(x => !taken.has(x.o.id)).map(x => x.o.id);
+  if (rest.length) src.push({ ids: rest, vars: [], idx: 0 });
+  const n = Math.max(0, ...src.map(s => s.vars.length));
+  const lead = src.filter(s => s.vars.length === n).sort((a, b) => (b.rec ? 1 : 0) - (a.rec ? 1 : 0))[0] || src[0];
+  const tgt = lead.rec || recs[0] || { id: uid(), vars: [], idx: 0 };
+  const idx = n ? clamp(lead.idx, 0, n - 1) : 0;
+  const ids = [...new Set(src.flatMap(s => s.ids))];
+  const cur = {}; for (const id of ids) { const fd = byId(id); if (fd) cur[id] = snapPose(fd.kind, fd.o); }
+  const vars = [];
+  for (let k = 0; k < n; k++) {
+    const lv = lead.vars[k] || {}, v = { label: lv.label || varLabel(k, parseInt((lead.vars[0] || {}).label) || nextVarPrefix()), poses: {}, base: {} };
+    if (lv.draft) v.draft = lv.draft;
+    for (const s of src) {
+      const sv = k === idx ? null : s.vars[k];
+      for (const id of s.ids) {
+        if (!cur[id]) continue;
+        const p = (sv && sv.poses && sv.poses[id]) || cur[id];
+        v.poses[id] = clonePoses(p); v.base[id] = clonePoses((sv && sv.base && sv.base[id]) || p);
+      }
+    }
+    vars.push(v);
+  }
+  dropPoseOrphans(ids, true, f); // uninvolved kayıtlarda da kalmasın: groupPoses başka sahipte kalan pozu atlar
+  for (const r of rooms) { delete r.vars; delete r.vIdx; }
+  for (const id of ids) { const fd = byId(id); if (fd) fd.o.grp = tgt.id; }
+  tgt.vars = vars; tgt.idx = idx;
+  if (!f.groups.includes(tgt)) f.groups.push(tgt);
+  pruneGroups(f);
+  if (n && f === F()) grpAlignVars(tgt.id); // başka kattaki bağlı kayıtlar da aynı düzen sayısını alır (#86)
+  return { rec: tgt, n, merged: src.length };
+}
+// seçimde birden çok ayarlanabilir kaynak var mı (birleştirme gerekir)
+function adjSources(groupable) {
+  const gs = new Set(groupable.map(x => x.o.grp).filter(Boolean));
+  const rooms = groupable.filter(x => x.kind === 'room' && !x.o.grp && (x.o.vars || []).length);
+  const hasVars = [...gs].some(g => grpHasVars(g)) || rooms.length > 0;
+  return { n: gs.size + rooms.length, hasVars };
 }
 function grpEditing(o) {
   const g = ui.grpEdit;
@@ -10650,10 +10816,13 @@ function grpEditAbsorb() {
     for (const o of f[arr] || []) {
       if (g.known.has(o.id)) continue;
       g.known.add(o.id);
-      if (GROUPABLE[kind] && !o.grp) fresh.push({ kind, o });
+      if (GROUPABLE[kind] && o.grp !== g.id) fresh.push({ kind, o });
     }
   }
-  if (joinGroup(rec, fresh)) toast(L(`${fresh.length} yeni nesne gruba eklendi`, `${fresh.length} new object(s) added to the group`));
+  if (fresh.some(x => x.o.grp || (x.kind === 'room' && (x.o.vars || []).length))) { // #207: kendi grubu / düzeni olan yeni nesne
+    const all = groupMemberIds(g.id).map(id => find(id)).filter(Boolean).concat(fresh);
+    if (mergeAdjustable(all)) toast(L(`${fresh.length} yeni nesne gruba eklendi`, `${fresh.length} new object(s) added to the group`));
+  } else if (joinGroup(rec, fresh)) toast(L(`${fresh.length} yeni nesne gruba eklendi`, `${fresh.length} new object(s) added to the group`));
 }
 function ungroupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind] && x.o.grp);
@@ -10979,6 +11148,8 @@ function varContainer() {
     if (adjRoom) return { type: 'room', o: adjRoom };
   }
   const groupable = os.filter(x => GROUPABLE[x.kind]);
+  const as = adjSources(groupable);
+  if (as.n >= 2 && as.hasVars) return { type: 'merge', os: groupable }; // #207: iki ayarlanabilir kaynak → tek grupta birleştir
   if (gs.length === 1 && groupable.every(x => !x.o.grp || x.o.grp === gs[0]) && groupable.some(x => !x.o.grp)) {
     const rec = (F().groups || []).find(g => g.id === gs[0]);
     if (rec) return { type: 'join', rec, os: groupable.filter(x => !x.o.grp) }; // grup + gruplanmamış nesneler: gruba ekle
@@ -10987,7 +11158,7 @@ function varContainer() {
   return null;
 }
 function varAction(a, targetIdx) {
-  let c = varContainer(); if (!c || c.type === 'join') return;
+  let c = varContainer(); if (!c || c.type === 'join' || c.type === 'merge') return;
   if (c.type === 'potential') {
     if (a !== 'varInit') return;
     const g = uid(), f = F(); f.groups = f.groups || [];
@@ -11075,6 +11246,7 @@ function grpEditHtml(c) {
 function variantUIHtml() { return variantBodyHtml() + grpLinkHtml(); } // + başka kattaki gruba bağlama (#86)
 function variantBodyHtml() {
   const c = varContainer(); if (!c) return '';
+  if (c.type === 'merge') return `<div class="row"><button class="btn sm primary" data-act="grpJoin">🔗 ${L('Tek ayarlanabilir grupta birleştir', 'Merge into one adjustable group')}</button></div><p class="muted" style="margin:0 0 6px">${L('Seçili gruplar ve düzenli odalar tek grup olur; kayıtlı düzenler korunur ve bir tıklama hepsini birlikte değiştirir.', 'The selected groups and rooms with layouts become one group; saved layouts are kept and one click switches them all together.')}</p>`;
   if (c.type === 'join') return `<div class="row"><button class="btn sm primary" data-act="grpJoin">➕ ${L('Gruba ekle', 'Add to group')} (${c.os.length})</button></div><p class="muted" style="margin:0 0 6px">${L('Seçili nesneler mevcut gruba katılır; kayıtlı düzenler korunur.', 'The selected objects join the existing group; saved layouts are kept.')}</p>`;
   if (c.type === 'group' && !(c.rec.vars || []).length) return grpEditHtml(c) + `<div class="row"><button class="btn sm primary" data-act="varInit">🔄 ${L('Ayarlanabilir Yap', 'Make Adjustable')}</button></div><p class="muted" style="margin:0 0 6px">${L('Mevcut düzeni 1a olarak kaydeder; sonraki düzenleri ➕ ile ekleyin, kanvasta tıklayarak geçin.', 'Saves the current layout as 1a; add more with ➕, cycle by clicking on canvas.')}</p>`;
   const vars = c.type === 'room' ? (c.o.vars || []) : c.type === 'group' ? (c.rec.vars || []) : [];
@@ -11274,6 +11446,7 @@ function cmdList() {
   return tools.concat([
     act('undo', '↶', 'Geri al', 'Undo', 'Ctrl+Z', undo, true),
     act('redo', '↷', 'Yinele', 'Redo', 'Ctrl+Y', redo, true),
+    act('history', '🕘', 'Değişiklik geçmişi', 'Changes history', '', () => setTimeout(() => histMenuOpen(true), 0), true, 'history undo list geçmiş geri al liste adım step'),
     act('2d', '▭', '2B katı görünüm', '2D solid view', '', () => { ui.outline = false; show3D(false); syncViewSwitch(); render(); }, true, 'plan'),
     act('outline', '⌗', '2B çizgisel / CAD görünümü', '2D outline / CAD view', 'J', () => setOutline(!ui.outline), true, 'cad wireframe çizgi outline'),
     act('3d', '🧊', '3B görünüm', '3D view', '', () => show3D(true), true, 'model'),
@@ -13180,7 +13353,9 @@ function adoptActive(o) {
   absorbTextures(o);
   const s = JSON.stringify(normalizeProject(o));
   if (s === JSON.stringify(P)) return false;
+  const prev = hist[hi];
   hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 150) hist.shift(); hi = hist.length - 1;
+  histNote(s, L('Başka yerden güncellendi', 'Updated from elsewhere'), prev);
   restore(s); ensureTextures(P); syncTab(); autosave(); updateUndo();
   return true;
 }
@@ -21775,6 +21950,7 @@ function applyLangUI() {
   $('#bOpen').title = L('Dosya aç: JSON, IFC (Revit, ArchiCAD…) ya da DXF (AutoCAD…) — dosyayı tuvale sürükleyip de bırakabilirsiniz', 'Open file: JSON, IFC (Revit, ArchiCAD…) or DXF (AutoCAD…) — you can also drag the file onto the canvas');
   $('#bUndo').title = L('Geri al (Ctrl+Z)', 'Undo (Ctrl+Z)');
   $('#bRedo').title = L('Yinele (Ctrl+Y)', 'Redo (Ctrl+Y)');
+  if ($('#bHist')) $('#bHist').title = L('Değişiklik geçmişi – bir adıma tıklayıp oraya dönün', 'Changes history – click a step to go back to it');
   $('#bPrint').textContent = L('🖨 PDF / Yazdır', '🖨 PDF / Print');
   $('#bDl').textContent = L('⬇ İndir ▾', '⬇ Download ▾'); $('#bDl').title = L('İndir: görüntü (PNG, SVG, PDF) ya da dosya (JSON, DXF, IFC, Revit)', 'Download: an image (PNG, SVG, PDF) or a file (JSON, DXF, IFC, Revit)');
   $('#zIn').title = L('Yakınlaştır', 'Zoom in'); $('#zOut').title = L('Uzaklaştır', 'Zoom out'); $('#zFit').title = L('Sığdır (0)', 'Zoom to fit (0)');
@@ -21891,6 +22067,10 @@ $('#bRevit').onclick = () => exportBim('revit');
 $('#bIfc').onclick = () => exportBim('ifc');
 $('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpModal; $('#bAi').onclick = () => aiModal();
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
+if ($('#bHist')) $('#bHist').onclick = e => { e.stopPropagation(); histMenuOpen(); }; // #208
+document.addEventListener('pointerdown', e => { if (!(e.target.closest && e.target.closest('#histMenu, #bHist'))) { const m = $('#histMenu'); if (m && !m.hidden) histMenuOpen(false); } }, true);
+document.addEventListener('keydown', e => { const m = $('#histMenu'); if (e.key === 'Escape' && m && !m.hidden) { histMenuOpen(false); e.stopPropagation(); } }, true);
+window.addEventListener('resize', () => { const m = $('#histMenu'); if (m && !m.hidden) histMenuOpen(false); });
 $('#bPng').onclick = e => (ui.view3d ? export3DRender(e && e.shiftKey) : exportPng()); $('#bPrint').onclick = exportPrint;
 $('#bSvg').onclick = () => download(fname('svg'), new Blob([exportSvg().svg], { type: 'image/svg+xml' }));
 $('#b2d').onclick = () => { ui.outline = false; show3D(false); syncViewSwitch(); render(); };

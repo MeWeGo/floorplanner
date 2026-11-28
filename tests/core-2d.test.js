@@ -53,6 +53,7 @@ function makeHistorySandbox(initialP) {
     const syncCeilMounts = () => {};
     const followRooms = () => {}, wallSigReset = () => {}; // #201: own smoke check
     const tour = null, tourCheck = () => {}; // #197: own smoke check
+    const histNote = () => {}; // #208: own tests (history-merge)
     const autosave = () => { counts.autosave++; };
     const updateUndo = () => { counts.updateUndo++; };
     const fp3DOn = () => false;

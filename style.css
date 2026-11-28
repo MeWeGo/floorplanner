@@ -362,6 +362,16 @@ header input#pname:focus {
 .dl-menu .btn:hover { background: var(--line); }
 .dl-h { padding: 6px 8px 2px; color: var(--muted); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; }
 #bDl.on { background: var(--line); }
+/* Changes history (#208) */
+#bHist.on { background: var(--line); }
+.hist-menu { min-width: 260px; max-width: min(360px, calc(100vw - 16px)); }
+.hist-list { display: flex; flex-direction: column; gap: 1px; max-height: min(60vh, 420px); overflow-y: auto; }
+.hist-row { display: flex; gap: 8px; align-items: baseline; }
+.hist-n { min-width: 2.2em; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.hist-l { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-t { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.hist-row.cur { background: var(--accent-soft, var(--line)); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent, #2563eb); }
+.hist-row.fut { opacity: 0.5; }
 
 /* My Projects: one section per group */
 .pgrp-h { display: flex; align-items: center; gap: 6px; margin: 14px 0 8px; font-size: 13px; }
