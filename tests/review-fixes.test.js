@@ -131,3 +131,11 @@ test('a followed room moved on its own stops following its walls; the warning sh
   R.fl.walls[0].b.x = 70; R.followRooms();
   assert.strictEqual(r.wb, undefined);
 });
+
+test('source files hold no stray control characters (a shell edit once turned \b into a backspace and broke ?tour=off)', () => {
+  for (const f of ['app.js', 'mcp/server.js', 'index.html', 'style.css']) {
+    const bad = read(f).split(/\n/).map((l, i) => /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(l) ? `${f}:${i + 1}` : null).filter(Boolean);
+    assert.deepStrictEqual(bad, [], 'control characters in ' + bad.join(', '));
+  }
+  assert.ok(src.includes('tour=off' + String.fromCharCode(92) + 'b/'), 'TOUR_OFF regex keeps its word boundary');
+});

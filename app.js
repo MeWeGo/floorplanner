@@ -11643,7 +11643,7 @@ const TOUR_STEPS = [
   { t: ['Mobilya koyun', 'Place furniture'], d: ['Kütüphaneden bir eşya seçip plana tıklayın (R döndürür).', 'Pick an item in the library and click in the plan (R turns it).'], at: ['#lib', '#bLib', '#tools [data-tool="furn"]'], n: f => f.furn.length },
   { t: ['3B olarak görün', 'See it in 3D'], d: ['3B düğmesine basın; sürükleyerek döndürün, 👁 ile içinde gezin.', 'Press 3D; drag to orbit, use 👁 to walk inside.'], at: ['#b3d'], v3d: true },
 ];
-const TOUR_OFF = /[?&]tour=off/.test(location.search); // test tarayıcısı: tur kendiliğinden açılmaz
+const TOUR_OFF = /[?&]tour=off\b/.test(location.search); // test tarayıcısı: tur kendiliğinden açılmaz
 const tourSeen = () => TOUR_OFF || !!localStorage.getItem('fp_tour');
 let tour = null;
 function tourTarget(st) { for (const s of st.at) { const el = document.querySelector(s); if (el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden') return el; } return null; }
