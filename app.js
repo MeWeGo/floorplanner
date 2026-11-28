@@ -9120,7 +9120,14 @@ function startMove(raw, e) {
   }
   const first = objs.find(x => orig.has(x.o.id)); let anchor = { x: raw.x, y: raw.y };
   if (first) { const o = orig.get(first.o.id); anchor = AB_KINDS.has(first.kind) ? o.a : PTS_KINDS.has(first.kind) ? o.pts[0] : first.kind === 'op' ? anchor : { x: o.x, y: o.y }; }
-  ui.drag = { type: 'move', start: raw, orig, conn, roomInner, anchor, moved: false, locked: objs.length - orig.size };
+  // katlar arası grup (#86): grubun bu kattaki tüm üyeleri taşınıyorsa öteki katlardaki üyeleri de aynı kadar kayar (3B'deki gibi)
+  const xtra = [], sset2 = new Set(sel);
+  if (!(e && e.altKey)) for (const g of new Set(objs.map(x => x.o.grp).filter(Boolean))) {
+    if (!groupMemberIds(g).every(id => sset2.has(id))) continue;
+    for (const l of grpLinked(g)) if (l.i !== fi) for (const k in KINDS) for (const o of P.floors[l.i][k] || [])
+      if (o.grp === g && !isLocked(o) && !sset2.has(o.id)) xtra.push({ kind: KINDS[k], o, g: JSON.parse(JSON.stringify(o)) });
+  }
+  ui.drag = { type: 'move', start: raw, orig, conn, roomInner, xtra, anchor, moved: false, locked: objs.length - orig.size };
   if (typeof collabSoftLockWarn === 'function' && orig.size) collabSoftLockWarn([...orig.keys()]);
 }
 function doMove(raw, e) {
@@ -9154,6 +9161,11 @@ function doMove(raw, e) {
   }
   for (const c of d.conn) { c.w[c.e] = { x: c.o.x + dx, y: c.o.y + dy }; }
   if (d.roomInner) for (const it of d.roomInner) { it.o.x = it.g.x + dx; it.o.y = it.g.y + dy; }
+  if (d.xtra) for (const { kind, o, g } of d.xtra) { // öteki katlardaki grup üyeleri (açıklıklar duvarlarını izler)
+    if (AB_KINDS.has(kind)) { o.a = { x: g.a.x + dx, y: g.a.y + dy }; o.b = { x: g.b.x + dx, y: g.b.y + dy }; }
+    else if (PTS_KINDS.has(kind)) { o.pts = g.pts.map(p => ({ x: p.x + dx, y: p.y + dy })); xfHp(o, g, p => ({ x: p.x + dx, y: p.y + dy })); }
+    else if (g.x != null) { o.x = g.x + dx; o.y = g.y + dy; }
+  }
   if (typeof collabSendDrag === 'function') collabSendDrag([...d.orig.keys()], dx, dy);
   scheduleRender();
 }
@@ -9332,7 +9344,7 @@ function renderProps() {
   const acts = (extra = '') => '<div class="acts-pin">' + floorBadgeHtml() + lockNote + selLayerHtml(os) + xf + `<div class="row">${extra}${lockBtn}${hideBtn}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div></div>`;
   if (kinds.length > 1) {
     const gs = os.filter(x => GROUPABLE[x.kind]);
-    const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
+    const grp = gs.length >= 2 ? groupBtnHtml(gs) : '';
     const ungrp = gs.some(x => x.o.grp) ? `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>` : '';
     el.innerHTML = `<h3>${os.length} ${L('nesne seçili', 'objects selected')}</h3><p class="muted">${L('Taşımak için sürükle, silmek için Del.', 'Drag to move, press Del to delete.')}</p>${grp}${ungrp}${variantUIHtml()}${acts()}${hiddenPanelHtml(true)}`; return;
   }
@@ -9584,7 +9596,7 @@ function renderProps() {
   }
   if (LAYER_ARR[k]) h += `<div class="row layer-row" title="${L('Çakışan nesnelerde çizim sırası (2B ve 3B)', 'Drawing order where objects overlap (2D and 3D)')}"><span class="muted">${L('Katman', 'Layer')}</span><button class="btn sm" data-act="layer" data-dir="front" title="${L('En öne getir', 'Bring to front')} (Ctrl+Shift+])">⤒</button><button class="btn sm" data-act="layer" data-dir="up" title="${L('Bir öne', 'Bring forward')} (Ctrl+])">↑</button><button class="btn sm" data-act="layer" data-dir="down" title="${L('Bir arkaya', 'Send backward')} (Ctrl+[)">↓</button><button class="btn sm" data-act="layer" data-dir="back" title="${L('En arkaya gönder', 'Send to back')} (Ctrl+Shift+[)">⤓</button></div>`;
   const gsAll = os.filter(x => GROUPABLE[x.kind]);
-  if (gsAll.length >= 2) h += `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>`;
+  if (gsAll.length >= 2) h += groupBtnHtml(gsAll);
   if (gsAll.some(x => x.o.grp)) h += `<div class="row"><button class="btn sm" data-act="ungroup">📦✕ ${L('Grubu çöz', 'Ungroup')}</button></div>`;
   h += variantUIHtml();
   h += hiddenPanelHtml(true);
@@ -10052,7 +10064,7 @@ function onPropsClick(e) {
   if (a === 'grpUnlink') { const c = varContainer(); if (c && c.type === 'group') unlinkGroup(c.rec); return; }
   if (a === 'group') return groupSel();
   if (a === 'ungroup') return ungroupSel();
-  if (a === 'grpJoin') { const c = varContainer(); if (c && c.type === 'merge') { const m = mergeAdjustable(c.os); if (m) { sel = groupMemberIds(m.rec.id); commit(L('Grupları birleştir', 'Merge groups')); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L(`Tek ayarlanabilir grup – ${m.n} düzen`, `One adjustable group – ${m.n} layouts`)); } return; } if (c && c.type === 'join') { joinGroup(c.rec, c.os); sel = groupMemberIds(c.rec.id); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L('Gruba eklendi – düzenler korundu', 'Added to the group – layouts kept')); } return; }
+  if (a === 'grpJoin') { const c = varContainer(); if (c && c.type === 'merge') { const m = groupObjs(c.os); if (m) { commit(L('Grupları birleştir', 'Merge groups')); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L(`Tek ayarlanabilir grup – ${m.n} düzen`, `One adjustable group – ${m.n} layouts`)); } return; } if (c && c.type === 'join') { joinGroup(c.rec, c.os); sel = groupMemberIds(c.rec.id); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); toast(L('Gruba eklendi – düzenler korundu', 'Added to the group – layouts kept')); } return; }
   if (a === 'grpEdit') { const c = varContainer(); if (ui.grpEdit && (!c || c.type !== 'group' || c.rec.id === ui.grpEdit.id)) stopGrpEdit(); else if (c && c.type === 'group') startGrpEdit(c.rec); refresh(); return; }
   if (a === 'varInit' || a === 'varSave' || a === 'varNew' || a === 'varDel' || a === 'varGo' || a === 'varNext') return varAction(a, b.dataset.idx != null ? +b.dataset.idx : null);
   for (const { kind, o } of os) {
@@ -10705,13 +10717,51 @@ const GROUPABLE = { wall: 1, room: 1, furn: 1, dim: 1, text: 1, slab: 1 }; // d�
 function groupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind]);
   if (gs.length < 2) { toast(L('Gruplamak için en az 2 nesne seçin', 'Select at least 2 objects to group')); return; }
-  if (new Set(gs.map(x => x.floorIdx ?? fi)).size > 1) { toast(L('Gruplamak için aynı kattaki nesneleri seçin (katlar arası için 🔗 bağla)', 'Select objects on the same floor to group (use 🔗 link across floors)')); return; }
-  const m = mergeAdjustable(gs); // #207: düzenli gruplar / odalar tek ayarlanabilir grupta birleşir, düzenler korunur
+  const m = groupObjs(gs); // #207: düzenli gruplar / odalar tek ayarlanabilir grupta birleşir, düzenler korunur; katlar arası da olur
   if (!m) return;
-  sel = groupMemberIds(m.rec.id);
   commit(L('Grupla', 'Group')); refresh();
   if (ui.view3d && T3) schedBuild3D();
-  toast(m.n ? L(`Tek ayarlanabilir grup – ${m.n} düzen, tıklayınca hepsi birlikte değişir`, `One adjustable group – ${m.n} layouts, a click switches all members together`) : L('Seçili nesneler gruplandı – birlikte taşınırlar', 'Selected objects grouped – they move together'));
+  toast(m.floors > 1 ? L(`${m.floors} kat tek grupta – birlikte taşınır${m.n ? ', düzenleri birlikte değişir' : ''}`, `One group across ${m.floors} floors – moves together${m.n ? ', layouts switch together' : ''}`)
+    : m.n ? L(`Tek ayarlanabilir grup – ${m.n} düzen, tıklayınca hepsi birlikte değişir`, `One adjustable group – ${m.n} layouts, a click switches all members together`) : L('Seçili nesneler gruplandı – birlikte taşınırlar', 'Selected objects grouped – they move together'));
+}
+/* Gruplama / birleştirme girişi: tek katta mergeAdjustable (#207). Seçim birden çok kata yayılıyorsa ya da birleşen bir grup başka
+   katlara bağlıysa (#86) her kat kendi kaydında birleşir ve kayıtlar aynı kimliği alır (bağlı): birlikte taşınır, düzenler birlikte değişir.
+   Birleşen grupların öteki katlardaki üyeleri de gelir, böylece bağ kopmaz. Seçimi grubun üyelerine ayarlar. */
+function groupFloorSet(objs) {
+  const gids = new Set(objs.map(x => x.o.grp).filter(Boolean)), fls = new Set(objs.map(x => x.floorIdx ?? fi));
+  for (const g of gids) for (const l of grpLinked(g)) fls.add(l.i);
+  return { gids, fls };
+}
+function groupObjs(objs) {
+  objs = objs.filter(x => GROUPABLE[x.kind]); if (!objs.length) return null;
+  const { gids, fls } = groupFloorSet(objs);
+  if (fls.size < 2) {
+    const m = mergeAdjustable(objs); if (!m) return null;
+    sel = groupMemberIds(m.rec.id);
+    return { id: m.rec.id, n: m.n, floors: 1 };
+  }
+  const vn = g => Math.max(0, ...grpLinked(g).map(l => (l.rec.vars || []).length));
+  const tid = [...gids].sort((a, b) => vn(b) - vn(a) || grpLinked(b).length - grpLinked(a).length)[0] || uid();
+  let n = 0, used = 0;
+  for (const i of [...fls].sort((a, b) => a - b)) {
+    const f = P.floors[i], mine = objs.filter(x => (x.floorIdx ?? fi) === i).map(x => ({ kind: x.kind, o: x.o }));
+    for (const k in KINDS) for (const o of f[k] || []) if (o.grp && gids.has(o.grp) && !mine.some(x => x.o === o)) mine.push({ kind: KINDS[k], o });
+    if (!mine.length) continue;
+    const m = withFloor(i, () => mergeAdjustable(mine, f, tid));
+    if (m) { n = Math.max(n, m.n); used++; }
+  }
+  if (!used) return null;
+  grpAlignVars(tid);
+  sel = ui.view3d ? groupMemberIdsAny(tid) : groupMemberIds(tid);
+  return { id: tid, n, floors: used };
+}
+// Grupla düğmesi: seçimde 2+ ayrı grup varsa "Grupları birleştir", birden çok kat varsa "Katlar arası grupla" der
+function groupBtnHtml(gs) {
+  const ng = new Set(gs.map(x => x.o.grp).filter(Boolean)).size, nf = new Set(gs.map(x => x.floorIdx ?? fi)).size;
+  const lbl = ng >= 2 ? L('Grupları birleştir', 'Merge groups') : nf > 1 ? L('Katlar arası grupla', 'Group across floors') : L('Grupla', 'Group');
+  const tip = nf > 1 ? L('Farklı katlardaki nesneler tek grup olur: birlikte taşınır, düzenleri birlikte değişir', 'Objects on different floors become one group: they move together and their layouts switch together')
+    : ng >= 2 ? L('Seçili gruplar tek grupta birleşir', 'The selected groups become one group') : '';
+  return `<div class="row"><button class="btn sm primary" data-act="group" title="${tip} (Ctrl+G)">📦 ${lbl}</button></div>`;
 }
 /* ---------- Grup üyelerini düzenleme (gruba duvar/nesne ekle, düzene göre tek tek konumla) ---------- */
 function joinGroup(rec, objs) {
@@ -10732,7 +10782,7 @@ function joinGroup(rec, objs) {
    Hedef = en çok düzeni olan grup (kimliği korunur, katlar arası bağ sürer). Düzen k'de her üye kendi kaynağının k. pozunu alır;
    kaynağın o kadar düzeni yoksa ya da düz nesneyse mevcut pozunu. Etkin düzende herkes şu anki yerinde kalır (hiçbir şey zıplamaz).
    Birleşen odaların r.vars / r.vIdx kayıtları ve eski grup kayıtları kalkar; başka kayıtlarda kalan pozları temizlenir. */
-function mergeAdjustable(objs, f = F()) {
+function mergeAdjustable(objs, f = F(), tid = null) { // tid: katlar arası birleştirmede tüm katların ortak grup kimliği (groupObjs hizalar)
   objs = objs.filter(x => GROUPABLE[x.kind]); if (!objs.length) return null;
   f.groups = f.groups || [];
   const recs = [], rooms = [], plain = [];
@@ -10756,7 +10806,8 @@ function mergeAdjustable(objs, f = F()) {
   if (rest.length) src.push({ ids: rest, vars: [], idx: 0 });
   const n = Math.max(0, ...src.map(s => s.vars.length));
   const lead = src.filter(s => s.vars.length === n).sort((a, b) => (b.rec ? 1 : 0) - (a.rec ? 1 : 0))[0] || src[0];
-  const tgt = lead.rec || recs[0] || { id: uid(), vars: [], idx: 0 };
+  const tgt = lead.rec || recs[0] || { id: tid || uid(), vars: [], idx: 0 };
+  if (tid) tgt.id = tid;
   const idx = n ? clamp(lead.idx, 0, n - 1) : 0;
   const ids = [...new Set(src.flatMap(s => s.ids))];
   const cur = {}; for (const id of ids) { const fd = byId(id); if (fd) cur[id] = snapPose(fd.kind, fd.o); }
@@ -10778,9 +10829,10 @@ function mergeAdjustable(objs, f = F()) {
   for (const r of rooms) { delete r.vars; delete r.vIdx; }
   for (const id of ids) { const fd = byId(id); if (fd) fd.o.grp = tgt.id; }
   tgt.vars = vars; tgt.idx = idx;
+  f.groups = f.groups.filter(g => g === tgt || g.id !== tgt.id); // aynı kimlikte ikinci kayıt kalmasın
   if (!f.groups.includes(tgt)) f.groups.push(tgt);
   pruneGroups(f);
-  if (n && f === F()) grpAlignVars(tgt.id); // başka kattaki bağlı kayıtlar da aynı düzen sayısını alır (#86)
+  if (n && !tid && f === F()) grpAlignVars(tgt.id); // başka kattaki bağlı kayıtlar da aynı düzen sayısını alır (#86)
   return { rec: tgt, n, merged: src.length };
 }
 // seçimde birden çok ayarlanabilir kaynak var mı (birleştirme gerekir)
@@ -10821,15 +10873,27 @@ function grpEditAbsorb() {
   }
   if (fresh.some(x => x.o.grp || (x.kind === 'room' && (x.o.vars || []).length))) { // #207: kendi grubu / düzeni olan yeni nesne
     const all = groupMemberIds(g.id).map(id => find(id)).filter(Boolean).concat(fresh);
-    if (mergeAdjustable(all)) toast(L(`${fresh.length} yeni nesne gruba eklendi`, `${fresh.length} new object(s) added to the group`));
+    const m = mergeAdjustable(all, f, g.id); // düzenlenen grubun kimliği kalır: katlar arası bağı kopmaz
+    if (m) grpAlignVars(g.id);
+    if (m) toast(L(`${fresh.length} yeni nesne gruba eklendi`, `${fresh.length} new object(s) added to the group`));
   } else if (joinGroup(rec, fresh)) toast(L(`${fresh.length} yeni nesne gruba eklendi`, `${fresh.length} new object(s) added to the group`));
 }
 function ungroupSel() {
   const gs = selObjs().filter(x => GROUPABLE[x.kind] && x.o.grp);
   if (!gs.length) return;
+  // grubun bu kattaki tüm üyeleri seçiliyse öteki katlardaki (bağlı) üyeleri de gruptan çıkar
+  const have = new Set(gs.map(x => x.o.id));
+  for (const g of new Set(gs.map(x => x.o.grp))) {
+    if (!groupMemberIds(g).every(id => have.has(id))) continue;
+    for (const l of grpLinked(g)) if (l.i !== fi) for (const k in KINDS) for (const o of P.floors[l.i][k] || [])
+      if (o.grp === g && !have.has(o.id)) { have.add(o.id); gs.push({ kind: KINDS[k], o, floorIdx: l.i }); }
+  }
   gs.forEach(({ o }) => delete o.grp);
-  dropPoseOrphans(gs.map(x => x.o.id)); // eski grup kayıtlarındaki artık pozlar temizlenir
-  pruneGroups();
+  for (const i of new Set(gs.map(x => x.floorIdx ?? fi))) { // 3B'de seçim birden çok katta olabilir
+    const f = P.floors[i]; if (!f) continue;
+    dropPoseOrphans(gs.map(x => x.o.id), false, f); // eski grup kayıtlarındaki artık pozlar temizlenir
+    pruneGroups(f);
+  }
   commit(); refresh();
   if (ui.view3d && T3) schedBuild3D();
   toast(L('Grup çözüldü', 'Group dissolved'));
