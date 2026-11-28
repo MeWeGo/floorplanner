@@ -1965,9 +1965,11 @@ body.fs-open #toast { position: fixed; z-index: 140; }
 
 /* ---------- Cinematic entrance ----------
    A blueprint splash that draws a small plan, then the panels slide into place.
-   Pure CSS timeline; app.js (introBoot) only decides when it leaves (.out) and
-   removes it. Plays once per tab session; off with reduced motion or ?intro=off.
-   If app.js never runs, introAuto hides the overlay after 4 s. */
+   Grid and bars show at once (load curtain); the plan and title stay paused until
+   app.js adds .go after its heavy first render (stroke animations run on the main
+   thread and froze mid-draw), then .out. Once per tab session; off with reduced
+   motion or ?intro=off. If app.js never runs, introAuto hides the overlay after 8 s.
+   The element carries [hidden], so a stale stylesheet without these rules hides it. */
 #intro {
   position: fixed;
   inset: 0;
@@ -1985,7 +1987,7 @@ body.fs-open #toast { position: fixed; z-index: 140; }
     linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 24px 24px,
     linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 24px 24px,
     var(--stage-bg);
-  animation: introAuto 0.4s ease 4s forwards;
+  animation: introAuto 0.4s ease 8s forwards;
 }
 [data-theme=light] #intro {
   background:
@@ -2005,8 +2007,11 @@ body.fs-open #toast { position: fixed; z-index: 140; }
   z-index: 2;
   transition: transform 0.55s cubic-bezier(0.7, 0, 0.3, 1);
 }
-#intro::before { top: 0; animation: introBarT 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
-#intro::after { bottom: 0; animation: introBarB 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+#intro::before { top: 0; animation: introBarT 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+#intro::after { bottom: 0; animation: introBarB 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+/* waiting for app.js: everything but the grid and bars holds its first frame */
+#intro:not(.go) .intro-cam, #intro:not(.go) .intro-plan, #intro:not(.go) .intro-plan *,
+#intro:not(.go) .intro-title *, #intro:not(.go) .intro-skip { animation-play-state: paused; }
 .intro-cam {
   width: min(520px, 82vw);
   perspective: 900px;

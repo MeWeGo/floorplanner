@@ -22289,36 +22289,48 @@ function prewarm3D() {
 }
 
 /* ---------- Sinematik giriş ----------
-   #intro (index.html + style.css) sayfa boyanır boyanmaz CSS ile oynar; burada yalnızca ne zaman çıkacağı belirlenir.
+   #intro (index.html + style.css): ızgara ve sinema bantları sayfa boyanır boyanmaz görünür (yükleme perdesi).
+   Plan çizimi ve başlık CSS'te duraklatılmıştır; introPlay() açılışın ağır ilk çizimi bittikten sonra .go ile başlatır.
+   stroke-dashoffset animasyonu ana iş parçacığında çalışır: app.js'in yürütülmesi, ilk render ve 3B ön ısıtma
+   çizimin ortasına denk gelince plan donup sıçrıyordu. Bu yüzden ağır işler önce, çizim sonra; 3B ön ısıtma da
+   introAfter() ile giriş bitince başlar. Çıkış zamanı .go'dan sayılır (ilk ziyarette CDN geç gelse de kesilmez).
    Sekme oturumunda bir kez tam oynar (sessionStorage 'fp_intro'); sonraki yüklemelerde, ?intro=off ile ve
    azaltılmış hareket tercihinde hemen kaybolur. Tık / tuş atlatır ve o olay uygulamaya geçmez (altta şablon seçici
-   olabilir). Bitince öğe DOM'dan kaldırılır, panellerin giriş sınıfı da silinir: sıcak yollara hiçbir maliyeti yok. */
+   olabilir). Bitince öğe DOM'dan kaldırılır: sıcak yollara hiçbir maliyeti yok. */
 const INTRO_OFF = /[?&]intro=off\b/.test(location.search);
-const INTRO_HOLD = 1750;   // ms, gezinme başlangıcından: plan çizilir, başlık oturur
+const INTRO_HOLD = 1900;   // ms, .go'dan: plan çizilir, başlık oturur
+const intro = { el: null, done: true, calm: true, timer: 0, after: [] };
+function introAfter(fn) { if (intro.done) fn(); else intro.after.push(fn); }
+function introFinish() {
+  const el = intro.el; if (intro.done || !el) return; intro.done = true; clearTimeout(intro.timer);
+  window.removeEventListener('keydown', introSwallow, true);
+  el.removeEventListener('pointerdown', introSwallow);
+  el.classList.add('out'); if (intro.calm) el.classList.add('quick');
+  if (!intro.calm) {
+    document.body.classList.add('intro-enter');
+    setTimeout(() => document.body.classList.remove('intro-enter'), 1100);
+  }
+  setTimeout(() => el.remove(), intro.calm ? 200 : 650);
+  // ağır işler (3B ön ısıtma) panellerin girişi bittikten sonra
+  const fns = intro.after.splice(0); setTimeout(() => fns.forEach(f => f()), intro.calm ? 0 : 1200);
+}
+function introSwallow(e) { e.preventDefault(); e.stopPropagation(); introFinish(); }
 function introBoot() {
   const el = $('#intro'); if (!el) return;
   let seen = false; try { seen = !!sessionStorage.getItem('fp_intro'); sessionStorage.setItem('fp_intro', '1'); } catch (_) {}
-  const calm = INTRO_OFF || seen || matchMedia('(prefers-reduced-motion: reduce)').matches;
+  Object.assign(intro, { el, done: false, calm: INTRO_OFF || seen || matchMedia('(prefers-reduced-motion: reduce)').matches });
   $('#introName').textContent = L('Kat Planı', 'Floor Planner');
   $('#introSub').textContent = L('2B · 3B kat planı çizici', '2D · 3D floor planner');
   $('#introSkip').textContent = L('Geçmek için tıklayın', 'Click to skip');
-  let done = false, timer = 0;
-  const swallow = e => { e.preventDefault(); e.stopPropagation(); finish(); };
-  function finish() {
-    if (done) return; done = true; clearTimeout(timer);
-    window.removeEventListener('keydown', swallow, true);
-    el.removeEventListener('pointerdown', swallow);
-    el.classList.add('out'); if (calm) el.classList.add('quick');
-    if (!calm) {
-      document.body.classList.add('intro-enter');
-      setTimeout(() => document.body.classList.remove('intro-enter'), 1100);
-    }
-    setTimeout(() => el.remove(), calm ? 200 : 650);
-  }
-  if (calm) { finish(); return; }
-  window.addEventListener('keydown', swallow, true);
-  el.addEventListener('pointerdown', swallow);
-  timer = setTimeout(finish, Math.max(0, INTRO_HOLD - performance.now()));
+  if (intro.calm) { introFinish(); return; }
+  window.addEventListener('keydown', introSwallow, true);
+  el.addEventListener('pointerdown', introSwallow);
+}
+// açılışın ağır kısmı (proje yükleme + ilk render) bitti: çizimi başlat, kesintisiz oynasın
+function introPlay() {
+  if (intro.done || !intro.el) return;
+  intro.el.classList.add('go');
+  intro.timer = setTimeout(introFinish, INTRO_HOLD);
 }
 
 applyLangUI();
@@ -22332,11 +22344,11 @@ introBoot();
   else { P = newProject(); loadProject(P); templatesModal(); }
   try { restoreTabs(await dbGet('state', 'tabs')); } catch (e) { }
   syncBoot();              // pencereler arası kanal, Google Drive oturumu, #fp / #fpd paylaşım linki
-  setTimeout(fit, 50);
+  setTimeout(() => { fit(); introPlay(); }, 50); // giriş çizimi ilk render bittikten sonra başlar
   aiBridgeBoot();          // connect to a running local bridge, if any
   presenceBoot();          // canlı kullanıcı sayısı göstergesi (ayarlıysa)
   collabBoot();            // canlı birlikte düzenleme (oda bağlantısı varsa)
-  prewarm3D();             // 3B'yi boşta hazırla: ilk 3B düğmesi bekletmesin (#106)
+  introAfter(prewarm3D);   // 3B'yi boşta hazırla: ilk 3B düğmesi bekletmesin (#106)
   swBoot();                // uygulama olarak yükleme + çevrimdışı (#203)
   // Depolama engelliyse uygulama bellekte çalışır; bunu bir kez söyle (#188)
   if (!dbOk && !localStorage.ok) setTimeout(() => toast(L('Tarayıcı depolaması engelli: çalışmanız bu sekmede kalır, kaydedilmez. Saklamak için ⬇ JSON indirin.', 'Browser storage is blocked: your work stays in this tab and is not saved. Use ⬇ JSON to keep a copy.')), 900);
