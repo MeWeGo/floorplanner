@@ -1962,3 +1962,151 @@ body.fs-open #toast { position: fixed; z-index: 140; }
 .st-f input, .st-f select, .st-f textarea { width: 100%; box-sizing: border-box; font: inherit; }
 .st-sign { margin: 8px 0; min-height: 44px; }
 @media (max-width: 700px) { .st-big { width: 100%; height: 160px; } }
+
+/* ---------- Cinematic entrance ----------
+   A blueprint splash that draws a small plan, then the panels slide into place.
+   Pure CSS timeline; app.js (introBoot) only decides when it leaves (.out) and
+   removes it. Plays once per tab session; off with reduced motion or ?intro=off.
+   If app.js never runs, introAuto hides the overlay after 4 s. */
+#intro {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  overflow: hidden;
+  cursor: pointer;
+  color: var(--text);
+  background:
+    radial-gradient(ellipse at center, transparent 35%, rgba(0, 0, 0, 0.45) 100%),
+    linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--stage-bg);
+  animation: introAuto 0.4s ease 4s forwards;
+}
+[data-theme=light] #intro {
+  background:
+    radial-gradient(ellipse at center, transparent 40%, rgba(60, 50, 30, 0.18) 100%),
+    linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--stage-bg);
+}
+/* letterbox bars */
+#intro::before, #intro::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 11vh;
+  background: #000;
+  z-index: 2;
+  transition: transform 0.55s cubic-bezier(0.7, 0, 0.3, 1);
+}
+#intro::before { top: 0; animation: introBarT 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+#intro::after { bottom: 0; animation: introBarB 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.intro-cam {
+  width: min(520px, 82vw);
+  perspective: 900px;
+  animation: introFade 0.6s ease both;
+}
+.intro-plan {
+  display: block;
+  width: 100%;
+  height: auto;
+  transform-origin: 50% 60%;
+  animation: introDolly 2.2s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.intro-plan path, .intro-plan circle {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  stroke-linecap: square;
+  animation: introDraw 0.7s cubic-bezier(0.6, 0, 0.3, 1) var(--d, 0s) forwards;
+}
+.intro-plan .iw { stroke: var(--text); stroke-width: 7; }
+.intro-plan .ia { stroke: var(--accent); stroke-width: 1.4; }
+.intro-plan .ig { stroke: var(--accent2); stroke-width: 2; }
+.intro-plan .if { stroke: var(--muted); stroke-width: 1.4; }
+.intro-plan .id { stroke: var(--accent); stroke-width: 1; }
+.intro-plan .it {
+  fill: var(--accent);
+  font: 500 11px var(--font-mono);
+  text-anchor: middle;
+  opacity: 0;
+  animation: introFade 0.4s ease 1.3s forwards;
+}
+.intro-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  z-index: 3;
+}
+.intro-title b {
+  font-size: clamp(22px, 4vw, 34px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  animation: introTitle 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) 0.75s both;
+}
+.intro-title small {
+  font: 500 12px var(--font-mono);
+  color: var(--muted);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  animation: introFade 0.6s ease 1.1s both;
+}
+.intro-skip {
+  position: absolute;
+  bottom: calc(11vh + 14px);
+  font: 11px var(--font-mono);
+  color: var(--muted);
+  opacity: 0;
+  z-index: 3;
+  animation: introFade 0.5s ease 1.4s forwards;
+}
+/* exit: the camera pushes into the plan, bars open, the overlay dissolves */
+#intro.out {
+  pointer-events: none;
+  animation: introOut 0.6s cubic-bezier(0.6, 0, 0.3, 1) forwards;
+}
+#intro.out::before { transform: translateY(-100%); }
+#intro.out::after { transform: translateY(100%); }
+#intro.out .intro-cam, #intro.out .intro-title { transition: transform 0.6s cubic-bezier(0.6, 0, 0.3, 1), filter 0.6s; transform: scale(1.35); filter: blur(4px); }
+#intro.quick { animation-duration: 0.18s; }
+#intro.quick::before, #intro.quick::after, #intro.quick * { animation: none; transition: none; }
+
+@keyframes introAuto { to { opacity: 0; visibility: hidden; pointer-events: none; } }
+@keyframes introOut { to { opacity: 0; visibility: hidden; } }
+@keyframes introFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes introDraw { to { stroke-dashoffset: 0; } }
+@keyframes introBarT { from { transform: translateY(-100%); } }
+@keyframes introBarB { from { transform: translateY(100%); } }
+@keyframes introDolly {
+  from { transform: rotateX(38deg) rotateZ(-6deg) scale(0.86); opacity: 0; }
+  20% { opacity: 1; }
+  to { transform: none; }
+}
+@keyframes introTitle {
+  from { opacity: 0; letter-spacing: 0.4em; filter: blur(6px); transform: translateY(8px); }
+  to { opacity: 1; letter-spacing: 0.02em; filter: none; transform: none; }
+}
+
+/* the app chrome arriving after the intro (class removed when done) */
+body.intro-enter header { animation: enterDown 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+body.intro-enter #ptabs { animation: enterDown 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 0.05s both; }
+body.intro-enter #tools { animation: enterLeft 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 0.1s both; }
+body.intro-enter #lib { animation: enterLeft 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s both; }
+body.intro-enter #props { animation: enterRight 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s both; }
+body.intro-enter footer { animation: enterUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 0.2s both; }
+body.intro-enter #stage { animation: enterStage 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes enterDown { from { transform: translateY(-110%); opacity: 0; } }
+@keyframes enterUp { from { transform: translateY(110%); opacity: 0; } }
+@keyframes enterLeft { from { transform: translateX(-40px); opacity: 0; } }
+@keyframes enterRight { from { transform: translateX(40px); opacity: 0; } }
+@keyframes enterStage { from { opacity: 0; transform: scale(1.04); filter: blur(3px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  #intro { display: none; }
+}
