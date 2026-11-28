@@ -5,9 +5,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, wallTopSrc } = require('./helpers/repo');
+const { read, markerBlock, fnSrcOf, wallTopSrc } = require('./helpers/repo');
 
 const src = read('app.js');
+const CURVE = markerBlock(src, 'CURVED-WALL'); // eğri duvar yardımcıları (#202): visFloor / mkOp / layerStrings çağırır
 const fnSrc = name => fnSrcOf(src, name);
 
 const env = new Function(`
@@ -20,6 +21,7 @@ const env = new Function(`
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const wLen = w => dist(w.a, w.b);
+  ${CURVE}
   const wAng = w => Math.atan2(w.b.y - w.a.y, w.b.x - w.a.x);
   const fmtLen = v => Math.round(v) + ' cm';
   const fmtArea = a => (a / 10000).toFixed(1) + ' m2';

@@ -3144,7 +3144,7 @@ function normalizeProject(obj) {
     for (const z of f.zones) cleanZone(z); // site parcel / outdoor zones (#150)
     f.groups = Array.isArray(f.groups) ? f.groups : [];
     for (const o of f.ops) if (o.open == null) o.open = 0;
-    for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
+    for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanBulge(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
     for (const sl of f.slabs) { if (!(sl.t > 0)) sl.t = 20; sl.floor = sl.floor || 'concrete'; sl.off = +sl.off || 0; }
     for (const v of f.voids) { if (!VOID_TYPES.includes(v.type)) v.type = 'stair'; if (v.dep != null) { const d = Math.max(0, Math.min(1000, Math.round(+v.dep || 0))); if (d) v.dep = d; else delete v.dep; } } // pit depth (cm)
     if (f.lvl != null) { const n = typeof f.lvl === 'number' || (typeof f.lvl === 'string' && f.lvl.trim()) ? +f.lvl : NaN; if (Number.isFinite(n)) f.lvl = Math.max(-50000, Math.min(50000, Math.round(n))); else delete f.lvl; } // floor level (cm, ±0 = ground)
@@ -3187,6 +3187,13 @@ function cleanMullions(w, a = w) {
   if (a.mulN != null) { const n = Math.round(+a.mulN); if (!(n >= 0 && n <= 200)) throw new Error('mulN must be an integer 0..200'); w.mulN = n; delete w.mul; }
   else if (a.mul != null) { const m = Math.round(+a.mul); if (!(m >= 20 && m <= 1000)) throw new Error('mul must be 20..1000 cm'); delete w.mulN; if (m === 120) delete w.mul; else w.mul = m; }
 }
+// Eğri duvar (#202): w.bulge = a → b kirişinin ortasından normal (−uy, ux) yönünde yayın tepe noktasına uzaklık (cm); |bulge| ≤ kiriş / 2, < 0.5 = düz. app.js setBulge / cleanBulge ile aynı.
+const BULGE_MIN = 0.5;
+function setBulge(w, v) {
+  const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y), b = Math.round(Math.max(-L / 2, Math.min(L / 2, +v || 0)) * 10) / 10;
+  if (Math.abs(b) < BULGE_MIN) delete w.bulge; else w.bulge = b;
+}
+function cleanBulge(w) { if (!w || w.bulge == null) return; if (!Number.isFinite(+w.bulge)) { delete w.bulge; return; } setBulge(w, +w.bulge); }
 function mkWall(f, a) {
   const w = {
     id: uid(),
@@ -3200,6 +3207,7 @@ function mkWall(f, a) {
   if (a.color) w.color = String(a.color);
   if (LOW_WALL[w.wt]) { if (a.h == null) w.h = LOW_WALL[w.wt].h; if (a.t == null) w.t = LOW_WALL[w.wt].t; }
   cleanMullions(w, a);
+  if (a.bulge != null) { w.bulge = a.bulge; cleanBulge(w); }
   if (wLen(w) <= 0) throw new Error('Wall length must be > 0');
   f.walls.push(w);
   return w;
@@ -4061,6 +4069,7 @@ tool('add_wall',
     rs: { type: 'string', enum: ['bars', 'glass', 'cable', 'solid'], description: 'Railings only: style - "bars" (vertical balusters, default), "glass" (glass panel), "cable" (horizontal bars / cable) or "solid" (parapet).' },
     color: { type: 'string', description: 'Optional wall paint colour (#hex). Omit for the default wall colour.' },
     elev: { type: 'number', description: 'Optional base offset in cm relative to the floor level (-500..500, default 0): a wall that starts below or above its floor.' },
+    bulge: { type: 'number', description: 'Optional curvature in cm (curved wall): signed distance from the middle of the straight line a → b to the top of the arc, measured along the wall normal (-(y2-y1), x2-x1) / length. At most half the straight length (a half circle); 0 / omitted = straight. Openings on a curved wall measure d along the arc.' },
     floorIndex: floorArg,
   },
   ['x1', 'y1', 'x2', 'y2'],
@@ -4497,7 +4506,7 @@ tool('update_object',
     // sanity checks after merge
     if (found.kind === 'op' && found.o.wall && !f.walls.some(w => w.id === found.o.wall))
       throw new Error('props.wall "' + found.o.wall + '" does not exist on this floor');
-    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); if (found.o.top === null) delete found.o.top; if (found.o.top != null) { const tp = cleanWallTop(found.o.top); if (!tp) throw new Error('top must be [[t, h], …] or [[t, hP, hM], …]: t from 0 to 1 increasing, h 10–2000 cm (height above the wall base)'); found.o.top = tp; found.o.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } if (found.o.elev != null) { const e = +found.o.elev || 0; if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm'); if (e) found.o.elev = e; else delete found.o.elev; } }
+    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (found.o.bulge === null) delete found.o.bulge; cleanBulge(found.o); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); if (found.o.top === null) delete found.o.top; if (found.o.top != null) { const tp = cleanWallTop(found.o.top); if (!tp) throw new Error('top must be [[t, h], …] or [[t, hP, hM], …]: t from 0 to 1 increasing, h 10–2000 cm (height above the wall base)'); found.o.top = tp; found.o.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } if (found.o.elev != null) { const e = +found.o.elev || 0; if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm'); if (e) found.o.elev = e; else delete found.o.elev; } }
     if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
     if (found.kind === 'draft') { parsePts(found.o.pts, found.o.shape === 'arc' ? 3 : 2, 'pts'); if (!DRAFT_SHAPES.includes(found.o.shape)) found.o.shape = 'pline'; }
     if (found.kind === 'furn' && 'parts' in props) cleanParts(found.o);

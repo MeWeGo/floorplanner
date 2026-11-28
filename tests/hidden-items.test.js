@@ -4,9 +4,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, constLineOf, mcpClient } = require('./helpers/repo');
+const { read, markerBlock, fnSrcOf, constLineOf, mcpClient } = require('./helpers/repo');
 
 const src = read('app.js');
+const CURVE = markerBlock(src, 'CURVED-WALL'); // eğri duvar yardımcıları (#202): visFloor / mkOp / layerStrings çağırır
 
 function loadEnv(initialP) {
   let P = initialP;
@@ -27,6 +28,7 @@ function loadEnv(initialP) {
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const wLen = w => dist(w.a, w.b);
+    ${CURVE}
     const fmtLen = v => Math.round(v) + ' cm';
     const itemName = o => o.name || '';
     const snapToGrid = p => ({ x: Math.round(p.x / 10) * 10, y: Math.round(p.y / 10) * 10 });
@@ -132,6 +134,7 @@ function makeSandbox(initialP) {
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const wLen = w => dist(w.a, w.b);
+    ${CURVE}
     const fmtLen = v => Math.round(v) + ' cm';
     const itemName = o => o.name || '';
     const segProj = (p, a, b) => {

@@ -757,6 +757,36 @@ check('sloped surfaces: height points added by click / on corners tilt a slab an
   if (!info.undo[0] || info.undo[1] !== -5 || info.undo[2] !== 0 || !info.svg) throw new Error('undo / export: ' + JSON.stringify(info));
 });
 
+check('curved walls (#202): the middle handle bends a wall, openings sit on the arc, 2D / 3D / click / undo', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); view.z = 1; view.x = 200; view.y = 200; render();
+    const r = cv.getBoundingClientRect(), out = {};
+    const ev = (p, type, tgt) => { const s = w2s(p); (tgt || cv).dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 })); };
+    const w = mkWall({ x: 0, y: 0 }, { x: 400, y: 0 }); F().walls.push(w); commit();
+    setTool('select'); sel = [w.id]; refresh();
+    const hd = document.querySelector('#gSel [data-h="wc"]'); out.handle = !!hd;
+    if (hd) { ev({ x: 200, y: 0 }, 'pointerdown', hd); ev({ x: 200, y: 120 }, 'pointermove'); ev({ x: 200, y: 150 }, 'pointermove'); ev({ x: 200, y: 150 }, 'pointerup'); }
+    out.bulge = w.bulge;
+    out.pieces = document.querySelectorAll('#gWalls [data-id="' + w.id + '"]').length;
+    out.arcLen = Math.round(wallLen(w));
+    const op = mkOp(OPDEF.door, w, wallLen(w) / 2); F().ops.push(op); commit(); refresh();
+    const q = opPos(op); out.opAt = [Math.round(q.x), Math.round(q.y)];
+    out.opSvg = document.querySelectorAll('#gOps *').length > 0;
+    sel = []; refresh(); const pk = arcAt(wallArc(w), wallLen(w) * 0.2); ev(pk, 'pointerdown'); ev(pk, 'pointerup'); out.picked = sel.join();
+    out.export = exportSvg().svg.length > 0;
+    await show3D(true); build3D(); let n = 0; T3.scene.traverse(m => { if (m.userData && m.userData.wallId === w.id) n++; }); out.groups3d = n; show3D(false);
+    sel = [w.id]; refresh(); document.querySelector('#props [data-act="wallstraight"]').click(); out.straight = w.bulge == null;
+    undo(); out.undo = find(w.id).o.bulge;
+    return out;
+  })()`);
+  if (!info.handle || info.bulge !== 150) throw new Error('middle handle did not bend the wall: ' + JSON.stringify(info));
+  if (info.pieces < 4 || info.arcLen <= 400) throw new Error('curved wall not drawn as an arc: ' + JSON.stringify(info));
+  if (info.opAt[0] !== 200 || info.opAt[1] !== 150 || !info.opSvg) throw new Error('door not on the arc apex: ' + JSON.stringify(info));
+  if (info.picked !== info.picked.split('~')[0] || !info.picked) throw new Error('clicking a piece must select the wall itself: ' + JSON.stringify(info));
+  if (info.groups3d < 4 || !info.export) throw new Error('3D / export: ' + JSON.stringify(info));
+  if (!info.straight || info.undo !== 150) throw new Error('straighten / undo: ' + JSON.stringify(info));
+});
+
 check('axes: the Z tool draws named axes, a wall snaps to their crossing, grid + copy to floors, export, undo', async page => {
   const info = await page.evaluate(`(() => {
     loadProject(newProject()); view.z = 0.5; view.x = 100; view.y = 50; render();

@@ -7,6 +7,7 @@ const assert = require('node:assert');
 const { read, fnSrcOf, constLineOf, markerBlock, matchBracket } = require('./helpers/repo');
 
 const src = read('app.js');
+const CURVE = markerBlock(src, 'CURVED-WALL'); // eğri duvar yardımcıları (#202): visFloor / mkOp / layerStrings çağırır
 const fnSrc = name => fnSrcOf(src, name);
 const constSrc = name => constLineOf(src, name);
 
@@ -260,6 +261,7 @@ function makeTemplateSandbox() {
     const L = (tr, en) => (lang === 'en' ? en : tr);
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    ${CURVE}
     const toast = m => { toasts.push(m); };
 
     ${constSrc('itemName')}
