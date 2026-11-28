@@ -4507,7 +4507,7 @@ check('boots and edits with browser storage blocked (#188)', async page => {
   // ?bridge=off: never reach a real mcp/bridge.js on 127.0.0.1:8787 — the checks load
   // test plans, and a connected tab would push them over the user's live AI plan
   // tour=off: the first-run tour (#197) would otherwise open over the canvas after the first template click
-  const url = `http://127.0.0.1:${port}/?bridge=off&presence=off&store=off&tour=off`;
+  const url = `http://127.0.0.1:${port}/?bridge=off&presence=off&store=off&tour=off&intro=off`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-smoke-'));
   const debugPort = 9300 + Math.floor(Math.random() * 300);
 

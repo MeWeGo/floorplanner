@@ -22108,7 +22108,41 @@ function prewarm3D() {
   });
 }
 
+/* ---------- Sinematik giriş ----------
+   #intro (index.html + style.css) sayfa boyanır boyanmaz CSS ile oynar; burada yalnızca ne zaman çıkacağı belirlenir.
+   Sekme oturumunda bir kez tam oynar (sessionStorage 'fp_intro'); sonraki yüklemelerde, ?intro=off ile ve
+   azaltılmış hareket tercihinde hemen kaybolur. Tık / tuş atlatır ve o olay uygulamaya geçmez (altta şablon seçici
+   olabilir). Bitince öğe DOM'dan kaldırılır, panellerin giriş sınıfı da silinir: sıcak yollara hiçbir maliyeti yok. */
+const INTRO_OFF = /[?&]intro=off\b/.test(location.search);
+const INTRO_HOLD = 1750;   // ms, gezinme başlangıcından: plan çizilir, başlık oturur
+function introBoot() {
+  const el = $('#intro'); if (!el) return;
+  let seen = false; try { seen = !!sessionStorage.getItem('fp_intro'); sessionStorage.setItem('fp_intro', '1'); } catch (_) {}
+  const calm = INTRO_OFF || seen || matchMedia('(prefers-reduced-motion: reduce)').matches;
+  $('#introName').textContent = L('Kat Planı', 'Floor Planner');
+  $('#introSub').textContent = L('2B · 3B kat planı çizici', '2D · 3D floor planner');
+  $('#introSkip').textContent = L('Geçmek için tıklayın', 'Click to skip');
+  let done = false, timer = 0;
+  const swallow = e => { e.preventDefault(); e.stopPropagation(); finish(); };
+  function finish() {
+    if (done) return; done = true; clearTimeout(timer);
+    window.removeEventListener('keydown', swallow, true);
+    el.removeEventListener('pointerdown', swallow);
+    el.classList.add('out'); if (calm) el.classList.add('quick');
+    if (!calm) {
+      document.body.classList.add('intro-enter');
+      setTimeout(() => document.body.classList.remove('intro-enter'), 1100);
+    }
+    setTimeout(() => el.remove(), calm ? 200 : 650);
+  }
+  if (calm) { finish(); return; }
+  window.addEventListener('keydown', swallow, true);
+  el.addEventListener('pointerdown', swallow);
+  timer = setTimeout(finish, Math.max(0, INTRO_HOLD - performance.now()));
+}
+
 applyLangUI();
+introBoot();
 (async () => {
   await migrateLegacyStorage();
   let saved = null, dbOk = true;
