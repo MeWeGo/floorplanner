@@ -490,20 +490,22 @@ function expandCurved(f) {
     if (!A) { walls.push(w); continue; }
     g._curved.push(w);
     const os = byWall.get(w.id) || [];
-    const spans = os.map(o => [Math.max(0, o.d - o.w / 2), Math.min(A.len, o.d + o.w / 2), o]);
+    const spans = os.map(o => { const ow = Math.min(+o.w || 0, A.len), od = clamp(+o.d || 0, ow / 2, A.len - ow / 2); return [od - ow / 2, od + ow / 2, o]; });
     const n = Math.max(4, Math.ceil(Math.abs(A.sweep) / (Math.PI / 24)));
     let br = [];
     // dilim noktaları açıklığın içine ve kenarına 1 cm’den yakın düşmez (yoksa açıklık iki parçaya bölünür ve kaybolur)
     for (let i = 1; i < n; i++) { const d = A.len * i / n; if (!spans.some(([s0, s1]) => d > s0 - 1 && d < s1 + 1)) br.push(d); }
     for (const [s0, s1] of spans) br.push(s0, s1);
-    br.push(0, A.len); br.sort((p, q) => p - q); br = br.filter((d, i) => !i || d - br[i - 1] > 0.5); br[br.length - 1] = A.len;
+    br.push(0, A.len); br = br.map(d => clamp(d, 0, A.len)); br.sort((p, q) => p - q); br = br.filter((d, i) => !i || d - br[i - 1] > 0.5); br[br.length - 1] = A.len;
+    const placed = new Set(), B = w.wt === 'curtain' ? curtainBays(w) : 0, posts = w.wt === 'railing' || w.wt === 'fence' ? lowWallPosts(w, A.len, os) : null;
     for (let k = 0; k + 1 < br.length; k++) {
       const d0 = br[k], d1 = br[k + 1], p0 = arcAt(A, d0), p1 = arcAt(A, d1);
-      const sw = Object.assign({}, w, { id: w.id + '~' + k, pid: w.id, a: { x: p0.x, y: p0.y }, b: { x: p1.x, y: p1.y } });
-      for (const key of ['bulge', 'top', 'angles', 'pivot', 'posIdx', 'acc', 'bel']) delete sw[key];
+      if (d1 - d0 < 0.25) continue;
+      const sw = Object.assign({}, w, { id: w.id + '~' + k, pid: w.id, po: d0, arc: { d0, d1, len: A.len, B, posts }, a: { x: p0.x, y: p0.y }, b: { x: p1.x, y: p1.y } });
+      for (const key of ['bulge', 'top', 'angles', 'pivot', 'posIdx', 'acc', 'bel', 'mul', 'mulN']) delete sw[key];
       walls.push(sw);
       const ch = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-      for (const [s0, s1, o] of spans) if (s0 >= d0 - 0.5 && s1 <= d1 + 0.5) ops.push(Object.assign({}, o, { wall: sw.id, d: ch / 2, w: Math.min(o.w, ch) }));
+      for (const [s0, s1, o] of spans) if (!placed.has(o) && s0 >= d0 - 0.5 && s1 <= d1 + 0.5 && placed.add(o)) ops.push(Object.assign({}, o, { wall: sw.id, d: ch / 2, w: Math.min(o.w, ch) }));
     }
   }
   const cw = new Set(g._curved.map(w => w.id));
@@ -574,7 +576,7 @@ function isSolidWall(w) { return !w.wt || w.wt === 'solid'; }
 // cam cephe bölme sayısı: mulN (ara dikme adedi) varsa o + 1, yoksa uzunluk / modül (#71)
 function curtainBays(w) {
   if (w.mulN != null && +w.mulN >= 0) return Math.max(1, Math.round(+w.mulN) + 1);
-  const L = wLen(w) || 1, m = +w.mul > 0 ? +w.mul : MUL_DEF;
+  const L = wallLen(w) || 1, m = +w.mul > 0 ? +w.mul : MUL_DEF;
   return Math.max(1, Math.round(L / m));
 }
 // korkuluk / çit dikme konumları (a ucundan cm; uçlar dahil), açıklık aralıkları atlanır
@@ -584,7 +586,15 @@ function lowWallSolid(L, ops) {
   if (L - p > 1) out.push([p, L]);
   return out;
 }
+// eğri duvar parçası: yay boyundaki konumlardan bu parçaya düşenler, parça boyuna ölçekli (uç ortak: sonraki parçada)
+function arcPiecePos(w, L, xs) { const { d0, d1, len } = w.arc, k = L / ((d1 - d0) || 1); return xs.filter(x => x >= d0 - 0.01 && (x < d1 - 0.01 || d1 >= len - 0.01)).map(x => clamp((x - d0) * k, 0, L)); }
+// giydirme cephe dikmeleri: parça boyunca konumlar (ends = uç dikmeleri de)
+function mulPos(w, L, ends = false) {
+  if (w.arc) { const B = w.arc.B || 1, xs = []; for (let i = ends ? 0 : 1; i <= (ends ? B : B - 1); i++) xs.push(w.arc.len * i / B); return arcPiecePos(w, L, xs); }
+  const nB = curtainBays(w), out = []; for (let i = ends ? 0 : 1; i <= (ends ? nB : nB - 1); i++) out.push(L * i / nB); return out;
+}
 function lowWallPosts(w, L, ops = []) {
+  if (w.arc && w.arc.posts) return arcPiecePos(w, L, w.arc.posts); // eğri duvar parçası (#202): dikmeler tüm yay boyunca
   const spec = LOW_WALL[w.wt] || LOW_WALL.railing, out = [];
   for (const [s, e] of lowWallSolid(L, ops)) { const n = Math.max(1, Math.ceil((e - s) / spec.post - 1e-6)); for (let i = 0; i <= n; i++) out.push(s + (e - s) * i / n); }
   return out;
@@ -877,7 +887,7 @@ function scaleObjs(os, orig, tx, ty, sx, sy, scaleT = false) {
       mo.a = { x: tx(g.a.x), y: ty(g.a.y) }; mo.b = { x: tx(g.b.x), y: ty(g.b.y) };
       if (kind === 'wall') {
         if (scaleT && g.t) mo.t = clamp(Math.round(g.t * Math.sqrt(sx * sy)), 3, 200);
-        if (g.bulge) setBulge(mo, g.bulge * Math.sqrt(Math.abs(sx * sy))); // #202
+        if (g.bulge) { const gl = dist(g.a, g.b) || 1, nx = -(g.b.y - g.a.y) / gl, ny = (g.b.x - g.a.x) / gl; setBulge(mo, g.bulge * Math.hypot(sx * nx, sy * ny) * (Math.sign(sx * sy) || 1)); } // #202
         // menteşeli duvar: açı ön ayarlarını yeni yönelime göre kaydır (eski preset'e sıçramasın)
         if (Array.isArray(g.angles) && g.angles.length) {
           const od = Math.atan2(g.b.y - g.a.y, g.b.x - g.a.x) * 180 / Math.PI, nd = Math.atan2(mo.b.y - mo.a.y, mo.b.x - mo.a.x) * 180 / Math.PI;
@@ -886,7 +896,8 @@ function scaleObjs(os, orig, tx, ty, sx, sy, scaleT = false) {
         }
         // duvara bağlı kapı/pencereler de ölçeklensin: merkez noktayı ölçekle, yeni duvara projekte et
         const L0 = dist(g.a, g.b) || 1, L1 = wLen(mo) || 1, ux = (mo.b.x - mo.a.x) / L1, uy = (mo.b.y - mo.a.y) / L1;
-        for (const o2 of F().ops.filter(op => op.wall === mo.id)) {
+        if (isCurved(g) || isCurved(mo)) { const A0 = wallLen(g) || 1, A1 = wallLen(mo) || 1; for (const o2 of F().ops.filter(op => op.wall === mo.id)) { const og = orig(o2.id) || o2; o2.d = clamp(og.d / A0 * A1, Math.min(o2.w / 2, A1 / 2), Math.max(A1 - o2.w / 2, A1 / 2)); } }
+        else for (const o2 of F().ops.filter(op => op.wall === mo.id)) {
           const og = orig(o2.id) || o2, t0 = clamp(og.d / L0, 0, 1), px = tx(g.a.x + (g.b.x - g.a.x) * t0), py = ty(g.a.y + (g.b.y - g.a.y) * t0);
           const pr = clamp(((px - mo.a.x) * ux + (py - mo.a.y) * uy) / L1, 0, 1);
           o2.d = clamp(pr * L1, Math.min(o2.w / 2, L1 / 2), Math.max(L1 - o2.w / 2, L1 / 2));
@@ -1539,7 +1550,9 @@ const BG_MAX = 4096;              // yüklenen arka planın en uzun kenarı (px)
 const bgData = b => (b ? (typeof b.src === 'string' && b.src) || ((b.img && TEX.get(b.img)) || {}).data || '' : '');
 function bgAbsorb(b) {
   if (!b || typeof b.src !== 'string' || !b.src.startsWith('data:image/')) return b;
-  const id = 'bg' + uid() + uid(); cacheTex(id, b.src);
+  // kimlik görselin içeriğinden: aynı görsel (canlı odada her arka plan değişikliği yeniden gelir) yeni kopya açmaz, eşlerde aynı kimlik
+  const id = 'bg' + strHash(b.src).replace(':', 'x'), had = TEX.has(id); cacheTex(id, b.src);
+  if (had) { b.img = id; delete b.src; return b; }
   dbPut('textures', { id, data: b.src }).catch(() => { });
   b.img = id; delete b.src; return b;
 }
@@ -2319,9 +2332,8 @@ function wallSvg(w, live, f) {
     } else {
       s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.glass}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="butt" pointer-events="none"/>`;
     }
-    const nTick = curtainBays(w);
-    for (let i = 1; i < nTick; i++) {
-      const px = w.a.x + ux * (Lc * i / nTick), py = w.a.y + uy * (Lc * i / nTick), hw2 = w.t / 2 - sw * 0.5;
+    for (const xm of mulPos(w, Lc)) {
+      const px = w.a.x + ux * xm, py = w.a.y + uy * xm, hw2 = w.t / 2 - sw * 0.5;
       s += `<line x1="${px - nx * hw2}" y1="${py - ny * hw2}" x2="${px + nx * hw2}" y2="${py + ny * hw2}" stroke="${C.wall}" stroke-width="${sw}" pointer-events="none"/>`;
     }
   } else if (isLowWall(w)) {
@@ -6868,7 +6880,8 @@ function snapMids(f, ignore) {
   const out = [];
   for (const arr of ['walls', 'dims']) for (const o of f[arr] || []) {
     if (o.hidden || (ignore && (ignore.has(o.id) || ignore.has(o.a) || ignore.has(o.b)))) continue;
-    out.push({ x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 });
+    const A = arr === 'walls' && wallArc(o); // eğri duvar: yayın tepe noktası (#202)
+    if (A) { const m = arcAt(A, A.len / 2); out.push({ x: m.x, y: m.y }); } else out.push({ x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 });
   }
   return out;
 }
@@ -7145,7 +7158,7 @@ function accCandidate(f, w, p) {
 function accLink(f, w) { w.acc = { a: accCandidate(f, w, w.a), b: accCandidate(f, w, w.b) }; return w.acc; }
 function setAccWall(f, w, on) { if (on) accLink(f, w); else delete w.acc; }
 function accFitOps(f, w) {
-  const L = wLen(w);
+  const L = wallLen(w);
   for (const op of f.ops) if (op.wall === w.id) op.d = clamp(op.d, Math.min(op.w / 2, L / 2), Math.max(L - op.w / 2, L / 2));
 }
 // relink = false: yalnızca bağlı uçları izle (çizim sırasında); true (commit): kullanıcının taşıdığı uç yeniden bağlanır
@@ -7807,7 +7820,7 @@ function autoRoomAt(p, silent) {
   const r = detectRoom(p);
   if (r === 'open') { if (!silent) toast(L('Alan kapalı değil – duvarlar arasında boşluk var', 'Area is not enclosed – there is a gap between walls')); return null; }
   if (!r) { if (!silent) toast(L('Burada oda algılanamadı (duvarın üzerine tıkladınız mı?)', 'No room detected here (did you click on a wall?)')); return null; }
-  const rm = mkRoom(r); rm.wb = 1; F().rooms.push(rm); return rm; // #201: duvarlarını izler
+  const rm = mkRoom(r); roomWbSet(rm); F().rooms.push(rm); return rm; // #201: duvarlarını izler
 }
 /* ---------- Duvarlarını izleyen odalar (#201) ----------
    Algılamayla oluşan oda (Oto oda aracı, ↻ Yeniden algıla) r.wb = 1 taşır. Bir duvar değişikliği commit edilince
@@ -7828,12 +7841,19 @@ function roomRedetect(r) {
   }
   return false;
 }
+// r.wb = son algılanan köşelerin imzası: oda tek başına taşınır / döndürülür / kopyalanırsa imza tutmaz ve oda serbest kalır
+// (yoksa sonraki duvar düzenlemesi onu eski yerinden ya da üstüne geldiği odadan yeniden algılardı). Eski kayıtlarda wb = 1.
+const roomWbSig = r => strHash((r.pts || []).map(q => Math.round(q.x * 10) + ',' + Math.round(q.y * 10)).join(';'));
+function roomWbSet(r) { r.wb = roomWbSig(r); }
+const wbWarned = new Set(); // izleyemedi uyarısı oda başına bir kez (aralık kapanana kadar)
 function followRooms() {
   const f = F(); if (!f || typeof document === 'undefined') return;
+  for (const r of f.rooms || []) if (r.wb && r.wb !== 1 && r.wb !== roomWbSig(r)) { delete r.wb; wbWarned.delete(r.id); }
   const sig = wallSigOf(f), old = wallSig.get(f.id); wallSig.set(f.id, sig);
   if (old === undefined || old === sig) return;
   const rs = (f.rooms || []).filter(r => roomFollows(r, f)); if (!rs.length) return;
-  const lost = rs.filter(r => !roomRedetect(r));
+  const lost = [];
+  for (const r of rs) { if (roomRedetect(r)) { roomWbSet(r); wbWarned.delete(r.id); } else if (!wbWarned.has(r.id)) { wbWarned.add(r.id); lost.push(r); } }
   if (lost.length) toast(L(`⚠ ${lost.map(r => '“' + r.name + '”').join(', ')} duvarlarını izleyemedi (aralık var ya da kapalı değil); eski köşeler korundu`, `⚠ ${lost.map(r => '“' + r.name + '”').join(', ')} could not follow its walls (a gap or not enclosed); the previous corners were kept`));
 }
 
@@ -9060,7 +9080,7 @@ function doHandle(raw, e) {
   if (h === 'wc') { // #202: eğrilik = imlecin kirişin normali boyunca uzaklığı (5 cm adım, Shift serbest; ortaya yakın = düz)
     const L = wLen(o) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, mx = (o.a.x + o.b.x) / 2, my = (o.a.y + o.b.y) / 2;
     let b = (raw.x - mx) * nx + (raw.y - my) * ny; if (!sh) b = Math.abs(b) < 8 ? 0 : rnd(b, 5);
-    setBulge(o, b); ui.cur = { x: mx + nx * (+o.bulge || 0), y: my + ny * (+o.bulge || 0) }; scheduleRender(); return;
+    setBulge(o, b); accFitOps(F(), o); ui.cur = { x: mx + nx * (+o.bulge || 0), y: my + ny * (+o.bulge || 0) }; scheduleRender(); return;
   }
   if (h === 'wa' || h === 'wb') {
     const ek = h === 'wa' ? 'a' : 'b', other = h === 'wa' ? o.b : o.a;
@@ -9725,7 +9745,7 @@ function applyProp(t, final) {
   }
   const os = selObjs().filter(x => x.kind === k); if (!os.length) return;
   for (const { o } of os) {
-    if (k === 'wall' && p === 'bulge') { setBulge(o, v); continue; } // #202
+    if (k === 'wall' && p === 'bulge') { setBulge(o, v); accFitOps(F(), o); continue; } // #202
     if (k === 'wall' && p === 'len') {
       if (final) applyWallLength(o, v, wallFree(o), ui.connWalls, os.find(x => x.o === o)?.floor || F()); // yazarken her tuşta değil: ara değerler kapıları sıkıştırmasın
     } else if (k === 'wall' && p === 'deg') {
@@ -9806,7 +9826,7 @@ function onPropsClick(e) {
   if (a === 'texadd') { ui.txWall = 0; return openTexDialog(); }
   if (a === 'axgrid') return axisGridPrompt();
   if (a === 'autodims') return autoDimsRun(); // #200
-  if (a === 'wallstraight') { os.forEach(x => { if (x.kind === 'wall') delete x.o.bulge; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; } // #202
+  if (a === 'wallstraight') { os.forEach(x => { if (x.kind === 'wall') { delete x.o.bulge; accFitOps(F(), x.o); } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; } // #202
   if (a === 'axcopy') { const axs = os.filter(x => x.kind === 'axis').map(x => x.o); if (!axs.length) return; if (P.floors.length < 2) return toast(L('Başka kat yok', 'There is no other floor')); axisCopyAll(axs); commit(); toast(L(`⧉ ${axs.length} aks ${P.floors.length - 1} kata kopyalandı`, `⧉ ${axs.length} axis/axes copied to ${P.floors.length - 1} floor(s)`)); return; }
   if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t) askConfirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`), { ok: L('Sil', 'Delete'), danger: true }).then(ok => { if (ok === true) deleteTexture(t.id); }); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
@@ -9977,8 +9997,8 @@ function onPropsClick(e) {
     }
     if (a === 'opflip' && kind === 'op') o.flip = o.flip ? 0 : 1;
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
-    if (a === 'redetect' && kind === 'room') { if (roomRedetect(o)) o.wb = 1; else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
-    if (a === 'roomwb' && kind === 'room') { if (o.wb) delete o.wb; else if (roomRedetect(o)) o.wb = 1; else toast(L('Oda duvarlardan algılanamadı: kapalı bir alan olmalı', 'The room could not be found from the walls: it must be enclosed')); }
+    if (a === 'redetect' && kind === 'room') { if (roomRedetect(o)) roomWbSet(o); else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
+    if (a === 'roomwb' && kind === 'room') { if (o.wb) delete o.wb; else if (roomRedetect(o)) roomWbSet(o); else toast(L('Oda duvarlardan algılanamadı: kapalı bir alan olmalı', 'The room could not be found from the walls: it must be enclosed')); }
     if (a === 'split' && kind === 'wall') {
       const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; if (o.color) nw.color = o.color; if (o.mul) nw.mul = o.mul; if (o.rs) nw.rs = o.rs; const L = wLen(o), old = o.b;
       o.b = m; f.walls.push(nw);
@@ -10109,7 +10129,7 @@ function libSizePaint(full) {
 function buildLib() {
   const cats = isEN() ? LIBCATS_EN : LIBCATS;
   libSizeUI();
-  const fits = libFits, opFits = o => libFits({ w: o.w, d: 0, h: o.h }), preFits = p => (p.kind === 'op' ? opFits(p) : libFits(p));
+  const fits = libFits, opFits = o => { const z = ui.libSize; if (!libSizeOn(z)) return true; return (+o.w || 0) <= (z.w > 0 ? z.w : Infinity) && (+o.h || 0) <= (z.h > 0 ? z.h : Infinity); } /* kapı / pencere dönmez: yalnız genişlik ve yükseklik */, preFits = p => (p.kind === 'op' ? opFits(p) : libFits(p));
   $('#cats').innerHTML = cats.map((c, i) => `<button class="chip ${i === ui.cat && (!ui.q || i === LIB_COMM) ? 'on' : ''}" data-cat="${i}">${c}</button>`).join('');
   const q = ui.q.toLowerCase(); let items = '';
   const card = (type, d, sz) => `<button class="item" data-type="${type}" data-id="${d.id}"><div class="ic">${d.icon || '▭'}</div><div>${itemName(d)}</div><div class="sz">${sz}</div></button>`;
@@ -10853,7 +10873,7 @@ function applyVarPoses(poses) {
         const diff = Math.round((wallDeg(o) - od) * 10) / 10;
         if (Math.abs(diff) > 0.05) o.angles = o.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
       }
-      const L = wLen(o);
+      const L = wallLen(o);
       F().ops.forEach(op => { if (op.wall === o.id) op.d = clamp(op.d, Math.min(op.w / 2, L / 2), Math.max(L - op.w / 2, L / 2)); });
     } else if (fd.kind === 'room') {
       o.pts = p.pts.map(q => ({ ...q }));
@@ -11822,6 +11842,7 @@ function helpModal() {
   )}</p>`, 'help');
   const aiBtn = document.querySelector('#modal [data-ai-prompt]');
   if (aiBtn) aiBtn.onclick = async () => {
+    if (!BRIDGE_OFF && !brgEs) { brgWant(); brgProbe(); } // #192: istem kopyalandı, köprü gelince bağlan
     const ok = await copyText(aiSetupPrompt());
     const st = document.getElementById('aiPromptState');
     if (st) st.textContent = ok
@@ -14934,7 +14955,7 @@ const qtyPrice = (proj, key) => { const v = proj && proj.qty && proj.qty.prices 
 function cleanQty(P) {
   const q = P.qty; if (!q || typeof q !== 'object') { delete P.qty; return; }
   const prices = {};
-  for (const [k, v] of Object.entries(q.prices || {})) if (/^[\w:.\-x ]{1,80}$/u.test(k) && Number.isFinite(+v) && +v > 0) prices[k] = Math.round(+v * 100) / 100;
+  for (const [k, v] of Object.entries(q.prices || {})) if (/^[^"<>`\u0000-\u001f]{1,80}$/u.test(k) && k !== '__proto__' && Number.isFinite(+v) && +v > 0) prices[k] = Math.round(+v * 100) / 100;
   if (Object.keys(prices).length) P.qty = { prices }; else delete P.qty;
 }
 function qtyCsv(data, proj) {
@@ -15104,8 +15125,8 @@ function archPrims(spec) {
           };
         }).filter(hh => hh.s1 - hh.s0 > 1);
         const top = wallTopOn(w) ? wallTopPts(w, t0 * L, t1 * L, 2).map(([d, hh]) => ({ s: pr(at(d / L)).s, z: WE + hh })) : null; // eğimli üst (#96, #176, #178)
-        const baseMeta = { id: w.id, kind: 'wall', floorIdx: i, color: faceCol, t0, t1, sA: A.s, sB: B.s, uProj, L };
-        face(corners, WE, WE + H, rail ? { ...baseMeta, rail, rs: railStyle(w) } : { ...baseMeta, holes, curtain, mulN, top });
+        const baseMeta = { id: w.pid || w.id, po: w.po || 0, kind: 'wall', floorIdx: i, color: faceCol, t0, t1, sA: A.s, sB: B.s, uProj, L };
+        face(corners, WE, WE + H, rail ? { ...baseMeta, rail, rs: railStyle(w) } : { ...baseMeta, holes, curtain, mulN, mulF: w.arc && curtain ? mulPos(w, 1) : null, top });
       };
       if (cut && (A.d > 0) !== (B.d > 0)) {
         const t = A.d / (A.d - B.d), sc = A.s + (B.s - A.s) * t, sin = Math.abs(B.d - A.d) / L, cw = w.t / Math.max(sin, 0.2);
@@ -15113,8 +15134,8 @@ function archPrims(spec) {
         const [c0, c1] = inCrop(sc - cw / 2, sc + cw / 2);
         if (c1 - c0 > 0.2) {
           const bands = op ? [[WE, WE + (+op.sill || 0)], [WE + (+op.sill || 0) + (+op.h || 0), WE + Hc]] : [[WE, WE + Hc]];
-          for (const [z0, z1] of bands) if (z1 - z0 > 0.5) prims.push({ t: 'cut', s0: c0, s1: c1, z0, z1, depth: 0, curtain, id: w.id, kind: 'wall', floorIdx: i, color: faceCol, uProj });
-          if (op && op.type === 'window') prims.push({ t: 'glass', s0: c0, s1: c1, z0: WE + (+op.sill || 0), z1: WE + (+op.sill || 0) + (+op.h || 0), depth: 0, id: op.id, kind: 'op', wallId: w.id, floorIdx: i });
+          for (const [z0, z1] of bands) if (z1 - z0 > 0.5) prims.push({ t: 'cut', s0: c0, s1: c1, z0, z1, depth: 0, curtain, id: w.pid || w.id, kind: 'wall', floorIdx: i, color: faceCol, uProj });
+          if (op && op.type === 'window') prims.push({ t: 'glass', s0: c0, s1: c1, z0: WE + (+op.sill || 0), z1: WE + (+op.sill || 0) + (+op.h || 0), depth: 0, id: op.id, kind: 'op', wallId: w.pid || w.id, floorIdx: i });
         }
         if (A.d > 0) faceOf(0, t); else faceOf(t, 1);
       } else if (!cut || (A.d > 0 && B.d > 0)) faceOf(0, 1);
@@ -15253,7 +15274,7 @@ function archSvg(spec, title, opts) {
     } else {
       out += `<rect${wAttr} x="${X(p.s0)}" y="${Y(p.z1)}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="${fill}"${fop} stroke="${st}" stroke-width="1.6"/>`;
     }
-    if (p.curtain && p.mulN > 1) {
+    if (p.curtain && (p.mulF ? p.mulF.length : p.mulN > 1)) {
       let md = ''; const span = p.s1 - p.s0;
       const topAt = s => {
         if (!p.top || !p.top.length) return p.z1;
@@ -15262,7 +15283,8 @@ function archSvg(spec, title, opts) {
         for (let i = 1; i < tp.length; i++) if (s <= tp[i].s) { const a = tp[i - 1], b = tp[i]; return b.s > a.s ? a.z + (b.z - a.z) * (s - a.s) / (b.s - a.s) : b.z; }
         return tp[tp.length - 1].z;
       };
-      for (let m = 1; m < p.mulN; m++) { const ms = p.s0 + span * m / p.mulN, mx = X(ms); md += `M${mx} ${Y(topAt(ms))}V${Y(p.z0)}`; }
+      const msL = p.mulF ? p.mulF.map(f => p.sA + (p.sB - p.sA) * f) : Array.from({ length: p.mulN - 1 }, (_, m) => p.s0 + span * (m + 1) / p.mulN);
+      for (const ms of msL) { const mx = X(ms); md += `M${mx} ${Y(topAt(ms))}V${Y(p.z0)}`; }
       if (md) out += `<path d="${md}" stroke="${st}" stroke-width="${mode === 'cad' ? 0.9 : 1.1}" fill="none" pointer-events="none"/>`;
     }
     for (const hh of p.holes || []) {
@@ -15325,7 +15347,7 @@ function archApplyDrag(spec, drag, ds, dz, snapStep = 0) {
   const dsSn = sn(ds), dzSn = sn(dz);
   if (kind === 'op') {
     const w = drag.wall; if (!w) return '';
-    const L = dist(w.a, w.b) || 1, WH = +w.h || drag.floorH || 270, uProj = drag.uProj || 0;
+    const L = wallLen(w) || 1, WH = +w.h || drag.floorH || 270, uProj = drag.uProj || 0;
     o.d = orig.d; o.w = orig.w; o.h = orig.h; o.sill = orig.sill;
     if (!handle) {
       if (Math.abs(uProj) > 0.15) {
@@ -15454,7 +15476,7 @@ function archPlaceOpAt(spec, prims, s, z, def, snapStep = 0) {
     ? clamp(sn(z - p.z0 - def.h / 2), 0, Math.max(0, H - def.h))
     : (z - p.z0 < def.h * 0.85 ? 0 : clamp(sn(z - p.z0), 0, Math.max(0, H - def.h)));
   const sC = p.sA + spanS * (d / L), halfS = (def.w / 2) * Math.abs(p.uProj);
-  return { floorIdx: p.floorIdx, wallId: p.id, d, sill, s0: sC - halfS, s1: sC + halfS, z0: p.z0 + sill, z1: p.z0 + sill + def.h };
+  return { floorIdx: p.floorIdx, wallId: p.id, d: d + (p.po || 0), sill, s0: sC - halfS, s1: sC + halfS, z0: p.z0 + sill, z1: p.z0 + sill + def.h };
 }
 function archHandleSvg(meta, selIds, zScale) {
   if (!meta || !selIds || !selIds.length) return '';
@@ -18567,7 +18589,7 @@ function init3D() {
     if (d3.op) {
       const fo = findAnyFloor(d3.id), w = fo && fo.floor.walls.find(x => x.id === d3.wallId); if (!w || d3.t0 == null) return;
       const p = opDragHit(ray3(e).ray, w, d3.elev); if (!p) return;
-      const L = wLen(w); let d = d3.d0 + p.t - d3.t0;
+      const L = wallLen(w); let d = d3.d0 + p.t - d3.t0;
       if (ui.snap && !e.shiftKey) d = rnd(d, 5);
       fo.o.d = clamp(d, Math.min(fo.o.w / 2, L / 2), Math.max(L - fo.o.w / 2, L / 2));
       schedBuild3D(); return;
@@ -21317,9 +21339,7 @@ function build3D(keepCam = false) {
       }
       if (curt) {
         // dikmeler: açıklıkların üstüne binmesin, eğimli duvar üstünde profile göre kısalır (#176)
-        const nM = curtainBays(w); // modül / ara dikme adedi (#71)
-        for (let i = 0; i <= nM; i++) {
-          const x = (i * L) / nM;
+        for (const x of mulPos(w, L, true)) { // modül / ara dikme (#71), eğri duvarda tüm yay boyunca (#202)
           if (ops.some(o => o.d - o.w / 2 < x + 4 && o.d + o.w / 2 > x - 4)) continue;
           const hx = sloped ? Math.min(wallTopAt(w, x), wallTopAt(w, clamp(x - 3, 0, L)), wallTopAt(w, clamp(x + 3, 0, L))) : H;
           const mh = hx - 2 * rail;
@@ -21359,13 +21379,13 @@ function build3D(keepCam = false) {
           else { tri([b.x, jb, b.y], [b.x, zb, b.y], [a.x, za, a.y]); tri([b.x, jb, b.y], [a.x, za, a.y], [a.x, jb, a.y]); }
         }
         const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.computeVertexNormals();
-        const m = new THREE.Mesh(geo, mat(jCol)); m.position.y = elev; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
+        const m = new THREE.Mesh(geo, mat(jCol)); m.position.y = elev; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.pid || w0.id };
         S.add(m); continue;
       }
       const geo = new THREE.ExtrudeGeometry(new THREE.Shape(j.poly.map(p => new THREE.Vector2(p.x, p.y))), { depth: H, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
       const m = new THREE.Mesh(geo, mat(jCol));
-      m.position.y = elev + jb + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
+      m.position.y = elev + jb + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.pid || w0.id };
       S.add(m);
     }
     f.furn.forEach((o, fi3) => {

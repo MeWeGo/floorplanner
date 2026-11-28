@@ -302,6 +302,9 @@ function makeTemplateSandbox() {
     ${fnSrc('mkFurn')}
     ${fnSrc('mkRoom')}
     ${fnSrc('addRectWalls')}
+    ${fnSrc('strHash')}
+    ${constSrc('roomWbSig')}
+    ${fnSrc('roomWbSet')}
     ${fnSrc('autoRoomAt')}
     ${fnSrc('tplCtx')}
     ${arrayDecl('TEMPLATES')}

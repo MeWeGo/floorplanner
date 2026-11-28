@@ -26,6 +26,7 @@ function makeSandbox() {
       return Promise.resolve();
     };
 
+    ${fnSrcOf(src, 'strHash')}
     ${constLineOf(src, 'bgData')}
     ${fnSrcOf(src, 'bgAbsorb')}
     ${fnSrcOf(src, 'bgInline')}

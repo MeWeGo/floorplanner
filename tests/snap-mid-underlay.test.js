@@ -6,7 +6,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf, markerBlock } = require('./helpers/repo');
 
 const src = read('app.js');
 const fnSrc = name => fnSrcOf(src, name);
@@ -21,7 +21,8 @@ function env(floors, opts = {}) {
     const F = () => P.floors[fi];
     const layersVis = { underlay: opts.underlay !== false }, underlay = { floor: opts.ref || 'prev' };
     const KINDS = { walls: 'wall', furn: 'furn', rooms: 'room', slabs: 'slab', voids: 'void', dims: 'dim' };
-    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), rnd = (v, s) => Math.round(v / s) * s;
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), rnd = (v, s) => Math.round(v / s) * s, clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    ${markerBlock(src, 'CURVED-WALL')}
     const visFloor = f => f; // katman süzgeci (#32): bu testlerde tüm katmanlar görünür
     ${fnSrc('snapToGrid')}
     ${constLineOf(src, 'NO_TILT_K')}

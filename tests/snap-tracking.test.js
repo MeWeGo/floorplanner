@@ -5,7 +5,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock } = require('./helpers/repo');
 
 const src = read('app.js');
 const start = src.indexOf('function underlayFloor('); // + underlay / mid / centre helpers (#25, #26)
@@ -17,7 +17,8 @@ function env(walls, opts = {}) {
     const ui = { snap: true, angle: opts.angle !== false, polyPts: null };
     const view = { z: 1 }, P = { grid: 10, gridType: 'square' };
     const F = () => ({ walls, rooms: [] }), layersVis = { underlay: false }, underlay = { floor: 'prev' }, KINDS = {};
-    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), rnd = (v, s) => Math.round(v / s) * s;
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), rnd = (v, s) => Math.round(v / s) * s, clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    ${markerBlock(src, 'CURVED-WALL')}
     ${fnSrcOf(src, 'snapToGrid')}
     ${src.slice(start, end)}
     return { snapPt };`)(walls, opts);

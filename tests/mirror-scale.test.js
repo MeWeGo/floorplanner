@@ -4,7 +4,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, markerBlock } = require('./helpers/repo');
 
 const src = read('app.js');
 const fnSrc = name => fnSrcOf(src, name);
@@ -20,6 +20,7 @@ function env(initialFloor = { walls: [], ops: [] }) {
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const wLen = w => dist(w.a, w.b);
+    ${markerBlock(src, 'CURVED-WALL')}
     const F = () => f;
     const isParamRoof = () => false; // parametric roofs: parametric-roof.test.js
     ${fnSrc('reflectPoint')}

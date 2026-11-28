@@ -4231,7 +4231,7 @@ check('rooms that follow their walls (#201)', async page => {
     const a2 = polyArea(F().rooms.find(x => x.id === auto.id).pts); commit(); const stays = polyArea(F().rooms.find(x => x.id === auto.id).pts) === a2;
     return { wb: auto.wb, a0: Math.round(a0 / 1e4), a1: Math.round(a1 / 1e4), oneStep, manKept, undone, leakKept, warned, pressed, unbound, stays };
   })()`);
-  const ok = r.wb === 1 && r.a1 > r.a0 && r.oneStep && r.manKept && r.undone && r.leakKept && r.warned && r.pressed === 'true' && r.unbound && r.stays;
+  const ok = typeof r.wb === 'string' && r.a1 > r.a0 && r.oneStep && r.manKept && r.undone && r.leakKept && r.warned && r.pressed === 'true' && r.unbound && r.stays;
   if (!ok) throw new Error('rooms follow walls: ' + JSON.stringify(r));
   return `room ${r.a0} → ${r.a1} m² with the wall, manual room kept, gap warned, unlink works`;
 });
