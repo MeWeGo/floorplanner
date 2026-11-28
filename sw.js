@@ -20,7 +20,8 @@ const DEV = BUILD.startsWith('__');
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const c = await caches.open(CACHE);
-    await c.addAll(SHELL);
+    // bypass the HTTP cache (GitHub Pages: max-age=600), or a build could mix a new index.html with an old style.css
+    await c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })));
     // CDN scripts: a failure (offline install, blocked CDN) must not stop the worker from installing
     await Promise.all(CDN.map(u => fetch(u, { mode: 'cors' }).then(r => (r.ok ? c.put(u, r) : null)).catch(() => null)));
   })());
