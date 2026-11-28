@@ -4,7 +4,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf, markerBlock } = require('./helpers/repo');
 
 const src = read('app.js');
 const mcpSrc = read('mcp/server.js');
@@ -21,6 +21,8 @@ test('(#71) curtainBays(w): bay count calculations and priority', () => {
   const { curtainBays } = new Function(`
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const wLen = w => dist(w.a, w.b);
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    ${markerBlock(src, 'CURVED-WALL')}
     ${constLine('MUL_DEF')}
     ${fnSrc('curtainBays')}
     return { curtainBays };
@@ -54,12 +56,14 @@ test('(#71) curtainBays(w): bay count calculations and priority', () => {
 });
 
 test('(#71) source regex: wallSvg and build3D draw curtain bays', () => {
-  assert.ok(/function wallSvg\b[\s\S]*?const nTick = curtainBays\(w\);/.test(src),
-    'wallSvg must compute bays with curtainBays(w)');
-  assert.ok(/for\s*\(\s*let\s+i\s*=\s*1;\s*i\s*<\s*nTick;\s*i\+\+\s*\)/.test(src),
-    'wallSvg must draw (bays - 1) tick lines');
-  assert.ok(/const nM = curtainBays\(w\);/.test(src),
-    'build3D must compute mullion bays with curtainBays(w)');
+  assert.match(fnSrc('mulPos'), /const nB = curtainBays\(w\)/,
+    'mulPos must compute bays with curtainBays(w)');
+  assert.match(fnSrc('mulPos'), /for\s*\(\s*let\s+i\s*=\s*ends\s*\?\s*0\s*:\s*1;\s*i\s*<=\s*\(ends\s*\?\s*nB\s*:\s*nB\s*-\s*1\);\s*i\+\+\s*\)/,
+    'mulPos must emit (bays - 1) interior ticks when ends=false');
+  assert.match(fnSrc('wallSvg'), /for\s*\(\s*const\s+xm\s+of\s+mulPos\(w,\s*Lc\)\s*\)/,
+    'wallSvg must draw curtain ticks via mulPos(w, Lc)');
+  assert.match(fnSrc('build3D'), /for\s*\(\s*const\s+x\s+of\s+mulPos\(w,\s*L,\s*true\)\s*\)/,
+    'build3D must draw curtain mullions via mulPos(w, L, true)');
 });
 
 test('(#71) source regex: applyProp and renderProps handle mul and mulN', () => {

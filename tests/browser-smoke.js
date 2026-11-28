@@ -380,8 +380,8 @@ check('project tabs keep separate plans and undo, and paste across (issue #17)',
     document.querySelector('#ptabs [data-tab="1"]').click();
     r.bStill = F().walls.length;
     r.state = tabsState().tabs.length;
-    window.confirm = () => true;
-    await closeTab(1);
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
+    const closing = closeTab(1); await answer(); await closing;
     r.n2 = tabs.length; r.after = P.name;
     return r;
   })()`);
@@ -755,6 +755,36 @@ check('sloped surfaces: height points added by click / on corners tilt a slab an
   if (info.roomMin !== -5) throw new Error('3D room floor does not dip to the drain: ' + JSON.stringify(info));
   if (info.furnY === null || info.furnY < 30) throw new Error('furniture does not sit on the sloped slab: ' + JSON.stringify(info));
   if (!info.undo[0] || info.undo[1] !== -5 || info.undo[2] !== 0 || !info.svg) throw new Error('undo / export: ' + JSON.stringify(info));
+});
+
+check('curved walls (#202): the middle handle bends a wall, openings sit on the arc, 2D / 3D / click / undo', async page => {
+  const info = await page.evaluate(`(async () => {
+    loadProject(newProject()); view.z = 1; view.x = 200; view.y = 200; render();
+    const r = cv.getBoundingClientRect(), out = {};
+    const ev = (p, type, tgt) => { const s = w2s(p); (tgt || cv).dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 })); };
+    const w = mkWall({ x: 0, y: 0 }, { x: 400, y: 0 }); F().walls.push(w); commit();
+    setTool('select'); sel = [w.id]; refresh();
+    const hd = document.querySelector('#gSel [data-h="wc"]'); out.handle = !!hd;
+    if (hd) { ev({ x: 200, y: 0 }, 'pointerdown', hd); ev({ x: 200, y: 120 }, 'pointermove'); ev({ x: 200, y: 150 }, 'pointermove'); ev({ x: 200, y: 150 }, 'pointerup'); }
+    out.bulge = w.bulge;
+    out.pieces = document.querySelectorAll('#gWalls [data-id="' + w.id + '"]').length;
+    out.arcLen = Math.round(wallLen(w));
+    const op = mkOp(OPDEF.door, w, wallLen(w) / 2); F().ops.push(op); commit(); refresh();
+    const q = opPos(op); out.opAt = [Math.round(q.x), Math.round(q.y)];
+    out.opSvg = document.querySelectorAll('#gOps *').length > 0;
+    sel = []; refresh(); const pk = arcAt(wallArc(w), wallLen(w) * 0.2); ev(pk, 'pointerdown'); ev(pk, 'pointerup'); out.picked = sel.join();
+    out.export = exportSvg().svg.length > 0;
+    await show3D(true); build3D(); let n = 0; T3.scene.traverse(m => { if (m.userData && m.userData.wallId === w.id) n++; }); out.groups3d = n; show3D(false);
+    sel = [w.id]; refresh(); document.querySelector('#props [data-act="wallstraight"]').click(); out.straight = w.bulge == null;
+    undo(); out.undo = find(w.id).o.bulge;
+    return out;
+  })()`);
+  if (!info.handle || info.bulge !== 150) throw new Error('middle handle did not bend the wall: ' + JSON.stringify(info));
+  if (info.pieces < 4 || info.arcLen <= 400) throw new Error('curved wall not drawn as an arc: ' + JSON.stringify(info));
+  if (info.opAt[0] !== 200 || info.opAt[1] !== 150 || !info.opSvg) throw new Error('door not on the arc apex: ' + JSON.stringify(info));
+  if (info.picked !== info.picked.split('~')[0] || !info.picked) throw new Error('clicking a piece must select the wall itself: ' + JSON.stringify(info));
+  if (info.groups3d < 4 || !info.export) throw new Error('3D / export: ' + JSON.stringify(info));
+  if (!info.straight || info.undo !== 150) throw new Error('straighten / undo: ' + JSON.stringify(info));
 });
 
 check('axes: the Z tool draws named axes, a wall snaps to their crossing, grid + copy to floors, export, undo', async page => {
@@ -1437,10 +1467,10 @@ check('furniture studio: drop, drag, resize, keys, undo, templates, place in pla
     out.lib = (P.lib.presets || []).some(p => p.name === 'Test table' && p.extra && p.extra.parts.length === out.parts);
     // reopen from the panel, switch to a template, Esc (confirm accepted) closes without touching the item
     sel = [o.id]; refresh(); document.querySelector('#props [data-act="parts"]').click(); await frame();
-    const conf = window.confirm; window.confirm = () => true;
-    const tplSel = document.getElementById('fsTpl'); tplSel.value = 'chair'; tplSel.dispatchEvent(new Event('change', { bubbles: true }));
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
+    const tplSel = document.getElementById('fsTpl'); tplSel.value = 'chair'; tplSel.dispatchEvent(new Event('change', { bubbles: true })); await answer();
     out.tpl = D().parts.length; out.tplName = D().parts.some(p => p.name === 'seat' || p.name === 'backrest');
-    key('Escape'); window.confirm = conf; out.escClosed = ui.modal !== 'parts' && !document.getElementById('fstudio');
+    key('Escape'); await answer(); out.escClosed = ui.modal !== 'parts' && !document.getElementById('fstudio');
     out.itemKept = F().furn[0].parts.length === out.parts;
     sel = []; refresh();
     return out;
@@ -1811,11 +1841,11 @@ check('texture dialog: create a pattern, upload tab, AI tab, agent-made SVG text
 });
 
 check('library presets: save a door, place it twice, delete + undo, JSON keeps them (issue #42)', async page => {
-  const info = await page.evaluate(`(() => {
+  const info = await page.evaluate(`(async () => {
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
     loadProject(newProject()); addRectWalls(0, 0, 800, 500); const f = F();
     const door = mkOp(OPDEF.door, f.walls[0], 200); door.w = 85; door.mat = 'glass'; f.ops.push(door); commit();
-    const p0 = window.prompt, c0 = window.confirm; window.prompt = () => 'K1'; window.confirm = () => true;
-    sel = [door.id]; refresh(); const btn = document.querySelector('#props [data-act="savepreset"]'); if (btn) btn.click();
+    sel = [door.id]; refresh(); const btn = document.querySelector('#props [data-act="savepreset"]'); if (btn) btn.click(); await answer('K1');
     const out = { saved: (P.lib.presets || []).length, card: (document.querySelector('#items [data-type="pre"] .sz') || {}).textContent };
     const pr = P.lib.presets[0]; document.querySelector('#items [data-type="pre"][data-id="' + pr.id + '"]').click();
     const r = cv.getBoundingClientRect(), at = (q, type) => { const s = w2s(q); cv.dispatchEvent(new PointerEvent(type, { clientX: r.left + s.x, clientY: r.top + s.y, bubbles: true, pointerId: 1, button: 0 })); };
@@ -1823,9 +1853,8 @@ check('library presets: save a door, place it twice, delete + undo, JSON keeps t
     setTool('select');
     out.placed = F().ops.slice(1).map(o => o.w + ':' + o.mat).join(',');
     out.json = JSON.parse(JSON.stringify(P)).lib.presets.length;
-    document.querySelector('#items [data-delpre="' + pr.id + '"]').click(); out.del = P.lib.presets.length;
+    document.querySelector('#items [data-delpre="' + pr.id + '"]').click(); await answer(); out.del = P.lib.presets.length;
     undo(); out.undo = P.lib.presets.length + '/' + document.querySelectorAll('#items [data-type="pre"]').length;
-    window.prompt = p0; window.confirm = c0;
     return out;
   })()`);
   if (info.saved !== 1 || info.card !== '85×210') throw new Error('door preset not saved to the library: ' + JSON.stringify(info));
@@ -3450,7 +3479,7 @@ check('mobile: context touch bar (placing / drawing), library drawer, long-press
 
 
 check('mobile: exact wall length from the touch bar, multi-select without Shift, rename a floor without double-tap', async page => {
-  const r = await page.evaluate(`(() => {
+  const r = await page.evaluate(`(async () => {
     if (ui.view3d) show3D(false);
     loadProject(newProject()); const f = F(); commit(); refresh();
     document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true }));
@@ -3470,7 +3499,8 @@ check('mobile: exact wall length from the touch bar, multi-select without Shift,
     tap(a); tap(b); const both = sel.includes(a.id) && sel.includes(b.id);
     touchAct('multi'); sel = []; refresh(); tap(a); tap(b); const single = sel.length === 1 && sel[0] === b.id;
     // floor rename button
-    const op = window.prompt; window.prompt = () => 'Zemin X'; document.querySelector('#floors [data-fa="ren"]').click(); window.prompt = op;
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
+    document.querySelector('#floors [data-fa="ren"]').click(); await answer('Zemin X');
     const fname = F().name;
     document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'mouse', bubbles: true }));
     return { len, start, boxGone, multiOn, both, single, fname };
@@ -3627,9 +3657,9 @@ check('project groups: tabs gather behind a folding group chip, panel + right-cl
     out.order = names().join(' ');
     document.querySelector('#ptabs [data-tabgrp="Zehra"]').click(); out.folded = names().join(' ');
     document.querySelector('#ptabs [data-tabgrp="Zehra"]').click();
-    const keep = window.prompt; window.prompt = () => 'Zehra';
+    const answer = async v => { for (let i = 0; i < 60 && !document.querySelector('#ask'); i++) await new Promise(r => setTimeout(r, 10)); if (!document.querySelector('#ask')) return false; const f = document.querySelector('#askI'); if (f && v != null) f.value = v; document.querySelector('#ask [data-ask="ok"]').click(); await new Promise(r => setTimeout(r, 0)); return true; };
     const a2 = [...document.querySelectorAll('#ptabs .ptab')].find(e => /A2/.test(e.textContent));
-    a2.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); window.prompt = keep;
+    a2.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); await answer('Zehra');
     out.right = P.group; undo(); out.undo = P.group;
     await dbPut('projects', { name: '__g1', updatedAt: 3, project: { ...mk('__g1'), group: 'Zehra' } });
     await dbPut('projects', { name: '__g2', updatedAt: 2, project: { ...mk('__g2'), group: 'Ahsen' } });
@@ -3980,6 +4010,487 @@ check('Hexagonal Draw Roof, beveled & curtain wall attach, one-sided resize (#17
 });
 
 
+// #191: dragging a sun slider in the render studio with the live view on only moves lights and sky uniforms;
+// the full applyLive3D (realistic materials, sky, ground) runs once on release, and matches a direct rebuild.
+check('render studio sun sliders stay light while dragging in the live view (#191)', async page => {
+  const r = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 500, 400); sel = []; commit(); refresh();
+    document.getElementById('b3d').click(); if (!ui.view3d) return { err: '3D did not open' };
+    if (!ui.live3d) setLive3D(true);
+    openRenderStudio();
+    const az = document.querySelector('[data-rs="az"]'); if (!az) return { err: 'no azimuth slider' };
+    const origReal = realLook; let reals = 0; realLook = function () { reals++; return origReal.apply(this, arguments); };
+    const sky0 = T3.live.sky, sun0 = sky0.material.uniforms.sun.value.clone(), l0 = shadowLights(T3.scene)[0].position.clone();
+    const frame = () => new Promise(res => requestAnimationFrame(() => res()));
+    try {
+      for (let i = 1; i <= 12; i++) { az.value = String(20 * i); az.dispatchEvent(new Event('input', { bubbles: true })); if (i % 3 === 0) await frame(); }
+      await frame();
+      const during = { reals, sameSky: T3.live.sky === sky0, sunMoved: sky0.material.uniforms.sun.value.distanceTo(sun0) > 0.05, lightMoved: shadowLights(T3.scene)[0].position.distanceTo(l0) > 1 };
+      az.dispatchEvent(new Event('change', { bubbles: true }));
+      const released = { reals, newSky: T3.live.sky !== sky0, sun: T3.live.sky.material.uniforms.sun.value.clone() };
+      applyLive3D();
+      const direct = T3.live.sky.material.uniforms.sun.value;
+      return { ...during, afterRelease: released.reals, newSky: released.newSky, matches: released.sun.distanceTo(direct) < 1e-6 };
+    } finally { realLook = origReal; closeModal(); setLive3D(false); show3D(false); }
+  })()`);
+  if (r.err) throw new Error(r.err);
+  if (r.reals !== 0 || !r.sameSky || !r.sunMoved || !r.lightMoved || r.afterRelease !== 1 || !r.newSky || !r.matches) throw new Error('sun slider: ' + JSON.stringify(r));
+  return 'no realLook while dragging, one full rebuild on release';
+});
+
+// #205: the render studio sets the sun from the project location, date and time; the location is project data
+// (one undo step, survives a save), north turns the sun, and the shadow study animates the hour.
+check('sun from location, date and time in the render studio (#205)', async page => {
+  const r = await page.evaluate(`(async () => {
+    loadProject(newProject()); addRectWalls(0, 0, 500, 400); sel = []; commit(); refresh();
+    document.getElementById('b3d').click(); if (!ui.view3d) return { err: '3D did not open' };
+    ui.studio.date = '2026-06-21'; ui.studio.hour = 12; ui.studio.siteOpen = true;
+    openRenderStudio();
+    const q = s => document.querySelector('#modal ' + s), fire = (el, ev) => el.dispatchEvent(new Event(ev, { bubbles: true }));
+    const city = q('[data-site="city"]'); if (!city) return { err: 'no city picker' };
+    const h0 = hi;
+    city.value = 'ankara'; fire(city, 'change');
+    const site = JSON.parse(JSON.stringify(P.site || null)), oneStep = hi === h0 + 1;
+    const hour = q('[data-rs="hour"]'); hour.value = '13.25'; fire(hour, 'input'); fire(hour, 'change');
+    const noon = { az: ui.studio.az, alt: ui.studio.alt, slider: +q('[data-rs="az"]').value, label: hour.nextElementSibling.textContent };
+    const north = q('[data-site="north"]'); north.value = '90'; fire(north, 'change');
+    const turned = ui.studio.az;
+    hour.value = '1'; fire(q('[data-rs="hour"]'), 'input'); const nightIn = q('[data-rs="hour"]'); nightIn.value = '1'; fire(nightIn, 'input'); fire(nightIn, 'change');
+    const night = { alt: ui.studio.alt, mood: ui.studio.mood };
+    q('[data-rs-anim]').click(); const hA = ui.studio.hour;
+    await new Promise(res => setTimeout(res, 700));
+    const animated = ui.studio.anim && ui.studio.hour !== hA, live = !!ui.live3d;
+    q('[data-rs-anim]').click();
+    undo(); undo(); const undone = !P.site;
+    closeModal(); setLive3D(false); show3D(false);
+    return { site, oneStep, noon, turned, night, animated, live, undone };  // Ankara solar noon ≈ 12:49, so 13:15 is just past south
+  })()`);
+  if (r.err) throw new Error(r.err);
+  const ok = r.site && r.site.lat === 39.93 && r.oneStep && r.noon.az > 185 && r.noon.az < 215 && r.noon.alt > 70 && r.noon.label === '13:15'
+    && Math.abs(((r.turned - r.noon.az + 360) % 360) - 90) < 1 && r.night.alt < 0 && r.night.mood === 'night' && r.animated && r.live && r.undone;
+  if (!ok) throw new Error('site sun: ' + JSON.stringify(r));
+  return `Ankara 21 June 13:15 → az ${r.noon.az}°, alt ${r.noon.alt}°; north 90° → ${r.turned}°; shadow study runs`;
+});
+
+// #204: the library can be filtered by maximum width / depth / height, together with search and categories,
+// and "fits the selection" takes the limits from a selected room or the gap between two facing walls.
+check('library size filter and "fits the selection" (#204)', async page => {
+  const r = await page.evaluate(`(async () => {
+    loadProject(newProject()); closeModal();
+    ui.cat = 1; ui.q = ''; document.querySelector('#search').value = ''; ui.libSize = { w: null, d: null, h: null }; ui.libSizeOpen = false; buildLib();
+    const count = () => document.querySelectorAll('#items .item').length;
+    const all = count();
+    document.querySelector('#libSize [data-lsact="toggle"]').click();
+    const w = document.querySelector('#libSize [data-ls="w"]'); w.value = '90'; w.dispatchEvent(new Event('input', { bubbles: true }));
+    const small = count(), focusKept = document.activeElement === w || !!document.querySelector('#libSize [data-ls="w"]');
+    const ids = [...document.querySelectorAll('#items .item')].map(b => BYID[b.dataset.id]).filter(Boolean);
+    const allFit = ids.every(c => Math.min(c.w, c.d) <= 90);
+    ui.libSize.w = 80; ui.q = 'sofa'; document.querySelector('#search').value = 'sofa'; buildLib();
+    const sofas = [...document.querySelectorAll('#items .item')].map(b => b.dataset.id);
+    ui.q = ''; document.querySelector('#search').value = ''; document.querySelector('#libSize [data-lsact="clear"]').click();
+    const cleared = count() === all && !libSizeOn();
+    // a 300 × 250 room, then two facing walls 120 cm apart (clear gap 100 with 20 cm walls)
+    addRectWalls(0, 0, 300, 250); commit();
+    P.floors[fi].rooms.push({ id: 'rmA', name: 'Box', color: '#ccc', floor: 'none', pts: [{ x: 0, y: 0 }, { x: 300, y: 0 }, { x: 300, y: 250 }, { x: 0, y: 250 }] });
+    sel = ['rmA']; document.querySelector('#libSize [data-lsact="fit"]').click();
+    const room = { ...ui.libSize };
+    const wa = mkWall({ x: 1000, y: 0 }, { x: 1000, y: 300 }), wb = mkWall({ x: 1120, y: 0 }, { x: 1120, y: 300 });
+    F().walls.push(wa, wb); sel = [wa.id, wb.id]; document.querySelector('#libSize [data-lsact="fit"]').click();
+    const gap = { ...ui.libSize };
+    ui.libSize = { w: null, d: null, h: null }; buildLib();
+    return { all, small, allFit, sofas, cleared, focusKept, room, gap };
+  })()`);
+  const ok = r.small > 0 && r.small < r.all && r.allFit && r.cleared && r.room.w === 300 && r.room.d === 250 && r.room.h > 200
+    && r.gap.w === 100 && r.gap.d === 300 && !r.sofas.includes('sofa3');
+  if (!ok) throw new Error('library size filter: ' + JSON.stringify(r));
+  return `${r.all} → ${r.small} items at ≤ 90 cm; room → ${r.room.w}×${r.room.d}×${r.room.h}, gap → ${r.gap.w} cm`;
+});
+
+// #200: one click dimensions every room and the outside of the building; a second click replaces only the
+// automatic dimensions (manual ones stay) and each run is one undo step.
+check('one-click dimensions for rooms and outer walls (#200)', async page => {
+  const r = await page.evaluate(`(() => {
+    closeModal(); P = newProject(); fi = 0; TEMPLATES[2].build(); loadProject(P); refresh();
+    F().dims.push({ id: 'manual1', a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, off: 40 }); commit();
+    const h0 = hi, n0 = F().dims.length;
+    document.querySelector('#props [data-act="autodims"]') ? document.querySelector('#props [data-act="autodims"]').click() : autoDimsRun();
+    const n1 = F().dims.length, auto1 = F().dims.filter(d => d.auto).length, oneStep = hi === h0 + 1;
+    autoDimsRun();
+    const n2 = F().dims.length, manualKept = F().dims.some(d => d.id === 'manual1');
+    const svg = exportSvg().svg;
+    undo(); undo(); const back = F().dims.length === n0;
+    return { n0, n1, auto1, n2, oneStep, manualKept, back, svgOk: svg.length > 1000 };
+  })()`);
+  if (!(r.auto1 > 8 && r.n1 === r.n0 + r.auto1 && r.n2 === r.n1 && r.oneStep && r.manualKept && r.back && r.svgOk)) throw new Error('auto dimensions: ' + JSON.stringify(r));
+  return `${r.auto1} dimensions, re-run replaced them, manual kept, undo restores`;
+});
+
+// #199: the quantities view lists rooms, floor finishes, wall surfaces, walls, openings and furniture for a floor
+// or the whole project; unit prices are project data (one undo step); the CSV is UTF-8 with a BOM.
+check('quantities & shopping list with unit prices and CSV (#199)', async page => {
+  const r = await page.evaluate(`(() => {
+    closeModal(); P = newProject(); fi = 0; TEMPLATES[2].build(); loadProject(P); refresh();
+    document.querySelector('#bQty').click();
+    if (ui.modal !== 'qty') return { err: 'modal did not open' };
+    const sections = [...document.querySelectorAll('#modal tr.qty-sec')].map(t => t.textContent);
+    const inp = document.querySelector('#modal [data-qty-price^="fin:"]'), key = inp.dataset.qtyPrice;
+    const h0 = hi; inp.value = '12.5'; inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
+    const saved = P.qty && P.qty.prices[key] === 12.5, oneStep = hi === h0 + 1, total = document.querySelector('#qtyTotal').textContent;
+    const d = qtyData(), roomSum = d.rooms.reduce((s, x) => s + x.area, 0), finSum = d.sections.find(s => s.id === 'fin').lines.reduce((s, l) => s + l.qty, 0);
+    const furn = d.sections.find(s => s.id === 'furn').lines.reduce((s, l) => s + l.qty, 0);
+    const csv = qtyCsv(d, P), bom = csv.charCodeAt(0) === 0xfeff;
+    document.querySelector('#modal [data-qty-scope="all"]').click(); const all = ui.qtyAll;
+    closeModal(); undo(); const undone = !(P.qty && P.qty.prices[key]);
+    ui.qtyAll = false;
+    return { sections: sections.length, saved, oneStep, total, roomSum: Math.round(roomSum * 100), finSum: Math.round(finSum * 100), furn, furnInPlan: F().furn.length, bom, csvLines: csv.split('\\r\\n').length, all, undone };
+  })()`);
+  if (r.err) throw new Error(r.err);
+  const ok = r.sections >= 4 && r.saved && r.oneStep && /[0-9]/.test(r.total) && r.roomSum === r.finSum && r.furn === r.furnInPlan && r.bom && r.csvLines > 10 && r.all && r.undone;
+  if (!ok) throw new Error('quantities: ' + JSON.stringify(r));
+  return `${r.sections} sections, ${r.furn} furniture items, price saved + undone, CSV with BOM`;
+});
+
+// #195 / #196: in-app ask / confirm dialogs (Enter submits, Esc aborts with no change, focus stays inside and
+// returns to the opener), modal dialog semantics with focus restore, context-menu keys, named icon buttons.
+check('accessible in-app dialogs, modal focus, menu keys and icon-button names (#195, #196)', async page => {
+  const r = await page.evaluate(`(async () => {
+    closeModal(); loadProject(newProject()); addRectWalls(0, 0, 400, 300); commit(); refresh();
+    const tick = () => new Promise(res => setTimeout(res, 20)), key = (k, o = {}) => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...o }));
+    const out = {};
+    // floor rename: Esc leaves the name, Enter applies it, one undo step
+    const ren0 = () => document.querySelector('#floors [data-fa="ren"]'), ren = ren0(); ren.focus(); const name0 = F().name;
+    ren.click(); await tick();
+    const ask = document.querySelector('#ask'); out.role = ask && ask.getAttribute('role'); out.modal = ask && ask.getAttribute('aria-modal');
+    out.focusIn = document.activeElement && document.activeElement.id === 'askI';
+    document.activeElement.value = 'Escaped'; key('Escape'); await tick();
+    out.escKept = F().name === name0 && !document.querySelector('#ask'); out.focusBack = document.activeElement === ren;
+    const h0 = hi; ren0().click(); await tick(); document.activeElement.value = 'Kat Bir'; key('Enter'); await tick();
+    out.entered = F().name === 'Kat Bir' && hi === h0 + 1;
+    // Tab stays inside the dialog
+    ren0().click(); await tick(); const okB = document.querySelector('#ask [data-ask="ok"]'); okB.focus(); key('Tab'); await tick();
+    out.trap = !!document.activeElement.closest('#ask'); key('Escape'); await tick();
+    // the dialog follows the theme: its colours come from the CSS variables
+    document.documentElement.dataset.theme = 'light'; ren0().click(); await tick();
+    const lightBg = getComputedStyle(document.querySelector('#ask')).backgroundColor; key('Escape'); await tick();
+    delete document.documentElement.dataset.theme; ren0().click(); await tick();
+    const darkBg = getComputedStyle(document.querySelector('#ask')).backgroundColor; key('Escape'); await tick();
+    out.themed = lightBg !== darkBg;
+    // a validation error keeps the dialog open
+    sel = F().walls.map(w => w.id); refresh(); scaleSelPrompt(); await tick();
+    document.activeElement.value = 'abc'; key('Enter'); await tick();
+    out.invalid = !!document.querySelector('#ask') && /\\S/.test(document.querySelector('#askE').textContent); key('Escape'); await tick();
+    // #modal: dialog role, labelled by its heading, focus in, Esc from an input closes, focus returns
+    const help = document.querySelector('#bHelp'); help.focus(); help.click(); await tick();
+    const m = document.querySelector('#modal'); out.mRole = m.getAttribute('role') + '/' + m.getAttribute('aria-modal') + '/' + !!document.getElementById(m.getAttribute('aria-labelledby'));
+    out.mFocus = m.contains(document.activeElement); out.closeNamed = !!m.querySelector('[data-close][aria-label]');
+    key('Escape'); await tick(); out.mBack = document.activeElement === help && ui.modal == null;
+    // context menu: role menu, arrow keys move, Esc closes
+    sel = [F().walls[0].id]; refresh();
+    const s = w2s({ x: 200, y: 0 }), rc = cv.getBoundingClientRect();
+    openCtxMenu({ clientX: rc.left + s.x, clientY: rc.top + s.y });
+    const cm = document.getElementById('ctxMenu'); out.menu = cm && cm.getAttribute('role');
+    const first = document.activeElement; key('ArrowDown'); out.arrow = document.activeElement !== first && document.activeElement.getAttribute('role') === 'menuitem';
+    key('Escape'); out.menuClosed = !document.getElementById('ctxMenu');
+    // icon-only buttons carry a name
+    await tick();
+    const bare = [...document.querySelectorAll('header button, #floors button, #zIn, #zOut, #zFit')].filter(b => b.offsetParent && !/[\\p{L}\\p{N}]{2,}/u.test(b.textContent) && !b.getAttribute('aria-label'));
+    out.unnamed = bare.map(b => b.id || b.outerHTML.slice(0, 40));
+    return out;
+  })()`);
+  const ok = r.role === 'dialog' && r.modal === 'true' && r.focusIn && r.escKept && r.focusBack && r.entered && r.trap && r.themed && r.invalid
+    && r.mRole === 'dialog/true/true' && r.mFocus && r.closeNamed && r.mBack && r.menu === 'menu' && r.arrow && r.menuClosed && !r.unnamed.length;
+  if (!ok) throw new Error('a11y dialogs: ' + JSON.stringify(r));
+  return 'ask dialog Enter / Esc / Tab / theme / validation, modal focus restore, menu keys, icon buttons named';
+});
+
+// #201: rooms found by detection follow their walls on commit; manual / unbound rooms stay; a leak keeps the old
+// corners with a warning; undo and redo do not re-trigger it.
+check('rooms that follow their walls (#201)', async page => {
+  const r = await page.evaluate(`(() => {
+    closeModal(); loadProject(newProject());
+    const [t, rt, b, l] = addRectWalls(0, 0, 400, 300) || F().walls; commit(); refresh();
+    const auto = autoRoomAt({ x: 200, y: 150 }, true); commit();
+    const man = mkRoom([{ x: 20, y: 20 }, { x: 120, y: 20 }, { x: 120, y: 120 }, { x: 20, y: 120 }]); man.name = 'Manual'; F().rooms.push(man); commit();
+    const a0 = polyArea(auto.pts), m0 = JSON.stringify(man.pts);
+    // move the right wall 100 cm out, with its corners (as a drag with connected walls would)
+    const right = F().walls.find(w => Math.min(w.a.x, w.b.x) > 300);
+    for (const w of F().walls) for (const k of ['a', 'b']) if (w[k].x > 300) w[k].x += 100;
+    const h0 = hi; commit(); refresh();
+    const room = F().rooms.find(x => x.id === auto.id), a1 = polyArea(room.pts), oneStep = hi === h0 + 1, manKept = JSON.stringify(F().rooms.find(x => x.id === man.id).pts) === m0;
+    undo(); const undone = Math.round(polyArea(F().rooms.find(x => x.id === auto.id).pts)) === Math.round(a0); redo();
+    // a gap: the room keeps its corners and warns
+    const before = JSON.stringify(F().rooms.find(x => x.id === auto.id).pts);
+    const wl = F().walls.find(w => Math.max(w.a.x, w.b.x) < 50); const save = JSON.parse(JSON.stringify(wl));
+    wl.b = { x: wl.a.x, y: (wl.a.y + wl.b.y) / 2 }; commit();
+    const leakKept = JSON.stringify(F().rooms.find(x => x.id === auto.id).pts) === before, warned = /could not follow|izleyemedi/.test(document.querySelector('#toast').textContent);
+    undo();
+    // unbinding from the panel stops following
+    sel = [auto.id]; refresh(); const btn = document.querySelector('#props [data-act="roomwb"]'); const pressed = btn && btn.getAttribute('aria-pressed'); btn.click();
+    const unbound = !F().rooms.find(x => x.id === auto.id).wb;
+    for (const w of F().walls) for (const k of ['a', 'b']) if (w[k].x > 450) w[k].x += 50;
+    const a2 = polyArea(F().rooms.find(x => x.id === auto.id).pts); commit(); const stays = polyArea(F().rooms.find(x => x.id === auto.id).pts) === a2;
+    return { wb: auto.wb, a0: Math.round(a0 / 1e4), a1: Math.round(a1 / 1e4), oneStep, manKept, undone, leakKept, warned, pressed, unbound, stays };
+  })()`);
+  const ok = typeof r.wb === 'string' && r.a1 > r.a0 && r.oneStep && r.manKept && r.undone && r.leakKept && r.warned && r.pressed === 'true' && r.unbound && r.stays;
+  if (!ok) throw new Error('rooms follow walls: ' + JSON.stringify(r));
+  return `room ${r.a0} → ${r.a1} m² with the wall, manual room kept, gap warned, unlink works`;
+});
+
+// #203: over http the app registers sw.js, which caches the app shell and the pinned Three.js scripts, so the app
+// files still load with the network off; the manifest is linked and names the icons.
+check('install as an app and work offline: service worker + manifest (#203)', async page => {
+  const r = await page.evaluate(`(async () => {
+    if (!('serviceWorker' in navigator)) return { skip: true };
+    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise(res => setTimeout(() => res(null), 15000))]);
+    if (!reg) return { err: 'service worker never became ready' };
+    for (let i = 0; i < 50 && !(await caches.keys()).some(k => k.startsWith('fp-')); i++) await new Promise(res => setTimeout(res, 100));
+    const key = (await caches.keys()).find(k => k.startsWith('fp-')), c = key && await caches.open(key);
+    const has = async u => !!(c && await c.match(u));
+    const man = document.querySelector('link[rel="manifest"]'), mj = man ? await (await fetch(man.href)).json() : null;
+    return { scope: reg.scope, key, shell: await has('app.js') && await has('index.html') && await has('style.css'),
+      three: await has('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'),
+      icons: mj ? mj.icons.map(i => i.sizes).join(',') : '', display: mj && mj.display, controlled: !!navigator.serviceWorker.controller };
+  })()`);
+  if (r.skip) return 'no service worker support in this browser';
+  if (r.err) throw new Error(r.err);
+  // offline: the app files come from the worker's cache
+  await page.send('Network.enable');
+  await page.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+  let off;
+  try {
+    off = await page.evaluate(`(async () => { try { await fetch('README.md?x=' + Date.now(), { cache: 'no-store' }); return { ok: false, why: 'the network was not offline' }; } catch (e) { } // control: a file the worker does not cache fails
+      try { const t = await (await fetch('app.js')).text(); return { ok: t.includes('Kat Planı Çizici') }; } catch (e) { return { ok: false, why: String(e) }; } })()`);
+  } finally {
+    await page.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    // the offline control request logs its own (expected) network error
+    await sleep(200);
+    for (let i = page.problems.length - 1; i >= 0; i--) if (/ERR_INTERNET_DISCONNECTED/.test(page.problems[i])) page.problems.splice(i, 1);
+  }
+  const ok = r.key && r.shell && r.three && /192x192/.test(r.icons) && /512x512/.test(r.icons) && r.display === 'standalone' && off.ok;
+  if (!ok) throw new Error('PWA: ' + JSON.stringify({ ...r, off }));
+  return `cache ${r.key}: app shell + Three.js, app.js served offline${r.controlled ? '' : ' (page not yet controlled)'}`;
+});
+
+// #193: room detection and the white-paper export, the core 2D paths the unit tests cannot reach (canvas, DOM)
+check('room detection: detectRoom and autoRoomAt handle enclosed, open, and on-wall points', async page => {
+  const r = await page.evaluate(`(() => {
+    loadProject(newProject());
+    const f = F();
+    addRectWalls(0, 0, 400, 300);
+    commit();
+    const pts = detectRoom({ x: 200, y: 150 });
+    const area = Array.isArray(pts) ? Math.round(polyArea(pts)) : 0;
+    const rm = autoRoomAt({ x: 200, y: 150 }, true);
+    const outside = detectRoom({ x: 700, y: 700 });
+    const onWall = detectRoom({ x: 200, y: 0 });
+    // Break the enclosure by shortening the top wall to leave a gap
+    f.walls[0].b.x = 200;
+    const gapped = detectRoom({ x: 200, y: 150 });
+    return {
+      ptsLen: Array.isArray(pts) ? pts.length : 0,
+      area,
+      roomCount: f.rooms.length,
+      rmPts: rm ? rm.pts.length : 0,
+      outside,
+      onWall,
+      gapped,
+    };
+  })()`);
+  if (r.ptsLen < 4) throw new Error('detectRoom did not return a closed polygon: ' + JSON.stringify(r));
+  if (Math.abs(r.area - 380 * 280) > 6000) throw new Error('detected room area unexpected: ' + JSON.stringify(r));
+  if (r.roomCount !== 1 || r.rmPts < 4) throw new Error('autoRoomAt did not add room: ' + JSON.stringify(r));
+  if (r.outside !== 'open') throw new Error('outside point should return open: ' + JSON.stringify(r));
+  if (r.onWall !== null) throw new Error('point on wall should return null: ' + JSON.stringify(r));
+  if (r.gapped !== 'open') throw new Error('gapped walls should return open: ' + JSON.stringify(r));
+  return 'enclosed ' + r.ptsLen + ' pts (' + r.area + ' cm2), open/on-wall rejected';
+});
+
+check('2D export uses the white-paper light palette even in dark theme', async page => {
+  const r = await page.evaluate(`(() => {
+    const prevTheme = document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = '';
+    loadProject(newProject());
+    const f = F();
+    const ws = addRectWalls(0, 0, 500, 400);
+    f.ops.push(mkOp(OPDEF.door, ws[0], 250));
+    f.furn.push(mkFurn(BYID.sofa3, 250, 200, 0));
+    f.dims.push({ id: uid(), a: { x: 0, y: 0 }, b: { x: 500, y: 0 }, off: -50 });
+    autoRoomAt({ x: 250, y: 200 }, true);
+    commit(); refresh();
+
+    const darkPal = pal();
+    ui.exporting = true;
+    const exportPal = pal();
+    ui.exporting = false;
+    const res = exportSvg();
+    const restoredExporting = ui.exporting;
+
+    document.documentElement.dataset.theme = prevTheme || '';
+    render();
+
+    const darkHexes = ['#0b0f14', '#d5dee8', '#161e29', '#e6edf5', '#2dd4bf', '#161f2c', '#243244'];
+    const leaked = darkHexes.filter(c => res.svg.toLowerCase().includes(c));
+    return {
+      darkLt: darkPal.lt,
+      exportLt: exportPal.lt,
+      exportBg: exportPal.bg,
+      exportWall: exportPal.wall,
+      hasPaperBg: res.svg.includes('fill="#fff"'),
+      hasLightWall: res.svg.includes(exportPal.wall),
+      leaked,
+      restoredExporting,
+      len: res.svg.length,
+    };
+  })()`);
+  if (r.darkLt !== false) throw new Error('expected dark theme pal().lt === false: ' + JSON.stringify(r));
+  if (r.exportLt !== true || r.exportBg !== '#ffffff') throw new Error('ui.exporting did not switch pal() to light white-paper: ' + JSON.stringify(r));
+  if (!r.hasPaperBg || !r.hasLightWall) throw new Error('exported SVG missing white paper or light wall stroke: ' + JSON.stringify(r));
+  if (r.leaked.length) throw new Error('exported SVG leaked dark-theme colours: ' + r.leaked.join(', '));
+  if (r.restoredExporting !== false) throw new Error('ui.exporting was not reset after exportSvg()');
+  return 'white-paper export (' + r.len + ' bytes, 0 dark-theme colours)';
+});
+
+// #194: feet and inches as a per-browser display / input unit; the project stays in centimetres.
+check('imperial units: labels, panel fields, typed lengths, grid steps, scale bar (#194)', async page => {
+  const r = await page.evaluate(`(async () => {
+    closeModal(); loadProject(newProject()); addRectWalls(0, 0, 400, 300); commit(); autoRoomAt({ x: 200, y: 150 }, true); commit(); refresh();
+    const u = document.querySelector('#sUnits'); u.value = 'imperial'; u.dispatchEvent(new Event('change', { bubbles: true }));
+    const out = { stored: localStorage.getItem('fp_units'), wallsLbl: /13' 1"/.test(document.querySelector('#gWalls').textContent + document.querySelector('#gDims').textContent + document.body.textContent) };
+    out.area = (document.querySelector('#cv').textContent.match(/[0-9.]+ ft²/) || [''])[0];
+    // panel: the length field is a feet-inch text field that accepts 12'6"
+    const w = F().walls[0]; sel = [w.id]; refresh();
+    const f = document.querySelector('#props [data-k="wall"][data-p="len"]');
+    out.fieldType = f && f.type; out.fieldVal = f && f.value;
+    f.value = "12'6\\""; f.dispatchEvent(new Event('change', { bubbles: true }));
+    out.len = Math.round(wLen(F().walls[0]) * 100) / 100;
+    // typed length while drawing: a bare number is feet
+    sel = []; refresh(); setTool('wall'); ui.draw = { start: { x: 0, y: 600 } };
+    const rc = cv.getBoundingClientRect(), sp = w2s({ x: 50, y: 600 }); cv.dispatchEvent(new PointerEvent('pointermove', { clientX: rc.left + sp.x, clientY: rc.top + sp.y, bubbles: true, pointerId: 1 }));
+    for (const k of ['1', '0', 'Enter']) window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+    const nw = F().walls[F().walls.length - 1]; out.typed = Math.round(wLen(nw) * 100) / 100; setTool('select');
+    // grid presets and the export scale bar
+    out.ftOption = !document.querySelector('#sGrid option[value="30.48"]').hidden && document.querySelector('#sGrid option[value="300"]').hidden;
+    out.bar = /6'/.test(exportSvg().svg);
+    // back to metric; the project never changed unit
+    u.value = 'metric'; u.dispatchEvent(new Event('change', { bubbles: true }));
+    out.back = localStorage.getItem('fp_units') === 'metric' && /m²/.test(document.querySelector('#cv').textContent);
+    out.projCm = JSON.stringify(P).includes('"wallT":20');
+    return out;
+  })()`);
+  const ok = r.stored === 'imperial' && r.wallsLbl && /ft²/.test(r.area) && r.fieldType === 'text' && /'/.test(r.fieldVal) && r.len === 381 && r.typed === 304.8 && r.ftOption && r.bar && r.back && r.projCm;
+  if (!ok) throw new Error('imperial units: ' + JSON.stringify(r));
+  return `labels in ft-in, ${r.area}, field 12'6" → 381 cm, typed 10 → 304.8 cm, 6' scale bar`;
+});
+
+// #197: the guided tour highlights the real control, advances when the step is done, can be skipped (remembered)
+// and restarted from Help. The smoke page runs with ?tour=off, so the tour is started from Help here.
+check('first-run guided tour: highlight, advance on action, skip remembered, restart from Help (#197)', async page => {
+  const r = await page.evaluate(`(async () => {
+    const wait = ms => new Promise(res => setTimeout(res, ms));
+    closeModal(); loadProject(newProject()); localStorage.removeItem('fp_tour');
+    document.querySelector('#bHelp').click(); document.querySelector('#helpTour').click(); await wait(50);
+    const out = { open: !!document.querySelector('#tourBox') && ui.modal == null, steps: [] };
+    const ringOn = sel => { const g = document.querySelector('#tourRing'), t = document.querySelector(sel); if (!g || g.hidden || !t) return false; const a = g.getBoundingClientRect(), b = t.getBoundingClientRect(); return a.left <= b.left && a.right >= b.right && a.top <= b.top && a.bottom >= b.bottom; };
+    out.ringWall = ringOn('#tools [data-tool="wall"]');
+    const step = () => (document.querySelector('#tourBox .tour-n') || {}).textContent || 'done';
+    const ws = addRectWalls(0, 0, 400, 300); commit(); await wait(350); out.steps.push(step());
+    autoRoomAt({ x: 200, y: 150 }, true); commit(); await wait(350); out.steps.push(step());
+    F().ops.push(mkOp(OPDEF.door, ws[0], 200)); commit(); await wait(350); out.steps.push(step());
+    F().furn.push(mkFurn(BYID.sofa3, 200, 150, 0)); commit(); await wait(350); out.steps.push(step());
+    out.ring3d = ringOn('#b3d');
+    document.querySelector('#b3d').click(); await wait(400); out.steps.push(step());
+    out.done = localStorage.getItem('fp_tour'); out.doneText = document.querySelector('#tourBox').textContent;
+    show3D(false); document.querySelector('#tourBox [data-tour="end"]').click(); out.closed = !document.querySelector('#tourBox');
+    // skip is remembered; Help restarts it anyway
+    startTour(true); document.querySelector('#tourBox [data-tour="skip"]').click();
+    out.skip = localStorage.getItem('fp_tour') === 'skip' && !document.querySelector('#tourBox');
+    startTour(); out.noAuto = !document.querySelector('#tourBox');
+    localStorage.removeItem('fp_tour');
+    return out;
+  })()`);
+  const ok = r.open && r.ringWall && r.steps.join('|') === 'Step 2 / 5|Step 3 / 5|Step 4 / 5|Step 5 / 5|done' && r.ring3d && r.done === 'done' && r.closed && r.skip && r.noAuto;
+  if (!ok) throw new Error('tour: ' + JSON.stringify(r));
+  return 'walls → room → door → furniture → 3D, skip remembered, Help restarts';
+});
+
+// #187: a large background image lives outside P (IndexedDB + blob: URL), so undo snapshots and autosave stay
+// small; exports still embed it, JSON files carry it inline, and an old save with an inline src is migrated.
+check('large background image stays out of undo history and autosave (#187)', async page => {
+  const r = await page.evaluate(`(async () => {
+    closeModal(); P = newProject(); loadProject(P);
+    const cv = document.createElement('canvas'); cv.width = 5000; cv.height = 1000;
+    const g = cv.getContext('2d'); for (let i = 0; i < 400; i++) { g.fillStyle = 'hsl(' + i + ',60%,50%)'; g.fillRect((i * 97) % 5000, (i * 53) % 1000, 40, 40); }
+    const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
+    const dt = new DataTransfer(); dt.items.add(new File([blob], 'plan.png', { type: 'image/png' }));
+    const inp = document.querySelector('#fileBg'); inp.files = dt.files; inp.dispatchEvent(new Event('change'));
+    for (let i = 0; i < 80 && !(P.bg && P.bg.img); i++) await new Promise(r => setTimeout(r, 100));
+    const data = bgData(P.bg);
+    const im = new Image(); await new Promise(r => { im.onload = r; im.onerror = r; im.src = data; });
+    render();
+    const live = document.querySelector('#gBg').innerHTML, ex = exportSvg().svg;
+    const file = JSON.parse(JSON.stringify(bundleTextures(P)));
+    const legacy = JSON.parse(JSON.stringify(P)); legacy.bg = bgInline(P.bg);
+    loadProject(legacy);
+    const migrated = !!(P.bg && P.bg.img && !P.bg.src && bgData(P.bg) === data);
+    return { img: !!P.bg.img, noSrc: !('src' in P.bg), dataLen: data.length, snap: hist[hi].length, longSide: Math.max(im.width, im.height),
+      liveBlob: /href="blob:/.test(live), exportData: ex.includes('href="data:image/'), fileInline: !!(file.bg && String(file.bg.src).startsWith('data:image/')), migrated };
+  })()`);
+  if (!r.img || !r.noSrc || r.dataLen < 50000 || r.snap > 20000 || r.longSide !== 4096 || !r.liveBlob || !r.exportData || !r.fileInline || !r.migrated) throw new Error('background image: ' + JSON.stringify(r));
+  return `image ${Math.round(r.dataLen / 1024)} KB outside P, undo snapshot ${(r.snap / 1024).toFixed(1)} KB, downscaled to ${r.longSide} px`;
+});
+
+// #189: a null blob (canvas too large) no longer throws in download(); the user gets a toast instead
+check('PNG export reports a failed canvas instead of throwing (#189)', async page => {
+  const r = await page.evaluate(`(async () => {
+    closeModal(); loadProject(newProject()); addRectWalls(0, 0, 400, 300); commit(); refresh(); toast('');
+    const orig = HTMLCanvasElement.prototype.toBlob; let calls = 0;
+    HTMLCanvasElement.prototype.toBlob = function (cb) { calls++; setTimeout(() => cb(null), 0); };
+    try {
+      svgToPng('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><rect width="40" height="30" fill="#08f"/></svg>', 40, 30, 'x.png'); // exportPng() hands its SVG to svgToPng
+      for (let i = 0; i < 200 && !/PNG/.test(document.querySelector('#toast').textContent); i++) await new Promise(r => setTimeout(r, 50));
+      return { calls, msg: document.querySelector('#toast').textContent };
+    } finally { HTMLCanvasElement.prototype.toBlob = orig; }
+  })()`);
+  if (r.calls < 2 || !/SVG/.test(r.msg)) throw new Error('PNG failure handling: ' + JSON.stringify(r));
+  return `retried ${r.calls}× at smaller scales, then: "${r.msg.slice(0, 50)}…"`;
+});
+
+// #188: blocked storage (site data off) made window.localStorage throw a SecurityError at boot. Reload the
+// page with both storages and IndexedDB throwing, check that it boots and draws, then reload it normally.
+check('boots and edits with browser storage blocked (#188)', async page => {
+  const block = `(() => { const no = () => { throw new DOMException('blocked', 'SecurityError'); };
+    for (const k of ['localStorage', 'sessionStorage', 'indexedDB']) Object.defineProperty(window, k, { configurable: true, get: no }); })();`;
+  const { identifier } = (await page.send('Page.addScriptToEvaluateOnNewDocument', { source: block })).result;
+  const boot = async () => {
+    for (let i = 0; i < 80; i++) {
+      try { if (await page.evaluate(`typeof P !== 'undefined' && !!P && !!document.querySelector('#gWalls')`)) return true; } catch (e) { }
+      await sleep(250);
+    }
+    return false;
+  };
+  try {
+    await page.send('Page.reload', { ignoreCache: true });
+    await sleep(500);
+    if (!await boot()) throw new Error('the app did not boot with storage blocked');
+    // the warning comes ~1 s after boot; wait for it instead of reading the toast once
+    let warned = false;
+    for (let i = 0; i < 40 && !warned; i++) { warned = await page.evaluate("/storage|depolama/i.test(document.querySelector('#toast').textContent)"); if (!warned) await sleep(100); }
+    const r = await page.evaluate(`(() => {
+      closeModal();
+      const n = F().walls.length; addRectWalls(0, 0, 400, 300); commit(); refresh(); undo(); const u = F().walls.length; redo();
+      localStorage.setItem('fp_x', '1');
+      return { blockedOk: localStorage.ok === false, mem: localStorage.getItem('fp_x'), added: F().walls.length - n, undone: u === n };
+    })()`);
+    if (!r.blockedOk || r.mem !== '1' || r.added !== 4 || !r.undone || !warned) throw new Error('blocked storage: ' + JSON.stringify({ ...r, warned }));
+    return 'boots in memory, edits + undo work, warning shown';
+  } finally {
+    await page.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+    await page.send('Page.reload', { ignoreCache: true });
+    await sleep(500);
+    await boot();
+  }
+});
+
 /* ---------- main ---------- */(async () => {
   const browserPath = findBrowser();
   if (!browserPath) {
@@ -3995,7 +4506,8 @@ check('Hexagonal Draw Roof, beveled & curtain wall attach, one-sided resize (#17
   const port = server.address().port;
   // ?bridge=off: never reach a real mcp/bridge.js on 127.0.0.1:8787 — the checks load
   // test plans, and a connected tab would push them over the user's live AI plan
-  const url = `http://127.0.0.1:${port}/?bridge=off&presence=off&store=off`;
+  // tour=off: the first-run tour (#197) would otherwise open over the canvas after the first template click
+  const url = `http://127.0.0.1:${port}/?bridge=off&presence=off&store=off&tour=off`;
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-smoke-'));
   const debugPort = 9300 + Math.floor(Math.random() * 300);
 
@@ -4026,7 +4538,8 @@ check('Hexagonal Draw Roof, beveled & curtain wall attach, one-sided resize (#17
     if (!ready) throw new Error('the app never finished booting');
     await sleep(400);
 
-    console.log(`\nBrowser smoke test — ${path.basename(browserPath)} on ${url}\n`);
+    const ver = await page.send('Browser.getVersion').catch(() => null); // recorded in the log (#193)
+    console.log(`\nBrowser smoke test — ${path.basename(browserPath)}${ver && ver.result ? ' ' + ver.result.product : ''} on ${url}\n`);
     const state = {};
     for (const { name, fn } of results) {
       const before = page.problems.length;

@@ -3,7 +3,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, wallTopSrc } = require('./helpers/repo');
+const { read, wallTopSrc, markerBlock } = require('./helpers/repo');
 
 const src = read('app.js');
 const start = src.indexOf('/* ---------- Duvar kırpma / bölme (issue #15) ---------- */');
@@ -20,6 +20,7 @@ function load(walls, ops = []) {
     const mkWall = (a, b) => ({ id: uid(), a: { ...a }, b: { ...b }, t: 20, h: 270, wt: 'solid' });
     function deleteIds(ids) { const s = new Set(ids); f.ops = f.ops.filter(o => !s.has(o.id)); }
     ${wallTopSrc(src)}
+    ${markerBlock(src, 'CURVED-WALL')}
     ${src.slice(start, end)}
     return { wallCuts, trimWall, splitWallAt, joinCorner, trimPlan };`)(f);
   return { f, ...api };

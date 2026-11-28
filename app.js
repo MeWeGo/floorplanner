@@ -9,8 +9,55 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 const rnd = (v, n = 1) => Math.round(v / n) * n;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const fmtLen = cm => (cm / 100).toFixed(2) + ' m';
-const fmtArea = c2 => (c2 / 10000).toFixed(2) + ' m²';
+/* Birimler (#194): görünüm ve giriş metrik (m / cm) ya da emperyal (fit-inç) olabilir; tarayıcı başına saklanır
+   (localStorage['fp_units']). Proje, MCP ve dosyalar her zaman santimetredir: yalnız gösterim ve okunuş değişir. */
+let units = 'metric';
+const isImp = () => units === 'imperial';
+// cm → 12' 6" (en yakın 1/den inç; 1 ft altı yalnız inç)
+function fmtFtIn(cm, den = 1) {
+  const neg = cm < 0, inch = Math.round(Math.abs(cm) / 2.54 * den) / den, ft = Math.floor(inch / 12 + 1e-9), r = +(inch - ft * 12).toFixed(3);
+  let num = Math.round((r % 1) * den), dd = den; while (num && num % 2 === 0 && dd % 2 === 0) { num /= 2; dd /= 2; } // 4/8 → 1/2
+  const ri = r === Math.floor(r) ? String(r) : den >= 2 ? (Math.floor(r) ? Math.floor(r) + ' ' : '') + num + '/' + dd : r.toFixed(1);
+  return (neg ? '−' : '') + (ft ? ft + "' " + ri + '"' : ri + '"');
+}
+const fmtLen = cm => (isImp() ? fmtFtIn(cm) : (cm / 100).toFixed(2) + ' m');
+const fmtArea = c2 => (isImp() ? (c2 / 929.0304).toFixed(1) + ' ft²' : (c2 / 10000).toFixed(2) + ' m²');
+// metin → cm. 12'6", 12' 6, 12ft 6in, 6", 6in, 1/2", 150cm, 1.5m, 30mm; birimsiz sayı = bare ('ft' | 'in' | 'cm' | 'm')
+function parseLen(s, bare = 'cm') {
+  let t = String(s == null ? '' : s).trim().toLowerCase().replace(/,/g, '.').replace(/[″“”]/g, '"').replace(/[′‘’]/g, "'");
+  if (!t) return null;
+  let sign = 1; if (/^[-−]/.test(t)) { sign = -1; t = t.slice(1).trim(); }
+  const frac = x => { x = x.trim(); let m = /^(\d+(?:\.\d+)?)(?:\s+(\d+)\/(\d+))?$/.exec(x); if (m) return +m[1] + (m[2] ? m[2] / m[3] : 0); m = /^(\d+)\/(\d+)$/.exec(x); return m && +m[2] ? m[1] / m[2] : NaN; };
+  const fm = /^(.*?)\s*(?:'|ft|feet|foot)\s*(.*)$/.exec(t);
+  if (fm) { const ft = fm[1] ? frac(fm[1]) : 0, rest = fm[2].replace(/\s*(?:"|inches|inch|in)\s*$/, ''), inch = rest ? frac(rest) : 0; return ft >= 0 && inch >= 0 ? sign * (ft * 30.48 + inch * 2.54) : null; }
+  const im = /^(.*?)\s*(?:"|inches|inch|in)$/.exec(t); if (im) { const v = frac(im[1]); return v >= 0 ? sign * v * 2.54 : null; }
+  const um = /^(.*?)\s*(mm|cm|m)$/.exec(t); if (um) { const v = frac(um[1]); return v >= 0 ? sign * v * { mm: 0.1, cm: 1, m: 100 }[um[2]] : null; }
+  const v = frac(t); return v >= 0 ? sign * v * ({ mm: 0.1, cm: 1, m: 100, ft: 30.48, in: 2.54 }[bare] || 1) : null;
+}
+// çizerken yazılan uzunluk: metrikte cm, emperyalde birimsiz sayı fit (12'6" de olur)
+const typedCm = s => (isImp() ? parseLen(s, 'ft') : parseFloat(s));
+const typedUnit = () => (isImp() ? '' : ' cm');
+// dışa aktarma ölçek çubuğu: 2 m ya da 6 ft
+const scaleBarSpec = () => (isImp() ? { len: 182.88, mid: "3'", end: "6'" } : { len: 200, mid: '1 m', end: '2 m' });
+
+/* ---------- Güvenli tarayıcı depolaması (#188) ----------
+   Depolama engellendiğinde (gizli pencere ayarları, site verisi kapalı, sandbox iframe) window.localStorage'a
+   erişmek bile SecurityError fırlatır ve uygulama açılmazdı. Bu sarmalayıcı hiçbir zaman hata atmaz; depolama
+   yoksa değerler bu oturum için bellekte tutulur. Aynı adla genel kapsamda tanımlandığı için (window özelliği
+   yapılandırılabilir, sözcüksel bağlama onu gölgeler) koddaki her localStorage / sessionStorage çağrısı buradan geçer. */
+function safeStore(name) {
+  let s = null;
+  try { s = window[name]; const k = '__fp_probe'; s.setItem(k, '1'); s.removeItem(k); } catch (e) { s = null; }
+  const mem = new Map();
+  return {
+    ok: !!s,
+    getItem(k) { k = String(k); if (mem.has(k)) return mem.get(k); try { return s ? s.getItem(k) : null; } catch (e) { return null; } },
+    setItem(k, v) { k = String(k); v = String(v); try { if (s) { s.setItem(k, v); mem.delete(k); return; } } catch (e) { } mem.set(k, v); },
+    removeItem(k) { k = String(k); mem.delete(k); try { if (s) s.removeItem(k); } catch (e) { } },
+  };
+}
+const localStorage = safeStore('localStorage');
+const sessionStorage = safeStore('sessionStorage');
 
 /* ---------- Dil (i18n: TR / EN) ---------- */
 let lang = (() => {
@@ -20,6 +67,7 @@ let lang = (() => {
   } catch (e) { }
   return /^tr\b/i.test((typeof navigator !== 'undefined' && navigator.language) || '') ? 'tr' : 'en';
 })();
+units = localStorage.getItem('fp_units') === 'imperial' ? 'imperial' : 'metric'; // #194
 const isEN = () => lang === 'en';
 const L = (tr, en) => (lang === 'en' ? en : tr);
 const itemName = d => (lang === 'en' && d.en ? d.en : d.name);
@@ -140,6 +188,49 @@ function cleanGround(P) {
   if (Object.keys(o).length) P.ground = o; else delete P.ground;
 }
 /* GROUND-PARAM:END */
+/* SITE-SUN:BEGIN — proje konumu ve güneş konumu (#205): saf JS, mcp/server.js ile birebir aynı (tests/site-sun.test.js karşılaştırır).
+   P.site = { lat, lon, tz, north } isteğe bağlı: enlem / boylam (°), saat dilimi (UTC farkı, saat; yaz saati yok sayılır),
+   north = gerçek kuzeyin plan yukarısından (−y) saat yönünde açısı (°). Yok = kuzey plan yukarısı, konum yok.
+   sunPosition = NOAA'nın kısaltılmış güneş formülü (yaklaşık ±0.5°), bağımlılık yok. */
+const SITE_CITIES = {
+  istanbul: ['İstanbul', 'Istanbul', 41.01, 28.98, 3], ankara: ['Ankara', 'Ankara', 39.93, 32.86, 3], izmir: ['İzmir', 'Izmir', 38.42, 27.14, 3],
+  antalya: ['Antalya', 'Antalya', 36.9, 30.7, 3], trabzon: ['Trabzon', 'Trabzon', 41, 39.72, 3], diyarbakir: ['Diyarbakır', 'Diyarbakir', 37.91, 40.24, 3],
+  london: ['Londra', 'London', 51.51, -0.13, 0], berlin: ['Berlin', 'Berlin', 52.52, 13.4, 1], paris: ['Paris', 'Paris', 48.86, 2.35, 1],
+  dubai: ['Dubai', 'Dubai', 25.2, 55.27, 4], newyork: ['New York', 'New York', 40.71, -74.01, -5], losangeles: ['Los Angeles', 'Los Angeles', 34.05, -118.24, -8],
+  tokyo: ['Tokyo', 'Tokyo', 35.68, 139.69, 9], sydney: ['Sidney', 'Sydney', -33.87, 151.21, 10],
+};
+const SITE_DEF = { lat: 41.01, lon: 28.98, tz: 3, north: 0 };
+function siteP(P) {
+  const s = (P && P.site) || {}, n = (v, d) => (Number.isFinite(+v) && v !== null && v !== '' ? +v : d);
+  const has = Number.isFinite(+s.lat) && s.lat !== null && Number.isFinite(+s.lon) && s.lon !== null;
+  return { has, lat: has ? +s.lat : SITE_DEF.lat, lon: has ? +s.lon : SITE_DEF.lon, tz: n(s.tz, has ? Math.round(+s.lon / 15) || 0 : SITE_DEF.tz), north: n(s.north, 0) };
+}
+function cleanSite(P) {
+  const s = P && P.site; if (!s || typeof s !== 'object') { if (P) delete P.site; return; }
+  const o = {}, r = (v, k) => Math.round(v * k) / k, ok = v => v !== null && v !== '' && Number.isFinite(+v);
+  if (ok(s.lat) && ok(s.lon)) { o.lat = r(Math.max(-90, Math.min(90, +s.lat)), 1e4); o.lon = r(Math.max(-180, Math.min(180, +s.lon)), 1e4); }
+  if (ok(s.tz)) o.tz = r(Math.max(-12, Math.min(14, +s.tz)), 4);
+  if (ok(s.north)) { const n = r(((+s.north % 360) + 360) % 360, 10); if (n) o.north = n; }
+  if (Object.keys(o).length) P.site = o; else delete P.site;
+}
+// güneşin gerçek azimutu (kuzeyden saat yönünde) ve ufuktan yüksekliği, derece; t = UTC milisaniye
+function sunPosition(lat, lon, t) {
+  const rad = Math.PI / 180, d = t / 864e5 + 2440587.5 - 2451545;
+  const g = (357.529 + 0.98560028 * d) * rad, q = 280.459 + 0.98564736 * d;
+  const L = (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * rad, e = (23.439 - 3.6e-7 * d) * rad;
+  const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)), dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const H = ((18.697374558 + 24.06570982441908 * d) * 15 + lon) * rad - ra, la = lat * rad;
+  const alt = Math.asin(Math.sin(la) * Math.sin(dec) + Math.cos(la) * Math.cos(dec) * Math.cos(H));
+  const az = Math.atan2(-Math.sin(H), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(H));
+  return { az: ((az / rad) % 360 + 360) % 360, alt: alt / rad };
+}
+// proje konumunda yerel tarih (YYYY-AA-GG) + saat (0–24, ondalık) → plan azimutu (kuzey açısı eklenmiş), yükseklik
+function siteSun(site, date, hour) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || '')); if (!m) return null;
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3]) + (+hour - site.tz) * 36e5, p = sunPosition(site.lat, site.lon, t);
+  return { az: ((p.az + site.north) % 360 + 360) % 360, alt: p.alt, trueAz: p.az };
+}
+/* SITE-SUN:END */
 /* ZONE-PARAM:BEGIN — arsa sınırı ve dış mekân zeminleri (#150): saf JS, mcp/server.js ile birebir aynı (tests/site-zones.test.js karşılaştırır).
    Floor.zones = [{ id, zt, name?, pts, floor?, color?, curb?, setback?, sb? }] — sıradan bir tür (KINDS.zones = 'zone'), yani seçme,
    taşıma, döndürme, aynalama, kopyalama, geri alma, katman hazır gelir. zt: 'parcel' (arsa: sınır + çekme mesafesi, yüzeyi yok) ya da
@@ -301,6 +392,7 @@ const PTS_KINDS = new Set(['room', 'sketch', 'slab', 'void', 'draft', 'zone']), 
 // Döşeme boşluğu türleri (issue #23)
 const VOID_TYPES = { stair: ['Merdiven boşluğu', 'Stairwell'], shaft: ['Şaft', 'Shaft'], atrium: ['Galeri boşluğu', 'Atrium / void'] };
 function find(id, f = F()) {
+  if (typeof id === 'string' && id.includes('~')) id = id.split('~')[0]; // eğri duvar parçası (#202) → asıl duvar
   if (id === 'bg' && P && P.bg) { P.bg.id = 'bg'; return { kind: 'bg', arr: null, o: P.bg }; }
   for (const arr in KINDS) { const o = f[arr].find(x => x.id === id); if (o) return { kind: KINDS[arr], arr, o }; }
   return null;
@@ -348,6 +440,95 @@ function segProj(p, a, b) {
   return { t, q, d: dist(p, q) };
 }
 const wLen = w => dist(w.a, w.b);
+/* CURVED-WALL:BEGIN ---------- Eğri duvarlar (#202) ----------
+   İsteğe bağlı w.bulge (cm, işaretli sehim): a → b kirişinin ortasından duvar normaline (−uy, ux) doğru yayın tepe
+   noktasına uzaklık; |bulge| ≤ kiriş / 2 (en çok yarım daire), yok = düz duvar (eski projeler aynı). Duvarın uçları,
+   kalınlığı, yüksekliği ve tipi aynı kalır. Kapı / pencerenin d'si yay boyunca ölçülür.
+   Çizim için tek yol: expandCurved(f) eğri duvarı düz parçalara böler (her açıklık kendi düz parçasına oturur, gerisi
+   7,5°'lik dilimler) ve açıklıkları o parçalara taşır; visFloor bunu çağırdığı için 2B, köşe dolguları, 3B, kesit /
+   görünüş, yürüme, DXF / IFC / Revit dışa aktarma ve oda algılama ek kod gerektirmez. Parçalar id~k kimliği ve pid
+   (asıl duvar) taşır; seçim ve 3B tıklama asıl duvara döner (find, wallSvg, build3D). */
+const BULGE_MIN = 0.5;
+const isCurved = w => !!(w && w.bulge && Math.abs(+w.bulge) >= BULGE_MIN && Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) > 1);
+function wallArc(w) {
+  if (!isCurved(w)) return null;
+  const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y), ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, nx = -uy, ny = ux;
+  const h = L / 2, s = Math.max(-h, Math.min(h, +w.bulge)), r = (h * h + s * s) / (2 * Math.abs(s));
+  const mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2, k = s - Math.sign(s) * r;
+  const c = { x: mx + nx * k, y: my + ny * k }, apex = { x: mx + nx * s, y: my + ny * s };
+  const a0 = Math.atan2(w.a.y - c.y, w.a.x - c.x), th = 2 * Math.asin(Math.min(1, h / r));
+  // dönüş yönü: yayın ortası tepe noktasına düşen yön
+  const mid = dir => ({ x: c.x + r * Math.cos(a0 + dir * th / 2), y: c.y + r * Math.sin(a0 + dir * th / 2) });
+  const dir = Math.hypot(mid(1).x - apex.x, mid(1).y - apex.y) <= Math.hypot(mid(-1).x - apex.x, mid(-1).y - apex.y) ? 1 : -1;
+  return { c, r, a0, sweep: dir * th, len: r * th, s };
+}
+// yay boyunca d (cm, a ucundan) noktası ve teğet açısı (derece, a → b yönünde)
+function arcAt(A, d) {
+  const f = A.len ? Math.max(0, Math.min(1, d / A.len)) : 0, an = A.a0 + A.sweep * f, sg = Math.sign(A.sweep) || 1;
+  return { x: A.c.x + A.r * Math.cos(an), y: A.c.y + A.r * Math.sin(an), ang: Math.atan2(Math.cos(an) * sg, -Math.sin(an) * sg) * 180 / Math.PI };
+}
+// noktanın yay üstündeki izdüşümü: { t (0..1), d (yay boyu), q (nokta), dist }
+function arcProject(A, p) {
+  const sg = Math.sign(A.sweep) || 1, tw = 2 * Math.PI;
+  let dl = (Math.atan2(p.y - A.c.y, p.x - A.c.x) - A.a0) * sg; dl = ((dl % tw) + tw) % tw;
+  const th = Math.abs(A.sweep);
+  let t = dl <= th ? dl / th : (dl - th < tw - dl ? 1 : 0);
+  const q = arcAt(A, t * A.len);
+  return { t, d: t * A.len, q: { x: q.x, y: q.y }, dist: Math.hypot(p.x - q.x, p.y - q.y), ang: q.ang };
+}
+// duvar boyu: eğri duvarda yay uzunluğu (açıklıkların d'si buna göre)
+const wallLen = w => { const A = wallArc(w); return A ? A.len : Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y); };
+// eğri duvarın orta çizgisi (2B seçim vurgusu, ölçü etiketi): n + 1 nokta
+function arcPts(A, n) { const out = []; for (let i = 0; i <= n; i++) out.push(arcAt(A, A.len * i / n)); return out; }
+function expandCurved(f) {
+  if (!f || !f.walls || !f.walls.some(isCurved)) return f;
+  const g = Object.assign({}, f), walls = [], ops = [], byWall = new Map();
+  for (const o of f.ops || []) { if (!byWall.has(o.wall)) byWall.set(o.wall, []); byWall.get(o.wall).push(o); }
+  g._curved = [];
+  for (const w of f.walls) {
+    const A = wallArc(w);
+    if (!A) { walls.push(w); continue; }
+    g._curved.push(w);
+    const os = byWall.get(w.id) || [];
+    const spans = os.map(o => { const ow = Math.min(+o.w || 0, A.len), od = clamp(+o.d || 0, ow / 2, A.len - ow / 2); return [od - ow / 2, od + ow / 2, o]; });
+    const n = Math.max(4, Math.ceil(Math.abs(A.sweep) / (Math.PI / 24)));
+    let br = [];
+    // dilim noktaları açıklığın içine ve kenarına 1 cm’den yakın düşmez (yoksa açıklık iki parçaya bölünür ve kaybolur)
+    for (let i = 1; i < n; i++) { const d = A.len * i / n; if (!spans.some(([s0, s1]) => d > s0 - 1 && d < s1 + 1)) br.push(d); }
+    for (const [s0, s1] of spans) br.push(s0, s1);
+    br.push(0, A.len); br = br.map(d => clamp(d, 0, A.len)); br.sort((p, q) => p - q); br = br.filter((d, i) => !i || d - br[i - 1] > 0.5); br[br.length - 1] = A.len;
+    const placed = new Set(), B = w.wt === 'curtain' ? curtainBays(w) : 0, posts = w.wt === 'railing' || w.wt === 'fence' ? lowWallPosts(w, A.len, os) : null;
+    for (let k = 0; k + 1 < br.length; k++) {
+      const d0 = br[k], d1 = br[k + 1], p0 = arcAt(A, d0), p1 = arcAt(A, d1);
+      if (d1 - d0 < 0.25) continue;
+      const sw = Object.assign({}, w, { id: w.id + '~' + k, pid: w.id, po: d0, arc: { d0, d1, len: A.len, B, posts }, a: { x: p0.x, y: p0.y }, b: { x: p1.x, y: p1.y } });
+      for (const key of ['bulge', 'top', 'angles', 'pivot', 'posIdx', 'acc', 'bel', 'mul', 'mulN']) delete sw[key];
+      walls.push(sw);
+      const ch = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+      for (const [s0, s1, o] of spans) if (!placed.has(o) && s0 >= d0 - 0.5 && s1 <= d1 + 0.5 && placed.add(o)) ops.push(Object.assign({}, o, { wall: sw.id, d: ch / 2, w: Math.min(o.w, ch) }));
+    }
+  }
+  const cw = new Set(g._curved.map(w => w.id));
+  for (const o of f.ops || []) if (!cw.has(o.wall)) ops.push(o);
+  g.walls = walls; g.ops = ops;
+  return g;
+}
+// 2B: eğri duvarın yay boyu etiketi (tepe noktasının dışında)
+function curvedDimSvg(w) {
+  const A = wallArc(w); if (!A || A.len < 30) return '';
+  const C = pal(), m = arcAt(A, A.len / 2), fs = clamp(13 / view.z, 9, 40), out = Math.sign(A.s), L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
+  const nx = -(w.b.y - w.a.y) / L, ny = (w.b.x - w.a.x) / L, off = w.t / 2 + fs * 0.9;
+  let ang = m.ang; if (ang > 90 || ang <= -90) ang += 180;
+  return `<text transform="translate(${m.x + nx * out * off} ${m.y + ny * out * off}) rotate(${ang})" text-anchor="middle" dominant-baseline="middle" font-size="${fs}" fill="${C.sub}" stroke="${C.halo}" stroke-width="${fs * 0.25}" paint-order="stroke" font-family="Segoe UI,sans-serif" pointer-events="none">⌒ ${fmtLen(A.len)}${wallTag(w)}</text>`;
+}
+// eğriliği bırakınca / alandan: |bulge| ≤ kiriş / 2, çok küçükse düz
+function setBulge(w, v) {
+  const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y), b = Math.round(Math.max(-L / 2, Math.min(L / 2, +v || 0)) * 10) / 10;
+  if (Math.abs(b) < BULGE_MIN) delete w.bulge; else w.bulge = b;
+}
+// kayıtlı / dış kaynaklı eğrilik (normalizeProject, MCP): sayı değilse sil, değilse sınırla
+function cleanBulge(w) { if (!w || w.bulge == null) return; if (!Number.isFinite(+w.bulge)) { delete w.bulge; return; } setBulge(w, +w.bulge); }
+/* CURVED-WALL:END */
 const wAng = w => Math.atan2(w.b.y - w.a.y, w.b.x - w.a.x);
 const wallPivot = w => w.pivot === 'b' ? 'b' : 'a';
 const wallFree = w => w.pivot === 'b' ? 'a' : 'b';
@@ -395,7 +576,7 @@ function isSolidWall(w) { return !w.wt || w.wt === 'solid'; }
 // cam cephe bölme sayısı: mulN (ara dikme adedi) varsa o + 1, yoksa uzunluk / modül (#71)
 function curtainBays(w) {
   if (w.mulN != null && +w.mulN >= 0) return Math.max(1, Math.round(+w.mulN) + 1);
-  const L = wLen(w) || 1, m = +w.mul > 0 ? +w.mul : MUL_DEF;
+  const L = wallLen(w) || 1, m = +w.mul > 0 ? +w.mul : MUL_DEF;
   return Math.max(1, Math.round(L / m));
 }
 // korkuluk / çit dikme konumları (a ucundan cm; uçlar dahil), açıklık aralıkları atlanır
@@ -405,7 +586,15 @@ function lowWallSolid(L, ops) {
   if (L - p > 1) out.push([p, L]);
   return out;
 }
+// eğri duvar parçası: yay boyundaki konumlardan bu parçaya düşenler, parça boyuna ölçekli (uç ortak: sonraki parçada)
+function arcPiecePos(w, L, xs) { const { d0, d1, len } = w.arc, k = L / ((d1 - d0) || 1); return xs.filter(x => x >= d0 - 0.01 && (x < d1 - 0.01 || d1 >= len - 0.01)).map(x => clamp((x - d0) * k, 0, L)); }
+// giydirme cephe dikmeleri: parça boyunca konumlar (ends = uç dikmeleri de)
+function mulPos(w, L, ends = false) {
+  if (w.arc) { const B = w.arc.B || 1, xs = []; for (let i = ends ? 0 : 1; i <= (ends ? B : B - 1); i++) xs.push(w.arc.len * i / B); return arcPiecePos(w, L, xs); }
+  const nB = curtainBays(w), out = []; for (let i = ends ? 0 : 1; i <= (ends ? nB : nB - 1); i++) out.push(L * i / nB); return out;
+}
 function lowWallPosts(w, L, ops = []) {
+  if (w.arc && w.arc.posts) return arcPiecePos(w, L, w.arc.posts); // eğri duvar parçası (#202): dikmeler tüm yay boyunca
   const spec = LOW_WALL[w.wt] || LOW_WALL.railing, out = [];
   for (const [s, e] of lowWallSolid(L, ops)) { const n = Math.max(1, Math.ceil((e - s) / spec.post - 1e-6)); for (let i = 0; i <= n; i++) out.push(s + (e - s) * i / n); }
   return out;
@@ -595,8 +784,9 @@ function voidDrop(f, i, o) {
   return 0;
 }
 function pointInPoly(p, pts) { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { if (((pts[i].y > p.y) !== (pts[j].y > p.y)) && (p.x < (pts[j].x - pts[i].x) * (p.y - pts[i].y) / (pts[j].y - pts[i].y) + pts[i].x)) c = !c; } return c; }
-function opPos(op) {
-  const w = F().walls.find(x => x.id === op.wall); if (!w) return null;
+function opPos(op, f) {
+  const w = (f || F()).walls.find(x => x.id === op.wall); if (!w) return null;
+  { const A = wallArc(w); if (A) { const q = arcAt(A, op.d); return { x: q.x, y: q.y, ang: q.ang, t: w.t, w }; } } // #202: yay üstünde
   const L = wLen(w) || 1, ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L;
   return { x: w.a.x + ux * op.d, y: w.a.y + uy * op.d, ang: wAng(w) * 180 / Math.PI, t: w.t, w };
 }
@@ -668,6 +858,7 @@ function mirrorObjs(os, o, u, opsOf = w => F().ops.filter(op => op.wall === w.id
       else if (kind === 'section') m.dir = -(m.dir || 1); // yansıyan çizgi ters döner: bakış yönü de yansısın
       else {
         if (Array.isArray(m.angles) && m.angles.length) m.angles = m.angles.map(a => normDeg(2 * ax - a));
+        if (m.bulge) m.bulge = -m.bulge; // #202: yansıyan yay öbür yana bükülür
         for (const op of opsOf(m)) op.side = -(op.side || 1);
         if (wallFaced(m)) wallFaceSwap(m); // yansıma yüzleri yer değiştirir: boya / kaplama aynı tarafta kalsın
         if (Array.isArray(m.top)) m.top = m.top.map(p => p.length >= 3 ? [p[0], p[2], p[1]] : p); // +n / -n eğimli üst yüzleri yer değiştirir (#178)
@@ -696,6 +887,7 @@ function scaleObjs(os, orig, tx, ty, sx, sy, scaleT = false) {
       mo.a = { x: tx(g.a.x), y: ty(g.a.y) }; mo.b = { x: tx(g.b.x), y: ty(g.b.y) };
       if (kind === 'wall') {
         if (scaleT && g.t) mo.t = clamp(Math.round(g.t * Math.sqrt(sx * sy)), 3, 200);
+        if (g.bulge) { const gl = dist(g.a, g.b) || 1, nx = -(g.b.y - g.a.y) / gl, ny = (g.b.x - g.a.x) / gl; setBulge(mo, g.bulge * Math.hypot(sx * nx, sy * ny) * (Math.sign(sx * sy) || 1)); } // #202
         // menteşeli duvar: açı ön ayarlarını yeni yönelime göre kaydır (eski preset'e sıçramasın)
         if (Array.isArray(g.angles) && g.angles.length) {
           const od = Math.atan2(g.b.y - g.a.y, g.b.x - g.a.x) * 180 / Math.PI, nd = Math.atan2(mo.b.y - mo.a.y, mo.b.x - mo.a.x) * 180 / Math.PI;
@@ -704,7 +896,8 @@ function scaleObjs(os, orig, tx, ty, sx, sy, scaleT = false) {
         }
         // duvara bağlı kapı/pencereler de ölçeklensin: merkez noktayı ölçekle, yeni duvara projekte et
         const L0 = dist(g.a, g.b) || 1, L1 = wLen(mo) || 1, ux = (mo.b.x - mo.a.x) / L1, uy = (mo.b.y - mo.a.y) / L1;
-        for (const o2 of F().ops.filter(op => op.wall === mo.id)) {
+        if (isCurved(g) || isCurved(mo)) { const A0 = wallLen(g) || 1, A1 = wallLen(mo) || 1; for (const o2 of F().ops.filter(op => op.wall === mo.id)) { const og = orig(o2.id) || o2; o2.d = clamp(og.d / A0 * A1, Math.min(o2.w / 2, A1 / 2), Math.max(A1 - o2.w / 2, A1 / 2)); } }
+        else for (const o2 of F().ops.filter(op => op.wall === mo.id)) {
           const og = orig(o2.id) || o2, t0 = clamp(og.d / L0, 0, 1), px = tx(g.a.x + (g.b.x - g.a.x) * t0), py = ty(g.a.y + (g.b.y - g.a.y) * t0);
           const pr = clamp(((px - mo.a.x) * ux + (py - mo.a.y) * uy) / L1, 0, 1);
           o2.d = clamp(pr * L1, Math.min(o2.w / 2, L1 / 2), Math.max(L1 - o2.w / 2, L1 / 2));
@@ -750,13 +943,18 @@ function parseScale(str, width) {
   if ((m = t.match(/^([\d.]+)\s*%$/))) return parseFloat(m[1]) / 100;
   return parseFloat(t);
 }
-function scaleSelPrompt() {
+async function scaleSelPrompt() {
   const os = selObjs().filter(x => XFORM_KINDS.has(x.kind) || x.kind === 'bg'), bb = selectionBounds(os); if (!bb) return;
-  const v = prompt(L('Ölçek: çarpan (1.5 / 150%), hedef genişlik (=450 cm) veya referans:hedef (300:450)', 'Scale: factor (1.5 / 150%), target width (=450 cm) or reference:target (300:450)'), '1.5');
+  const w0 = bb.x1 - bb.x0, okSc = v => { const s = parseScale(v, w0); return s > 0.01 && s < 100; };
+  const v = await askText(L('Ölçekle', 'Scale'), '1.5', { msg: L('Çarpan (1.5 / 150%), hedef genişlik (=450 cm) veya referans:hedef (300:450)', 'Factor (1.5 / 150%), target width (=450 cm) or reference:target (300:450)'), validate: v => (okSc(v) ? '' : L('Geçersiz ölçek', 'Invalid scale')) });
   if (v == null) return;
-  const sc = parseScale(v, bb.x1 - bb.x0);
-  if (!(sc > 0.01 && sc < 100) || Math.abs(sc - 1) < 1e-6) { if (!(sc > 0.01 && sc < 100)) toast(L('Geçersiz ölçek', 'Invalid scale')); return; }
-  const scaleT = os.some(x => x.kind === 'wall') && confirm(L('Duvar kalınlıkları da ölçeklensin mi? (İptal = kalınlık korunur)', 'Scale wall thickness too? (Cancel = keep thickness)'));
+  const sc = parseScale(v, w0);
+  if (!(sc > 0.01 && sc < 100) || Math.abs(sc - 1) < 1e-6) return;
+  let scaleT = false;
+  if (os.some(x => x.kind === 'wall')) {
+    const r = await askConfirm(L('Duvar kalınlıkları da ölçeklensin mi?', 'Scale wall thickness too?'), { title: L('Duvar kalınlığı', 'Wall thickness'), ok: L('Kalınlığı da ölçekle', 'Scale thickness too'), cancel: L('Kalınlığı koru', 'Keep thickness') });
+    if (r === null) return; scaleT = r;
+  }
   if (scaleSelection(sc, scaleT, os)) { afterXform(); toast(L('Ölçeklendi ×', 'Scaled ×') + Math.round(sc * 1000) / 1000); }
 }
 function contentBounds(f = F()) {
@@ -774,8 +972,10 @@ let _dbProm = null;
 function openDB() {
   if (_dbProm) return _dbProm;
   _dbProm = new Promise((res, rej) => {
-    if (!window.indexedDB) return rej(new Error('IndexedDB desteklenmiyor'));
-    const req = indexedDB.open(DB_NAME, DB_VER);
+    let idb = null;
+    try { idb = window.indexedDB; } catch (e) { }
+    if (!idb) return rej(new Error(L('IndexedDB kullanılamıyor', 'IndexedDB is not available')));
+    const req = idb.open(DB_NAME, DB_VER);
     req.onupgradeneeded = e => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains('projects')) db.createObjectStore('projects', { keyPath: 'name' });
@@ -783,8 +983,11 @@ function openDB() {
       if (!db.objectStoreNames.contains('textures')) db.createObjectStore('textures', { keyPath: 'id' }); // özel doku görselleri, P dışında
     };
     req.onsuccess = () => res(req.result);
-    req.onerror = () => rej(req.error);
+    req.onerror = () => rej(req.error || new Error(L('Tarayıcı veritabanı açılamadı', 'Could not open the browser database')));
+    req.onblocked = () => rej(new Error(L('Tarayıcı veritabanı başka bir sekmede kilitli', 'The browser database is blocked by another tab')));
   });
+  // Başarısız bir açılış kalıcı olarak saklanmaz: sonraki çağrı yeniden dener (#188)
+  _dbProm.catch(() => { _dbProm = null; });
   return _dbProm;
 }
 async function dbPut(store, val, key) {
@@ -1055,6 +1258,7 @@ function commit() {
   if (typeof collabReadOnly === 'function' && collabReadOnly()) return;
   if (typeof grpEditAbsorb === 'function') grpEditAbsorb(); // grup düzenleme modunda yeni çizilenler gruba katılır
   for (const fl of P.floors) syncAccWalls(fl, true); // akordiyon duvarlar bağlı uçları izler (düzen pozundan önce)
+  followRooms(); // #201: duvarlarını izleyen odalar duvar değişikliğinden sonra yeniden algılanır
   if (typeof syncActiveVars === 'function') syncActiveVars();
   stampLayers(); // yeni nesneler etkin katmana (#32)
   for (const fl of P.floors) for (const o of fl.furn) if (isParamRoof(o)) o.h = roofHeight(o); // çatı yüksekliği parametrelerden (boyutlandırma / ölçek sonrası) (#115)
@@ -1067,6 +1271,7 @@ function commit() {
   if (typeof collabOnCommit === 'function') collabOnCommit(s);
   autosave(); updateUndo();
   if (fp3DOn()) schedBuild3D(); // 3B'de çizim aracıyla eklenen / değişen nesne sahnede görünsün
+  if (tour) tourCheck(); // #197: ilk açılış turu yapılanı görünce ilerler
 }
 function autosave() {
   clearTimeout(saveTimer);
@@ -1079,7 +1284,18 @@ function autosave() {
     }
   }, 350);
 }
-const GRID_PRESETS = ['5', '10', '25', '50', '100', '300', '500'];
+const GRID_PRESETS = ['5', '10', '25', '50', '100', '300', '500', '2.54', '15.24', '30.48', '91.44']; // emperyal: 1 in, 6 in, 1 ft, 3 ft (#194)
+// birim seçimine göre ızgara adımı seçenekleri (metrik ya da emperyal adımlar)
+function syncUnitsUI() {
+  const s = $('#sUnits'); if (s) s.value = units;
+  for (const o of $('#sGrid').options) { const imp = /\.\d/.test(o.value); if (o.value !== 'custom') o.hidden = imp !== isImp() && String(P && P.grid) !== o.value; }
+}
+function setUnits(u) {
+  units = u === 'imperial' ? 'imperial' : 'metric';
+  localStorage.setItem('fp_units', units);
+  syncUnitsUI(); applyView(); refresh(); buildLib();
+  toast(isImp() ? L('Birimler: fit-inç', 'Units: feet and inches') : L('Birimler: metre / cm', 'Units: metres / cm'));
+}
 function syncGridUI() {
   const g = String(P.grid);
   if (GRID_PRESETS.includes(g)) {
@@ -1091,10 +1307,12 @@ function syncGridUI() {
     $('#iGridCustom').value = P.grid;
   }
   $('#sGridType').value = P.gridType || 'square';
+  syncUnitsUI();
   $('#lblAngle').textContent = P.gridType === 'triangle' ? L('Açı 30°', 'Angle 30°') : L('Açı 15°', 'Angle 15°');
 }
 function restore(s) {
   P = JSON.parse(s); P.gridType = P.gridType || 'square';
+  wallSigReset(); // #201: geri alınan durum odaların duvar izlemesi için yeni taban
   fi = clamp(fi, 0, P.floors.length - 1);
   sel = sel.filter(id => find(id));
   $('#pname').value = P.name; syncGridUI();
@@ -1123,6 +1341,7 @@ const layerById = id => (P.layers || []).find(l => l.id === (id || '0'));
 // Gizli tekil ögeler (#174) veya gizli (ya da baskıda çıkmayan) katmanlardaki nesneler olmadan katın sığ kopyası; hepsi görünürse kat aynen döner
 function visFloor(f, print = false, lift = false) {
   if (lift) return liftLayers(visFloor(f, print));
+  f = expandCurved(f); // #202: eğri duvar → düz parçalar (2B, 3B, kesit, dışa aktarma)
   if (f.walls && f.walls.some(w => w.acc && (wLen(w) < 1 || w.acc.fill === 'fan'))) { // kapanmış akordiyon duvar (boşluk yok) çizilmez; yelpazede kapı / pencere yok
     const g = Object.assign({}, f); g.walls = f.walls.filter(w => !(w.acc && wLen(w) < 1));
     const wl = new Set(g.walls.filter(w => !isAccFan(w)).map(w => w.id)); g.ops = f.ops.filter(o => wl.has(o.wall)); f = g;
@@ -1269,7 +1488,11 @@ function layerAct(a, lid) {
   else if (a === 'lyrlock') l.lock = !l.lock;
   else if (a === 'lyrprint') l.print = l.print === false;
   else if (a === 'lyrdel') {
-    if (l.id === '0' || !confirm(L(`“${l.name}” katmanı silinsin mi? Nesneleri Varsayılan katmana geçer.`, `Delete layer “${l.name}”? Its objects move to Default.`))) return;
+    if (l.id === '0') return;
+    askConfirm(L(`“${l.name}” katmanı silinsin mi? Nesneleri Varsayılan katmana geçer.`, `Delete layer “${l.name}”? Its objects move to Default.`), { ok: L('Sil', 'Delete'), danger: true }).then(ok => { if (ok === true) layerAct('lyrdelok', l.id); });
+    return;
+  }
+  else if (a === 'lyrdelok') {
     for (const f of P.floors) for (const k in KINDS) for (const o of f[k] || []) if (o.layer === l.id) o.layer = '0';
     P.layers = P.layers.filter(x => x !== l); if (P.activeLayer === l.id) P.activeLayer = '0';
   }
@@ -1318,17 +1541,40 @@ function cacheTex(id, data) {
   e.img.src = data;
   TEX.set(id, e); return e;
 }
-// projenin dokularını IndexedDB'den önbelleğe al (açılış, sekme geçişi, dosya açma)
+/* Arka plan görseli (#187): baytlar da dokular gibi P'nin dışında (IndexedDB 'textures' + TEX) durur;
+   P.bg yalnız künyedir { id: 'bg', img: <görsel id>, x, y, w, h, op, lock }. Eskiden src'deki birkaç MB'lık
+   dataURL her geri-al anlık görüntüsüne, her otomatik kayda ve her render karşılaştırmasına giriyordu.
+   Eski kayıtlar (src içinde dataURL) normalizeProject'te bgAbsorb ile bir kez dışarı taşınır; link, canlı oda
+   ve eski sürümler için bgInline görseli yeniden src'ye koyar. */
+const BG_MAX = 4096;              // yüklenen arka planın en uzun kenarı (px): çizim ve ölçek ayarı için yeterli
+const bgData = b => (b ? (typeof b.src === 'string' && b.src) || ((b.img && TEX.get(b.img)) || {}).data || '' : '');
+function bgAbsorb(b) {
+  if (!b || typeof b.src !== 'string' || !b.src.startsWith('data:image/')) return b;
+  // kimlik görselin içeriğinden: aynı görsel (canlı odada her arka plan değişikliği yeniden gelir) yeni kopya açmaz, eşlerde aynı kimlik
+  const id = 'bg' + strHash(b.src).replace(':', 'x'), had = TEX.has(id); cacheTex(id, b.src);
+  if (had) { b.img = id; delete b.src; return b; }
+  dbPut('textures', { id, data: b.src }).catch(() => { });
+  b.img = id; delete b.src; return b;
+}
+// görsel src'ye gömülü kopya (paylaşım linki, canlı oda); görsel yoksa null
+function bgInline(b) {
+  const d = bgData(b); if (!b || !d) return null;
+  const o = { ...b, src: d }; delete o.img; return o;
+}
+const texRefIds = proj => [...((proj && proj.textures) || []).map(t => t.id), ...(proj && proj.bg && proj.bg.img ? [proj.bg.img] : [])];
+// projenin dokularını (ve arka plan görselini) IndexedDB'den önbelleğe al (açılış, sekme geçişi, dosya açma)
 async function ensureTextures(proj = P) {
-  for (const t of (proj && proj.textures) || []) {
-    if (TEX.has(t.id)) continue;
-    try { const r = await dbGet('textures', t.id); if (r && r.data) cacheTex(t.id, r.data); } catch (e) { }
+  for (const id of texRefIds(proj)) {
+    if (TEX.has(id)) continue;
+    try { const r = await dbGet('textures', id); if (r && r.data) cacheTex(id, r.data); } catch (e) { }
   }
 }
 // ⬇ JSON: görsel verisi dosyayla birlikte gider, böylece başka bilgisayarda da açılır
 function bundleTextures(proj) {
   const texData = {};
   for (const t of proj.textures || []) { const e = TEX.get(t.id); if (e) texData[t.id] = e.data; }
+  // arka plan görseli dosyada src içinde gömülü gider (eski sürümler de açar); açılışta bgAbsorb yeniden dışarı alır
+  if (proj.bg && proj.bg.img) { const b = bgInline(proj.bg); if (b) proj = { ...proj, bg: b }; }
   return Object.keys(texData).length ? { ...proj, texData } : proj;
 }
 // 📂 Aç: texData → önbellek + IndexedDB; P'ye (ve geri-al geçmişine) girmez
@@ -1592,7 +1838,7 @@ function normalizeProject(P) {
   P.grid = P.grid || 10; P.gridType = P.gridType || 'square'; P.wallT = P.wallT || 20; P.wallH = P.wallH || 270;
   P.lib = Object.assign({ shapes: [] }, P.lib || {}); P.lib.shapes = P.lib.shapes || [];
   P.lib.presets = (Array.isArray(P.lib.presets) ? P.lib.presets : []).filter(p => p && p.id && (p.kind === 'op' || p.kind === 'furn') && +p.w > 0); // #42
-  if (P.bg) P.bg.id = 'bg';
+  if (P.bg) { P.bg.id = 'bg'; if (P.bg.src) bgAbsorb(P.bg); } // #187: eski kayıtlardaki gömülü görsel dışarı
   P.textures = (Array.isArray(P.textures) ? P.textures : []).filter(t => t && /^[\w-]{1,32}$/.test(t.id))
     .map(t => ({ id: t.id, name: String(t.name || t.id).slice(0, 60), w: clamp(+t.w || 60, 1, 5000), h: clamp(+t.h || +t.w || 60, 1, 5000) }));
   if (!Array.isArray(P.layers) || !P.layers.length) P.layers = [defaultLayer()];
@@ -1603,7 +1849,9 @@ function normalizeProject(P) {
   if (P.layers.length > 1) { const ids = new Set(P.layers.map(l => l.id)); P.floors.forEach(f => { for (const k in KINDS) for (const o of f[k] || []) if (!ids.has(o.layer)) o.layer = '0'; }); }
   cleanLw(P); // çizgi kalınlıkları
   cleanGround(P); // 3B zemin (#147)
-  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; for (const k in KINDS) for (const o of f[k]) if (o) { if (o.hidden) o.hidden = true; else delete o.hidden; } f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); cleanWallFaces(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
+  cleanSite(P); // konum + plan kuzeyi (#205)
+  cleanQty(P); // metraj birim fiyatları (#199)
+  P.floors.forEach(f => { for (const k in KINDS) f[k] = f[k] || []; for (const k in KINDS) for (const o of f[k]) if (o) { if (o.hidden) o.hidden = true; else delete o.hidden; } f.groups = f.groups || []; f.slabFloor = f.slabFloor || 'none'; if (f.slabColor === undefined) f.slabColor = null; for (const o of f.ops) if (o.open == null) o.open = 0; for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanAcc(w); cleanBel(w); cleanWallFaces(w); cleanBulge(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
     for (const s of f.slabs) { if (!(s.t > 0)) s.t = 20; s.floor = s.floor || 'concrete'; s.off = +s.off || 0; cleanSurfHp(s); }
     for (const r of f.rooms) cleanSurfHp(r);
     for (const z of f.zones || []) cleanZone(z); // arsa / dış zemin (#150)
@@ -1619,7 +1867,7 @@ function loadProject(obj, msg) {
   fi = 0; sel = []; ui.draw = null; ui.dimStart = null; ui.polyPts = null; placing = null;
   hist = [JSON.stringify(P)]; hi = 0;
   $('#pname').value = P.name; syncGridUI();
-  setTool('select'); fit(); syncTab(); refresh(); updateUndo(); autosave(); buildLib();
+  setTool('select'); fit(); syncTab(); refresh(); updateUndo(); autosave(); buildLib(); wallSigReset(); // #201
   if (msg) toast(msg);
 }
 /* ---------- Proje sekmeleri (issue #17) ----------
@@ -1651,10 +1899,8 @@ function setProjGroup(v) {
   if (g) { P.group = g; rememberGroup(g); } else delete P.group;
   commit(); renderTabs(); if (!sel.length) renderProps();
 }
-function groupPrompt() {
-  const known = knownGroups();
-  const v = prompt(L(`“${P.name}” hangi grupta olsun? (ör. Ahsen’in projeleri) — boş bırakın: grupsuz${known.length ? '\nVar olanlar: ' + known.join(', ') : ''}`,
-    `Which group should “${P.name}” be in? (e.g. Ahsen’s projects) — leave empty for no group${known.length ? '\nExisting: ' + known.join(', ') : ''}`), projGroup(P));
+async function groupPrompt() {
+  const v = await askText(L('Proje grubu', 'Project group'), projGroup(P), { msg: L(`“${P.name}” hangi grupta olsun? (ör. Ahsen’in projeleri) — boş bırakın: grupsuz`, `Which group should “${P.name}” be in? (e.g. Ahsen’s projects) — leave empty for no group`), list: knownGroups() });
   if (v != null) setProjGroup(v);
 }
 const tabGrpOff = () => new Set(lsArr('fp_tabgrp_off'));
@@ -1683,7 +1929,7 @@ function activateTab(i) {
   $('#pname').value = P.name; syncGridUI();
   if (t.view) Object.assign(view, t.view); else fit();
   if (tool === 'place') setTool('select');
-  refresh(); updateUndo(); renderTabs(); autosave(); buildLib();
+  refresh(); updateUndo(); renderTabs(); autosave(); buildLib(); wallSigReset(); // #201
   if (ui.viewElev) archRedraw(true);
   if (ui.view3d && T3) schedBuild3D();
 }
@@ -1700,7 +1946,7 @@ async function closeTab(i) {
   if (i === tabIdx) syncTab();
   const p = tabs[i].P;
   if (!isPristine(p) && !(await savedCopyMatches(p))
-    && !confirm(L(`“${p.name}” kaydedilmemiş. Sekme kapatılırsa değişiklikler kaybolur. Kapatılsın mı?`, `“${p.name}” is not saved. Closing the tab discards its changes. Close it?`))) return;
+    && (await askConfirm(L(`“${p.name}” kaydedilmemiş. Sekme kapatılırsa değişiklikler kaybolur. Kapatılsın mı?`, `“${p.name}” is not saved. Closing the tab discards its changes. Close it?`), { ok: L('Kapat', 'Close'), danger: true })) !== true) return;
   if (tabs.length === 1) { tabs = []; tabIdx = 0; loadProject(newProject()); return; }
   tabs.splice(i, 1);
   if (i === tabIdx) activateTab(Math.min(i, tabs.length - 1));
@@ -1752,15 +1998,14 @@ $('#ptabs').addEventListener('contextmenu', e => { // sağ tık: grubu değişti
 $('#ptabs').addEventListener('dblclick', e => {
   const t = e.target.closest('[data-tab]'); if (!t || e.target.closest('[data-tabclose]')) return;
   if (+t.dataset.tab !== tabIdx) switchTab(+t.dataset.tab);
-  const nm = prompt(L('Proje adı:', 'Project name:'), P.name);
-  if (nm && nm.trim()) { P.name = nm.trim(); $('#pname').value = P.name; commit(); renderTabs(); }
+  askText(L('Proje adı', 'Project name'), P.name).then(nm => { if (nm && nm.trim()) { P.name = nm.trim(); $('#pname').value = P.name; commit(); renderTabs(); } });
 });
 let toastT;
 // act = { label, fn }: isteğe bağlı tek düğme (tıklanabilir bildirim daha uzun kalır)
 function toast(m, act) {
   const t = $('#toast'); t.textContent = m; t.classList.toggle('act', !!act);
   if (act) { const b = document.createElement('button'); b.className = 'btn sm'; b.textContent = act.label; b.onclick = () => { t.classList.remove('show'); act.fn(); }; t.append(' ', b); }
-  t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), act ? 6000 : 2600);
+  t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), act ? act.ms || 6000 : 2600);
 }
 
 /* ---------- Görünüm ---------- */
@@ -1862,6 +2107,7 @@ function gridScale(z = view.z) {
 }
 /** Izgara aralığını okunur yazar: 25 cm · 1 m · 2.5 m · 500 m. */
 function gridStepLabel(cm) {
+  if (isImp()) return fmtFtIn(cm).replace(/ 0"$/, ""); // #194: 12' / 6"
   if (cm >= 100) { const m = cm / 100; return (Number.isInteger(m) ? m : +m.toFixed(2)) + ' m'; }
   return +(Math.round(cm * 10) / 10) + ' cm';
 }
@@ -1932,8 +2178,11 @@ function gridSvg() {
 }
 function bgSvg(live = true) {
   const b = P.bg; if (!b) return '';
+  // tuvalde kısa blob: adresi (DOM ve setLayerHtml karşılaştırması hafif kalır), dışa aktarımda kendi başına geçerli dataURL
+  const e = b.img ? TEX.get(b.img) : null, href = b.src || (e ? (live && !ui.exporting ? e.url : e.data) : '');
+  if (!href) return '';
   const hit = live && !b.lock ? `data-id="bg" style="cursor:move"` : `pointer-events="none"`;
-  return `<image href="${b.src}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" opacity="${b.op}" preserveAspectRatio="none" ${hit}/>`;
+  return `<image href="${href}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" opacity="${b.op}" preserveAspectRatio="none" ${hit}/>`;
 }
 function roomSvg(r, live) {
   const C = pal(), pts = r.pts.map(p => p.x + ',' + p.y).join(' ');
@@ -2083,9 +2332,8 @@ function wallSvg(w, live, f) {
     } else {
       s += `<line x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="${C.glass}" stroke-width="${Math.max(1, w.t - 2 * sw)}" stroke-linecap="butt" pointer-events="none"/>`;
     }
-    const nTick = curtainBays(w);
-    for (let i = 1; i < nTick; i++) {
-      const px = w.a.x + ux * (Lc * i / nTick), py = w.a.y + uy * (Lc * i / nTick), hw2 = w.t / 2 - sw * 0.5;
+    for (const xm of mulPos(w, Lc)) {
+      const px = w.a.x + ux * xm, py = w.a.y + uy * xm, hw2 = w.t / 2 - sw * 0.5;
       s += `<line x1="${px - nx * hw2}" y1="${py - ny * hw2}" x2="${px + nx * hw2}" y2="${py + ny * hw2}" stroke="${C.wall}" stroke-width="${sw}" pointer-events="none"/>`;
     }
   } else if (isLowWall(w)) {
@@ -2100,10 +2348,10 @@ function wallSvg(w, live, f) {
     s += `<circle cx="${pv.x}" cy="${pv.y}" r="${pr}" fill="${C.bg}" stroke="${C.accent}" stroke-width="${Math.max(2, 2.2 / view.z)}" pointer-events="none"/><circle cx="${pv.x}" cy="${pv.y}" r="${pr * 0.38}" fill="${C.accent}" pointer-events="none"/>`;
     if (live) {
       const mx = (w.a.x + w.b.x) / 2, my = (w.a.y + w.b.y) / 2, fs = clamp(11 / view.z, 8, 22), bw = fs * 3.1, bh = fs * 1.45;
-      s += `<g data-id="${w.id}" transform="translate(${mx} ${my})" style="cursor:pointer"><rect x="${-bw / 2}" y="${-bh / 2}" width="${bw}" height="${bh}" rx="${bh / 2}" fill="${C.bg}" stroke="${C.accent}" stroke-width="${1.5 / view.z}"/><text text-anchor="middle" dominant-baseline="central" font-size="${fs}" font-weight="700" fill="${C.accent}">↻ ${curIdx + 1}/${w.angles.length}</text></g>`;
+      s += `<g data-id="${w.pid || w.id}" transform="translate(${mx} ${my})" style="cursor:pointer"><rect x="${-bw / 2}" y="${-bh / 2}" width="${bw}" height="${bh}" rx="${bh / 2}" fill="${C.bg}" stroke="${C.accent}" stroke-width="${1.5 / view.z}"/><text text-anchor="middle" dominant-baseline="central" font-size="${fs}" font-weight="700" fill="${C.accent}">↻ ${curIdx + 1}/${w.angles.length}</text></g>`;
     }
   }
-  if (live) s += `<line data-id="${w.id}" x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="transparent" stroke-width="${Math.max(w.t, 12 / view.z)}" pointer-events="stroke" style="cursor:pointer"/>`;
+  if (live) s += `<line data-id="${w.pid || w.id}" x1="${w.a.x}" y1="${w.a.y}" x2="${w.b.x}" y2="${w.b.y}" stroke="transparent" stroke-width="${Math.max(w.t, 12 / view.z)}" pointer-events="stroke" style="cursor:pointer"/>`;
   return s;
 }
 // Korkuluk / bahçe çiti 2B (#73): korkuluk = iki ince ray + kare dikmeler; çit = orta çizgi + dikmeler + çıta işaretleri
@@ -2203,6 +2451,7 @@ function wallHollowSvg(f) {
   return s;
 }
 function wallDimSvg(w) {
+  if (w.pid) return ''; // eğri duvar parçası: tek yay etiketi curvedDimSvg'de
   const L = wLen(w); if (L < 30) return '';
   const hit = ui.exporting ? 'pointer-events="none"' : `data-wdim="${w.id}" style="cursor:text"`; // tıkla → uzunluğu yaz (#36)
   const C = pal();
@@ -2213,8 +2462,8 @@ function wallDimSvg(w) {
 }
 // taban kotu etiketi: ▲ +220 / ▼ −50 (kat döşemesinden başlamayan duvar; IFC'de birleşen seviyeler)
 function wallTag(w) { const e = Math.round(wallElev(w)); return (e ? ` · ${e > 0 ? '▲ +' : '▼ −'}${Math.abs(e)}` : '') + (wallTopOn(w) ? ' · ⌂' : '') + (isAccWall(w) ? ' · ⇔' : '') + (belSides(w).length ? ' · ≋' : ''); }
-function opSvg(op, live) {
-  const p = opPos(op); if (!p) return '';
+function opSvg(op, live, f) {
+  const p = opPos(op, f); if (!p) return '';
   const C = pal(), w = op.w, t = p.t, hw = w / 2, ht = t / 2, sd = op.side || 1, sw = sd > 0 ? 1 : 0;
   const stk = `stroke="${C.stroke}" fill="none" stroke-width="2"`;
   // kapı malzemesi (#41): cam kanat = cam dolgulu kalın çizgi + ince kenar, cam bölmeli = çerçeve içinde cam, metal = kalın
@@ -6211,8 +6460,8 @@ const draftRect = (a, b) => [{ x: a.x, y: a.y }, { x: b.x, y: a.y }, { x: b.x, y
 function draftTypedPt(a, cur, typed, mode) {
   const dx = cur.x - a.x, dy = cur.y - a.y;
   if (mode === 'arc') return cur;
-  if (mode === 'rect') { const [w, d] = typed.split('x').map(parseFloat), W = w > 0 ? w : 0, D = d > 0 ? d : W; return { x: a.x + (dx < 0 ? -W : W), y: a.y + (dy < 0 ? -D : D), hit: null }; }
-  const l = parseFloat(typed) || 0, m = Math.hypot(dx, dy) || 1;
+  if (mode === 'rect') { const [w, d] = typed.split('x').map(s => typedCm(s)), W = w > 0 ? w : 0, D = d > 0 ? d : W; return { x: a.x + (dx < 0 ? -W : W), y: a.y + (dy < 0 ? -D : D), hit: null }; }
+  const l = typedCm(typed) || 0, m = Math.hypot(dx, dy) || 1;
   return { x: a.x + dx / m * l, y: a.y + dy / m * l, hit: null };
 }
 function addDraft(spec) {
@@ -6457,8 +6706,8 @@ function layerStrings(f, live) {
     // döşemeler odaların altında, boşluklar oda dolgusunun üstünde (delik oda zeminini de keser)
     rooms: terrainLayerSvg(f, live) + siteZonesSvg(f, live) + lwScale((f.slabs || []).map(s => slabSvg(s, live)).join('') + f.rooms.map(r => roomSvg(r, live)[0]).join('') + (f.voids || []).map(v => voidSvg(v, live)).join(''), lwK('room')),
     roomLabels: f.rooms.map(r => roomSvg(r, live)[1]).join('') + [...(f.slabs || []), ...f.rooms].map(slopeSvg).join('') + groupVarsSvg(f, live),
-    walls: bellowsSvg(f, live) + jointsSvg(f) + f.walls.map(w => wallSvg(w, live, f)).join('') + wallHollowSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') : ''),
-    ops: lwScale(f.ops.map(o => opSvg(o, live)).join(''), lwK('op')),
+    walls: bellowsSvg(f, live) + jointsSvg(f) + f.walls.map(w => wallSvg(w, live, f)).join('') + wallHollowSvg(f) + (ui.dims ? f.walls.map(wallDimSvg).join('') + (f._curved || []).map(curvedDimSvg).join('') : ''),
+    ops: lwScale(f.ops.map(o => opSvg(o, live, f)).join(''), lwK('op')),
     furn: (live && !ui.exporting && layersVis.lightArea ? lightAreaSvg(f) : '') + lwScale(f.furn.map(x => furnSvg(x, live)).join(''), lwK('furn')),
     dims: lwScale(f.dims.map(d => dimSvg(d, live)).join('') + (f.sections || []).map(x => sectionSvg(x, live)).join('') + (f.axes || []).map(x => axisSvg(x, live)).join(''), lwK('anno')),
     texts: f.texts.map(t => textSvg(t, live)).join(''),
@@ -6474,7 +6723,8 @@ function handleSvg() {
     ? `<rect data-h="${id}" x="${x - hs}" y="${y - hs}" width="${hs * 2}" height="${hs * 2}" fill="#fff" stroke="#f59e0b" stroke-width="${1.6 / z}" style="cursor:${cur}"/>`
     : `<circle data-h="${id}" cx="${x}" cy="${y}" r="${hs * 1.15}" fill="#f59e0b" stroke="#fff" stroke-width="${1.6 / z}" style="cursor:${cur}"/>`);
   for (const { kind, o } of os) {
-    if (kind === 'wall') s += `<line x1="${o.a.x}" y1="${o.a.y}" x2="${o.b.x}" y2="${o.b.y}" stroke="#f59e0b" stroke-opacity=".45" stroke-width="${o.t + 6 / z}" stroke-linecap="square" pointer-events="none"/>`
+    if (kind === 'wall' && isCurved(o)) { const A = wallArc(o); s += `<path d="M${arcPts(A, 32).map(q => q.x + ' ' + q.y).join('L')}" fill="none" stroke="#f59e0b" stroke-opacity=".45" stroke-width="${o.t + 6 / z}" stroke-linejoin="round" pointer-events="none"/>`; }
+    else if (kind === 'wall') s += `<line x1="${o.a.x}" y1="${o.a.y}" x2="${o.b.x}" y2="${o.b.y}" stroke="#f59e0b" stroke-opacity=".45" stroke-width="${o.t + 6 / z}" stroke-linecap="square" pointer-events="none"/>`
       + `<text transform="translate(${(o.a.x + o.b.x) / 2} ${(o.a.y + o.b.y) / 2})" font-size="${14 / z}" text-anchor="middle" dy="${-o.t / 2 - 6 / z}" fill="${C.lt ? '#b45309' : '#fbbf24'}" font-weight="700" stroke="${C.halo}" stroke-width="${3 / z}" paint-order="stroke" pointer-events="none">${fmtLen(wLen(o))}</text>`;
     if (kind === 'furn') {
       s += `<g transform="translate(${o.x} ${o.y}) rotate(${o.rot})" pointer-events="none"><rect x="${-o.w / 2}" y="${-o.d / 2}" width="${o.w}" height="${o.d}" fill="none" stroke="#f59e0b" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${4 / z}"/></g>`;
@@ -6496,6 +6746,8 @@ function handleSvg() {
       const rx = fr.x + ux * (28 / z), ry = fr.y + uy * (28 / z);
       s += `<line x1="${fr.x}" y1="${fr.y}" x2="${rx}" y2="${ry}" stroke="#f59e0b" stroke-width="${1.5 / z}" pointer-events="none"/>`
         + hnd(o.a.x, o.a.y, 'wa', 'move') + hnd(o.b.x, o.b.y, 'wb', 'move') + hnd(rx, ry, 'wrot', 'grab', 'circle');
+      // #202: orta tutamak duvarı büker (yayın tepe noktası); düz duvarda kirişin ortasında
+      if (!(Array.isArray(o.angles) && o.angles.length) && !isLowWall(o) || isCurved(o)) { const Lc = wLen(o) || 1, bg = +o.bulge || 0, mx = (o.a.x + o.b.x) / 2 - (o.b.y - o.a.y) / Lc * bg, my = (o.a.y + o.b.y) / 2 + (o.b.x - o.a.x) / Lc * bg; s += hnd(mx, my, 'wc', 'crosshair', 'circle'); }
     }
     if (POLY_KINDS.has(kind)) {
       o.pts.forEach((p, i) => {
@@ -6628,7 +6880,8 @@ function snapMids(f, ignore) {
   const out = [];
   for (const arr of ['walls', 'dims']) for (const o of f[arr] || []) {
     if (o.hidden || (ignore && (ignore.has(o.id) || ignore.has(o.a) || ignore.has(o.b)))) continue;
-    out.push({ x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 });
+    const A = arr === 'walls' && wallArc(o); // eğri duvar: yayın tepe noktası (#202)
+    if (A) { const m = arcAt(A, A.len / 2); out.push({ x: m.x, y: m.y }); } else out.push({ x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 });
   }
   return out;
 }
@@ -6727,7 +6980,12 @@ function snapPt(p, from, e, ignore) {
 }
 function wallNear(p, maxD = 40) {
   let best = null;
-  for (const w of F().walls) { if (w.hidden) continue; const pr = segProj(p, w.a, w.b); if (pr.d < maxD && (!best || pr.d < best.pr.d)) best = { w, pr }; }
+  for (const w of F().walls) {
+    if (w.hidden) continue;
+    const A = wallArc(w); // #202: eğri duvarda izdüşüm yay üstünde, t yay boyunun oranı, u teğet
+    if (A) { const ap = arcProject(A, p), an = ap.ang * Math.PI / 180; if (ap.dist < maxD && (!best || ap.dist < best.pr.d)) best = { w, pr: { t: ap.t, q: ap.q, d: ap.dist }, u: { x: Math.cos(an), y: Math.sin(an) } }; continue; }
+    const pr = segProj(p, w.a, w.b); if (pr.d < maxD && (!best || pr.d < best.pr.d)) best = { w, pr };
+  }
   return best;
 }
 function magnet(f) {
@@ -6900,7 +7158,7 @@ function accCandidate(f, w, p) {
 function accLink(f, w) { w.acc = { a: accCandidate(f, w, w.a), b: accCandidate(f, w, w.b) }; return w.acc; }
 function setAccWall(f, w, on) { if (on) accLink(f, w); else delete w.acc; }
 function accFitOps(f, w) {
-  const L = wLen(w);
+  const L = wallLen(w);
   for (const op of f.ops) if (op.wall === w.id) op.d = clamp(op.d, Math.min(op.w / 2, L / 2), Math.max(L - op.w / 2, L / 2));
 }
 // relink = false: yalnızca bağlı uçları izle (çizim sırasında); true (commit): kullanıcının taşıdığı uç yeniden bağlanır
@@ -7170,7 +7428,7 @@ function toolWall(a, b) { const w = mkWall(a, b); if (ui.btn === 'railing') { se
 function mkWall(a, b) { return { id: uid(), a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y }, t: P.wallT, h: curFloorH(), wt: 'solid' }; }
 function opType(id) { return id.startsWith('window') || id === 'wsmall' ? 'window' : id; }
 function mkOp(def, wall, d) {
-  const L = wLen(wall); const w = def.w;
+  const L = wallLen(wall); const w = def.w;
   const o = { id: uid(), wall: wall.id, d: L >= w ? clamp(d, w / 2, L - w / 2) : L / 2, w, h: def.h, sill: def.sill, type: opType(def.id), flip: 0, side: 1, open: 0 };
   if (def.extra) Object.assign(o, JSON.parse(JSON.stringify(def.extra))); // ön ayar alanları (#42)
   return o;
@@ -7345,7 +7603,17 @@ function wallCuts(w, f = F()) {
 }
 const wallPt = (w, s) => { const L = wLen(w) || 1; return { x: w.a.x + (w.b.x - w.a.x) * s / L, y: w.a.y + (w.b.y - w.a.y) * s / L }; };
 // Duvarı a ucundan s cm'de ikiye böler; s'nin ötesindeki açıklıklar yeni parçaya geçer
+// #202: eğri duvarı kirişin t oranında (yay açısında) iki yaya böl; her yarı kendi sehimini alır, açıklıklar yay boyunca taşınır
+function splitArcAt(w, s, f) {
+  const A = wallArc(w), t = clamp(s / (wLen(w) || 1), 0, 1), m = arcAt(A, A.len * t), dm = A.len * t, sg = Math.sign(A.s);
+  const sag = th => sg * A.r * (1 - Math.cos(Math.abs(th) / 2)), nw = mkWall(m, w.b);
+  for (const k of ['t', 'h', 'wt', 'color', 'c1', 'c2', 'f1', 'f2', 'mul', 'mulN', 'rs', 'elev']) if (w[k] != null) nw[k] = w[k];
+  w.b = { x: m.x, y: m.y }; delete w.top; f.walls.push(nw); setBulge(w, sag(A.sweep * t)); setBulge(nw, sag(A.sweep * (1 - t)));
+  f.ops.forEach(op => { if (op.wall === w.id && op.d > dm) { op.wall = nw.id; op.d -= dm; } });
+  return nw;
+}
 function splitWallAt(w, s, f = F()) {
+  if (isCurved(w)) return splitArcAt(w, s, f);
   const m = wallPt(w, s), nw = mkWall(m, w.b), L0 = wLen(w), tA = wallTopSub(w, 0, s), tB = wallTopSub(w, s, L0);
   for (const k of ['t', 'h', 'wt', 'color', 'c1', 'c2', 'f1', 'f2', 'mul', 'mulN', 'rs', 'elev']) if (w[k] != null) nw[k] = w[k];
   w.b = m; f.walls.push(nw); setWallTop(w, tA); setWallTop(nw, tB);
@@ -7396,8 +7664,82 @@ function joinCorner(w1, w2, f = F()) {
 }
 
 /* ---------- Oda algılama (raster flood-fill) ---------- */
+/* ---------- Tek tıkla ölçülendirme (#200) ----------
+   autoDims(f) sıradan, düzenlenebilir ölçüler üretir ({ a, b, off, auto: 1 }): her odanın eni ve boyu (oda içinde,
+   etiketten çeyrek mesafe uzakta) ve binanın dört yüzünde dışarıda üç sıra zincir — en içte kapı / pencere kenarları,
+   ortada duvar parçaları, en dışta toplam. Bir yüze "görünen" duvarlar o yöne paralel ve önünde başka duvar olmayanlardır.
+   Yeniden çalıştırmak yalnız auto işaretli ölçüleri değiştirir; elle çizilenler kalır. Eğik duvarlar dış zincire girmez. */
+const AUTO_DIM_GAP = 60, AUTO_DIM_STEP = 45;
+const AUTO_SIDES = {
+  top: { u: p => p.x, v: p => p.y, back: (u, v) => ({ x: u, y: v }), hor: true },
+  bottom: { u: p => p.x, v: p => -p.y, back: (u, v) => ({ x: u, y: -v }), hor: true },
+  left: { u: p => p.y, v: p => p.x, back: (u, v) => ({ x: v, y: u }), hor: false },
+  right: { u: p => p.y, v: p => -p.x, back: (u, v) => ({ x: -v, y: u }), hor: false },
+};
+function autoDimUniq(us, tol = 2) {
+  const s = us.filter(Number.isFinite).sort((a, b) => a - b), out = [];
+  for (const u of s) if (!out.length || u - out[out.length - 1] > tol) out.push(u);
+  return out;
+}
+// a → b ölçüsü: a, b yüzdeki noktalar; ölçü çizgisi dışa doğru D kadar ötede (off işareti normal yönünden bulunur)
+function autoDimAt(S, u0, u1, vFace, D) {
+  const a = S.back(u0, vFace), b = S.back(u1, vFace), L = Math.hypot(b.x - a.x, b.y - a.y); if (L < 1) return null;
+  const n = { x: a.x - (b.y - a.y) / L, y: a.y + (b.x - a.x) / L };
+  return { a, b, off: S.v(n) < vFace ? D : -D, auto: 1 };
+}
+function autoDims(f) {
+  const out = [], walls = (f.walls || []).filter(w => !w.hidden && isSolidWall(w) && Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) > 1);
+  // odalar: en küçük dikdörtgenin eni ve boyu, odanın içinde
+  for (const r of f.rooms || []) {
+    if (r.hidden || !r.pts || r.pts.length < 3) continue;
+    const q = ifcRect(r.pts.map(p => [p.x, p.y])); if (!q || q.w < 50 || q.d < 50) continue;
+    const t = q.rot * Math.PI / 180, ux = Math.cos(t), uy = Math.sin(t), vx = -uy, vy = ux, c = { x: q.cx, y: q.cy };
+    const at = (s, k) => ({ x: c.x + ux * s + vx * k, y: c.y + uy * s + vy * k });
+    out.push({ a: at(-q.w / 2, q.d / 4), b: at(q.w / 2, q.d / 4), off: 0, auto: 1 });
+    out.push({ a: { x: c.x - vx * q.d / 2 + ux * q.w / 4, y: c.y - vy * q.d / 2 + uy * q.w / 4 }, b: { x: c.x + vx * q.d / 2 + ux * q.w / 4, y: c.y + vy * q.d / 2 + uy * q.w / 4 }, off: 0, auto: 1 });
+  }
+  if (!walls.length) return out;
+  for (const S of Object.values(AUTO_SIDES)) {
+    const par = walls.filter(w => { const dx = Math.abs(w.b.x - w.a.x), dy = Math.abs(w.b.y - w.a.y); return S.hor ? dy <= dx * 0.035 : dx <= dy * 0.035; });
+    if (!par.length) continue;
+    const info = par.map(w => ({ w, u0: Math.min(S.u(w.a), S.u(w.b)), u1: Math.max(S.u(w.a), S.u(w.b)), face: Math.min(S.v(w.a), S.v(w.b)) - w.t / 2 }));
+    // bu yüzden görünen duvarlar: üç örnek noktadan en az birinde önünde (daha dışarıda) başka paralel duvar yok
+    const vis = info.filter(I => [0.15, 0.5, 0.85].some(k => { const u = I.u0 + (I.u1 - I.u0) * k; return !info.some(J => J !== I && J.face < I.face - 1 && J.u0 - J.w.t / 2 <= u && J.u1 + J.w.t / 2 >= u); }));
+    if (!vis.length) continue;
+    // her görünen duvarın yalnız önü açık kısmı sayılır (köşede öndeki duvarın arkasında kalan uç sayılmaz)
+    const vFace = Math.min(...vis.map(I => I.face)), ends = [];
+    for (const I of vis) {
+      let segs = [[I.u0 - I.w.t / 2, I.u1 + I.w.t / 2]];
+      for (const J of info) if (J !== I && J.face < I.face - 1) {
+        const j0 = J.u0 - J.w.t / 2, j1 = J.u1 + J.w.t / 2;
+        segs = segs.flatMap(([s0, s1]) => (j1 <= s0 || j0 >= s1 ? [[s0, s1]] : [[s0, j0], [j1, s1]].filter(([x, y]) => y - x > 1)));
+      }
+      for (const [s0, s1] of segs) ends.push(s0, s1);
+    }
+    const all = autoDimUniq(ends), lo = all[0], hi = all[all.length - 1];
+    const opPts = [];
+    for (const I of vis) {
+      const L = Math.hypot(I.w.b.x - I.w.a.x, I.w.b.y - I.w.a.y), ua = S.u(I.w.a), ub = S.u(I.w.b);
+      for (const o of f.ops || []) if (o.wall === I.w.id && !o.hidden) { const m = ua + (ub - ua) * o.d / L; opPts.push(m - o.w / 2, m + o.w / 2); }
+    }
+    let row = 0;
+    const chain = us => { for (let i = 0; i + 1 < us.length; i++) { const d = autoDimAt(S, us[i], us[i + 1], vFace, AUTO_DIM_GAP + row * AUTO_DIM_STEP); if (d) out.push(d); } row++; };
+    if (opPts.length) chain(autoDimUniq([...all, ...opPts]));
+    if (all.length > 2) chain(all);
+    chain([lo, hi]);
+  }
+  return out;
+}
+function autoDimsRun() {
+  const f = F(), keep = (f.dims || []).filter(d => !d.auto), made = autoDims(f).map(d => ({ id: uid(), ...d }));
+  const removed = (f.dims || []).length - keep.length;
+  if (!made.length) { toast(L('Ölçülendirilecek oda ya da duvar yok', 'No rooms or walls to dimension')); return; }
+  f.dims = [...keep, ...made]; sel = sel.filter(id => f.dims.some(d => d.id === id) || find(id));
+  layersVis.dims = true; commit(); refresh();
+  toast(L(`📐 ${made.length} ölçü eklendi` + (removed ? ` (${removed} eski otomatik ölçü değişti)` : ''), `📐 ${made.length} dimensions added` + (removed ? ` (${removed} earlier automatic ones replaced)` : '')));
+}
 function detectRoom(p) {
-  const f = F(); if (!f.walls.length) return null;
+  const f = expandCurved(F()); if (!f.walls.length) return null; // #202: eğri duvar parçalarıyla
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const w of f.walls) for (const q of [w.a, w.b]) { x0 = Math.min(x0, q.x - w.t); y0 = Math.min(y0, q.y - w.t); x1 = Math.max(x1, q.x + w.t); y1 = Math.max(y1, q.y + w.t); }
   x0 -= 60; y0 -= 60; x1 += 60; y1 += 60;
@@ -7478,7 +7820,41 @@ function autoRoomAt(p, silent) {
   const r = detectRoom(p);
   if (r === 'open') { if (!silent) toast(L('Alan kapalı değil – duvarlar arasında boşluk var', 'Area is not enclosed – there is a gap between walls')); return null; }
   if (!r) { if (!silent) toast(L('Burada oda algılanamadı (duvarın üzerine tıkladınız mı?)', 'No room detected here (did you click on a wall?)')); return null; }
-  const rm = mkRoom(r); F().rooms.push(rm); return rm;
+  const rm = mkRoom(r); roomWbSet(rm); F().rooms.push(rm); return rm; // #201: duvarlarını izler
+}
+/* ---------- Duvarlarını izleyen odalar (#201) ----------
+   Algılamayla oluşan oda (Oto oda aracı, ↻ Yeniden algıla) r.wb = 1 taşır. Bir duvar değişikliği commit edilince
+   (etkin katın duvar imzası değişti) her bağlı oda kendi eski çokgeninin içinden yeniden algılanır, köşeleri ve alanı
+   güncellenir. Algılama açıksa / başarısızsa eski köşeler kalır ve bir kez uyarılır. Elle çizilen, köşesi elle
+   taşınan, panelden bağı kesilen ve düzenleri (vars / grup düzeni) olan odalar serbesttir. İmza P'de değil; geri al,
+   proje açma ve sekme geçişi onu o anki duvarlara eşitler (wallSigReset), böylece yalnız gerçek düzenlemeler tetikler. */
+const wallSig = new Map();
+const wallSigOf = f => (f.walls || []).filter(w => !w.hidden).map(w => [w.a.x, w.a.y, w.b.x, w.b.y, w.t, w.wt || '', w.elev || 0].join(',')).join(';');
+function wallSigReset() { wallSig.clear(); if (P && P.floors) for (const f of P.floors) wallSig.set(f.id, wallSigOf(f)); }
+const roomFollows = (r, f) => !!(r && r.wb && !r.hidden && !(Array.isArray(r.vars) && r.vars.length) && !(r.grp && (f.groups || []).some(g => g.id === r.grp && g.vars && g.vars.length)));
+// bağlı odayı şimdiki duvarlardan yeniden algılar: true = güncel, false = algılanamadı (eski köşeler kalır)
+function roomRedetect(r) {
+  for (const s of [rvInsidePt(r.pts), polyCentroid(r.pts), ...r.pts.map((p, i) => { const q = r.pts[(i + 2) % r.pts.length]; return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }; })]) {
+    if (!pointInPoly(s, r.pts)) continue;
+    const d = detectRoom(s);
+    if (Array.isArray(d) && d.length > 2) { if (JSON.stringify(d) !== JSON.stringify(r.pts)) r.pts = d; return true; }
+  }
+  return false;
+}
+// r.wb = son algılanan köşelerin imzası: oda tek başına taşınır / döndürülür / kopyalanırsa imza tutmaz ve oda serbest kalır
+// (yoksa sonraki duvar düzenlemesi onu eski yerinden ya da üstüne geldiği odadan yeniden algılardı). Eski kayıtlarda wb = 1.
+const roomWbSig = r => strHash((r.pts || []).map(q => Math.round(q.x * 10) + ',' + Math.round(q.y * 10)).join(';'));
+function roomWbSet(r) { r.wb = roomWbSig(r); }
+const wbWarned = new Set(); // izleyemedi uyarısı oda başına bir kez (aralık kapanana kadar)
+function followRooms() {
+  const f = F(); if (!f || typeof document === 'undefined') return;
+  for (const r of f.rooms || []) if (r.wb && r.wb !== 1 && r.wb !== roomWbSig(r)) { delete r.wb; wbWarned.delete(r.id); }
+  const sig = wallSigOf(f), old = wallSig.get(f.id); wallSig.set(f.id, sig);
+  if (old === undefined || old === sig) return;
+  const rs = (f.rooms || []).filter(r => roomFollows(r, f)); if (!rs.length) return;
+  const lost = [];
+  for (const r of rs) { if (roomRedetect(r)) { roomWbSet(r); wbWarned.delete(r.id); } else if (!wbWarned.has(r.id)) { wbWarned.add(r.id); lost.push(r); } }
+  if (lost.length) toast(L(`⚠ ${lost.map(r => '“' + r.name + '”').join(', ')} duvarlarını izleyemedi (aralık var ya da kapalı değil); eski köşeler korundu`, `⚠ ${lost.map(r => '“' + r.name + '”').join(', ')} could not follow its walls (a gap or not enclosed); the previous corners were kept`));
 }
 
 /* ---------- 3B zemin plakası: duvarların dış konturunu izleyen poligon (taşma yok) ---------- */
@@ -7751,7 +8127,7 @@ function drawPreview() {
     else { o = { shape: 'pline', pts: [...ps, cur] }; t = `${fmtLen(dist(a, cur))}  •  ${Math.round((Math.atan2(a.y - cur.y, cur.x - a.x) * 180 / Math.PI + 360) % 360)}°`; }
     const dd = draftPathD(o);
     if (dd) s += `<path d="${dd}" fill="none" stroke="${ac}" stroke-width="${2 / z}" stroke-dasharray="${6 / z} ${4 / z}" pointer-events="none"/>`;
-    if (ui.typed) t = `[${ui.typed} cm]`;
+    if (ui.typed) t = `[${ui.typed}${typedUnit()}]`;
     if (t) s += lbl((a.x + cur.x) / 2, (a.y + cur.y) / 2 - 10 / z, t);
   }
   if (cur && cur.hit === 'end') s += `<circle cx="${cur.x}" cy="${cur.y}" r="${8 / z}" fill="none" stroke="#10b981" stroke-width="${2 / z}"/>`;
@@ -7763,7 +8139,7 @@ function drawPreview() {
   }
   if (ui.lenTyped && tool === 'select' && sel.length === 1) {
     const fw = find(sel[0]);
-    if (fw && fw.kind === 'wall') { const w = fw.o; s += lbl((w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2 - w.t / 2 - 22 / z, `[${ui.lenTyped} cm] ↵`); }
+    if (fw && fw.kind === 'wall') { const w = fw.o; s += lbl((w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2 - w.t / 2 - 22 / z, `[${ui.lenTyped}${typedUnit()}] ↵`); }
   }
   if (cur && cur.typed) s += lbl(cur.x, cur.y - 18 / z, `[${cur.typed} cm]`);
   if (tool === 'wall' && cur) {
@@ -7771,7 +8147,7 @@ function drawPreview() {
       const a = ui.draw.start;
       s += `<line x1="${a.x}" y1="${a.y}" x2="${cur.x}" y2="${cur.y}" stroke="${ac}" stroke-opacity=".65" stroke-width="${P.wallT}" stroke-linecap="square"/>`;
       const L = dist(a, cur), ang = (Math.atan2(cur.y - a.y, cur.x - a.x) * 180 / Math.PI + 360) % 360;
-      s += lbl((a.x + cur.x) / 2, (a.y + cur.y) / 2 - P.wallT / 2 - 8 / z, ui.typed ? `[${ui.typed} cm]` : `${fmtLen(L)}  •  ${Math.round(ang)}°`);
+      s += lbl((a.x + cur.x) / 2, (a.y + cur.y) / 2 - P.wallT / 2 - 8 / z, ui.typed ? `[${ui.typed}${typedUnit()}]` : `${fmtLen(L)}  •  ${Math.round(ang)}°`);
       s += `<circle cx="${a.x}" cy="${a.y}" r="${4 / z}" fill="${ac}"/>`;
     } else s += `<circle cx="${cur.x}" cy="${cur.y}" r="${4 / z}" fill="${ac}"/>`;
   }
@@ -7856,7 +8232,7 @@ function updateGhost() {
     ui.ghost = f;
   } else {
     const n = wallNear(p, 45); if (!n) return;
-    const { w, pr } = n, L = wLen(w), u = { x: (w.b.x - w.a.x) / L, y: (w.b.y - w.a.y) / L };
+    const { w, pr } = n, L = wallLen(w), u = n.u || { x: (w.b.x - w.a.x) / L, y: (w.b.y - w.a.y) / L };
     const op = mkOp(placing.def, w, pr.t * L); op.id = 'ghost';
     const side = ((p.x - pr.q.x) * -u.y + (p.y - pr.q.y) * u.x) >= 0 ? 1 : -1; op.side = placing.side || side;
     op.flip = placing.flip || 0;
@@ -7880,10 +8256,10 @@ function setCursor(e) {
   ui.cur = ['wall', 'rect', 'poly', 'slab', 'void', 'zone', 'roofd', 'dim', 'calib', 'shape', 'mirror', 'section', 'axis', 'draft'].includes(tool) ? snapPt(raw, from, e) : null;
   if (tool === 'draft' && ui.dr && ui.dr.pts.length && ui.typed) ui.cur = draftTypedPt(ui.dr.pts[ui.dr.pts.length - 1], ui.cur, ui.typed, draftUi().mode);
   if (tool === 'wall' && ui.draw && ui.typed) {
-    const a = ui.draw.start, l = parseFloat(ui.typed) || 0, dx = ui.cur.x - a.x, dy = ui.cur.y - a.y, m = Math.hypot(dx, dy) || 1;
+    const a = ui.draw.start, l = typedCm(ui.typed) || 0, dx = ui.cur.x - a.x, dy = ui.cur.y - a.y, m = Math.hypot(dx, dy) || 1;
     ui.cur = { x: a.x + dx / m * l, y: a.y + dy / m * l, hit: null };
   }
-  $('#coords').textContent = `x: ${(raw.x / 100).toFixed(2)} m   y: ${(raw.y / 100).toFixed(2)} m`;
+  $('#coords').textContent = `x: ${fmtLen(raw.x)}   y: ${fmtLen(raw.y)}`;
 }
 cv.addEventListener('contextmenu', e => { e.preventDefault(); if (lpress || performance.now() - lpressAt < 1500) return; /* dokunmatik uzun basma kendi yolundan açar */ if (tool === 'select') { openCtxMenu(e); return; } if (tool === 'place' || tool === 'wall' || POLY_TOOLS.has(tool) || tool === 'pen' || tool === 'draft') { setTool('select'); } });
 cv.addEventListener('wheel', e => {
@@ -7895,9 +8271,9 @@ function cvDbl(e) {
   else if (POLY_TOOLS.has(tool)) finishPoly();
   else if (tool === 'select') {
     const t = e.target.closest('[data-id]'); const o = t && find(t.dataset.id);
-    if (o && o.kind === 'room') { const n = prompt(L('Oda adı:', 'Room name:'), o.o.name); if (n) { o.o.name = n; commit(); refresh(); } }
-    else if (o && (o.kind === 'slab' || o.kind === 'void' || o.kind === 'zone')) { const n = prompt(L('Ad:', 'Name:'), o.o.name || ''); if (n != null) { o.o.name = n; commit(); refresh(); } }
-    else if (o && o.kind === 'text') { const n = prompt(L('Metin:', 'Text:'), o.o.text); if (n) { o.o.text = n; commit(); refresh(); } }
+    if (o && o.kind === 'room') askText(L('Oda adı', 'Room name'), o.o.name).then(n => { if (n) { o.o.name = n; commit(); refresh(); } });
+    else if (o && (o.kind === 'slab' || o.kind === 'void' || o.kind === 'zone')) askText(L('Ad', 'Name'), o.o.name || '').then(n => { if (n != null) { o.o.name = n; commit(); refresh(); } });
+    else if (o && o.kind === 'text') askText(L('Metin', 'Text'), o.o.text).then(n => { if (n) { o.o.text = n; commit(); refresh(); } });
   }
 }
 cv.addEventListener('dblclick', cvDbl);
@@ -8000,7 +8376,45 @@ function stackLevels(list, kind) {
   return lv;
 }
 // Sağ tık (Seç aracı): imlecin altındaki nesnelerin listesi + katman komutları
-function closeCtxMenu() { const m = document.getElementById('ctxMenu'); if (m) { if (m._onClose) m._onClose(); m.remove(); } }
+function closeCtxMenu() {
+  const m = document.getElementById('ctxMenu'); if (!m) return;
+  const back = m.contains(document.activeElement) ? m._opener : null;
+  if (m._onClose) m._onClose(); m.remove();
+  try { if (back && document.contains(back)) back.focus({ preventScroll: true }); } catch (e) { }
+}
+// #195: menü rolü, öğeler menuitem; ↑ ↓ Home End gezinir, Esc / Tab kapatır ve odağı geri verir
+function ctxMenuA11y(m) {
+  m.setAttribute('role', 'menu'); m.setAttribute('aria-label', L('Bağlam menüsü', 'Context menu'));
+  m._opener = document.activeElement;
+  const items = [...m.querySelectorAll('button')];
+  items.forEach(b => { b.setAttribute('role', 'menuitem'); b.tabIndex = -1; });
+  m.querySelectorAll('.cm-sep').forEach(s => s.setAttribute('role', 'separator'));
+  m.querySelectorAll('.cm-h').forEach(s => s.setAttribute('role', 'presentation'));
+  m.addEventListener('keydown', e => {
+    const i = items.indexOf(document.activeElement), go = j => { e.preventDefault(); items[(j + items.length) % items.length].focus(); };
+    if (e.key === 'ArrowDown') go(i + 1); else if (e.key === 'ArrowUp') go(i < 0 ? -1 : i - 1);
+    else if (e.key === 'Home') go(0); else if (e.key === 'End') go(-1);
+    else if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); closeCtxMenu(); }
+  });
+  if (items[0]) items[0].focus({ preventScroll: true });
+}
+/* #195: yalnız simgeden oluşan düğmeler (🗑, ✕, ↶ …) title'ını erişilebilir ad olarak taşır; dil değişince title
+   değiştiği için ad da güncellenir. Kendi etiketi olan ya da yazısı okunabilen düğmelere dokunulmaz. */
+function a11yLabel(b) {
+  if (b.hasAttribute('aria-label') && !b.dataset.al) return;
+  const words = /[\p{L}\p{N}]{2,}/u.test(b.textContent || ''), name = b.getAttribute('title');
+  if (!words && name) { if (b.getAttribute('aria-label') !== name) b.setAttribute('aria-label', name); b.dataset.al = '1'; }
+  else if (b.dataset.al) { b.removeAttribute('aria-label'); delete b.dataset.al; }
+}
+function a11yLabels(root) { if (root && root.querySelectorAll) root.querySelectorAll('button, [role="button"]').forEach(a11yLabel); }
+new MutationObserver(ms => {
+  for (const m of ms) {
+    const t = m.target; if (t.namespaceURI === 'http://www.w3.org/2000/svg') continue; // tuval katmanları: hızlı geç
+    if (m.type === 'attributes') { if (t.matches && t.matches('button, [role="button"]')) a11yLabel(t); continue; }
+    for (const n of m.addedNodes) if (n.nodeType === 1 && n.namespaceURI !== 'http://www.w3.org/2000/svg') { if (n.matches('button, [role="button"]')) a11yLabel(n); a11yLabels(n); }
+  }
+}).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['title'] });
+a11yLabels(document.body); // index.html'deki düğmeler
 /* Nesne kilidi (o.lock): kilitli nesne seçilebilir (kilidi açmak ve panelden düzenlemek için) ama fareyle / klavyeyle
    taşınmaz, boyutlanmaz, döndürülmez, aynalanmaz, silinmez ve silgiyle silinmez; 2B ve 3B. Tutamak yerine 🔒 rozeti çizilir. */
 const isLocked = o => !!(o && o.lock);
@@ -8032,6 +8446,7 @@ function openPickMenu(e, ids) {
     + ids.map(id => `<button data-pk="${id}" class="${keep.length === 1 && keep[0] === id ? 'on' : ''}">${isLocked(find(id)?.o) ? '🔒 ' : ''}${esc(objLabel(id))}</button>`).join('')
     + `<div class="cm-h" style="font-weight:400">${L('Ctrl + tık: sıradakine geç', 'Ctrl + click: next one down')}</div>`;
   document.body.appendChild(m);
+  ctxMenuA11y(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.max(4, Math.min(e.clientX + 8, innerWidth - r.width - 6)) + 'px';
   m.style.top = Math.max(4, Math.min(e.clientY + 8, innerHeight - r.height - 6)) + 'px';
@@ -8076,6 +8491,7 @@ function openCtxMenu(e) {
   }
   if (!h) return;
   m.innerHTML = h; document.body.appendChild(m);
+  ctxMenuA11y(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.min(e.clientX, innerWidth - r.width - 6) + 'px';
   m.style.top = Math.min(e.clientY, innerHeight - r.height - 6) + 'px';
@@ -8333,10 +8749,13 @@ function cvDown(e) {
       if (!ui.mAxis) { ui.mAxis = { x: cur.x, y: cur.y }; drawPreview(); return; }
       const l = dist(ui.mAxis, cur); if (l < 1) return;
       const u = { x: (cur.x - ui.mAxis.x) / l, y: (cur.y - ui.mAxis.y) / l }, o = ui.mAxis;
-      const erase = confirm(L('Orijinal nesneler silinsin mi?\n\nTamam = taşı (sil) • İptal = aynalı kopya oluştur', 'Erase the original objects?\n\nOK = move (erase) • Cancel = keep them and add a mirrored copy'));
-      if (!erase) { sel = [...new Set([...sel, ...F().ops.filter(op => sel.includes(op.wall)).map(op => op.id)])]; paste(true, 0); } // duvarların kapı/pencereleriyle birlikte kopya; kopya seçili hale gelir ve aynalanır
-      mirrorObjs(unlocked(selObjs().filter(x => XFORM_KINDS.has(x.kind))), o, u);
-      ui.mAxis = null; tool = 'select'; ui.btn = 'select'; updateTools(); afterXform();
+      ui.mAxis = null; tool = 'select'; ui.btn = 'select'; updateTools(); drawPreview();
+      askConfirm(L('Orijinal nesneler silinsin mi?', 'Erase the original objects?'), { title: L('Aynala', 'Mirror'), ok: L('Taşı (orijinali sil)', 'Move (erase originals)'), cancel: L('Aynalı kopya ekle', 'Add a mirrored copy') }).then(erase => {
+        if (erase === null) return; // Esc: hiçbir şey değişmez
+        if (!erase) { sel = [...new Set([...sel, ...F().ops.filter(op => sel.includes(op.wall)).map(op => op.id)])]; paste(true, 0); } // duvarların kapı/pencereleriyle birlikte kopya; kopya seçili hale gelir ve aynalanır
+        mirrorObjs(unlocked(selObjs().filter(x => XFORM_KINDS.has(x.kind))), o, u);
+        afterXform();
+      });
       return;
     }
     case 'calib': {
@@ -8344,13 +8763,16 @@ function cvDown(e) {
       if (!ui.calib) ui.calib = { x: cur.x, y: cur.y };
       else {
         const px = dist(ui.calib, cur); if (px < 2) return;
-        const real = parseFloat(String(prompt(L('Bu iki nokta arasındaki gerçek mesafe (metre):', 'Real distance between these two points (meters):'), '3') || '').replace(',', '.'));
+        const calibFrom = ui.calib;
+        askNumber(L('Gerçek mesafe (metre)', 'Real distance (metres)'), '3', { msg: L('Bu iki nokta arasındaki gerçek mesafe', 'The real distance between these two points') }).then(rv => {
+        const real = parseFloat(String(rv || '').replace(',', '.')); ui.calib = calibFrom;
         if (real > 0) {
           const k = real * 100 / px, a = ui.calib, b = P.bg;
           b.x = a.x + (b.x - a.x) * k; b.y = a.y + (b.y - a.y) * k; b.w *= k; b.h *= k;
           commit(); toast(L('Ölçek ayarlandı', 'Scale calibrated')); fit();
         }
-        ui.calib = null;
+        ui.calib = null; render();
+        });
       }
       render(); return;
     }
@@ -8619,7 +9041,7 @@ function doMove(raw, e) {
     else if (kind === 'text' || kind === 'bg') { o.x = g.x + dx; o.y = g.y + dy; }
     else if (kind === 'op') {
       const n = wallNear(raw, 60);
-      if (n) { const L = wLen(n.w); o.wall = n.w.id; o.d = clamp(ui.snap && !e.shiftKey ? rnd(n.pr.t * L, 5) : n.pr.t * L, Math.min(o.w / 2, L / 2), Math.max(L - o.w / 2, L / 2)); }
+      if (n) { const L = wallLen(n.w); o.wall = n.w.id; o.d = clamp(ui.snap && !e.shiftKey ? rnd(n.pr.t * L, 5) : n.pr.t * L, Math.min(o.w / 2, L / 2), Math.max(L - o.w / 2, L / 2)); }
     }
   }
   for (const c of d.conn) { c.w[c.e] = { x: c.o.x + dx, y: c.o.y + dy }; }
@@ -8653,12 +9075,18 @@ function startHandle(h, raw, e) {
 }
 function doHandle(raw, e) {
   const d = ui.drag, h = d.h, o = selObjs()[0]?.o; if (!o) return; d.moved = true;
+  if (o.wb && /^[ve]\d/.test(h) && selObjs()[0].kind === 'room') delete o.wb; // #201: köşesi elle taşınan oda serbest kalır
   const sh = e.shiftKey;
+  if (h === 'wc') { // #202: eğrilik = imlecin kirişin normali boyunca uzaklığı (5 cm adım, Shift serbest; ortaya yakın = düz)
+    const L = wLen(o) || 1, nx = -(o.b.y - o.a.y) / L, ny = (o.b.x - o.a.x) / L, mx = (o.a.x + o.b.x) / 2, my = (o.a.y + o.b.y) / 2;
+    let b = (raw.x - mx) * nx + (raw.y - my) * ny; if (!sh) b = Math.abs(b) < 8 ? 0 : rnd(b, 5);
+    setBulge(o, b); accFitOps(F(), o); ui.cur = { x: mx + nx * (+o.bulge || 0), y: my + ny * (+o.bulge || 0) }; scheduleRender(); return;
+  }
   if (h === 'wa' || h === 'wb') {
     const ek = h === 'wa' ? 'a' : 'b', other = h === 'wa' ? o.b : o.a;
     const ign = new Set([o.id, ...d.conn.map(c => c.w.id)]);
     let p = snapPt(raw, other, e, ign); ui.cur = p;
-    const tl = parseFloat(d.typed);
+    const tl = typedCm(d.typed);
     if (tl > 0) { // yazılan uzunluk (#36): imleç yönünde, karşı uçtan tam bu uzaklıkta
       let dx = p.x - other.x, dy = p.y - other.y, m = Math.hypot(dx, dy);
       if (m < 1e-6) { dx = d.orig ? d.orig[ek].x - other.x : 1; dy = d.orig ? d.orig[ek].y - other.y : 0; m = Math.hypot(dx, dy) || 1; }
@@ -8761,6 +9189,8 @@ function floorLevelHtml(f) {
 const fld = (lbl, k, p, v, o = {}) => {
   if (o.sel) return `<label class="f"><span>${lbl}</span><select data-k="${k}" data-p="${p}">${Object.entries(o.sel).map(([a, b]) => `<option value="${a}" ${String(a) === String(v) ? 'selected' : ''}>${b}</option>`).join('')}</select></label>`;
   const type = o.type || 'number';
+  if (isImp() && type === 'number' && / \(cm\)$/.test(lbl) && Number.isFinite(+v)) // #194: uzunluk alanı fit-inç yazılır ve okunur
+    return `<label class="f"><span>${lbl.replace(/ \(cm\)$/, ' (ft-in)')}</span><input type="text" inputmode="text" data-len="1" data-k="${k}" data-p="${p}" value="${esc(fmtFtIn(+v, 8))}" spellcheck="false" autocomplete="off"></label>`;
   const val = type === 'number' ? Math.round(v * 100) / 100 : v;
   return `<label class="f"><span>${lbl}</span><input type="${type}" data-k="${k}" data-p="${p}" value="${esc(val)}" ${o.step ? `step="${o.step}"` : ''} ${o.min != null ? `min="${o.min}"` : ''} ${o.max != null ? `max="${o.max}"` : ''}></label>`;
 };
@@ -8791,7 +9221,7 @@ function renderProps() {
   const lockBtn = lockable.length ? `<button class="btn sm${allLk ? ' on' : ''}" data-act="lock" title="${L('Kilitli nesne fareyle / klavyeyle taşınmaz, boyutlanmaz, silinmez', 'A locked object cannot be moved, resized or deleted by mouse or keys')}">${allLk ? L('🔓 Kilidi aç', '🔓 Unlock') : L('🔒 Kilitle', '🔒 Lock')}</button>` : '';
   const hideBtn = lockable.length ? `<button class="btn sm" data-act="hide" title="${L('Bu ögeyi gizle (Gizli ögeler panelinden geri açılabilir)', 'Hide this item (restore later from Hidden items)')}">🙈 ${L('Gizle', 'Hide')}</button>` : '';
   const lockNote = allLk ? `<p class="muted lockline">🔒 ${L('Kilitli: sürüklenmez, boyutlanmaz, silinmez. Alanlar yine düzenlenebilir.', 'Locked: no dragging, resizing or deleting. The fields below still edit it.')}</p>` : '';
-  const acts = (extra = '') => floorBadgeHtml() + lockNote + selLayerHtml(os) + xf + `<div class="row">${extra}${lockBtn}${hideBtn}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div>`;
+  const acts = (extra = '') => '<div class="acts-pin">' + floorBadgeHtml() + lockNote + selLayerHtml(os) + xf + `<div class="row">${extra}${lockBtn}${hideBtn}<button class="btn sm" data-act="copy" title="Ctrl+C">${L('📋 Kopyala', '📋 Copy')}</button>${ui.clip && ui.clip.length ? `<button class="btn sm" data-act="paste" title="Ctrl+V">${L('📥 Yapıştır', '📥 Paste')}</button>` : ''}<button class="btn sm" data-act="dup">${L('⧉ Çoğalt', '⧉ Duplicate')}</button><button class="btn sm" data-act="del" style="color:var(--danger)">${L('🗑 Sil', '🗑 Delete')}</button></div></div>`;
   if (kinds.length > 1) {
     const gs = os.filter(x => GROUPABLE[x.kind]);
     const grp = gs.length >= 2 ? `<div class="row"><button class="btn sm primary" data-act="group">📦 ${L('Grupla', 'Group')}</button></div>` : '';
@@ -8836,6 +9266,9 @@ function renderProps() {
     h += `<div class="row swatches">${PAINTS.map(([c, tr, en]) => `<button class="btn sm swatch${o.color === c ? ' on' : ''}" data-act="paint" data-c="${c}" title="${L(tr, en)}" style="background:${c}"></button>`).join('')}<button class="btn sm" data-act="paint" data-c="" title="${L('Varsayılan renk', 'Default colour')}">${L('↺ Varsayılan', '↺ Default')}</button></div>`;
     if (os.every(x => isSolidWall(x.o))) h += wallFacesHtml(o, n, os);
     if (n === 1) {
+      // #202: eğrilik (sehim) ve yay boyu; orta tutamakla da bükülür
+      h += fld(L('Eğrilik (cm)', 'Curvature (cm)'), 'wall', 'bulge', +o.bulge || 0, { step: 5 });
+      if (isCurved(o)) h += `<div class="stat"><span>⌒ ${L('Yay boyu', 'Arc length')}</span><b>${fmtLen(wallLen(o))}</b></div><div class="row"><button class="btn sm" data-act="wallstraight">↦ ${L('Düzleştir', 'Straighten')}</button></div>`;
       h += fld(L('Açı (°)', 'Angle (°)'), 'wall', 'deg', wallDeg(o), { step: 5, min: 0, max: 360 });
       h += fld(L('Sabit Nokta (Menteşe)', 'Fixed Point (Pivot)'), 'wall', 'pivot', wallPivot(o), {
         sel: {
@@ -8964,7 +9397,7 @@ function renderProps() {
       h += `<div class="stat"><span>${L('Alan', 'Area')}</span><b>${fmtArea(polyArea(o.pts))}</b></div><div class="stat"><span>${L('Çevre', 'Perimeter')}</span><b>${fmtLen(polyPerim(o.pts))}</b></div><div class="stat"><span>${L('Köşe sayısı', 'Vertices')}</span><b>${o.pts.length}</b></div>`;
     }
     if (n === 1 && o.floor !== 'glass') h += slopePanelHtml(o); // eğimli zemin
-    h += acts(`<button class="btn sm" data-act="redetect">${L('↻ Yeniden algıla', '↻ Redetect')}</button>`);
+    h += acts(`<button class="btn sm" data-act="redetect">${L('↻ Yeniden algıla', '↻ Redetect')}</button>` + (n === 1 ? `<button class="btn sm${o.wb ? ' on' : ''}" data-act="roomwb" aria-pressed="${!!o.wb}" title="${L('Açıkken oda, bir duvar taşınınca köşelerini ve alanını kendiliğinden günceller', 'When on, the room updates its corners and area by itself when a wall moves')}">🔗 ${o.wb ? L('Duvarlarını izliyor', 'Follows its walls') : L('Duvarlarını izlesin', 'Follow its walls')}</button>` : ''));
     if (n === 1) { const ls = roomLights(o); if (ls.length) { const on = ls.filter(litOn).length; h += `<div class="stat"><span>💡 ${L('Işıklar', 'Lights')}</span><b>${on} / ${ls.length} ${L('açık', 'on')}</b></div><div class="row"><button class="btn sm" data-act="roomlights" data-on="1">${L('Hepsini aç', 'All on')}</button><button class="btn sm" data-act="roomlights" data-on="0">${L('Hepsini kapat', 'All off')}</button></div>`; } }
   } else if (k === 'zone') { // arsa / dış zemin (#150)
     h += fld(L('Tür', 'Type'), 'zone', 'zt', o.zt, { sel: Object.fromEntries(Object.entries(ZONE_TYPES).map(([id, [tr, en]]) => [id, L(tr, en)])) }) + fld(L('Ad', 'Name'), 'zone', 'name', o.name || '', { type: 'text' });
@@ -9048,6 +9481,40 @@ function renderProps() {
   h += variantUIHtml();
   h += hiddenPanelHtml(true);
   el.innerHTML = h;
+  propsTidy(el, k);
+}
+/* Daha kısa özellik paneli (#198): ortak eylemler (kopyala, çoğalt, sil, kilit, aynala…) başlığın hemen altında sabit
+   durur; sonra o tür için temel alanlar (PROPS_BASIC: ölçü, tip, renk …) ve ölçüm satırları; geri kalan her şey sırası
+   bozulmadan "⚙ Diğer ayarlar" açılır bölümüne gider. Bölümün açık / kapalı hâli türe göre hatırlanır
+   (localStorage['fp_props_adv']). Hiçbir alan kaldırılmaz, davranış değişmez: yalnızca yer değiştirir. */
+const PROPS_BASIC = {
+  wall: ['len', 't', 'h', 'wt', 'color'],
+  op: ['type', 'w', 'h', 'sill'],
+  furn: ['label', 'w', 'd', 'h', 'rot', 'color', 'roofType', 'pitch', 'stairType', 'stepN', 'rampType', 'lon', 'lm'],
+  room: ['name', 'floor', 'color'],
+  slab: ['floor', 't', 'off'],
+  text: ['text', 'size', 'color', 'rot'],
+};
+function propsAdvState() { try { return JSON.parse(localStorage.getItem('fp_props_adv') || '{}') || {}; } catch (e) { return {}; } }
+function propsTidy(el, k) {
+  const pin = el.querySelector('.acts-pin'), h3 = el.querySelector(':scope > h3');
+  if (pin && h3) h3.after(pin);
+  const basic = PROPS_BASIC[k]; if (!basic) return;
+  const isBasic = n => {
+    if (n === h3 || n === pin || n.tagName === 'H3') return true;
+    if (n.classList && (n.classList.contains('stat') || n.classList.contains('swatches') || n.classList.contains('lockline'))) return true;
+    const f = n.matches && n.matches('label.f') ? n.querySelector('[data-p]') : null;
+    return !!(f && basic.includes(f.dataset.p));
+  };
+  const rest = [...el.children].filter(n => !isBasic(n));
+  if (rest.length < 2) return; // tek bir ek satır için katlamaya değmez
+  const st = propsAdvState(), d = document.createElement('details');
+  d.className = 'props-adv'; d.dataset.advk = k; d.open = !!st[k];
+  const sm = document.createElement('summary');
+  sm.textContent = '⚙ ' + L('Diğer ayarlar', 'More settings');
+  d.append(sm, ...rest);
+  el.append(d);
+  d.addEventListener('toggle', () => { const s = propsAdvState(); if (d.open) s[k] = 1; else delete s[k]; try { localStorage.setItem('fp_props_adv', JSON.stringify(s)); } catch (e) { } });
 }
 // cam döşeme (#57): şeffaf / buzlu seçimi yalnızca zemin 'glass' iken görünür
 // duvar alçalınca kapı / pencere duvarın üstünden taşmasın (#59): önce yükseklik, gerekirse denizlik düşer
@@ -9105,6 +9572,7 @@ function projectPanel() {
   h += `<label class="f"><span>${L('Grup', 'Group')}</span><input type="text" data-k="proj" data-p="group" list="grpList" maxlength="${GROUP_MAX}" value="${esc(projGroup(P))}" placeholder="${L('ör. Ahsen’in projeleri', 'e.g. Ahsen’s projects')}"></label><datalist id="grpList">${knownGroups().map(g => `<option value="${esc(g)}">`).join('')}</datalist>`;
   h += fld(L('Duvar kalınlığı (cm)', 'Wall thickness (cm)'), 'proj', 'wallT', P.wallT, { min: 3, max: 60 }) + fld(L('Duvar yüksekliği (cm)', 'Wall height (cm)'), 'proj', 'wallH', P.wallH, { min: FLOOR_H_MIN, max: FLOOR_H_MAX });
   h += `<div class="row"><button class="btn sm" data-act="wallhall" title="${L('Tüm katlardaki mevcut duvarları bu yüksekliğe getirir; kat bazlı yükseklikler sıfırlanır', 'Sets every existing wall on every floor to this height; per-floor heights are cleared')}">⬆ ${L('Mevcut tüm duvarlara uygula', 'Apply to all existing walls')}</button></div>`;
+  h += `<div class="row"><button class="btn sm" data-act="autodims" title="${L('Her odanın enini ve boyunu, binanın dış yüzlerine de kapı / pencere, duvar ve toplam zincirlerini ekler; yeniden basınca yalnız otomatik ölçüler yenilenir', 'Adds the width and depth of each room, and opening, wall and overall chains outside the building; pressing it again only replaces the automatic dimensions')}">📐 ${L('Otomatik ölçülendir', 'Auto-dimension')}</button></div>`;
   h += layersPanelHtml();
   h += hiddenPanelHtml(false);
   h += lwPanelHtml();
@@ -9199,6 +9667,7 @@ function applyProp(t, final) {
   const render = final ? window.render : scheduleRender; // canlı giriş: karede bir çizim
   const k = t.dataset.k, p = t.dataset.p; let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'number' || t.type === 'range') { v = parseFloat(v); if (isNaN(v)) return; }
+  if (t.dataset.len) { v = parseLen(v, 'ft'); if (v == null || !Number.isFinite(v)) return; v = Math.round(v * 100) / 100; } // #194: fit-inç → cm
   if (k === 'grplink') { if (final && v) linkGroupTo(v); return; }
   if (k === 'lyr') {
     const l = layerById(t.dataset.lid); if (!l) return;
@@ -9276,6 +9745,7 @@ function applyProp(t, final) {
   }
   const os = selObjs().filter(x => x.kind === k); if (!os.length) return;
   for (const { o } of os) {
+    if (k === 'wall' && p === 'bulge') { setBulge(o, v); accFitOps(F(), o); continue; } // #202
     if (k === 'wall' && p === 'len') {
       if (final) applyWallLength(o, v, wallFree(o), ui.connWalls, os.find(x => x.o === o)?.floor || F()); // yazarken her tuşta değil: ara değerler kapıları sıkıştırmasın
     } else if (k === 'wall' && p === 'deg') {
@@ -9355,8 +9825,10 @@ function onPropsClick(e) {
   if (a === 'opcolreset') { os.forEach(x => { if (x.kind === 'op') { delete x.o.color; delete x.o.frameCol; } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'texadd') { ui.txWall = 0; return openTexDialog(); }
   if (a === 'axgrid') return axisGridPrompt();
+  if (a === 'autodims') return autoDimsRun(); // #200
+  if (a === 'wallstraight') { os.forEach(x => { if (x.kind === 'wall') { delete x.o.bulge; accFitOps(F(), x.o); } }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; } // #202
   if (a === 'axcopy') { const axs = os.filter(x => x.kind === 'axis').map(x => x.o); if (!axs.length) return; if (P.floors.length < 2) return toast(L('Başka kat yok', 'There is no other floor')); axisCopyAll(axs); commit(); toast(L(`⧉ ${axs.length} aks ${P.floors.length - 1} kata kopyalandı`, `⧉ ${axs.length} axis/axes copied to ${P.floors.length - 1} floor(s)`)); return; }
-  if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t && confirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`))) deleteTexture(t.id); return; }
+  if (a === 'texdel') { const t = texMeta(b.dataset.tid); if (t) askConfirm(L(`“${t.name}” dokusu silinsin mi? Bu dokuyu kullanan yüzeyler düz renge döner.`, `Delete texture “${t.name}”? Surfaces using it go back to a solid colour.`), { ok: L('Sil', 'Delete'), danger: true }).then(ok => { if (ok === true) deleteTexture(t.id); }); return; }
   if (a === 'slabcolreset') { os.forEach(x => { if (x.kind === 'slab') x.o.color = null; }); commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); return; }
   if (a === 'dup') return paste(true);
   if (a === 'lock') return toggleLockSel();
@@ -9514,17 +9986,19 @@ function onPropsClick(e) {
       if (o.k === 'roof' && Array.isArray(o.faces)) { o.faces = o.faces.map(f => f.map(q => [q[1], q[0], q[2]]).reverse()); if (o.fbase) o.fbase = { w: o.fbase.d, d: o.fbase.w, h: o.fbase.h }; }
       if (Array.isArray(o.parts)) { o.parts = o.parts.map(q => Object.assign({}, q, { x: -q.y, y: q.x, rot: ((q.rot || 0) + 90) % 360 })); if (o.pbase) o.pbase = { w: o.pbase.d, d: o.pbase.w, h: o.pbase.h }; } }
     if (a === 'saveshape' && kind === 'furn') {
-      const nm = prompt(L('Şekil adı:', 'Shape name:'), o.name || L('Şekil', 'Shape'));
+      askText(L('Şekil adı', 'Shape name'), o.name || L('Şekil', 'Shape')).then(nm => {
       if (nm) {
         P.lib = P.lib || { shapes: [] }; P.lib.shapes = P.lib.shapes || [];
         P.lib.shapes.push({ id: uid(), name: nm, en: nm, k: o.k, pts: o.pts ? JSON.parse(JSON.stringify(o.pts)) : undefined, w: o.w, d: o.d, h: o.h, color: o.color, icon: o.k === 'round' ? '⬤' : '⬡', ...(Array.isArray(o.parts) && o.parts.length ? { parts: clonePlain(o.parts), pbase: clonePlain(o.pbase), partsV: PARTS_V } : {}) });
         commit(); buildLib(); toast(L(`“${nm}” kütüphaneye eklendi (⬡ Kütüphanem)`, `“${nm}” added to the library (⬡ My Library)`));
-        return;
       }
+      });
+      return;
     }
     if (a === 'opflip' && kind === 'op') o.flip = o.flip ? 0 : 1;
     if (a === 'opside' && kind === 'op') o.side = -(o.side || 1);
-    if (a === 'redetect' && kind === 'room') { const c = polyCentroid(o.pts); const r = detectRoom(pointInPoly(c, o.pts) ? c : o.pts[0]); if (Array.isArray(r)) o.pts = r; else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
+    if (a === 'redetect' && kind === 'room') { if (roomRedetect(o)) roomWbSet(o); else toast(L('Oda yeniden algılanamadı', 'Room could not be redetected')); }
+    if (a === 'roomwb' && kind === 'room') { if (o.wb) delete o.wb; else if (roomRedetect(o)) roomWbSet(o); else toast(L('Oda duvarlardan algılanamadı: kapalı bir alan olmalı', 'The room could not be found from the walls: it must be enclosed')); }
     if (a === 'split' && kind === 'wall') {
       const m = { x: (o.a.x + o.b.x) / 2, y: (o.a.y + o.b.y) / 2 }, nw = mkWall(m, o.b); nw.t = o.t; nw.h = o.h; nw.wt = o.wt; if (o.color) nw.color = o.color; if (o.mul) nw.mul = o.mul; if (o.rs) nw.rs = o.rs; const L = wLen(o), old = o.b;
       o.b = m; f.walls.push(nw);
@@ -9562,16 +10036,18 @@ function presetDef(p) {
   return { id: p.type, name: p.name, en: p.name, icon: p.icon || (cat && cat.icon) || '▭', k: p.k || (cat && cat.k) || 'rect', w: p.w, d: p.d, h: p.h, color: p.color, pts: p.extra && p.extra.pts, extra: p.extra, preset: p.id };
 }
 // kartta görünen ölçü: 85×210 · 100×70 · denizlik 110 · 200×90
+// kütüphane kartı ölçüsü: metrikte cm, emperyalde inç (#194)
+function libSz(w, d) { const f = v => Math.round(isImp() ? v / 2.54 : v); return (d == null ? f(w) : f(w) + '×' + f(d)) + (isImp() ? ' in' : d == null ? ' cm' : ''); }
 function presetSize(p) {
-  if (p.kind === 'op') return Math.round(p.w) + '×' + Math.round(p.h) + (p.sill > 0 ? ' · ' + L('denizlik', 'sill') + ' ' + Math.round(p.sill) : '');
-  return Math.round(p.w) + '×' + Math.round(p.d);
+  if (p.kind === 'op') return libSz(p.w, p.h) + (p.sill > 0 ? ' · ' + L('denizlik', 'sill') + ' ' + (isImp() ? libSz(p.sill) : Math.round(p.sill)) : '');
+  return libSz(p.w, p.d);
 }
-function savePresetSel() {
+async function savePresetSel() {
   const os = selObjs(); if (os.length !== 1 || (os[0].kind !== 'op' && os[0].kind !== 'furn')) return;
   const { kind, o } = os[0];
   const def0 = kind === 'op' ? (OPENINGS.find(d => opType(d.id) === o.type) || OPDEF.door) : (BYID[o.type] || o);
   const sug = kind === 'op' ? itemName(def0) + ' ' + Math.round(o.w) + '×' + Math.round(o.h) : (o.label || o.name || itemName(def0));
-  const nm = (prompt(L('Ön ayar adı:', 'Preset name:'), sug) || '').trim(); if (!nm) return;
+  const nm = ((await askText(L('Ön ayar adı', 'Preset name'), sug)) || '').trim(); if (!nm) return;
   const p = presetFromObj(kind, o, nm);
   P.lib.presets = P.lib.presets || []; P.lib.presets.push(p);
   commit(); ui.cat = LIBCATS.length - 1; ui.q = ''; $('#search').value = ''; buildLib(); refresh();
@@ -9587,28 +10063,93 @@ const opDefLast = def => ui.opLast[def.id] ? { ...def, ...ui.opLast[def.id] } : 
 const LIBCATS = ['Kapı & Pencere', ...CATS, '🌐 Topluluk', '⬡ Kütüphanem'];
 const LIBCATS_EN = ['Doors & Windows', ...CATS_EN, '🌐 Community', '⬡ My Library'];
 const LIB_COMM = LIBCATS.length - 2; // topluluk mağazası sekmesi (⬡ Kütüphanem hep sonda kalır)
+/* Ölçüye göre süzme (#204): en fazla genişlik / derinlik / yükseklik (cm). Bir öğe iki yönde de sığabilir
+   (döndürülüp konur), yüksekliği olmayan sınır yoktur. "Seçime sığanlar" sınırı seçili odadan (en küçük dikdörtgen,
+   kat yüksekliği), iki duvarın arasındaki açıklıktan ya da tek duvarın boyundan alır. Arama ve kategoriyle birlikte çalışır. */
+ui.libSize = { w: null, d: null, h: null };
+const libSizeOn = (s = ui.libSize) => !!(s && (s.w > 0 || s.d > 0 || s.h > 0));
+function libFits(it, s = ui.libSize) {
+  if (!libSizeOn(s)) return true;
+  const W = s.w > 0 ? s.w : Infinity, D = s.d > 0 ? s.d : Infinity, H = s.h > 0 ? s.h : Infinity;
+  const w = +it.w || 0, d = +it.d || 0, h = +it.h || 0;
+  return h <= H && ((w <= W && d <= D) || (w <= D && d <= W));
+}
+// seçimden sınır: oda → en küçük dikdörtgen + kat yüksekliği; iki paralel duvar → aradaki net açıklık; tek duvar → net boy
+function libLimitsFrom(os, floorH = 270) {
+  const rooms = os.filter(x => x.kind === 'room' || x.kind === 'slab'), walls = os.filter(x => x.kind === 'wall').map(x => x.o);
+  if (rooms.length === 1) {
+    const r = ifcRect(rooms[0].o.pts.map(p => [p.x, p.y])); if (!r) return null;
+    return { w: Math.floor(Math.max(r.w, r.d)), d: Math.floor(Math.min(r.w, r.d)), h: Math.floor(floorH) };
+  }
+  if (walls.length === 2) {
+    const [a, b] = walls, ux = a.b.x - a.a.x, uy = a.b.y - a.a.y, L = Math.hypot(ux, uy); if (L < 1) return null;
+    const vx = b.b.x - b.a.x, vy = b.b.y - b.a.y, M = Math.hypot(vx, vy); if (M < 1 || Math.abs(ux * vy - uy * vx) / (L * M) > 0.09) return null; // ~5° içinde paralel
+    const off = p => ((p.x - a.a.x) * -uy + (p.y - a.a.y) * ux) / L, gap = Math.abs((off(b.a) + off(b.b)) / 2) - (a.t + b.t) / 2;
+    const s0 = Math.max(0, Math.min(...[b.a, b.b].map(p => ((p.x - a.a.x) * ux + (p.y - a.a.y) * uy) / L))), s1 = Math.min(L, Math.max(...[b.a, b.b].map(p => ((p.x - a.a.x) * ux + (p.y - a.a.y) * uy) / L)));
+    if (gap < 1) return null;
+    return { w: Math.floor(gap), d: s1 - s0 > 1 ? Math.floor(s1 - s0) : null, h: Math.floor(Math.min(a.h, b.h)) };
+  }
+  if (walls.length === 1) { const w = walls[0]; return { w: Math.floor(Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) - w.t), d: null, h: Math.floor(w.h) }; }
+  return null;
+}
+function libSizeUI() {
+  let box = $('#libSize');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'libSize'; $('#search').insertAdjacentElement('afterend', box);
+    box.addEventListener('input', e => {
+      const t = e.target.closest('[data-ls]'); if (!t) return;
+      const v = parseFloat(String(t.value).replace(',', '.')); ui.libSize[t.dataset.ls] = v > 0 ? v : null; buildLib();
+    });
+    box.addEventListener('click', e => {
+      const b = e.target.closest('[data-lsact]'); if (!b) return;
+      const a = b.dataset.lsact;
+      if (a === 'toggle') ui.libSizeOpen = !ui.libSizeOpen;
+      else if (a === 'clear') ui.libSize = { w: null, d: null, h: null };
+      else if (a === 'fit') {
+        const lim = libLimitsFrom(selObjs(), curFloorH());
+        if (!lim) { toast(L('Önce bir oda, bir duvar ya da karşılıklı iki duvar seçin', 'Select a room, a wall or two facing walls first')); return; }
+        ui.libSize = lim; ui.libSizeOpen = true;
+        toast(L('Seçime sığanlar: ', 'Fits the selection: ') + [lim.w, lim.d, lim.h].map(v => (v ? v : '–')).join(' × ') + ' cm');
+      }
+      libSizePaint(true); buildLib();
+    });
+  }
+  libSizePaint(false);
+}
+function libSizePaint(full) {
+  const box = $('#libSize'); if (!box) return;
+  const s = ui.libSize, on = libSizeOn(s), open = !!ui.libSizeOpen || on, val = v => (v > 0 ? +(+v).toFixed(1) : '');
+  const sum = on ? [s.w, s.d, s.h].map(v => (v > 0 ? Math.round(v) : '–')).join(' × ') + ' cm' : L('Ölçüye göre süz', 'Filter by size');
+  const head = box.querySelector('[data-lsact="toggle"]');
+  if (!full && head && !!box.querySelector('.ls-row') === open) { head.textContent = '📏 ' + sum; head.classList.toggle('on', on); box.querySelector('[data-lsact="clear"]').hidden = !on; return; }
+  const inp = (k, ph) => `<label>${ph} <input type="number" min="0" step="1" inputmode="decimal" data-ls="${k}" value="${val(s[k])}" placeholder="${L('en fazla', 'max')}"></label>`;
+  box.innerHTML = `<div class="ls-head"><button type="button" class="chip${on ? ' on' : ''}" data-lsact="toggle" aria-expanded="${open}">📏 ${esc(sum)}</button><button type="button" class="chip" data-lsact="clear" ${on ? '' : 'hidden'} aria-label="${L('Ölçü süzgecini temizle', 'Clear the size filter')}">✕</button></div>`
+    + (open ? `<div class="ls-row">${inp('w', L('G', 'W'))}${inp('d', L('D', 'D'))}${inp('h', L('Y', 'H'))}</div><button type="button" class="chip" data-lsact="fit" title="${L('Seçili odaya, duvara ya da iki duvarın arasına sığanlar', 'Items that fit the selected room, wall or the gap between two walls')}">⤢ ${L('Seçime sığanlar', 'Fits the selection')}</button>` : '');
+}
 function buildLib() {
   const cats = isEN() ? LIBCATS_EN : LIBCATS;
+  libSizeUI();
+  const fits = libFits, opFits = o => { const z = ui.libSize; if (!libSizeOn(z)) return true; return (+o.w || 0) <= (z.w > 0 ? z.w : Infinity) && (+o.h || 0) <= (z.h > 0 ? z.h : Infinity); } /* kapı / pencere dönmez: yalnız genişlik ve yükseklik */, preFits = p => (p.kind === 'op' ? opFits(p) : libFits(p));
   $('#cats').innerHTML = cats.map((c, i) => `<button class="chip ${i === ui.cat && (!ui.q || i === LIB_COMM) ? 'on' : ''}" data-cat="${i}">${c}</button>`).join('');
   const q = ui.q.toLowerCase(); let items = '';
   const card = (type, d, sz) => `<button class="item" data-type="${type}" data-id="${d.id}"><div class="ic">${d.icon || '▭'}</div><div>${itemName(d)}</div><div class="sz">${sz}</div></button>`;
-  const shapeCard = d => `<button class="item" data-type="def" data-id="${d.id}"><div class="ic">${d.icon || '⬡'}</div><div>${esc(itemName(d))}</div><div class="sz">${Math.round(d.w)}×${Math.round(d.d)} cm</div><span class="delsh" data-delsh="${d.id}" title="${L('Kütüphaneden sil', 'Remove from library')}">✕</span></button>`;
-  const presetCard = p => { const d = presetDef(p); return `<button class="item" data-type="pre" data-id="${p.id}" title="${esc(p.name)}"><div class="ic">${d.icon || '▭'}</div><div>${esc(p.name)}</div><div class="sz">${presetSize(p)}</div><span class="renpre" data-renpre="${p.id}" title="${L('Yeniden adlandır', 'Rename')}">✎</span><span class="delsh" data-delpre="${p.id}" title="${L('Kütüphaneden sil', 'Remove from library')}">✕</span></button>`; };
+  const shapeCard = d => `<div class="item-c"><button class="item" data-type="def" data-id="${d.id}"><div class="ic">${d.icon || '⬡'}</div><div>${esc(itemName(d))}</div><div class="sz">${libSz(d.w, d.d)}</div></button><button type="button" class="delsh" data-delsh="${d.id}" title="${L('Kütüphaneden sil', 'Remove from library')}: ${esc(itemName(d))}">✕</button></div>`;
+  const presetCard = p => { const d = presetDef(p); return `<div class="item-c"><button class="item" data-type="pre" data-id="${p.id}" title="${esc(p.name)}"><div class="ic">${d.icon || '▭'}</div><div>${esc(p.name)}</div><div class="sz">${presetSize(p)}</div></button><button type="button" class="renpre" data-renpre="${p.id}" title="${L('Yeniden adlandır', 'Rename')}: ${esc(p.name)}">✎</button><button type="button" class="delsh" data-delpre="${p.id}" title="${L('Kütüphaneden sil', 'Remove from library')}: ${esc(p.name)}">✕</button></div>`; };
   const matches = d => d.name.toLowerCase().includes(q) || (d.en && d.en.toLowerCase().includes(q));
   const shapes = P && P.lib && P.lib.shapes || [], presets = P && P.lib && P.lib.presets || [];
-  const opCard = o => card('op', o, opDefLast(o).w + ' cm'); // son kullanılan ölçü kartta da görünür
+  const opCard = o => card('op', o, libSz(opDefLast(o).w)); // son kullanılan ölçü kartta da görünür
   $('#search').placeholder = ui.cat === LIB_COMM ? L('🔍 Toplulukta ara…', '🔍 Search the community…') : L('🔍 Mobilya ara...', '🔍 Search furniture...');
   if (ui.cat === LIB_COMM) items = storeLibHtml(); // arama kutusu topluluk sekmesinde mağazada arar
   else if (q) {
-    items += presets.filter(p => p.name.toLowerCase().includes(q)).map(presetCard).join('');
-    items += OPENINGS.filter(matches).map(opCard).join('');
-    items += CATALOG.filter(matches).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
-    items += shapes.filter(matches).map(shapeCard).join('');
-  } else if (ui.cat === 0) items = OPENINGS.map(opCard).join('') + presets.filter(p => p.kind === 'op').map(presetCard).join('');
-  else if (ui.cat === LIBCATS.length - 1) items = `<button class="item fs-new" data-fsnew="1" title="${L('Kendi mobilyanı parçalardan tasarla', 'Design your own furniture from parts')}"><div class="ic">🧩</div><div>${L('Mobilya oluştur', 'Create furniture')}</div><div class="sz">${L('stüdyo', 'studio')}</div></button>` + presets.map(presetCard).join('') + shapes.map(shapeCard).join('')
+    items += presets.filter(p => p.name.toLowerCase().includes(q) && preFits(p)).map(presetCard).join('');
+    items += OPENINGS.filter(o => matches(o) && opFits(opDefLast(o))).map(opCard).join('');
+    items += CATALOG.filter(c => matches(c) && fits(c)).map(c => card('furn', c, libSz(c.w, c.d))).join('');
+    items += shapes.filter(s => matches(s) && fits(s)).map(shapeCard).join('');
+  } else if (ui.cat === 0) items = OPENINGS.filter(o => opFits(opDefLast(o))).map(opCard).join('') + presets.filter(p => p.kind === 'op' && preFits(p)).map(presetCard).join('');
+  else if (ui.cat === LIBCATS.length - 1) items = `<button class="item fs-new" data-fsnew="1" title="${L('Kendi mobilyanı parçalardan tasarla', 'Design your own furniture from parts')}"><div class="ic">🧩</div><div>${L('Mobilya oluştur', 'Create furniture')}</div><div class="sz">${L('stüdyo', 'studio')}</div></button>` + presets.filter(preFits).map(presetCard).join('') + shapes.filter(fits).map(shapeCard).join('')
     + (presets.length || shapes.length ? '' : `<p class="muted">${L('Bir kapı, pencere ya da mobilyayı seçip “💾 Kütüphaneye kaydet” ile buraya ekle.', 'Select a door, window or furniture item and use “💾 Save to library” to add it here.')}</p>`);
-  else items = CATALOG.filter(c => c.cat === ui.cat - 1).map(c => card('furn', c, `${c.w}×${c.d}`)).join('');
-  $('#items').innerHTML = items || `<p class="muted">${L('Sonuç yok', 'No results')}</p>`;
+  else items = CATALOG.filter(c => c.cat === ui.cat - 1 && fits(c)).map(c => card('furn', c, libSz(c.w, c.d))).join('');
+  $('#items').innerHTML = items || `<p class="muted">${libSizeOn() && ui.cat !== LIB_COMM ? L('Bu ölçülere sığan öğe yok', 'Nothing here fits these sizes') : L('Sonuç yok', 'No results')}</p>`;
   updateTools();
 }
 $('#cats').addEventListener('click', e => { const b = e.target.closest('[data-cat]'); if (b) { ui.cat = +b.dataset.cat; ui.q = ''; $('#search').value = ''; buildLib(); } });
@@ -9619,14 +10160,15 @@ $('#items').addEventListener('click', e => {
   const x = e.target.closest('[data-delsh]');
   if (x) {
     const i = (P.lib.shapes || []).findIndex(s => s.id === x.dataset.delsh);
-    if (i >= 0 && confirm(L(`“${itemName(P.lib.shapes[i])}” kütüphaneden silinsin mi?`, `Delete “${itemName(P.lib.shapes[i])}” from the library?`))) { P.lib.shapes.splice(i, 1); commit(); buildLib(); toast(L('Şekil kütüphaneden silindi', 'Shape removed from library')); }
+    if (i >= 0) { const sh = P.lib.shapes[i]; askConfirm(L(`“${itemName(sh)}” kütüphaneden silinsin mi?`, `Delete “${itemName(sh)}” from the library?`), { ok: L('Sil', 'Delete'), danger: true }).then(ok => { const j = P.lib.shapes.indexOf(sh); if (ok === true && j >= 0) { P.lib.shapes.splice(j, 1); commit(); buildLib(); toast(L('Şekil kütüphaneden silindi', 'Shape removed from library')); } }); }
     return;
   }
   const dp = e.target.closest('[data-delpre]'), rp = e.target.closest('[data-renpre]');
   if (dp || rp) {
     const ps = P.lib.presets || [], i = ps.findIndex(p => p.id === (dp || rp).dataset[dp ? 'delpre' : 'renpre']); if (i < 0) return;
-    if (dp) { if (confirm(L(`“${ps[i].name}” kütüphaneden silinsin mi?`, `Delete “${ps[i].name}” from the library?`))) { ps.splice(i, 1); if (placing && placing.def.preset === dp.dataset.delpre) setTool('select'); commit(); buildLib(); toast(L('Ön ayar silindi (Ctrl+Z ile geri al)', 'Preset removed (Ctrl+Z to undo)')); } }
-    else { const nm = (prompt(L('Yeni ad:', 'New name:'), ps[i].name) || '').trim(); if (nm) { ps[i].name = nm.slice(0, 60); commit(); buildLib(); } }
+    const pr = ps[i];
+    if (dp) { askConfirm(L(`“${pr.name}” kütüphaneden silinsin mi?`, `Delete “${pr.name}” from the library?`), { ok: L('Sil', 'Delete'), danger: true }).then(ok => { const ps = P.lib.presets || [], i = ps.indexOf(pr); if (ok === true && i >= 0) { ps.splice(i, 1); if (placing && placing.def.preset === dp.dataset.delpre) setTool('select'); commit(); buildLib(); toast(L('Ön ayar silindi (Ctrl+Z ile geri al)', 'Preset removed (Ctrl+Z to undo)')); } }); }
+    else askText(L('Yeni ad', 'New name'), pr.name).then(nm => { nm = (nm || '').trim(); if (nm) { pr.name = nm.slice(0, 60); commit(); buildLib(); } });
     return;
   }
   const b = e.target.closest('.item'); if (!b) return;
@@ -9942,12 +10484,11 @@ function storeAct(a) {
   const done = (msg, drop) => { toast(msg); if (drop) { closeModal(); store.full.delete(id); } storeReload(); };
   const fail = e => toast('⚠ ' + e.message);
   if (a === 'report') return storeNeedSignIn(L('Şikâyet etmek için giriş yapın (kötüye kullanımı önler).', 'Sign in to report (this prevents abuse).'), () => {
-    if (!confirm(L(`“${it.name}” uygunsuz ya da bozuk olarak şikâyet edilsin mi? Birkaç şikâyetten sonra gizlenir.`, `Report “${it.name}” as inappropriate or broken? It is hidden after a few reports.`))) return;
-    storeApi(`/store/items/${id}/report`, { method: 'POST', auth: true }).then(() => done(L('Teşekkürler, şikâyet alındı', 'Thanks, reported'), true), fail);
+    askConfirm(L(`“${it.name}” uygunsuz ya da bozuk olarak şikâyet edilsin mi? Birkaç şikâyetten sonra gizlenir.`, `Report “${it.name}” as inappropriate or broken? It is hidden after a few reports.`), { ok: L('Şikâyet et', 'Report') }).then(ok => { if (ok === true) storeApi(`/store/items/${id}/report`, { method: 'POST', auth: true }).then(() => done(L('Teşekkürler, şikâyet alındı', 'Thanks, reported'), true), fail); });
   });
-  if (a === 'del') { if (confirm(L(`“${it.name}” mağazadan kaldırılsın mı? Planlara yerleştirilmiş kopyalar kalır.`, `Remove “${it.name}” from the store? Copies already placed in plans stay.`))) storeApi('/store/items/' + id, { method: 'DELETE', auth: true }).then(() => done(L('Mağazadan kaldırıldı', 'Removed from the store'), true), fail); return; }
+  if (a === 'del') { askConfirm(L(`“${it.name}” mağazadan kaldırılsın mı? Planlara yerleştirilmiş kopyalar kalır.`, `Remove “${it.name}” from the store? Copies already placed in plans stay.`), { ok: L('Kaldır', 'Remove'), danger: true }).then(ok => ok === true && storeApi('/store/items/' + id, { method: 'DELETE', auth: true }).then(() => done(L('Mağazadan kaldırıldı', 'Removed from the store'), true), fail)); return; }
   if (a === 'unhide') return void storeApi(`/store/items/${id}/unhide`, { method: 'POST', auth: true }).then(() => done(L('Yeniden gösteriliyor', 'Shown again'), true), fail);
-  if (a === 'ban') { if (it.sub && confirm(L('Bu kişi engellensin ve tüm mobilyaları gizlensin mi?', 'Ban this author and hide all their items?'))) storeApi(`/store/users/${encodeURIComponent(it.sub)}/ban`, { method: 'POST', auth: true }).then(() => done(L('Engellendi', 'Banned'), true), fail); return; }
+  if (a === 'ban') { if (it.sub) askConfirm(L('Bu kişi engellensin ve tüm mobilyaları gizlensin mi?', 'Ban this author and hide all their items?'), { ok: L('Engelle', 'Ban'), danger: true }).then(ok => ok === true && storeApi(`/store/users/${encodeURIComponent(it.sub)}/ban`, { method: 'POST', auth: true }).then(() => done(L('Engellendi', 'Banned'), true), fail)); return; }
   if (a === 'edit') return storePublishModal(null, it);
 }
 
@@ -10032,7 +10573,7 @@ $('#floors').addEventListener('click', e => {
   sel = []; commit(); fit(); refresh(); if (ui.view3d && T3) { sync3DFloors(); schedBuild3D(); } }
   if (a.dataset.fa === 'addb') addBasement();
   if (a.dataset.fa === 'dup') { const c = JSON.parse(JSON.stringify(F())); const m = {}; const idm = o => { const n = uid(); m[o.id] = n; o.id = n; }; for (const k in KINDS) c[k].forEach(idm); c.ops.forEach(o => o.wall = m[o.wall]); c.id = uid(); const gm = {}; for (const k in KINDS) c[k].forEach(o => { if (o.grp) o.grp = gm[o.grp] || (gm[o.grp] = uid()); }); c.groups = Object.values(gm).map(id => ({ id, vars: [], idx: 0 })); c.rooms.forEach(r => { delete r.vars; delete r.vIdx; }); c.name = F().name + L(' (kopya)', ' (copy)'); P.floors.splice(fi + 1, 0, c); fi++; sel = []; commit(); refresh(); }
-  if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); if (confirm(isEN() ? `Delete floor “${F().name}”?` : `“${F().name}” katı silinsin mi?`)) { P.floors.splice(fi, 1); fi = Math.max(0, fi - 1); sel = []; commit(); refresh(); } }
+  if (a.dataset.fa === 'del') { if (P.floors.length < 2) return toast(L('En az bir kat olmalı', 'At least one floor is required')); const fl = F(); askConfirm(L(`“${fl.name}” katı silinsin mi?`, `Delete floor “${fl.name}”?`), { ok: L('Katı sil', 'Delete floor'), danger: true }).then(ok => { const k = P.floors.indexOf(fl); if (ok === true && k >= 0 && P.floors.length > 1) { P.floors.splice(k, 1); fi = Math.max(0, Math.min(fi, k) - (k <= fi ? 1 : 0)); fi = clamp(fi, 0, P.floors.length - 1); sel = []; commit(); refresh(); } }); }
 });
 // bodrum kat: en alta eklenir; en alttaki katın kotu sabitlenir (zemin kat ±0.00'da kalır), bodrum onun bir kat altında başlar
 function addBasement(h = P.wallH) {
@@ -10046,7 +10587,7 @@ function addBasement(h = P.wallH) {
   toast(L(`⬇ ${b.name}: ${fmtLevel(b.lvl)} → ${fmtLevel(b.lvl + h)}`, `⬇ ${b.name}: ${fmtLevel(b.lvl)} → ${fmtLevel(b.lvl + h)}`));
   return b;
 }
-function renameFloor(i) { if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; } const f = P.floors[i]; if (!f) return; const n = (prompt(L('Kat adı:', 'Floor name:'), f.name) || '').trim(); if (n && n !== f.name) { f.name = n; commit(); refresh(); } }
+function renameFloor(i) { if (typeof collabReadOnly === 'function' && collabReadOnly()) { collabViewerToast(); return; } const f = P.floors[i]; if (!f) return; askText(L('Kat adı', 'Floor name'), f.name).then(n => { n = (n || '').trim(); if (n && n !== f.name) { f.name = n; commit(); refresh(); } }); }
 $('#floors').addEventListener('dblclick', e => { const t = e.target.closest('[data-fl]'); if (t) renameFloor(+t.dataset.fl); });
 function refresh() { if (ui.lenTyped && !(sel.length === 1 && find(sel[0])?.kind === 'wall')) ui.lenTyped = ''; render(); renderProps(); renderFloors(); updateTools(); syncLayerUI(); if (typeof collabSendPresence === 'function') collabSendPresence(true); }
 
@@ -10332,7 +10873,7 @@ function applyVarPoses(poses) {
         const diff = Math.round((wallDeg(o) - od) * 10) / 10;
         if (Math.abs(diff) > 0.05) o.angles = o.angles.map(a => Math.round((((a + diff) % 360) + 360) % 360 * 10) / 10);
       }
-      const L = wLen(o);
+      const L = wallLen(o);
       F().ops.forEach(op => { if (op.wall === o.id) op.d = clamp(op.d, Math.min(op.w / 2, L / 2), Math.max(L - op.w / 2, L / 2)); });
     } else if (fd.kind === 'room') {
       o.pts = p.pts.map(q => ({ ...q }));
@@ -10752,6 +11293,7 @@ function cmdList() {
     act('png', '🖼', 'PNG dışa aktar', 'Export PNG', '', () => $('#bPng').click(), true, 'image görsel render'),
     act('svg', '⬇', 'SVG dışa aktar', 'Export SVG', '', () => $('#bSvg').click(), false),
     act('json', '⬇', 'JSON indir', 'Download JSON', '', () => downloadJson(P), true, 'export backup yedek'),
+    act('qty', '📋', 'Metraj ve alışveriş listesi (CSV)', 'Quantities & shopping list (CSV)', '', () => qtyModal(), true, 'quantities schedule bill materials cost price csv excel metraj keşif maliyet fiyat liste'),
     act('dxf', '⬇', 'DXF olarak dışa aktar (etkin kat)', 'Export DXF (active floor)', '', () => downloadDxf(), true, 'dxf autocad cad bricscad librecad draftsight export dışa aktar'),
     act('dxfall', '⬇', 'DXF olarak dışa aktar (tüm katlar)', 'Export DXF (all floors)', '', () => downloadDxf(true), true, 'dxf autocad cad all floors tüm katlar export dışa aktar'),
     act('dxfm', '⬇', 'DXF olarak dışa aktar (metre)', 'Export DXF (metres)', '', () => downloadDxf(false, 'm'), true, 'dxf autocad cad metre metres meters m units birim'),
@@ -10774,6 +11316,8 @@ function cmdList() {
     act('unhideall', '👁', 'Gizli ögeleri aç', 'Show hidden items', '', () => unhideAll(), true, 'göster unhide restore hidden items gizli'),
     act('group', '⛓', 'Grupla', 'Group', 'Ctrl+G', groupSel, false),
     act('ungroup', '⛓', 'Grubu çöz', 'Ungroup', 'Ctrl+Shift+G', ungroupSel, false),
+    act('autodims', '📐', 'Otomatik ölçülendir (odalar + dış zincirler)', 'Auto-dimension (rooms + outer chains)', '', () => autoDimsRun(), false, 'dimension dimensions ölçü ölçülendirme otomatik auto chain zincir'),
+    act('units', '📏', 'Birim: metre ↔ fit-inç', 'Units: metric ↔ feet & inches', '', () => setUnits(isImp() ? 'metric' : 'imperial'), true, 'units imperial metric feet inches ft in birim fit inç metre'),
     act('axgrid', '⊞', 'Aks ızgarası oluştur', 'Create an axis grid', '', () => axisGridPrompt(), false, 'grid ızgara aks axis column kolon structure yapı'),
     act('elev', '📐', 'Görünüşler ve kesitler', 'Elevations & sections', '', () => archModal('elev:south'), true, 'facade cephe drawing çizim'),
     act('elevmain', '📐', 'Ana tuvalde görünüş / kesit', 'Elevation / section on main canvas', '', () => showElev(!ui.viewElev), true, 'facade cephe elevation section görünüş kesit'),
@@ -10839,7 +11383,10 @@ function openCmdPalette() {
 }
 window.addEventListener('keydown', e => {
   const tag = e.target.tagName, typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || e.target.isContentEditable;
-  if (typing) { if (e.key === 'Escape') e.target.blur(); return; }
+  if (typing) {
+    if (e.key === 'Escape') { if (e.target.closest('#modal') && $('#modalbg').style.display === 'flex' && ui.modal !== 'parts') closeModal(); else e.target.blur(); }
+    return;
+  }
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
   if (e.key === 'Escape' && document.getElementById('ctxMenu')) { closeCtxMenu(); return; }
   if (ui.modal === 'tex' && ui.txStudio) { if (e.key === 'Escape') closeModal(); return; } // stüdyonun üstündeki doku penceresi: tuşlar plana düşmez, Esc stüdyoya döner
@@ -10905,19 +11452,20 @@ window.addEventListener('keydown', e => {
   // sayıyla uzunluk (#36): seçili tek duvar → rakam + Enter; duvar ucu sürüklenirken → rakam yazınca uç o uzaklığa kilitlenir
   const hd = ui.drag && ui.drag.type === 'handle' && (ui.drag.h === 'wa' || ui.drag.h === 'wb') ? ui.drag : null;
   const sw = !hd && tool === 'select' && sel.length === 1 && find(sel[0])?.kind === 'wall' ? find(sel[0]).o : null;
-  if (hd && (/^[0-9.,]$/.test(e.key) || e.key === 'Backspace')) {
+  const lenKey = k0 => /^[0-9.,]$/.test(k0) || (isImp() && /^['" /]$/.test(k0)); // #194: fit-inç işaretleri
+  if (hd && (lenKey(e.key) || e.key === 'Backspace')) {
     hd.typed = e.key === 'Backspace' ? (hd.typed || '').slice(0, -1) : (hd.typed || '') + (e.key === ',' ? '.' : e.key);
     if (ui.raw) doHandle(ui.raw, ui.lastE || { shiftKey: false }); render(); e.preventDefault(); return;
   }
-  if (sw && (/^[0-9.,]$/.test(e.key) || (ui.lenTyped && (e.key === 'Backspace' || e.key === 'Enter' || e.key === 'Escape')))) {
+  if (sw && (lenKey(e.key) || (ui.lenTyped && (e.key === 'Backspace' || e.key === 'Enter' || e.key === 'Escape')))) {
     e.preventDefault();
-    if (e.key === 'Enter') { const v = parseFloat(ui.lenTyped); ui.lenTyped = ''; if (applyWallLength(sw, v)) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); } else render(); return; }
+    if (e.key === 'Enter') { const v = typedCm(ui.lenTyped); ui.lenTyped = ''; if (applyWallLength(sw, v)) { commit(); refresh(); if (ui.view3d && T3) schedBuild3D(); } else render(); return; }
     ui.lenTyped = e.key === 'Escape' ? '' : e.key === 'Backspace' ? ui.lenTyped.slice(0, -1) : (ui.lenTyped || '') + (e.key === ',' ? '.' : e.key);
     drawPreview(); return;
   }
   if (ui.lenTyped && !sw) ui.lenTyped = '';
   if (tool === 'wall' && ui.draw) {
-    if (/^[0-9.]$/.test(e.key)) { ui.typed += e.key; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
+    if (lenKey(e.key)) { ui.typed += e.key === ',' ? '.' : e.key; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Backspace') { ui.typed = ui.typed.slice(0, -1); if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Enter') {
       if (ui.typed && ui.cur && dist(ui.draw.start, ui.cur) > 1) { F().walls.push(toolWall(ui.draw.start, ui.cur)); ui.draw = { start: { x: ui.cur.x, y: ui.cur.y } }; ui.typed = ''; commit(); render(); renderProps(); }
@@ -10928,7 +11476,7 @@ window.addEventListener('keydown', e => {
   if (tool === 'draft' && ui.dr && ui.dr.pts.length) {
     // ölçü yazma (#83): rakamlar uzunluk / yarıçap, dikdörtgende "300x200"; Enter uygular ya da çoklu çizgiyi bitirir
     const k = e.key.toLowerCase(), sep = draftUi().mode === 'rect' && ui.typed && !ui.typed.includes('x') && (k === 'x' || k === '*');
-    if (/^[0-9.,]$/.test(k) || sep) { ui.typed += sep ? 'x' : k === ',' ? '.' : k; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
+    if (lenKey(e.key) || sep) { ui.typed += sep ? 'x' : k === ',' ? '.' : e.key; if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Backspace') { ui.typed = ui.typed.slice(0, -1); if (ui.lastE) setCursor(ui.lastE); drawPreview(); e.preventDefault(); return; }
     if (e.key === 'Enter') { if (ui.typed && ui.cur) draftClick(ui.cur); else finishDraft(); return; }
   }
@@ -10969,13 +11517,92 @@ if ($('#bInspect')) $('#bInspect').onclick = () => toggleDrawer('props'); // dar
 $('#zIn').onclick = () => zoomBtn(1.25); $('#zOut').onclick = () => zoomBtn(0.8); $('#zFit').onclick = fit;
 
 /* ---------- Modal ---------- */
-function openModal(html, kind = null) { ui.modal = kind; $('#modal').innerHTML = html; $('#modalbg').style.display = 'flex'; }
+/* ---------- Uygulama içi soru pencereleri (#196) ve erişilebilir pencereler (#195) ----------
+   askText / askConfirm tarayıcının prompt() / confirm() penceresinin yerine geçer: temaya uyar, iki dillidir,
+   Enter onaylar, Esc / İptal / arka plan hiçbir şey değiştirmeden kapatır, odak pencerenin içinde kalır ve kapanınca
+   açan düğmeye döner. Söz (Promise) döndürür: askText → metin | null, askConfirm → true | false (İptal) | null (Esc).
+   Açık bir #modal'ın üstünde ayrı bir katmanda (#askbg) açılır, alttaki pencereye dokunmaz. */
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
+const focusablesIn = root => [...root.querySelectorAll(FOCUSABLE)].filter(el => !el.closest('[hidden]') && el.getClientRects().length);
+function trapTab(e, root) {
+  if (e.key !== 'Tab') return;
+  const f = focusablesIn(root); if (!f.length) { e.preventDefault(); return; }
+  const i = f.indexOf(document.activeElement);
+  if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+  else if (!e.shiftKey && (i < 0 || i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
+}
+let askOpen = null;
+function askDialog(o) {
+  return new Promise(res => {
+    if (askOpen) askOpen.done(null);
+    const opener = document.activeElement;
+    let bg = $('#askbg'); if (!bg) { bg = document.createElement('div'); bg.id = 'askbg'; document.body.appendChild(bg); }
+    bg.innerHTML = `<div id="ask" role="${o.input ? 'dialog' : 'alertdialog'}" aria-modal="true" aria-labelledby="askT"${o.msg ? ' aria-describedby="askM"' : ''}>
+      <h3 id="askT">${esc(o.title)}</h3>${o.msg ? `<p id="askM">${esc(o.msg)}</p>` : ''}
+      ${o.input ? `<input id="askI" type="text" autocomplete="off" spellcheck="false" value="${esc(o.def == null ? '' : o.def)}"${o.list ? ' list="askL"' : ''}${o.inputmode ? ` inputmode="${o.inputmode}"` : ''} aria-labelledby="askT"${o.msg ? ' aria-describedby="askM askE"' : ' aria-describedby="askE"'}>${o.list ? `<datalist id="askL">${o.list.map(v => `<option value="${esc(v)}">`).join('')}</datalist>` : ''}<p id="askE" class="ask-err" role="alert"></p>` : ''}
+      <div class="ask-btns"><button type="button" class="btn" data-ask="no">${esc(o.cancel || L('İptal', 'Cancel'))}</button><button type="button" class="btn ${o.danger ? 'danger' : 'primary'}" data-ask="ok">${esc(o.ok || L('Tamam', 'OK'))}</button></div>
+    </div>`;
+    bg.style.display = 'flex';
+    const box = bg.firstElementChild, inp = box.querySelector('#askI');
+    const key = e => {
+      e.stopPropagation();
+      if (e.key === 'Escape') { e.preventDefault(); done(null); }
+      else if (e.key === 'Enter' && !(e.target.dataset && e.target.dataset.ask === 'no') && !e.isComposing) { e.preventDefault(); ok(); }
+      else trapTab(e, box);
+    };
+    const done = v => {
+      if (!askOpen || askOpen.res !== res) return;
+      askOpen = null; document.removeEventListener('keydown', key, true);
+      bg.style.display = 'none'; bg.innerHTML = '';
+      try { if (opener && opener.focus && document.contains(opener)) opener.focus({ preventScroll: true }); } catch (e) { }
+      res(v);
+    };
+    const ok = () => {
+      if (!inp) return done(true);
+      const er = o.validate ? o.validate(inp.value) : '';
+      if (er) { box.querySelector('#askE').textContent = er; inp.setAttribute('aria-invalid', 'true'); inp.focus(); return; }
+      done(inp.value);
+    };
+    document.addEventListener('keydown', key, true);
+    box.addEventListener('click', e => { const b = e.target.closest('[data-ask]'); if (b) { if (b.dataset.ask === 'ok') ok(); else done(o.input ? null : false); } });
+    bg.onmousedown = e => { if (e.target === bg) done(null); };
+    askOpen = { res, done };
+    (inp || box.querySelector('[data-ask="ok"]')).focus();
+    if (inp) inp.select();
+  });
+}
+// metin sorar: onaylanınca metin, vazgeçilince null. opts: { msg, ok, validate(v) → hata metni | '', list, inputmode }
+const askText = (title, def = '', opts = {}) => askDialog({ ...opts, title, def, input: true });
+// onay sorar: true = onay düğmesi, false = İptal / ikinci seçenek, null = Esc / arka plan. opts: { title, ok, cancel, danger }
+const askConfirm = (msg, opts = {}) => askDialog({ ...opts, title: opts.title || L('Emin misiniz?', 'Are you sure?'), msg });
+const askNumber = (title, def, opts = {}) => askText(title, def, { inputmode: 'decimal', validate: v => (parseFloat(String(v).replace(',', '.')) > 0 ? '' : L('Sıfırdan büyük bir sayı girin', 'Enter a number greater than zero')), ...opts });
+/* #195: #modal bir iletişim penceresidir (role, aria-modal, başlığıyla adlandırılır). Açılınca odak içine girer, Tab
+   pencerede döner, Esc kapatır (bir giriş alanındayken de), kapanınca odak pencereyi açan düğmeye döner. Yeniden
+   çizimde (aynı pencere yeni içerikle) açan düğme korunur. */
+let modalOpener = null;
+function openModal(html, kind = null) {
+  const m = $('#modal'), bg = $('#modalbg');
+  if (bg.style.display !== 'flex') modalOpener = document.activeElement;
+  ui.modal = kind; m.innerHTML = html; bg.style.display = 'flex';
+  m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true'); m.tabIndex = -1;
+  const h = m.querySelector('h2, h3');
+  if (h) { if (!h.id) h.id = 'modalT'; m.setAttribute('aria-labelledby', h.id); } else m.removeAttribute('aria-labelledby');
+  m.querySelectorAll('[data-close]:not([aria-label])').forEach(b => b.setAttribute('aria-label', L('Kapat', 'Close')));
+  a11yLabels(m);
+  if (!m.contains(document.activeElement)) m.focus({ preventScroll: true });
+}
+function modalRestoreFocus() {
+  const o = modalOpener; modalOpener = null;
+  try { if (o && o.focus && document.contains(o) && o !== document.body) o.focus({ preventScroll: true }); } catch (e) { }
+}
 function closeModal() {
   if (ui.modal === 'tex' && ui.txStudio) { ui.txStudio = null; ui.modal = 'parts'; $('#modalbg').style.display = 'none'; pbRedraw(); return; }
   ui.txWall = 0; if (ui.modal === 'parts') fsClose();
   if (ui.modal === 'arch') { $('#modal').classList.remove('arch-modal'); if (ui.arch) { ui.arch.drag = null; ui.arch.tool = 'select'; } }
   ui.modal = null; $('#modalbg').style.display = 'none';
+  modalRestoreFocus();
 }
+$('#modal').addEventListener('keydown', e => { if (e.key === 'Tab') trapTab(e, $('#modal')); });
 $('#modalbg').addEventListener('mousedown', e => { if (e.target.id === 'modalbg') closeModal(); });
 $('#modal').addEventListener('click', e => { if (e.target.closest('[data-close]')) closeModal(); });
 /* ---------- AI (MCP) help: copy-ready prompt for the user's agent ---------- */
@@ -11004,6 +11631,76 @@ function aiSetupPrompt() {
     ? 'Set up live editing for my floor planner so you can change my plan directly:\n1. In the project folder, run the bridge in the background and keep it running — do not close it. If you are OpenCode, start it with wake enabled so requests I type in the app start a turn for you: "FP_WAKE=1 node mcp/bridge.js" (Windows PowerShell: "$env:FP_WAKE=\'1\'; node mcp/bridge.js"). Any other agent runs plain "node mcp/bridge.js" — then I will ask you to check the queue.\n2. Tell me when it is running; my floor planner page (https://mewego.github.io/floorplanner/ or the local copy) connects to it automatically.\n3. Then call pull_from_browser to read my current plan. Apply every change with push_to_browser — it appears in my open tab and is saved automatically. Read anything I type in the app panel with get_user_requests (ack them with ack_user_requests).'
     : 'Kat planımı doğrudan düzenleyebilmen için canlı köprüyü kur:\n1. Proje klasöründe köprüyü arka planda çalıştır ve açık bırak — kapatma. OpenCode kullanıyorsan uyandırma açık başlat, böylece uygulamaya yazdığım istekler senin için bir tur başlatır: "FP_WAKE=1 node mcp/bridge.js" (Windows PowerShell: "$env:FP_WAKE=\'1\'; node mcp/bridge.js"). Başka bir ajan kullanıyorsan "node mcp/bridge.js" yeterli — o zaman kuyruğu kontrol etmeni ben söylerim.\n2. Çalıştığını bana söyle; kat planı sayfam (https://mewego.github.io/floorplanner/ veya yerel kopya) ona kendiliğinden bağlanır.\n3. Sonra pull_from_browser ile güncel planımı oku. Her değişikliği push_to_browser ile uygula — açık sekmemde görünür ve otomatik kaydedilir. Uygulama panelinde yazdıklarımı get_user_requests ile oku (işleyince ack_user_requests ile kapat).';
 }
+/* ---------- İlk açılış turu (#197) ----------
+   Yeni bir tarayıcıda şablon (ya da boş proje) seçilince beş adım: duvar çiz, oda yap, kapı ekle, mobilya koy, 3B'ye bak.
+   Her adım gerçek düğmeyi halkayla gösterir ve iş yapılınca (commit / 3B açılınca tourCheck) kendiliğinden ilerler;
+   "Atla" turu kapatır ve bir daha kendiliğinden açmaz (localStorage['fp_tour'] = skip | done), Yardım'daki düğme yeniden
+   başlatır. Kutucuk modal değildir: çizim, klavye ve dokunmatik çalışmaya devam eder. Hiçbir şey P'ye yazılmaz. */
+const TOUR_STEPS = [
+  { t: ['Duvar çizin', 'Draw walls'], d: ['🧱 Duvar aracını seçin, köşeleri tıklayarak duvar çizin. Bitirmek için Esc ya da çift tık.', 'Pick the 🧱 Wall tool and click to place the corners. Press Esc or double-click to finish.'], at: ['#tools [data-tool="wall"]'], n: f => f.walls.length },
+  { t: ['Oda yapın', 'Make a room'], d: ['🏠 Oda algıla aracını seçin ve duvarların içine tıklayın: alanı ve adı olan bir oda oluşur.', 'Pick 🏠 Auto Room and click inside the walls: you get a room with its area and name.'], at: ['#tools [data-tool="room"]'], n: f => f.rooms.length },
+  { t: ['Kapı ekleyin', 'Add a door'], d: ['🚪 Kapı aracını seçin ve bir duvarın üstüne tıklayın.', 'Pick the 🚪 Door tool and click on a wall.'], at: ['#tools [data-tool="door"]'], n: f => f.ops.length },
+  { t: ['Mobilya koyun', 'Place furniture'], d: ['Kütüphaneden bir eşya seçip plana tıklayın (R döndürür).', 'Pick an item in the library and click in the plan (R turns it).'], at: ['#lib', '#bLib', '#tools [data-tool="furn"]'], n: f => f.furn.length },
+  { t: ['3B olarak görün', 'See it in 3D'], d: ['3B düğmesine basın; sürükleyerek döndürün, 👁 ile içinde gezin.', 'Press 3D; drag to orbit, use 👁 to walk inside.'], at: ['#b3d'], v3d: true },
+];
+const TOUR_OFF = /[?&]tour=off\b/.test(location.search); // test tarayıcısı: tur kendiliğinden açılmaz
+const tourSeen = () => TOUR_OFF || !!localStorage.getItem('fp_tour');
+let tour = null;
+function tourTarget(st) { for (const s of st.at) { const el = document.querySelector(s); if (el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden') return el; } return null; }
+function startTour(force) {
+  if (!force && tourSeen()) return;
+  tour = { i: 0, base: 0, tick: 0 }; tourStep(0);
+  tour.tick = setInterval(tourPlace, 500); // araç çubuğu kayınca / pencere boyutu değişince yer tutsun
+  window.addEventListener('resize', tourPlace);
+}
+function endTour(how) {
+  if (!tour) return;
+  clearInterval(tour.tick); window.removeEventListener('resize', tourPlace); tour = null;
+  localStorage.setItem('fp_tour', how || 'done');
+  $('#tourBox')?.remove(); $('#tourRing')?.remove();
+}
+function tourStep(i) {
+  if (!tour) return;
+  tour.i = i;
+  if (i >= TOUR_STEPS.length) { tourDone(); return; }
+  const st = TOUR_STEPS[i]; tour.base = st.n ? st.n(F()) : 0;
+  let box = $('#tourBox');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'tourBox'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-live', 'polite'); box.setAttribute('aria-labelledby', 'tourT');
+    document.body.appendChild(box);
+    box.addEventListener('click', e => { const b = e.target.closest('[data-tour]'); if (!b) return; if (b.dataset.tour === 'skip') endTour('skip'); else if (b.dataset.tour === 'next') tourStep(tour.i + 1); else endTour('done'); });
+  }
+  box.innerHTML = `<div class="tour-n">${L('Adım', 'Step')} ${i + 1} / ${TOUR_STEPS.length}</div><h4 id="tourT">${L(...st.t)}</h4><p>${L(...st.d)}</p>
+    <div class="tour-btns"><button type="button" class="btn sm" data-tour="skip">${L('Turu atla', 'Skip tour')}</button><button type="button" class="btn sm" data-tour="next">${L('Sonraki ›', 'Next ›')}</button></div>`;
+  tourPlace();
+}
+function tourDone() {
+  const box = $('#tourBox'); if (!box) return;
+  $('#tourRing')?.remove();
+  box.innerHTML = `<h4 id="tourT">🎉 ${L('Hazırsınız', 'You are all set')}</h4><p>${L('Kalanı ❓ Yardım’da: kısayollar, dışa aktarma ve daha fazlası. Turu oradan yeniden açabilirsiniz.', 'The rest is in ❓ Help: shortcuts, exports and more. You can restart the tour from there.')}</p><div class="tour-btns"><button type="button" class="btn sm primary" data-tour="end">${L('Tamam', 'OK')}</button></div>`;
+  box.style.left = Math.max(16, (innerWidth - box.offsetWidth) / 2) + 'px'; box.style.top = Math.max(16, innerHeight / 2 - box.offsetHeight / 2) + 'px';
+  localStorage.setItem('fp_tour', 'done');
+}
+function tourPlace() {
+  if (!tour || tour.i >= TOUR_STEPS.length) return;
+  const box = $('#tourBox'), el = tourTarget(TOUR_STEPS[tour.i]); if (!box) return;
+  let ring = $('#tourRing'); if (!ring) { ring = document.createElement('div'); ring.id = 'tourRing'; document.body.appendChild(ring); }
+  if (!el) { ring.hidden = true; box.style.left = '16px'; box.style.top = Math.max(16, innerHeight - box.offsetHeight - 70) + 'px'; return; }
+  const r = el.getBoundingClientRect(), pad = 4;
+  ring.hidden = false; Object.assign(ring.style, { left: r.left - pad + 'px', top: r.top - pad + 'px', width: r.width + pad * 2 + 'px', height: r.height + pad * 2 + 'px' });
+  const bw = box.offsetWidth, bh = box.offsetHeight, gap = 12;
+  // sağına sığarsa sağına, yoksa altına, yoksa üstüne; ekrandan taşmaz (telefon dahil)
+  let x = r.right + gap, y = r.top;
+  if (x + bw > innerWidth - 8) { x = r.left; y = r.bottom + gap; if (y + bh > innerHeight - 8) y = r.top - bh - gap; }
+  box.style.left = clamp(x, 8, Math.max(8, innerWidth - bw - 8)) + 'px'; box.style.top = clamp(y, 8, Math.max(8, innerHeight - bh - 8)) + 'px';
+}
+// iş yapıldıysa sonraki adıma geç: commit() ve 3B açılışı çağırır
+function tourCheck() {
+  if (!tour || tour.i >= TOUR_STEPS.length) return;
+  const st = TOUR_STEPS[tour.i];
+  if (st.v3d ? ui.view3d : st.n(F()) > tour.base) setTimeout(() => tour && tourStep(tour.i + 1), 250);
+}
+$('#modal').addEventListener('click', e => { if (e.target.closest('#helpTour')) { closeModal(); startTour(true); } }); // #197: Yardım'dan turu yeniden başlat
 function helpModal() {
   const rows = isEN() ? [
     [':', 'Command line: run any tool or action by name (English or Turkish), shortcut keys shown'],
@@ -11135,6 +11832,7 @@ function helpModal() {
     'This needs Node.js and the project folder on the agent side; your plan still stays in this tab (in your own storage).'
   )}</p>`;
   openModal(`<h2>${L('Kısayollar & İpuçları', 'Shortcuts & Tips')} <button class="btn sm" data-close>✕</button></h2>
+  <div class="row" style="margin:0 0 12px"><button class="btn sm primary" data-act="tour" id="helpTour">▶ ${L('Rehberli turu başlat', 'Start the guided tour')}</button></div>
   ${aiBlock}
   <h3 style="margin:22px 0 8px">${L('Klavye kısayolları', 'Keyboard shortcuts')}</h3>
   <table class="kb">${rows.map(r => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
@@ -11144,6 +11842,7 @@ function helpModal() {
   )}</p>`, 'help');
   const aiBtn = document.querySelector('#modal [data-ai-prompt]');
   if (aiBtn) aiBtn.onclick = async () => {
+    if (!BRIDGE_OFF && !brgEs) { brgWant(); brgProbe(); } // #192: istem kopyalandı, köprü gelince bağlan
     const ok = await copyText(aiSetupPrompt());
     const st = document.getElementById('aiPromptState');
     if (st) st.textContent = ok
@@ -11186,13 +11885,17 @@ function aiModal() {
   };
   $('#aiLiveRetry').onclick = async () => {
     $('#aiLiveRetry').disabled = true;
+    brgWant();
     const ok = await brgConnect();
+    if (!ok) brgStartProbe();
     $('#aiLiveRetry').disabled = false;
     if (!ok) setState('aiLiveState2', L('Bağlanamadı — köprü çalışmıyor ya da tarayıcı izin istedi.', 'Could not connect — bridge not running, or the browser needs permission.'));
     else { setState('aiLiveState2', ''); brgInitialSync(); }
     aiSyncLiveRow();
   };
   aiSyncLiveRow();
+  // pencere açılınca köprü aranmaya başlar (#192): ajan sonra başlatılsa da sayfa kendiliğinden bağlanır
+  if (!BRIDGE_OFF && !brgEs) { brgWant(); brgProbe(); }
 }
 /* ---------- AI köprüsü istemcisi / AI bridge client ----------
    Makes the app itself talk to the local bridge (mcp/bridge.js), so the page on
@@ -11323,6 +12026,7 @@ async function brgConnect() {
     es.addEventListener('requests-changed', () => { brgRefreshPending(); });
     es.addEventListener('request', () => { brgRefreshPending(); });
     es.onopen = () => {
+      brgWanted = true; brgFails = 0; localStorage.setItem(BRIDGE_USED, '1'); // bir dahaki açılışta da ara
       brgSetConnected(true);
       if (!brgHydrated) brgInitialSync(); else brgSync();
       brgRefreshPending();
@@ -11338,20 +12042,33 @@ function brgDisconnect() {
   brgSetConnected(false);
 }
 
-/* keep looking for the bridge while the app stays open: it can be started,
-   restarted or stopped at any time, and a dropped SSE stream must not be final */
+/* #192: look for the bridge only when the user wants it. A fresh browser makes no request to 127.0.0.1 at boot
+   (the Local Network Access prompt and a failed request every 10 s for everyone who never uses AI); the probe
+   starts when the AI dialog opens or 🔌 is pressed, and at boot only for a browser that connected before
+   (BRIDGE_USED, or the older BRIDGE_SEEN revision). Once wanted it keeps looking — the bridge can be started,
+   restarted or stopped at any time — with a backoff (10 s → 1 min → 5 min), and not while the tab is hidden. */
+const BRIDGE_USED = 'fp_bridge_used';
+const BRIDGE_DELAYS = [10000, 60000, 300000];
+let brgWanted = false, brgFails = 0;
+const brgProbeDelay = fails => BRIDGE_DELAYS[Math.min(Math.max(0, fails | 0), BRIDGE_DELAYS.length - 1)];
+const brgUsedBefore = store => { try { return !!(store.getItem(BRIDGE_USED) || store.getItem(BRIDGE_SEEN)); } catch (e) { return false; } };
+function brgWant() { brgWanted = true; brgFails = 0; brgStopProbe(); }
 function brgStartProbe() {
-  if (BRIDGE_OFF) return;
+  if (BRIDGE_OFF || !brgWanted) return;
   if (brgProbeTimer || brgEs) return;
-  brgProbeTimer = setInterval(async () => {
-    if (brgEs) { brgStopProbe(); return; }
-    if (await brgConnect()) brgStopProbe();
-  }, 10000);
+  brgProbeTimer = setTimeout(async () => {
+    brgProbeTimer = null;
+    if (brgEs) return;
+    if (document.hidden) { brgStartProbe(); return; } // gizli sekme denemez; görünür olunca hemen dener
+    if (await brgConnect()) { brgFails = 0; return; }
+    brgFails++; brgStartProbe();
+  }, brgProbeDelay(brgFails));
 }
 function brgProbe() {
-  brgConnect().then(ok => { if (!ok) brgStartProbe(); });
+  brgConnect().then(ok => { if (ok) brgFails = 0; else brgStartProbe(); });
 }
-function brgStopProbe() { clearInterval(brgProbeTimer); brgProbeTimer = null; }
+function brgStopProbe() { clearTimeout(brgProbeTimer); brgProbeTimer = null; }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && brgWanted && !brgEs && brgProbeTimer) { brgStopProbe(); brgProbe(); } });
 
 /* mirror local edits to the bridge (debounced) — the agent's pull_from_browser sees them */
 const aiOrigAutosave = autosave;
@@ -11650,7 +12367,7 @@ async function aiRefreshSnapshots() {
 }
 
 async function aiRestoreSnapshot(id) {
-  if (!confirm(L('Bu kayıtlı sürüme geri dönülsün mü?', 'Restore this saved version?'))) return;
+  if ((await askConfirm(L('Bu kayıtlı sürüme geri dönülsün mü?', 'Restore this saved version?'), { ok: L('Geri dön', 'Restore') })) !== true) return;
   try {
     const res = await brgFetch('/__snapshots/restore', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
@@ -11688,7 +12405,7 @@ async function aiSendRequest() {
 }
 
 /* boot: try once now, then keep probing in the background while the app is open */
-function aiBridgeBoot() { brgProbe(); }
+function aiBridgeBoot() { if (!BRIDGE_OFF && brgUsedBefore(localStorage)) { brgWanted = true; brgProbe(); } }
 
 /* status row inside the AI modal (updated live) */
 function aiSyncLiveRow() {
@@ -11737,7 +12454,7 @@ function saveDriveStep(msg) {
   ui.saveDriveHint = true;
   toast(msg, { label: L("☁ Google Drive'a da kaydet", "☁ Also save to Google Drive"), fn: syncModal });
 }
-function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+function download(name, blob) { if (!blob) { toast(L('Dosya oluşturulamadı', 'Could not create the file')); return; } const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
 const fname = ext => (P.name || 'plan').replace(/[^\w\-çğıöşüÇĞİÖŞÜ ]+/g, '_') + '.' + ext;
 function downloadJson(proj = P) { download(fname('json'), new Blob([JSON.stringify(bundleTextures(proj), null, 2)], { type: 'application/json' })); }
 /* ---------- Revit dışa aktarma (floorplanner → Revit) ----------
@@ -12230,7 +12947,7 @@ async function projectsModal() {
   $('#modal').querySelectorAll('[data-grp]').forEach(b => b.onclick = async () => {
     const it = list[+b.dataset.grp]; if (!it) return;
     const known = knownGroups(), cur = projGroup(it.project);
-    const v = prompt(L(`“${it.name}” hangi grupta olsun? — boş bırakın: grupsuz${known.length ? '\nVar olanlar: ' + known.join(', ') : ''}`, `Which group should “${it.name}” be in? — leave empty for no group${known.length ? '\nExisting: ' + known.join(', ') : ''}`), cur);
+    const v = await askText(L('Proje grubu', 'Project group'), cur, { msg: L(`“${it.name}” hangi grupta olsun? — boş bırakın: grupsuz`, `Which group should “${it.name}” be in? — leave empty for no group`), list: known });
     if (v == null) return;
     const g = cleanGroup(v); if (g) { it.project.group = g; rememberGroup(g); } else delete it.project.group;
     await dbPut('projects', it);
@@ -12245,7 +12962,7 @@ async function projectsModal() {
   });
   $('#modal').querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
     const it = list[+b.dataset.rm];
-    if (it && confirm(isEN() ? `Delete “${it.name}”?` : `“${it.name}” silinsin mi?`)) { await dbDel('projects', it.name); projectsModal(); }
+    if (it && (await askConfirm(L(`“${it.name}” silinsin mi?`, `Delete “${it.name}”?`), { ok: L('Sil', 'Delete'), danger: true })) === true) { await dbDel('projects', it.name); projectsModal(); }
   });
 }
 
@@ -12450,7 +13167,7 @@ async function shareDecode(s) {
   if (!o || !Array.isArray(o.floors)) throw new Error(L('geçersiz plan', 'invalid plan'));
   return o;
 }
-const shareLink = async (p = P) => APP_URL + '#fp=' + await shareEncode(JSON.parse(JSON.stringify(p)));
+const shareLink = async (p = P) => { const c = JSON.parse(JSON.stringify(p)); if (c.bg) c.bg = bgInline(c.bg); return APP_URL + '#fp=' + await shareEncode(c); };
 const driveLink = fileId => APP_URL + '#fpd=' + fileId;
 // aynı projeyi (P.id) taşıyan sekme: etkin olan önce
 function tabIndexOf(id) {
@@ -12683,15 +13400,16 @@ async function gdUpload(id, meta, blob) {
 }
 const gdTexFile = async id => (await gdList(`appProperties has { key='fpTex' and value='${gdQ(id)}' }`, 'files(id)'))[0];
 async function gdPushTex(p) {
-  for (const t of p.textures || []) {
-    if (gd.texDone.has(t.id)) continue;
-    const e = TEX.get(t.id); if (!e || !e.data) continue;
-    if (!(await gdTexFile(t.id))) await gdUpload(null, { name: 'texture-' + t.id, parents: [await gdFolder()], appProperties: { fpTex: t.id } }, dataUrlBlob(e.data));
-    gd.texDone.add(t.id);
+  for (const id of texRefIds(p)) { // özel dokular + arka plan görseli (#187)
+    if (gd.texDone.has(id)) continue;
+    const e = TEX.get(id); if (!e || !e.data) continue;
+    if (!(await gdTexFile(id))) await gdUpload(null, { name: 'texture-' + id, parents: [await gdFolder()], appProperties: { fpTex: id } }, dataUrlBlob(e.data));
+    gd.texDone.add(id);
   }
 }
 async function gdPullTex(p) {
-  for (const t of p.textures || []) {
+  for (const id of texRefIds(p)) {
+    const t = { id };
     if (TEX.has(t.id)) continue;
     try { const r = await dbGet('textures', t.id); if (r && r.data) { cacheTex(t.id, r.data); continue; } } catch (e) { }
     const f = await gdTexFile(t.id); if (!f) continue;
@@ -13296,7 +14014,7 @@ function collabRoomUrl(roomId = collab.room, viewToken = '', editKey = '') {
 
 function collabExportState(proj = P) {
   const copy = JSON.parse(JSON.stringify(proj));
-  if (copy.bg && copy.bg.src && copy.bg.src.length > 100000) copy.bg = null;
+  if (copy.bg) { const b = bgInline(copy.bg); copy.bg = b && b.src.length <= 100000 ? b : null; } // büyük görsel ayrı varlık olarak gider
   return copy;
 }
 
@@ -13343,6 +14061,7 @@ function collabBgKey(bg) {
 function collabSendBgAsset(bg) {
   if (!collab.room || collab.role !== 'editor' || !collab.ws || collab.ws.readyState !== 1) return;
   if (!bg) { collabSend({ type: 'asset', kind: 'bg', data: null }); return; }
+  bg = bgInline(bg); if (!bg) return; // görsel henüz yüklenmedi
   const raw = JSON.stringify(bg);
   if (raw.length > COLLAB_MAX_ASSET) {
     toast(L('Arka plan görseli canlı aktarım için çok büyük (> 400 KB)', 'Background image is too large to sync live (> 400 KB)'));
@@ -13376,8 +14095,8 @@ function collabSyncAssetsAfterCommit() {
 
 async function collabRequestMissingAssets(hasBg = false) {
   if (!collab.room || !collab.ws || collab.ws.readyState !== 1) return;
-  if (hasBg && !P.bg) collabSend({ type: 'asset_req', kind: 'bg' });
   await ensureTextures(P);
+  if (hasBg && (!P.bg || !bgData(P.bg))) collabSend({ type: 'asset_req', kind: 'bg' });
   for (const t of P.textures || []) {
     if (!TEX.has(t.id)) collabSend({ type: 'asset_req', kind: 'tex', id: t.id });
   }
@@ -13880,7 +14599,7 @@ function collabConnect(url, opts = {}) {
       if (msg.kind === 'bg') {
         collab.applying = true;
         try {
-          P.bg = msg.data ? collabClone(msg.data) : null;
+          P.bg = msg.data ? bgAbsorb(collabClone(msg.data)) : null;
           collab.lastBgKey = collabBgKey(P.bg);
           collab.lastSnap = JSON.parse(JSON.stringify(P));
           refresh();
@@ -14174,9 +14893,126 @@ function templatesModal() {
   $('#modal').querySelectorAll('[data-tpl]').forEach(c => c.onclick = () => {
     const i = +c.dataset.tpl, t = TEMPLATES[i]; const np = newProject(); np.name = i ? (isEN() ? t.en : t.name).replace(/ \(.*/, '') : L('Yeni Proje', 'New Project');
     newTabSlot(); P = np; fi = 0; t.build(); loadProject(P); closeModal();
+    if (!tourSeen()) setTimeout(() => startTour(), 400); // #197: yeni tarayıcıda ilk şablondan sonra tur
   });
 }
 
+/* ---------- Metraj ve alışveriş listesi (#199) ----------
+   qtyLines(proj, floors) saf: odalar (alan, çevre, kaplama), kaplama başına zemin alanı, duvar tipi + kalınlığı başına
+   uzunluk ve brüt yüz alanı, oda başına net duvar yüzü (çevre × kat yüksekliği − o odaya bakan kapı / pencere),
+   kapı / pencere tip + ölçü başına adet, mobilya katalog ögesi başına adet. Her satırın kalıcı bir anahtarı var;
+   isteğe bağlı birim fiyatlar P.qty.prices[anahtar] içinde durur (geri alınabilir). CSV: UTF-8 + BOM (Excel'de
+   Türkçe karakterler düzgün açılır), Türkçede ; ayırıcı ve ondalık virgül. */
+const r2 = v => Math.round(v * 100) / 100;
+function qtyFinishName(kind, proj) {
+  if (!kind || kind === 'none') return L('Kaplamasız', 'No finish');
+  const id = typeof kind === 'string' && kind.startsWith('tex:') ? kind.slice(4) : null;
+  if (id) { const t = ((proj && proj.textures) || []).find(x => x.id === id); return t ? '🖼 ' + t.name : L('Özel doku', 'Custom texture'); }
+  return getFloors()[kind] || kind;
+}
+const qtyNearEdge = (p, pts, tol) => pts.some((a, i) => { const b = pts[(i + 1) % pts.length], L2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2; if (!L2) return false; const t = clamp(((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / L2, 0, 1); return Math.hypot(a.x + (b.x - a.x) * t - p.x, a.y + (b.y - a.y) * t - p.y) <= tol; });
+function qtyLines(proj, floors) {
+  const rooms = [], groups = { fin: new Map(), wall: new Map(), paint: new Map(), op: new Map(), furn: new Map() };
+  const add = (g, key, label, unit, q) => { const m = groups[g], e = m.get(key) || { key, label, unit, qty: 0 }; e.qty += q; m.set(key, e); };
+  for (const f of floors) {
+    const h = (f.wallH || proj.wallH || 270), walls = (f.walls || []).filter(w => !w.hidden), byId = new Map(walls.map(w => [w.id, w]));
+    const ops = (f.ops || []).filter(o => !o.hidden && byId.has(o.wall)).map(o => {
+      const w = byId.get(o.wall), len = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) || 1;
+      return { o, w, p: { x: w.a.x + (w.b.x - w.a.x) * o.d / len, y: w.a.y + (w.b.y - w.a.y) * o.d / len } };
+    });
+    for (const r of (f.rooms || []).filter(r => !r.hidden && r.pts && r.pts.length > 2)) {
+      const area = polyArea(r.pts) / 1e4, per = r.pts.reduce((s, p, i) => s + Math.hypot(r.pts[(i + 1) % r.pts.length].x - p.x, r.pts[(i + 1) % r.pts.length].y - p.y), 0) / 100;
+      const opA = ops.filter(x => qtyNearEdge(x.p, r.pts, x.w.t / 2 + 3)).reduce((s, x) => s + x.o.w * Math.min(x.o.h, h) / 1e4, 0);
+      const wallA = Math.max(0, per * h / 100 - opA), kind = r.floor || 'none';
+      rooms.push({ floor: f.name, name: r.name || L('Oda', 'Room'), area: r2(area), per: r2(per), finish: qtyFinishName(kind, proj), wall: r2(wallA) });
+      add('fin', 'fin:' + kind, qtyFinishName(kind, proj), 'm²', area);
+      add('paint', 'paint', L('Duvar yüzeyi (boya, net)', 'Wall surface (paint, net)'), 'm²', wallA);
+    }
+    for (const w of walls) {
+      const wt = w.wt || 'solid', len = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) / 100;
+      const name = { solid: L('Duvar', 'Wall'), curtain: L('Giydirme cephe', 'Curtain wall'), railing: L('Korkuluk', 'Railing'), fence: L('Çit', 'Fence') }[wt] || wt;
+      add('wall', `wall:${wt}:${Math.round(w.t)}`, `${name} ${Math.round(w.t)} cm`, 'm', len);
+    }
+    for (const { o } of ops) {
+      const def = OPENINGS.find(d => opType(d.id) === o.type) || null, nm = def ? itemName(def) : o.type;
+      add('op', `op:${o.type}:${Math.round(o.w)}x${Math.round(o.h)}`, `${nm} ${Math.round(o.w)} × ${Math.round(o.h)} cm`, L('adet', 'pcs'), 1);
+    }
+    for (const o of (f.furn || []).filter(o => !o.hidden)) {
+      const d = BYID[o.type], nm = o.label || (d ? itemName(d) : o.name || o.type);
+      add('furn', 'furn:' + (d ? o.type : 'x:' + nm), nm, L('adet', 'pcs'), 1);
+    }
+  }
+  const out = g => [...groups[g].values()].map(e => ({ ...e, qty: e.unit === 'm²' || e.unit === 'm' ? r2(e.qty) : e.qty })).sort((a, b) => a.label.localeCompare(b.label));
+  return { rooms, sections: [
+    { id: 'fin', title: L('Zemin kaplamaları', 'Floor finishes'), lines: out('fin') },
+    { id: 'paint', title: L('Duvar yüzeyleri', 'Wall surfaces'), lines: out('paint') },
+    { id: 'wall', title: L('Duvarlar', 'Walls'), lines: out('wall') },
+    { id: 'op', title: L('Kapı ve pencereler', 'Doors & windows'), lines: out('op') },
+    { id: 'furn', title: L('Mobilya ve donatı', 'Furniture & fittings'), lines: out('furn') },
+  ].filter(s => s.lines.length) };
+}
+const qtyPrice = (proj, key) => { const v = proj && proj.qty && proj.qty.prices && proj.qty.prices[key]; return Number.isFinite(+v) && +v > 0 ? +v : 0; };
+function cleanQty(P) {
+  const q = P.qty; if (!q || typeof q !== 'object') { delete P.qty; return; }
+  const prices = {};
+  for (const [k, v] of Object.entries(q.prices || {})) if (/^[^"<>`\u0000-\u001f]{1,80}$/u.test(k) && k !== '__proto__' && Number.isFinite(+v) && +v > 0) prices[k] = Math.round(+v * 100) / 100;
+  if (Object.keys(prices).length) P.qty = { prices }; else delete P.qty;
+}
+function qtyCsv(data, proj) {
+  const tr = !isEN(), sep = tr ? ';' : ',', num = v => (v === '' || v == null ? '' : tr ? String(v).replace('.', ',') : String(v));
+  const cell = v => { const s = String(v ?? ''); return /[";,\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const rows = [[L('Bölüm', 'Section'), L('Kalem', 'Item'), L('Miktar', 'Quantity'), L('Birim', 'Unit'), L('Birim fiyat', 'Unit price'), L('Tutar', 'Amount')]];
+  let total = 0;
+  for (const s of data.sections) for (const l of s.lines) { const p = qtyPrice(proj, l.key), a = r2(p * l.qty); total += a; rows.push([s.title, l.label, num(l.qty), l.unit, p ? num(p) : '', p ? num(a) : '']); }
+  rows.push(['', L('Toplam', 'Total'), '', '', '', num(r2(total))], []);
+  rows.push([L('Kat', 'Floor'), L('Oda', 'Room'), L('Alan (m²)', 'Area (m²)'), L('Çevre (m)', 'Perimeter (m)'), L('Kaplama', 'Finish'), L('Net duvar yüzü (m²)', 'Net wall surface (m²)')]);
+  for (const r of data.rooms) rows.push([r.floor, r.name, num(r.area), num(r.per), r.finish, num(r.wall)]);
+  return '﻿' + rows.map(r => r.map(cell).join(sep)).join('\r\n') + '\r\n';
+}
+function qtyData() { return qtyLines(P, ui.qtyAll ? P.floors.map(f => visFloor(f)) : [visFloor(F())]); }
+function qtyModal() {
+  const d = qtyData(), money = v => v ? v.toLocaleString(isEN() ? 'en-US' : 'tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+  let total = 0, h = `<h2>📋 ${L('Metraj ve alışveriş listesi', 'Quantities & shopping list')} <button class="btn sm" data-close>✕</button></h2>
+  <div class="row" style="gap:6px;margin:0 0 10px;flex-wrap:wrap"><button class="btn sm${ui.qtyAll ? '' : ' primary'}" data-qty-scope="floor">${L('Bu kat', 'This floor')}: ${esc(F().name)}</button><button class="btn sm${ui.qtyAll ? ' primary' : ''}" data-qty-scope="all">${L('Tüm proje', 'Whole project')}</button><span style="flex:1"></span><button class="btn sm primary" data-qty-csv>⬇ CSV</button></div>`;
+  if (!d.sections.length && !d.rooms.length) h += `<p class="muted">${L('Henüz ölçülecek bir şey yok: duvar, oda, kapı ya da mobilya ekleyin.', 'Nothing to measure yet: add walls, rooms, doors or furniture.')}</p>`;
+  h += `<div class="qty-wrap"><table class="qty"><thead><tr><th>${L('Kalem', 'Item')}</th><th class="n">${L('Miktar', 'Qty')}</th><th>${L('Birim', 'Unit')}</th><th class="n">${L('Birim fiyat', 'Unit price')}</th><th class="n">${L('Tutar', 'Amount')}</th></tr></thead><tbody>`;
+  for (const s of d.sections) {
+    h += `<tr class="qty-sec"><th colspan="5">${esc(s.title)}</th></tr>`;
+    for (const l of s.lines) {
+      const p = qtyPrice(P, l.key), a = r2(p * l.qty); total += a;
+      h += `<tr><td>${esc(l.label)}</td><td class="n">${l.qty}</td><td>${esc(l.unit)}</td><td class="n"><input type="number" min="0" step="0.01" data-qty-price="${esc(l.key)}" value="${p || ''}" placeholder="—" aria-label="${esc(L('Birim fiyat: ', 'Unit price: ') + l.label)}"></td><td class="n" data-qty-amt="${esc(l.key)}">${money(a)}</td></tr>`;
+    }
+  }
+  h += `</tbody><tfoot><tr><th colspan="4">${L('Toplam', 'Total')}</th><th class="n" id="qtyTotal">${money(r2(total)) || '—'}</th></tr></tfoot></table>`;
+  if (d.rooms.length) {
+    h += `<h4 style="margin:14px 0 6px">${L('Oda listesi', 'Room schedule')}</h4><table class="qty"><thead><tr>${ui.qtyAll ? `<th>${L('Kat', 'Floor')}</th>` : ''}<th>${L('Oda', 'Room')}</th><th class="n">${L('Alan', 'Area')} m²</th><th class="n">${L('Çevre', 'Perimeter')} m</th><th>${L('Kaplama', 'Finish')}</th><th class="n">${L('Net duvar', 'Net wall')} m²</th></tr></thead><tbody>`;
+    for (const r of d.rooms) h += `<tr>${ui.qtyAll ? `<td>${esc(r.floor)}</td>` : ''}<td>${esc(r.name)}</td><td class="n">${r.area}</td><td class="n">${r.per}</td><td>${esc(r.finish)}</td><td class="n">${r.wall}</td></tr>`;
+    h += `</tbody></table>`;
+  }
+  h += `</div><p class="muted" style="margin:10px 0 0">${L('Birim fiyatlar projeye kaydedilir. Duvar yüzeyi: oda çevresi × kat yüksekliği − odaya bakan kapı ve pencereler.', 'Unit prices are saved with the project. Wall surface: room perimeter × storey height − the doors and windows facing the room.')}</p>`;
+  openModal(h, 'qty');
+}
+$('#modal').addEventListener('click', e => {
+  if (ui.modal !== 'qty') return;
+  const s = e.target.closest('[data-qty-scope]'); if (s) { ui.qtyAll = s.dataset.qtyScope === 'all'; qtyModal(); return; }
+  if (e.target.closest('[data-qty-csv]')) { download(fname('csv').replace(/\.csv$/, '') + '-' + L('metraj', 'quantities') + '.csv', new Blob([qtyCsv(qtyData(), P)], { type: 'text/csv;charset=utf-8' })); }
+});
+$('#modal').addEventListener('input', e => {
+  if (ui.modal !== 'qty') return;
+  const t = e.target.closest('[data-qty-price]'); if (!t) return;
+  // canlı: tutar ve toplam yenilenir; geçmişe yazmak change'te (tek geri alma adımı)
+  const v = parseFloat(String(t.value).replace(',', '.')), k = t.dataset.qtyPrice;
+  P.qty = P.qty || { prices: {} }; P.qty.prices = P.qty.prices || {};
+  if (v > 0) P.qty.prices[k] = v; else delete P.qty.prices[k];
+  const d = qtyData(), money = x => x ? x.toLocaleString(isEN() ? 'en-US' : 'tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+  let tot = 0;
+  for (const s of d.sections) for (const l of s.lines) { const a = r2(qtyPrice(P, l.key) * l.qty); tot += a; const c = [...document.querySelectorAll('#modal [data-qty-amt]')].find(x => x.dataset.qtyAmt === l.key); if (c) c.textContent = money(a); }
+  const T = $('#qtyTotal'); if (T) T.textContent = money(r2(tot)) || '—';
+});
+$('#modal').addEventListener('change', e => {
+  if (ui.modal !== 'qty' || !e.target.closest('[data-qty-price]')) return;
+  cleanQty(P); commit();
+});
 /* ---------- Dışa aktarma ---------- */
 function exportSvg() {
   if (ui.viewElev) {
@@ -14191,9 +15027,10 @@ function exportSvg() {
   try { LS = layerStrings(f, false); defs = defsSvg(); }
   finally { view.z = z0; ui.exporting = false; }
   const date = new Date().toLocaleDateString(isEN() ? 'en-US' : 'tr-TR');
+  const sbS = scaleBarSpec();
   const sb = `<g transform="translate(${x0 + 30} ${y0 + h - 70})" font-family="Segoe UI,sans-serif"><rect width="${Math.min(w - 60, 560)}" height="56" fill="none" stroke="#334155" stroke-width="2"/>
     <text x="12" y="24" font-size="22" font-weight="700" fill="#0f172a">${esc(P.name)} – ${esc(f.name)}</text><text x="12" y="46" font-size="14" fill="#475569">${date}  •  ${L('Toplam oda alanı', 'Total room area')}: ${fmtArea(f.rooms.reduce((s, r) => s + polyArea(r.pts), 0))}</text></g>
-    <g transform="translate(${x0 + w - 230} ${y0 + h - 40})" font-family="Segoe UI,sans-serif"><path d="M0 0H200M0 -6V6M100 -6V6M200 -6V6" stroke="#0f172a" stroke-width="2" fill="none"/><text x="0" y="-12" font-size="13">0</text><text x="100" y="-12" font-size="13" text-anchor="middle">1 m</text><text x="200" y="-12" font-size="13" text-anchor="end">2 m</text></g>`;
+    <g transform="translate(${x0 + w - 230} ${y0 + h - 40})" font-family="Segoe UI,sans-serif"><path d="M0 0H${sbS.len}M0 -6V6M${sbS.len / 2} -6V6M${sbS.len} -6V6" stroke="#0f172a" stroke-width="2" fill="none"/><text x="0" y="-12" font-size="13">0</text><text x="${sbS.len / 2}" y="-12" font-size="13" text-anchor="middle">${sbS.mid}</text><text x="${sbS.len}" y="-12" font-size="13" text-anchor="end">${sbS.end}</text></g>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x0} ${y0} ${w} ${h}" width="${w}" height="${h}"><defs>${defs}</defs><rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="#fff"/>${P.bg && layersVis.bg ? bgSvg(false) : ''}${LS.rooms}${LS.walls}${LS.ops}${LS.furn}${LS.roomLabels}${LS.dims}${LS.texts}${LS.sketches}${sb}</svg>`;
   return { svg, w, h };
 }
@@ -14283,13 +15120,13 @@ function archPrims(spec) {
           return {
             s0: Math.min(q0.s, q1.s), s1: Math.max(q0.s, q1.s),
             z0: WE + (+o.sill || 0), z1: WE + (+o.sill || 0) + (+o.h || 0),
-            type: o.type, id: o.id, kind: 'op', wallId: w.id, floorIdx: i,
+            type: o.type, id: o.id, kind: 'op', wallId: w.pid || w.id, floorIdx: i,
             color: o.color || null, frameCol: o.frameCol || null, mat: o.mat || null, flip: o.flip || 0, open: o.open || 0
           };
         }).filter(hh => hh.s1 - hh.s0 > 1);
         const top = wallTopOn(w) ? wallTopPts(w, t0 * L, t1 * L, 2).map(([d, hh]) => ({ s: pr(at(d / L)).s, z: WE + hh })) : null; // eğimli üst (#96, #176, #178)
-        const baseMeta = { id: w.id, kind: 'wall', floorIdx: i, color: faceCol, t0, t1, sA: A.s, sB: B.s, uProj, L };
-        face(corners, WE, WE + H, rail ? { ...baseMeta, rail, rs: railStyle(w) } : { ...baseMeta, holes, curtain, mulN, top });
+        const baseMeta = { id: w.pid || w.id, po: w.po || 0, kind: 'wall', floorIdx: i, color: faceCol, t0, t1, sA: A.s, sB: B.s, uProj, L };
+        face(corners, WE, WE + H, rail ? { ...baseMeta, rail, rs: railStyle(w) } : { ...baseMeta, holes, curtain, mulN, mulF: w.arc && curtain ? mulPos(w, 1) : null, top });
       };
       if (cut && (A.d > 0) !== (B.d > 0)) {
         const t = A.d / (A.d - B.d), sc = A.s + (B.s - A.s) * t, sin = Math.abs(B.d - A.d) / L, cw = w.t / Math.max(sin, 0.2);
@@ -14297,8 +15134,8 @@ function archPrims(spec) {
         const [c0, c1] = inCrop(sc - cw / 2, sc + cw / 2);
         if (c1 - c0 > 0.2) {
           const bands = op ? [[WE, WE + (+op.sill || 0)], [WE + (+op.sill || 0) + (+op.h || 0), WE + Hc]] : [[WE, WE + Hc]];
-          for (const [z0, z1] of bands) if (z1 - z0 > 0.5) prims.push({ t: 'cut', s0: c0, s1: c1, z0, z1, depth: 0, curtain, id: w.id, kind: 'wall', floorIdx: i, color: faceCol, uProj });
-          if (op && op.type === 'window') prims.push({ t: 'glass', s0: c0, s1: c1, z0: WE + (+op.sill || 0), z1: WE + (+op.sill || 0) + (+op.h || 0), depth: 0, id: op.id, kind: 'op', wallId: w.id, floorIdx: i });
+          for (const [z0, z1] of bands) if (z1 - z0 > 0.5) prims.push({ t: 'cut', s0: c0, s1: c1, z0, z1, depth: 0, curtain, id: w.pid || w.id, kind: 'wall', floorIdx: i, color: faceCol, uProj });
+          if (op && op.type === 'window') prims.push({ t: 'glass', s0: c0, s1: c1, z0: WE + (+op.sill || 0), z1: WE + (+op.sill || 0) + (+op.h || 0), depth: 0, id: op.id, kind: 'op', wallId: w.pid || w.id, floorIdx: i });
         }
         if (A.d > 0) faceOf(0, t); else faceOf(t, 1);
       } else if (!cut || (A.d > 0 && B.d > 0)) faceOf(0, 1);
@@ -14437,7 +15274,7 @@ function archSvg(spec, title, opts) {
     } else {
       out += `<rect${wAttr} x="${X(p.s0)}" y="${Y(p.z1)}" width="${p.s1 - p.s0}" height="${p.z1 - p.z0}" fill="${fill}"${fop} stroke="${st}" stroke-width="1.6"/>`;
     }
-    if (p.curtain && p.mulN > 1) {
+    if (p.curtain && (p.mulF ? p.mulF.length : p.mulN > 1)) {
       let md = ''; const span = p.s1 - p.s0;
       const topAt = s => {
         if (!p.top || !p.top.length) return p.z1;
@@ -14446,7 +15283,8 @@ function archSvg(spec, title, opts) {
         for (let i = 1; i < tp.length; i++) if (s <= tp[i].s) { const a = tp[i - 1], b = tp[i]; return b.s > a.s ? a.z + (b.z - a.z) * (s - a.s) / (b.s - a.s) : b.z; }
         return tp[tp.length - 1].z;
       };
-      for (let m = 1; m < p.mulN; m++) { const ms = p.s0 + span * m / p.mulN, mx = X(ms); md += `M${mx} ${Y(topAt(ms))}V${Y(p.z0)}`; }
+      const msL = p.mulF ? p.mulF.map(f => p.sA + (p.sB - p.sA) * f) : Array.from({ length: p.mulN - 1 }, (_, m) => p.s0 + span * (m + 1) / p.mulN);
+      for (const ms of msL) { const mx = X(ms); md += `M${mx} ${Y(topAt(ms))}V${Y(p.z0)}`; }
       if (md) out += `<path d="${md}" stroke="${st}" stroke-width="${mode === 'cad' ? 0.9 : 1.1}" fill="none" pointer-events="none"/>`;
     }
     for (const hh of p.holes || []) {
@@ -14483,8 +15321,8 @@ function archSvg(spec, title, opts) {
   const ty = h - 30;
   out += `<text x="${LM}" y="${ty}" font-size="24" font-weight="700" fill="${C.text}" font-family="Segoe UI,sans-serif">${esc(title)}</text>`;
   out += `<text x="${LM}" y="${ty + 22}" font-size="14" fill="${C.sub}" font-family="Segoe UI,sans-serif">${esc(P.name)} · ${mode.toUpperCase()} · ${new Date().toLocaleDateString()}</text>`;
-  const bx = w - M / 2 - 200;
-  out += `<g font-family="Segoe UI,sans-serif" font-size="13" fill="${C.text}"><rect x="${bx}" y="${ty - 10}" width="100" height="8" fill="${st}"/><rect x="${bx + 100}" y="${ty - 10}" width="100" height="8" fill="#fff" stroke="${st}"/><text x="${bx}" y="${ty + 12}">0</text><text x="${bx + 100}" y="${ty + 12}" text-anchor="middle">1 m</text><text x="${bx + 200}" y="${ty + 12}" text-anchor="end">2 m</text></g>`;
+  const sbS = scaleBarSpec(), bx = w - M / 2 - 200;
+  out += `<g font-family="Segoe UI,sans-serif" font-size="13" fill="${C.text}"><rect x="${bx}" y="${ty - 10}" width="${sbS.len / 2}" height="8" fill="${st}"/><rect x="${bx + sbS.len / 2}" y="${ty - 10}" width="${sbS.len / 2}" height="8" fill="#fff" stroke="${st}"/><text x="${bx}" y="${ty + 12}">0</text><text x="${bx + sbS.len / 2}" y="${ty + 12}" text-anchor="middle">${sbS.mid}</text><text x="${bx + sbS.len}" y="${ty + 12}" text-anchor="end">${sbS.end}</text></g>`;
   return { svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><defs>${defs}</defs><rect width="${w}" height="${h}" fill="#fff"/>${out}</svg>`, w, h, s0, s1, zLow, zTop, prims, levels, mode };
 }
 function elevationSpec(dir) {
@@ -14509,7 +15347,7 @@ function archApplyDrag(spec, drag, ds, dz, snapStep = 0) {
   const dsSn = sn(ds), dzSn = sn(dz);
   if (kind === 'op') {
     const w = drag.wall; if (!w) return '';
-    const L = dist(w.a, w.b) || 1, WH = +w.h || drag.floorH || 270, uProj = drag.uProj || 0;
+    const L = wallLen(w) || 1, WH = +w.h || drag.floorH || 270, uProj = drag.uProj || 0;
     o.d = orig.d; o.w = orig.w; o.h = orig.h; o.sill = orig.sill;
     if (!handle) {
       if (Math.abs(uProj) > 0.15) {
@@ -14638,7 +15476,7 @@ function archPlaceOpAt(spec, prims, s, z, def, snapStep = 0) {
     ? clamp(sn(z - p.z0 - def.h / 2), 0, Math.max(0, H - def.h))
     : (z - p.z0 < def.h * 0.85 ? 0 : clamp(sn(z - p.z0), 0, Math.max(0, H - def.h)));
   const sC = p.sA + spanS * (d / L), halfS = (def.w / 2) * Math.abs(p.uProj);
-  return { floorIdx: p.floorIdx, wallId: p.id, d, sill, s0: sC - halfS, s1: sC + halfS, z0: p.z0 + sill, z1: p.z0 + sill + def.h };
+  return { floorIdx: p.floorIdx, wallId: p.id, d: d + (p.po || 0), sill, s0: sC - halfS, s1: sC + halfS, z0: p.z0 + sill, z1: p.z0 + sill + def.h };
 }
 function archHandleSvg(meta, selIds, zScale) {
   if (!meta || !selIds || !selIds.length) return '';
@@ -15182,10 +16020,29 @@ function archModal(key) {
   archRedraw(fresh || tabChanged);
   archRenderProps();
 }
+/* SVG → PNG (#189): tarayıcı tuvali çok büyük bulursa toBlob null döner (önceden download(null) hata atıyordu).
+   O zaman ölçek yarıya indirilip yeniden denenir; en küçükte de olmazsa SVG / PDF önerilir. */
+const PNG_MAX_PX = 6e7;
 function svgToPng(svg, w, h, name) {
-  const sc = Math.min(3, 3200 / Math.max(w, h)) * (w < 1200 ? 1.5 : 1), img = new Image();
-  img.onload = () => { const c = document.createElement('canvas'); c.width = Math.round(w * sc); c.height = Math.round(h * sc); const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height); c.toBlob(b => download(name, b)); };
-  img.onerror = () => toast(L('PNG oluşturulamadı', 'Failed to generate PNG'));
+  const fail = () => toast(L('PNG oluşturulamadı: çizim çok büyük olabilir. SVG veya PDF (Yazdır) deneyin.', 'Could not create the PNG: the drawing may be too large. Try SVG or PDF (Print).'));
+  const img = new Image();
+  img.onload = () => {
+    let sc = Math.min(3, 3200 / Math.max(w, h)) * (w < 1200 ? 1.5 : 1);
+    while (sc > 0.25 && w * h * sc * sc > PNG_MAX_PX) sc /= 2;
+    const tryAt = s => {
+      let c = null;
+      try {
+        c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+        const x = c.getContext('2d'); if (!x) throw new Error('no 2d context');
+        x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height);
+      } catch (e) { c = null; }
+      const retry = () => (s > 0.3 ? tryAt(s / 2) : fail());
+      if (!c) return retry();
+      c.toBlob(b => { if (b) download(name, b); else retry(); });
+    };
+    tryAt(sc);
+  };
+  img.onerror = fail;
   img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
 $('#modal').addEventListener('click', e => {
@@ -15295,10 +16152,11 @@ function axisSvg(ax, live) {
   return s + '</g>';
 }
 // ⊞ Aks ızgarası: iki soru (dikey ve yatay aralıklar), ızgara mevcut çizimin sol üst köşesinden (yoksa 0, 0) başlar
-function axisGridPrompt() {
-  const xs = parseAxisSpacing(prompt(L('Dikey akslar (1, 2, 3…) arası mesafeler, cm (ör. 500, 500, 400 ya da 3x500):', 'Spacing between vertical axes (1, 2, 3…), cm (e.g. 500, 500, 400 or 3x500):'), '3x500'));
+async function axisGridPrompt() {
+  const bad = v => (parseAxisSpacing(v) ? '' : L('Örnek: 500, 500, 400 ya da 3x500', 'Example: 500, 500, 400 or 3x500'));
+  const xs = parseAxisSpacing(await askText(L('Dikey akslar (1, 2, 3…)', 'Vertical axes (1, 2, 3…)'), '3x500', { msg: L('Aks arası mesafeler, cm (ör. 500, 500, 400 ya da 3x500)', 'Spacing between the axes, cm (e.g. 500, 500, 400 or 3x500)'), validate: bad }));
   if (!xs) return;
-  const ys = parseAxisSpacing(prompt(L('Yatay akslar (A, B, C…) arası mesafeler, cm:', 'Spacing between horizontal axes (A, B, C…), cm:'), '2x600'));
+  const ys = parseAxisSpacing(await askText(L('Yatay akslar (A, B, C…)', 'Horizontal axes (A, B, C…)'), '2x600', { msg: L('Aks arası mesafeler, cm', 'Spacing between the axes, cm'), validate: bad }));
   if (!ys) return;
   const f = F(), b = contentBounds && contentBounds(), o = b && isFinite(b.x0) && (f.walls.length || f.rooms.length) ? { x: rnd(b.x0, P.grid), y: rnd(b.y0, P.grid) } : { x: 0, y: 0 };
   const made = axisGrid(f, o, xs, ys); sel = made.map(x => x.id); commit(); setTool('select'); refresh();
@@ -15317,11 +16175,8 @@ function nextSectionName() {
   return 'S' + (used.size + 1);
 }
 function exportPng() {
-  const { svg, w, h } = exportSvg(), sc = Math.min(3, 3200 / Math.max(w, h)) * (w < 1200 ? 1.5 : 1);
-  const img = new Image();
-  img.onload = () => { const c = document.createElement('canvas'); c.width = Math.round(w * sc); c.height = Math.round(h * sc); const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height); c.toBlob(b => download(fname('png'), b)); };
-  img.onerror = () => toast(L('PNG oluşturulamadı', 'Failed to generate PNG'));
-  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  const { svg, w, h } = exportSvg();
+  svgToPng(svg, w, h, fname('png'));
 }
 // Yazdır düğmesi doğrudan yazdırmaz: önce çıktı ayarları (#35)
 function exportPrint() { openPlotDialog(); }
@@ -16189,11 +17044,72 @@ function studioHtml(preview) {
       <span>⛰ ${L('Güneş yüksekliği', 'Sun altitude')}</span><input type="range" min="${SUN_ALT_MIN}" max="85" step="1" value="${st.alt}" data-rs="alt"><b>${st.alt}°</b>
     </div>
     <div class="row" style="gap:6px;margin-bottom:8px">${Object.entries(SUN_PRESETS).map(([k, v]) => `<button class="btn sm" data-rs-sun="${k}">${L(...v[0])}</button>`).join('')}</div>
+    ${siteSunHtml()}
     <div class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 8px;align-items:center" title="${L('Gerçekçi ve Maket stillerinde ışık dengesi', 'Light balance for the Realistic and Maquette styles')}"><span>${L('Atmosfer', 'Atmosphere')}</span>${Object.entries(RENDER_MOODS).map(([k, v]) => `<button class="btn sm${k === (st.mood || 'day') ? ' primary' : ''}" data-rs-mood="${k}">${L(...v)}</button>`).join('')}</div>
     ${st.alt >= 6 ? `<div class="row" style="gap:8px;margin:0 0 8px"><label class="chk-pill"><input type="checkbox" data-rs="dayLights" ${ui.dayLights ? 'checked' : ''}> 💡 ${L('Gündüz ışıkları açık', 'Daytime lights on')}</label></div>` : ''}
     <div class="row" style="gap:10px;margin-bottom:10px;flex-wrap:wrap"><label>${L('Çözünürlük', 'Resolution')} <select data-rs="res">${opt(RENDER_RES, st.res)}</select></label><label>${L('Biçim', 'Format')} <select data-rs="format"><option value="png" ${st.format === 'png' ? 'selected' : ''}>PNG</option><option value="jpeg" ${st.format === 'jpeg' ? 'selected' : ''}>JPEG</option></select></label></div>
     <div class="rs-prev" style="background:${studioBackdrop() === 'sky' ? '#d6e8f5' : '#fff'};border-radius:8px;min-height:120px;display:flex;align-items:center;justify-content:center;overflow:hidden">${preview ? `<img src="${preview}" style="max-width:100%;max-height:40vh;display:block">` : `<span class="muted" style="color:#64748b">${L('Önizleme için 👁 Önizle', 'Press 👁 Preview to see it')}</span>`}</div>
     <div class="row" style="gap:8px;margin-top:10px"><button class="btn sm" data-rs-go="preview">👁 ${L('Önizle', 'Preview')}</button><button class="btn sm primary" data-rs-go="render">🎬 ${L('Render al ve indir', 'Render & download')}</button></div>`;
+}
+/* Konum, tarih ve saate göre güneş (#205). Konum + plan kuzeyi projede (P.site, SITE-SUN bloğu), tarih ve saat
+   görünüm durumu (ui.studio.date / hour). Saat ya da tarih değişince güneş yönü / yüksekliği hesaplanır ve kaydırıcılar
+   da güncellenir (elle sürükleyince elle değer geçerli olur). ▶ gölge çalışması saati gün doğumundan batımına oynatır. */
+const pad2 = n => String(n).padStart(2, '0');
+function todayStr() { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+const fmtHour = h => { const m = Math.round(((+h % 24) + 24) % 24 * 60); return pad2(Math.floor(m / 60) % 24) + ':' + pad2(m % 60); };
+function siteSunHtml() {
+  const s = siteP(P), st = ui.studio, city = Object.keys(SITE_CITIES).find(k => SITE_CITIES[k][2] === s.lat && SITE_CITIES[k][3] === s.lon) || '';
+  const num = (k, v, step, w) => `<input type="number" data-site="${k}" value="${v}" step="${step}" style="width:${w}px">`;
+  const hr = st.hour != null ? st.hour : 12;
+  return `<details class="rs-site" ${st.siteOpen ? 'open' : ''} style="margin:0 0 10px"><summary>📍 ${L('Konum, tarih ve saat', 'Location, date and time')}${s.has ? ` <span class="muted">· ${esc(city ? L(SITE_CITIES[city][0], SITE_CITIES[city][1]) : s.lat + '°, ' + s.lon + '°')}</span>` : ''}</summary>
+    <div class="row" style="flex-wrap:wrap;gap:6px 10px;margin:8px 0;align-items:center">
+      <label>${L('Şehir', 'City')} <select data-site="city"><option value="">${s.has ? L('Özel', 'Custom') : '—'}</option>${Object.entries(SITE_CITIES).map(([k, v]) => `<option value="${k}" ${k === city ? 'selected' : ''}>${L(v[0], v[1])}</option>`).join('')}</select></label>
+      <label>${L('Enlem', 'Lat')} ${num('lat', s.lat, 0.01, 74)}</label><label>${L('Boylam', 'Lon')} ${num('lon', s.lon, 0.01, 78)}</label>
+      <label title="${L('UTC farkı, saat (yaz saati hesaba katılmaz)', 'UTC offset in hours (standard time, no daylight saving)')}">UTC ${num('tz', s.tz, 0.5, 52)}</label>
+      <label title="${L('Gerçek kuzeyin plan yukarısından saat yönünde açısı', 'True north, degrees clockwise from the top of the plan')}">${L('Kuzey', 'North')} ${num('north', s.north, 1, 58)}°</label>
+    </div>
+    <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center">
+      <span>📅 ${L('Tarih', 'Date')}</span><input type="date" data-rs="date" value="${esc(st.date || todayStr())}"><span></span>
+      <span>🕒 ${L('Saat', 'Time')}</span><input type="range" min="0" max="24" step="0.25" value="${hr}" data-rs="hour"><b>${fmtHour(hr)}</b>
+    </div>
+    <div class="row" style="gap:8px;margin-top:6px;align-items:center"><button class="btn sm" data-rs-anim>${studioAnimLabel()}</button><span class="muted" id="rsSunInfo"></span></div>
+  </details>`;
+}
+const studioAnimLabel = () => (ui.studio.anim ? '⏸ ' + L('Durdur', 'Stop') : '▶ ' + L('Gölge çalışması (gün boyu)', 'Shadow study (whole day)'));
+// saat / tarih / konumdan güneşi kur; kaydırıcıları ve etiketleri eşitle. final = bırakıldı (tam kurulum + gece kipi)
+function studioSunFromTime(final) {
+  const st = ui.studio;
+  if (!st.date) st.date = todayStr();
+  if (st.hour == null) st.hour = 12;
+  const p = siteSun(siteP(P), st.date, st.hour); if (!p) return;
+  st.az = Math.round(p.az); st.alt = Math.round(clamp(p.alt, SUN_ALT_MIN, 85) * 10) / 10;
+  for (const k of ['az', 'alt']) { const el = document.querySelector(`#modal [data-rs="${k}"]`); if (el) { el.value = st[k]; if (el.nextElementSibling) el.nextElementSibling.textContent = Math.round(st[k]) + '°'; } }
+  const info = $('#rsSunInfo'); if (info) info.textContent = p.alt < 0 ? L('Güneş ufkun altında', 'Sun below the horizon') : `☀ ${Math.round(p.trueAz)}° · ${Math.round(p.alt)}°`;
+  if (!final) { liveSunSoon(); return; }
+  if (st.alt < 1) { st.mood = 'night'; ensureFixPool(); } else if (st.mood === 'night') st.mood = 'day';
+  syncNightUI(); liveSunDone(); assignFixLights();
+}
+// ▶ gölge çalışması: 12 sn'de gün doğumundan batımına; pencere kapanınca ya da yeniden basınca durur
+function studioSunAnim(on) {
+  const st = ui.studio; st.anim = !!on;
+  const b = document.querySelector('#modal [data-rs-anim]'); if (b) b.textContent = studioAnimLabel();
+  if (!st.anim) { studioSunFromTime(true); return; }
+  if (!ui.live3d) setLive3D(true);
+  const s = siteP(P), d = st.date || (st.date = todayStr());
+  let h0 = 0, h1 = 24;
+  for (let h = 0; h <= 24; h += 0.25) if (siteSun(s, d, h).alt > -2) { h0 = h; break; }
+  for (let h = 24; h >= 0; h -= 0.25) if (siteSun(s, d, h).alt > -2) { h1 = h; break; }
+  if (h1 <= h0) { h0 = 0; h1 = 24; } // kutup gecesi: tüm gün
+  let last = performance.now();
+  if (!(st.hour >= h0 && st.hour < h1)) st.hour = h0;
+  const step = now => {
+    if (!st.anim || ui.modal !== 'studio' || !ui.view3d) { st.anim = false; if (ui.view3d) applyLive3D(); return; }
+    st.hour += (now - last) / 1000 * (h1 - h0) / 12; last = now;
+    if (st.hour > h1) st.hour = h0;
+    const el = document.querySelector('#modal [data-rs="hour"]'); if (el) { el.value = st.hour; if (el.nextElementSibling) el.nextElementSibling.textContent = fmtHour(st.hour); }
+    studioSunFromTime(false); requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 const studioOpts = () => ({ mood: ui.studio.mood || 'day', style: ui.studio.style, backdrop: studioBackdrop(), sun: { az: ui.studio.az, alt: ui.studio.alt }, longSide: RENDER_RES[ui.studio.res][2] || 0, format: ui.studio.format });
 /* ---------- Doku penceresi: oluştur / yükle / AI'dan iste ----------
@@ -16272,6 +17188,7 @@ function txLoadFile(file) {
       openTexDialog('up');
     } catch (er) { toast(L('Doku eklenemedi: ', 'Could not add texture: ') + er.message); }
   };
+  r.onerror = () => toast(L('Dosya okunamadı: ', 'Could not read the file: ') + file.name);
   r.readAsDataURL(file);
 }
 function txPickFile() {
@@ -16349,12 +17266,33 @@ function openRenderStudio(preview) {
 $('#modal').addEventListener('input', e => {
   if (ui.modal !== 'studio') return;
   const t = e.target.closest('[data-rs]'); if (!t || t.type === 'checkbox') return;
-  const k = t.dataset.rs; ui.studio[k] = k === 'az' || k === 'alt' ? +t.value : t.value;
+  const k = t.dataset.rs;
+  if (k === 'hour' || k === 'date') { // #205
+    ui.studio[k] = k === 'hour' ? +t.value : t.value;
+    if (k === 'hour' && t.nextElementSibling) t.nextElementSibling.textContent = fmtHour(t.value);
+    if (ui.studio.anim) studioSunAnim(false); else studioSunFromTime(false);
+    return;
+  }
+  ui.studio[k] = k === 'az' || k === 'alt' ? +t.value : t.value;
   if (t.nextElementSibling && (k === 'az' || k === 'alt')) t.nextElementSibling.textContent = t.value + '°';
-  if (k === 'az' || k === 'alt') { syncLightsUI(); applyLive3D(); } // canlı gerçekçi görünüm aynı güneşi kullanır (#81)
+  if (k === 'az' || k === 'alt') { syncLightsUI(); liveSunSoon(); } // canlı gerçekçi görünüm aynı güneşi kullanır (#81); sürüklerken hafif önizleme (#191)
 });
 $('#modal').addEventListener('change', e => {
   if (ui.modal !== 'studio') return;
+  const sun = e.target.closest('[data-rs="az"], [data-rs="alt"]'); if (sun) { liveSunDone(); return; } // bırakınca tam kurulum (#191)
+  if (e.target.closest('[data-rs="hour"], [data-rs="date"]')) { studioSunFromTime(true); return; }
+  const sf = e.target.closest('[data-site]');
+  if (sf) { // konum alanları projeye yazılır (tek commit), güneş yeni konuma göre kurulur (#205)
+    const s = Object.assign({}, P.site), k = sf.dataset.site, cur = siteP(P);
+    if (k === 'city') { const cc = SITE_CITIES[sf.value]; if (!cc) return; s.lat = cc[2]; s.lon = cc[3]; s.tz = cc[4]; }
+    else {
+      const v = sf.value === '' ? null : +String(sf.value).replace(',', '.');
+      if ((k === 'lat' || k === 'lon') && !cur.has) { s.lat = cur.lat; s.lon = cur.lon; s.tz = cur.tz; }
+      if (v === null || Number.isFinite(v)) s[k] = v;
+    }
+    P.site = s; cleanSite(P); ui.studio.siteOpen = true; commit();
+    openRenderStudio(); studioSunFromTime(true); return;
+  }
   const t = e.target.closest('[data-rs="dayLights"]'); if (!t) return;
   setDayLights(t.checked);
 });
@@ -16363,6 +17301,8 @@ $('#modal').addEventListener('click', async e => {
   const s = e.target.closest('[data-rs-style]'); if (s) { ui.studio.style = s.dataset.rsStyle; openRenderStudio(); return; }
   const bg = e.target.closest('[data-rs-bg]'); if (bg) { ui.studio.backdrop = bg.dataset.rsBg; openRenderStudio(); return; }
   const p = e.target.closest('[data-rs-sun]'); if (p) { const v = SUN_PRESETS[p.dataset.rsSun]; ui.studio.az = v[1]; ui.studio.alt = v[2]; if (v[2] < 1) { ui.studio.mood = 'night'; ensureFixPool(); } else if (ui.studio.mood === 'night') ui.studio.mood = 'day'; syncNightUI(); applyLive3D(); assignFixLights(); openRenderStudio(); return; }
+  if (e.target.closest('[data-rs-anim]')) { studioSunAnim(!ui.studio.anim); return; } // #205
+  const sm = e.target.closest('.rs-site > summary'); if (sm) { ui.studio.siteOpen = !sm.parentElement.open; return; }
   const md = e.target.closest('[data-rs-mood]');
   if (md) { // sıcak akşam: alçak güneş + sıcak iç dolgu; gün ışığına dönünce güneş yeniden yükselir
     const st = ui.studio; st.mood = md.dataset.rsMood;
@@ -17037,8 +17977,8 @@ const pbRedraw = () => {
 function fsClose() {
   fs3DDispose(); document.getElementById('fstudio')?.remove(); document.body.classList.remove('fs-open');
 }
-function fsCancel() {
-  if (fsDirty() && !confirm(L('Uygulanmamış değişiklikler silinsin mi?', 'Discard the changes you have not applied?'))) return;
+async function fsCancel() {
+  if (fsDirty() && (await askConfirm(L('Uygulanmamış değişiklikler silinsin mi?', 'Discard the changes you have not applied?'), { ok: L('Değişiklikleri at', 'Discard'), danger: true })) !== true) return;
   closeModal();
 }
 // taslağı plana yazar: var olan öğe güncellenir, yeni mobilya görünümün ortasına yerleşir; toLib = kütüphaneye de ekle
@@ -17153,11 +18093,16 @@ function fsWire(root) {
     if (t.id === 'fsSnap') { ui.pb.snap = t.checked; return; }
     if (t.id === 'fsTpl') {
       const k = t.value; t.value = ''; if (!k) return;
-      if (ui.pb.d.parts.length && !confirm(L('Şablon, şu anki parçaların yerini alsın mı? (Geri al ile dönebilirsiniz)', 'Replace the current parts with this template? (Undo brings them back)'))) return;
-      const tp = FURN_TEMPLATES[k];
-      ui.pb.d = tp ? { w: tp.w, d: tp.d, h: tp.h, color: tp.color, parts: tp.parts(tp.w, tp.d, tp.h).map(cleanPart) } : { w: ui.pb.d.w, d: ui.pb.d.d, h: ui.pb.d.h, color: ui.pb.d.color, parts: [] };
-      if (tp && !ui.pb.id && (!ui.pb.name || ui.pb.name === ui.pb.name0)) { ui.pb.name = ui.pb.name0 = L(tp.tr, tp.en); const n = root.querySelector('#fsName'); if (n) n.value = ui.pb.name; }
-      ui.pb.sel = ui.pb.d.parts.length ? 0 : -1; fsPush(); pbRedraw(); return;
+      const use = () => {
+        if (!ui.pb) return;
+        const tp = FURN_TEMPLATES[k];
+        ui.pb.d = tp ? { w: tp.w, d: tp.d, h: tp.h, color: tp.color, parts: tp.parts(tp.w, tp.d, tp.h).map(cleanPart) } : { w: ui.pb.d.w, d: ui.pb.d.d, h: ui.pb.d.h, color: ui.pb.d.color, parts: [] };
+        if (tp && !ui.pb.id && (!ui.pb.name || ui.pb.name === ui.pb.name0)) { ui.pb.name = ui.pb.name0 = L(tp.tr, tp.en); const n = root.querySelector('#fsName'); if (n) n.value = ui.pb.name; }
+        ui.pb.sel = ui.pb.d.parts.length ? 0 : -1; fsPush(); pbRedraw();
+      };
+      if (!ui.pb.d.parts.length) { use(); return; }
+      askConfirm(L('Şablon, şu anki parçaların yerini alsın mı? (Geri al ile dönebilirsiniz)', 'Replace the current parts with this template? (Undo brings them back)'), { ok: L('Değiştir', 'Replace') }).then(ok => { if (ok === true) use(); });
+      return;
     }
     const D = ui.pb.d, p = D.parts[ui.pb.sel];
     if (t.dataset.pfall) {
@@ -17538,6 +18483,7 @@ function show3D(on) {
     T3.run = false;
     fp3DPreview(); render(); // 3B araç önizlemesi gizlenir; 2B tuval 3B'de değişen planı ve ölçeği yeniden çizer
   }
+  if (on && ui.view3d) tourCheck(); // #197
 }
 function init3D() {
   if (T3) { resize3D(); return; }
@@ -17643,7 +18589,7 @@ function init3D() {
     if (d3.op) {
       const fo = findAnyFloor(d3.id), w = fo && fo.floor.walls.find(x => x.id === d3.wallId); if (!w || d3.t0 == null) return;
       const p = opDragHit(ray3(e).ray, w, d3.elev); if (!p) return;
-      const L = wLen(w); let d = d3.d0 + p.t - d3.t0;
+      const L = wallLen(w); let d = d3.d0 + p.t - d3.t0;
       if (ui.snap && !e.shiftKey) d = rnd(d, 5);
       fo.o.d = clamp(d, Math.min(fo.o.w / 2, L / 2), Math.max(L - fo.o.w / 2, L / 2));
       schedBuild3D(); return;
@@ -18495,6 +19441,12 @@ function contactTex(radial) {
   g.fillStyle = gd; g.fillRect(0, 0, 64, 64);
   return new THREE.CanvasTexture(c);
 }
+// güneşe bağlı ışık değerleri (#87, #122): realLook ve kaydırıcı önizlemesi (liveSunPreview, #191) aynı formülü kullanır
+function realSunLight(o, sk, sinA, eve, nt, moonC) {
+  if (o.isHemisphereLight) { o.color.copy(sk.hor).lerp(new THREE.Color(0xffffff), 0.5).lerp(new THREE.Color(0x5a6b9a), nt); o.groundColor.setHex(eve ? 0xffb877 : 0xb9a58c).multiplyScalar(1 - 0.8 * nt); o.intensity = (eve ? 0.5 : 0.2 + 0.12 * sinA) * (1 - 0.72 * nt); }
+  else if (o.isDirectionalLight && o.castShadow) { o.intensity = (0.75 + 0.75 * sinA) * (eve ? 0.75 : 1) * (1 - nt) + 0.16 * nt; if (nt) o.color.lerp(moonC, nt); } // gece: ay ışığı (#122)
+  else if (o.isDirectionalLight) { o.color.setHex(eve ? 0xffc58a : 0xffe9cf); o.intensity = (eve ? 0.5 : 0.22) * (1 - 0.85 * nt); }
+}
 function realLook(S, sv, opts = {}) {
   const alt = Math.asin(clamp(sv.y, -1, 1)) * 180 / Math.PI, sinA = Math.sin(clamp(alt, 2, 89) * Math.PI / 180);
   const swaps = [], made = [], texs = [], decals = [], C = { floorTex: {}, texs }, cache = new Map(), furnCls = new Map();
@@ -18545,9 +19497,7 @@ function realLook(S, sv, opts = {}) {
   S.traverse(o => {
     if (!o.isLight || o.userData.fix) return; // armatür havuzu kendi değerlerini taşır; geri yüklemek açılıp kapanan lambayı eski haline döndürürdü
     lit.push({ l: o, i: o.intensity, c: o.color.clone(), g: o.groundColor ? o.groundColor.clone() : null });
-    if (o.isHemisphereLight) { o.color.copy(sk.hor).lerp(new THREE.Color(0xffffff), 0.5).lerp(new THREE.Color(0x5a6b9a), nt); o.groundColor.setHex(eve ? 0xffb877 : 0xb9a58c).multiplyScalar(1 - 0.8 * nt); o.intensity = (eve ? 0.5 : 0.2 + 0.12 * sinA) * (1 - 0.72 * nt); }
-    else if (o.isDirectionalLight && o.castShadow) { o.intensity = (0.75 + 0.75 * sinA) * (eve ? 0.75 : 1) * (1 - nt) + 0.16 * nt; if (nt) o.color.lerp(moonC, nt); } // gece: ay ışığı (#122)
-    else if (o.isDirectionalLight) { o.color.setHex(eve ? 0xffc58a : 0xffe9cf); o.intensity = (eve ? 0.5 : 0.22) * (1 - 0.85 * nt); }
+    realSunLight(o, sk, sinA, eve, nt, moonC);
   });
   const oldEnv = S.environment; S.environment = opts.mats !== false ? realEnv(sv) : oldEnv;
   // gece (#122): pozlama hafif artar; pencere camları içeriden sıcak parlar (dışarıdan bakınca ev yaşıyor görünür)
@@ -18627,6 +19577,30 @@ function applyLive3D() {
   T3.live = { sky: sky.mesh, fog: sky.fog, mats: [ground, slab], real };
   markScene3D(); req3D();
 }
+/* Güneş kaydırıcısı sürüklenirken (#191) applyLive3D her adımda gerçekçi malzemeleri, gökyüzünü ve zemini baştan
+   kuruyordu. Sürükleme sırasında yalnız güneş / gölge ışığı, ışık renkleri ve gökyüzü uniform'ları güncellenir (kare
+   başına en fazla bir kez); bırakınca (change) applyLive3D bir kez çalışır ve yansıma haritası dahil son görüntüyü kurar. */
+let liveSunRaf = 0;
+function liveSunPreview() {
+  if (!T3 || !T3.scene || !ui.live3d || !T3.live || !T3.live.sky) { applyLive3D(); return; }
+  const S = T3.scene, st = ui.studio, sv = sunVector(st.az, st.alt), lv = litVector(st.az, st.alt);
+  const alt = Math.asin(clamp(sv.y, -1, 1)) * 180 / Math.PI, sinA = Math.sin(clamp(alt, 2, 89) * Math.PI / 180);
+  const sk = skyColors(alt), nt = nightOf(alt), eve = st.mood === 'evening', moonC = new THREE.Color(0xa9bfff);
+  for (const l of shadowLights(S)) {
+    const tg = l.target.position, d0 = l.position.distanceTo(tg);
+    l.position.set(tg.x + lv.x * d0, tg.y + lv.y * d0, tg.z + lv.z * d0);
+    l.color.setHex(st.alt < 20 && st.alt >= 1 ? 0xffc58a : 0xfff6e8);
+  }
+  S.traverse(o => { if (o.isLight && !o.userData.fix) realSunLight(o, sk, sinA, eve, nt, moonC); });
+  const u = T3.live.sky.material.uniforms;
+  u.zen.value.copy(sk.zen); u.hor.value.copy(sk.hor); u.gnd.value.copy(sk.gnd); u.glow.value.copy(sk.glow);
+  u.sun.value.set(sv.x, sv.y, sv.z).normalize(); u.moon.value.set(-sv.x, 0.57, -sv.z).normalize(); u.night.value = Math.pow(nt, 1.5);
+  if (T3.live.fog) T3.live.fog.color.copy(sk.hor);
+  if (S.background && S.background.isColor) S.background.copy(sk.hor);
+  markShadows(); req3D();
+}
+function liveSunSoon() { if (!liveSunRaf) liveSunRaf = requestAnimationFrame(() => { liveSunRaf = 0; liveSunPreview(); }); }
+function liveSunDone() { if (liveSunRaf) { cancelAnimationFrame(liveSunRaf); liveSunRaf = 0; } applyLive3D(); }
 function syncLiveUI() { const b = $('#b3dLive'); if (b) b.classList.toggle('on', !!ui.live3d); syncNightUI(); }
 function setLive3D(on) {
   ui.live3d = !!on; syncLiveUI();
@@ -20215,7 +21189,7 @@ function build3D(keepCam = false) {
     const belMemC = {}, belMem = c => belMemC[c] || (belMemC[c] = (m => (extraMats.push(m), m))(new THREE.MeshPhongMaterial({ color: c, transparent: true, opacity: BEL_MEM_OP, shininess: 40, specular: 0x444444, depthWrite: false, side: THREE.DoubleSide }))); // #183: yarı saydam körük yanı
     f.walls.forEach(w => {
       const L = wLen(w), H = w.h, we = elev + wallElev(w), g = new THREE.Group(); bellows3D(S, w, we, H, mat, box, det, lineMat, lt, belMem);
-      { const fan = accFan(f, w); if (fan) { accFan3D(S, w, fan, we, H, mat, det, lineMat, lt); return; } } /* akordiyon yelpaze dolgusu */ g.userData = { wallId: w.id }; g.position.set((w.a.x + w.b.x) / 2, we, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
+      { const fan = accFan(f, w); if (fan) { accFan3D(S, w, fan, we, H, mat, det, lineMat, lt); return; } } /* akordiyon yelpaze dolgusu */ g.userData = { wallId: w.pid || w.id }; g.position.set((w.a.x + w.b.x) / 2, we, (w.a.y + w.b.y) / 2); g.rotation.y = -wAng(w); S.add(g);
       const hasPos = Array.isArray(w.angles) && w.angles.length > 0;
       const wCol = w.color || (hasPos ? (lt ? 0xdbeafe : 0xfde68a) : (lt ? 0xfaf8f5 : 0xe2e8f0));
       const curt = w.wt === 'curtain', rail = 5, frameCol = lt ? 0x8fa3b8 : 0x7c8a9c;
@@ -20365,9 +21339,7 @@ function build3D(keepCam = false) {
       }
       if (curt) {
         // dikmeler: açıklıkların üstüne binmesin, eğimli duvar üstünde profile göre kısalır (#176)
-        const nM = curtainBays(w); // modül / ara dikme adedi (#71)
-        for (let i = 0; i <= nM; i++) {
-          const x = (i * L) / nM;
+        for (const x of mulPos(w, L, true)) { // modül / ara dikme (#71), eğri duvarda tüm yay boyunca (#202)
           if (ops.some(o => o.d - o.w / 2 < x + 4 && o.d + o.w / 2 > x - 4)) continue;
           const hx = sloped ? Math.min(wallTopAt(w, x), wallTopAt(w, clamp(x - 3, 0, L)), wallTopAt(w, clamp(x + 3, 0, L))) : H;
           const mh = hx - 2 * rail;
@@ -20407,13 +21379,13 @@ function build3D(keepCam = false) {
           else { tri([b.x, jb, b.y], [b.x, zb, b.y], [a.x, za, a.y]); tri([b.x, jb, b.y], [a.x, za, a.y], [a.x, jb, a.y]); }
         }
         const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.computeVertexNormals();
-        const m = new THREE.Mesh(geo, mat(jCol)); m.position.y = elev; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
+        const m = new THREE.Mesh(geo, mat(jCol)); m.position.y = elev; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.pid || w0.id };
         S.add(m); continue;
       }
       const geo = new THREE.ExtrudeGeometry(new THREE.Shape(j.poly.map(p => new THREE.Vector2(p.x, p.y))), { depth: H, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
       const m = new THREE.Mesh(geo, mat(jCol));
-      m.position.y = elev + jb + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.id };
+      m.position.y = elev + jb + H; m.castShadow = m.receiveShadow = true; m.userData = { wallId: w0.pid || w0.id };
       S.add(m);
     }
     f.furn.forEach((o, fi3) => {
@@ -20805,7 +21777,9 @@ function applyLangUI() {
   $('#bRedo').title = L('Yinele (Ctrl+Y)', 'Redo (Ctrl+Y)');
   $('#bPrint').textContent = L('🖨 PDF / Yazdır', '🖨 PDF / Print');
   $('#bDl').textContent = L('⬇ İndir ▾', '⬇ Download ▾'); $('#bDl').title = L('İndir: görüntü (PNG, SVG, PDF) ya da dosya (JSON, DXF, IFC, Revit)', 'Download: an image (PNG, SVG, PDF) or a file (JSON, DXF, IFC, Revit)');
+  $('#zIn').title = L('Yakınlaştır', 'Zoom in'); $('#zOut').title = L('Uzaklaştır', 'Zoom out'); $('#zFit').title = L('Sığdır (0)', 'Zoom to fit (0)');
   $('#dlHImg').textContent = L('Görüntü', 'Image'); $('#dlHFile').textContent = L('Dosya', 'File');
+  $('#bQty').textContent = '📋 ' + L('Metraj / CSV', 'Quantities / CSV'); $('#bQty').title = L('Oda alanları, duvarlar, kapı / pencere ve mobilya adetleri; birim fiyat ve CSV', 'Room areas, walls, door / window and furniture counts; unit prices and CSV');
   $('#b2d').textContent = L('2B', '2D');
   $('#b2d').title = L('2B Katı Görünüm', '2D Solid View');
   if ($('#bCad')) {
@@ -20853,6 +21827,7 @@ function applyLangUI() {
     gtOpts[3].textContent = L('∅ Kapalı (Serbest)', '∅ Off (Free)');
   }
   $('#lblGridStep').textContent = L('Adım', 'Step');
+  $('#lblUnits').textContent = L('Birim', 'Units'); $('#sUnits').title = L('Uzunluk birimi (bu tarayıcı için): metre / santimetre ya da fit / inç', 'Length units (this browser): metres / centimetres or feet / inches');
   const gsCustom = $('#sGrid').querySelector('option[value="custom"]');
   if (gsCustom) gsCustom.textContent = L('Özel...', 'Custom...');
   $('#iGridCustom').title = L('Özel ızgara adımı (cm)', 'Custom grid step (cm)');
@@ -20911,6 +21886,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#dlMen
 window.addEventListener('resize', () => dlMenuOpen(false));
 $('#bJson').onclick = () => downloadJson(P);
 $('#bDxf').onclick = () => downloadDxf();
+$('#bQty').onclick = () => qtyModal(); // #199
 $('#bRevit').onclick = () => exportBim('revit');
 $('#bIfc').onclick = () => exportBim('ifc');
 $('#bOpen').onclick = () => $('#fileOpen').click(); $('#bHelp').onclick = helpModal; $('#bAi').onclick = () => aiModal();
@@ -20955,6 +21931,7 @@ $('#sBoxSel').onchange = e => { ui.boxSel = e.target.value; };
 $('#cAngle').onchange = e => { ui.angle = e.target.checked; };
 $('#cDims').onchange = e => { ui.dims = e.target.checked; render(); };
 if ($('#cOutline')) $('#cOutline').onchange = e => setOutline(e.target.checked);
+$('#sUnits').onchange = e => setUnits(e.target.value); // #194
 $('#sGrid').onchange = e => {
   if (e.target.value === 'custom') {
     $('#lblGridCustom').style.display = 'inline-flex';
@@ -20993,6 +21970,7 @@ function openPlanFile(file) {
     toast(L('DXF okunuyor…', 'Reading DXF…'));
     const rb = new FileReader();
     rb.onload = () => setTimeout(() => { try { importDxfText(dxfDecode(new Uint8Array(rb.result)), file.name); } catch (er) { toast(L('DXF açılamadı: ', 'Could not open DXF: ') + dxfErr(er)); } }, 30);
+    rb.onerror = () => toast(L('Dosya okunamadı: ', 'Could not read the file: ') + file.name);
     rb.readAsArrayBuffer(file); return;
   }
   const r = new FileReader();
@@ -21003,6 +21981,7 @@ function openPlanFile(file) {
       freshIdIfTaken(o); newTabSlot(); loadProject(o, L('Dosya açıldı', 'File opened')); closeModal();
     } catch (er) { toast(L('Dosya açılamadı: ', 'Could not open file: ') + er.message); }
   }, 30);
+  r.onerror = () => toast(L('Dosya okunamadı: ', 'Could not read the file: ') + file.name);
   r.readAsText(file);
 }
 function importIfcText(text, fileName = '') {
@@ -21036,10 +22015,9 @@ function importDxfText(text, fileName = '', units = null, same = false) {
     + (stats.truncated ? L(` · ${stats.truncated} nesne sınırı aştı`, ` · ${stats.truncated} object(s) over the limit`) : '')
     + (stats.skipped ? L(` · ${stats.skipped} öğe atlandı`, ` · ${stats.skipped} item(s) skipped`) : '');
   toast(msg, stats.unitsGuessed || units ? { label: L('Birim…', 'Units…'), fn: () => {
-    const u = prompt(L('Çizim birimi (mm, cm, m, in, ft):', 'Drawing unit (mm, cm, m, in, ft):'), stats.units);
-    const v = u && u.trim().toLowerCase(); if (!v) return;
-    if (!DXF_UNIT_CHOICES.includes(v)) { toast(L('Bilinmeyen birim', 'Unknown unit')); return; }
-    importDxfText(text, fileName, v, true);
+    askText(L('Çizim birimi', 'Drawing unit'), stats.units, { msg: 'mm, cm, m, in, ft', list: DXF_UNIT_CHOICES, validate: u => (DXF_UNIT_CHOICES.includes(String(u).trim().toLowerCase()) ? '' : L('Bilinmeyen birim', 'Unknown unit')) }).then(u => {
+      const v = u && u.trim().toLowerCase(); if (v) importDxfText(text, fileName, v, true);
+    });
   } } : null);
   return stats;
 }
@@ -21066,7 +22044,12 @@ $('#stage').addEventListener('dragover', e => { if ([...(e.dataTransfer.types ||
 $('#stage').addEventListener('drop', e => { const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (!f) return; e.preventDefault(); openPlanFile(f); });
 $('#fileBg').onchange = e => {
   const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-  r.onload = () => { const im = new Image(); im.onload = () => { const w = 1200; P.bg = { id: 'bg', src: r.result, x: 0, y: 0, w, h: Math.round(w * im.height / im.width), op: 0.5, lock: false }; sel = ['bg']; setTool('select'); commit(); fit(); refresh(); toast(L('Görsel eklendi – sürükleyerek taşıyabilir, köşe ve kenarlarından boyutlandırabilir veya sağ panelden konumunu ayarlayabilirsiniz', 'Image added – drag on canvas to move, drag corners or edges to resize, or adjust position in the right panel')); }; im.src = r.result; };
+  r.onerror = () => toast(L('Görsel okunamadı: ', 'Could not read the image: ') + file.name);
+  r.onload = async () => {
+    // #187: uzun kenar BG_MAX'a indirilir, baytlar IndexedDB'ye gider; P.bg yalnız künye taşır
+    let img; try { img = await downscaleImage(r.result, BG_MAX, file.type === 'image/png' ? 'image/png' : 'image/jpeg'); } catch (er) { toast(L('Görsel okunamadı: ', 'Could not read the image: ') + file.name); return; }
+    const w = 1200; P.bg = bgAbsorb({ id: 'bg', src: img.data, x: 0, y: 0, w, h: Math.round(w * img.h / img.w), op: 0.5, lock: false }); sel = ['bg']; setTool('select'); commit(); fit(); refresh(); toast(L('Görsel eklendi – sürükleyerek taşıyabilir, köşe ve kenarlarından boyutlandırabilir veya sağ panelden konumunu ayarlayabilirsiniz', 'Image added – drag on canvas to move, drag corners or edges to resize, or adjust position in the right panel'));
+  };
   r.readAsDataURL(file); e.target.value = '';
 };
 $('#tools').addEventListener('click', e => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); });
@@ -21074,6 +22057,30 @@ new ResizeObserver(() => { if (P && !ui.view3d) render(); if (T3 && ui.view3d) r
 window.addEventListener('beforeunload', () => { if (P) { dbPut('state', P, 'auto').catch(() => {}); dbPut('state', tabsState(), 'tabs').catch(() => {}); } });
 if (localStorage.getItem('fp_theme') === 'light') document.documentElement.dataset.theme = 'light';
 
+/* ---------- Uygulama olarak yükleme ve çevrimdışı (#203) ----------
+   sw.js yalnız http(s) üzerinde kaydedilir (file:// açılışında hiç denenmez), ?sw=off kapatır. Yeni bir sürüm
+   yayınlanınca tarayıcı yeni çalışanı eskisinin yanına kurar; sayfa bunu bir kez söyler ve "Yenile" düğmesi yeni
+   çalışanı devreye alıp sayfayı yeniden yükler. Çizim sürerken zorla yenilenmez. */
+const SW_OFF = /[?&]sw=off\b/.test(location.search);
+function swBoot() {
+  if (SW_OFF || !/^https?:$/.test(location.protocol) || !('serviceWorker' in navigator)) return;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (reloading) location.reload(); });
+  const offer = w => {
+    if (!w || !navigator.serviceWorker.controller) return; // ilk kurulum: güncelleme değil
+    toast(L('🔄 Yeni sürüm hazır', '🔄 A new version is ready'), { label: L('Yenile', 'Reload'), ms: 30000, fn: () => { reloading = true; autosave(); w.postMessage('skip-waiting'); } });
+  };
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    if (reg.waiting) offer(reg.waiting);
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing; if (!w) return;
+      w.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); });
+    });
+    // açık kalan sekme de yeni sürümü görsün: saatte bir ve sekmeye dönüldüğünde kontrol
+    setInterval(() => reg.update().catch(() => { }), 3600e3);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => { }); });
+  }).catch(() => { });
+}
 /* ---------- 3B ön ısıtma (#106) ----------
    İlk 3B girişinin bedeli (WebGL bağlamı, sahne, shader derleme) proje açıldıktan sonra boşta geçen zamana dağıtılır:
    her adım ayrı bir requestIdleCallback'te çalışır, böylece 2B tuval arada yanıt vermeye devam eder.
@@ -21104,8 +22111,8 @@ function prewarm3D() {
 applyLangUI();
 (async () => {
   await migrateLegacyStorage();
-  let saved = null;
-  try { saved = await dbGet('state', 'auto'); } catch (e) { }
+  let saved = null, dbOk = true;
+  try { saved = await dbGet('state', 'auto'); } catch (e) { dbOk = false; }
   if (!saved) { try { saved = JSON.parse(localStorage.getItem('fp_auto') || 'null'); } catch (e) { } }
   if (saved && saved.floors) { loadProject(saved); translateDefaultNames(); refresh(); }
   else { P = newProject(); loadProject(P); templatesModal(); }
@@ -21116,4 +22123,7 @@ applyLangUI();
   presenceBoot();          // canlı kullanıcı sayısı göstergesi (ayarlıysa)
   collabBoot();            // canlı birlikte düzenleme (oda bağlantısı varsa)
   prewarm3D();             // 3B'yi boşta hazırla: ilk 3B düğmesi bekletmesin (#106)
+  swBoot();                // uygulama olarak yükleme + çevrimdışı (#203)
+  // Depolama engelliyse uygulama bellekte çalışır; bunu bir kez söyle (#188)
+  if (!dbOk && !localStorage.ok) setTimeout(() => toast(L('Tarayıcı depolaması engelli: çalışmanız bu sekmede kalır, kaydedilmez. Saklamak için ⬇ JSON indirin.', 'Browser storage is blocked: your work stays in this tab and is not saved. Use ⬇ JSON to keep a copy.')), 900);
 })();

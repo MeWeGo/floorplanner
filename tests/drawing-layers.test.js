@@ -5,9 +5,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
+const { read, markerBlock, fnSrcOf, constLineOf } = require('./helpers/repo');
 
 const src = read('app.js');
+const CURVE = markerBlock(src, 'CURVED-WALL'); // eğri duvar yardımcıları (#202): visFloor / mkOp / layerStrings çağırır
 const html = read('index.html');
 
 const fnSrc = name => fnSrcOf(src, name);
@@ -20,6 +21,7 @@ function makeEnv(initialP) {
   return new Function('initialP', `
     const KINDS = { walls:'wall', ops:'op', furn:'furn', rooms:'room', slabs:'slab', voids:'void', sections:'section', dims:'dim', texts:'text', sketches:'sketch' };
     const L = (tr, en) => en;
+    ${CURVE}
     let uidCounter = 0;
     const uid = () => 'u' + (++uidCounter);
     const newFloor = name => {
@@ -57,7 +59,7 @@ function makeEnv(initialP) {
     ${fnSrc('cleanAcc')}
     ${fnSrc('cleanBel')}
     const cleanWallFaces = () => {}; // wall faces: wall-faces.test.js
-    const cleanLw = () => {}, cleanGround = () => {}; // line weights / ground: their own tests
+    const cleanLw = () => {}, cleanGround = () => {}, cleanSite = () => {}, cleanQty = () => {}; // line weights / ground: their own tests
     ${fnSrc('normalizeProject')}
     return {
       get P() { return P; },

@@ -4,9 +4,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, markerBlock, fnSrcOf } = require('./helpers/repo');
 
 const src = read('app.js');
+const CURVE = markerBlock(src, 'CURVED-WALL'); // eğri duvar yardımcıları (#202): visFloor / mkOp / layerStrings çağırır
 const mcp = read('mcp/server.js');
 const fnSrc = name => fnSrcOf(src, name);
 const lineSrc = name => {
@@ -22,6 +23,7 @@ const api = new Function(`
   const L = (tr, en) => en;
   const itemName = d => d.en || d.name;
   const wLen = w => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
+  ${CURVE}
   const BYID = { sofa3: { id: 'sofa3', icon: 'S', k: 'sofa' }, stairs: { id: 'stairs', icon: 'T', k: 'stairs' } };
   const ui = {};
   const CAT_PARTS = {}, CAT_ELEV = {}, LIGHT_DEFS = {}, PARTS_V = 1, cleanParts = o => o; // multi-part catalogue items (furniture-parts.test.js covers them)
@@ -35,6 +37,8 @@ const api = new Function(`
   ${lineSrc('clonePlain')}
   ${fnSrc('presetFromObj')}
   ${fnSrc('presetDef')}
+  const isImp = () => false;
+  ${fnSrc('libSz')}
   ${fnSrc('presetSize')}
   ui.opLast = {}; ui.opSrc = {};
   const buildLib = () => {};

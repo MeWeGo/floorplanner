@@ -44,10 +44,14 @@ jobs:
       # legacy-index.html (an old prototype search engines could list next to
       # the real app), AGENTS.md, tests/ and mcp/. If app.js ever loads another
       # local file, add it here — the smoke test runs from the repo, not _site.
+      # The PWA files (#203) ship next to the app. sw.js gets the commit id as its build id: a new
+      # deploy changes the file, so browsers install the new worker and offer "Reload".
       - name: Stage the static site
         run: |
           mkdir _site
-          cp index.html app.js style.css privacy.html _site/
+          cp index.html app.js style.css privacy.html manifest.webmanifest icon.svg icon-192.png icon-512.png icon-maskable-512.png _site/
+          sed "s/__BUILD__/${GITHUB_SHA::12}/" sw.js > _site/sw.js
+          grep -q "fp-' + BUILD" _site/sw.js && ! grep -q "__BUILD__'" _site/sw.js
 
       - name: Upload the static site
         uses: actions/upload-pages-artifact@v3

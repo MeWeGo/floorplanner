@@ -4,9 +4,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, constLineOf, mcpClient } = require('./helpers/repo');
+const { read, markerBlock, fnSrcOf, constLineOf, mcpClient } = require('./helpers/repo');
 
 const src = read('app.js');
+const CURVE = markerBlock(src, 'CURVED-WALL'); // eğri duvar yardımcıları (#202): visFloor / mkOp / layerStrings çağırır
 
 function loadEnv(initialP) {
   let P = initialP;
@@ -27,6 +28,7 @@ function loadEnv(initialP) {
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const wLen = w => dist(w.a, w.b);
+    ${CURVE}
     const fmtLen = v => Math.round(v) + ' cm';
     const itemName = o => o.name || '';
     const snapToGrid = p => ({ x: Math.round(p.x / 10) * 10, y: Math.round(p.y / 10) * 10 });
@@ -38,7 +40,7 @@ function loadEnv(initialP) {
     const LAYER_Z_MAX = 500, FLOOR_LVL_MAX = 50000, VOID_DEP_MAX = 1000, GROUP_MAX = 40;
     const VOID_TYPES = { stair: 1 };
     const cleanGroup = g => String(g || '').trim().slice(0, GROUP_MAX);
-    const cleanLw = () => {}, cleanGround = () => {}, cleanAcc = () => {}, cleanBel = () => {}, cleanWallFaces = () => {}, cleanWallTop = v => v;
+    const cleanLw = () => {}, cleanGround = () => {}, cleanSite = () => {}, cleanQty = () => {}, cleanAcc = () => {}, cleanBel = () => {}, cleanWallFaces = () => {}, cleanWallTop = v => v;
     const cleanSurfHp = () => {}, cleanZone = () => {}, cleanParts = () => {}, cleanRoof = () => {}, cleanLight = () => {};
     let ui = { snap: true, angle: false, view3d: false };
     let view = { x: 0, y: 0, z: 1 };
@@ -132,6 +134,7 @@ function makeSandbox(initialP) {
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const wLen = w => dist(w.a, w.b);
+    ${CURVE}
     const fmtLen = v => Math.round(v) + ' cm';
     const itemName = o => o.name || '';
     const segProj = (p, a, b) => {
@@ -148,7 +151,7 @@ function makeSandbox(initialP) {
     const LAYER_Z_MAX = 500, FLOOR_LVL_MAX = 50000, VOID_DEP_MAX = 1000, GROUP_MAX = 40, SURF_HP_MAX = 64;
     const VOID_TYPES = { stair: 1 };
     const cleanGroup = g => String(g || '').trim().slice(0, GROUP_MAX);
-    const cleanLw = () => {}, cleanGround = () => {}, cleanAcc = () => {}, cleanBel = () => {}, cleanWallFaces = () => {}, cleanWallTop = v => v;
+    const cleanLw = () => {}, cleanGround = () => {}, cleanSite = () => {}, cleanQty = () => {}, cleanAcc = () => {}, cleanBel = () => {}, cleanWallFaces = () => {}, cleanWallTop = v => v;
     const cleanSurfHp = () => {}, cleanZone = () => {}, cleanParts = () => {}, cleanRoof = () => {}, cleanLight = () => {};
     const newFloor = name => ({ id: uid(), name: name || 'Floor', walls: [], ops: [], furn: [], rooms: [], slabs: [], voids: [], sections: [], axes: [], dims: [], texts: [], sketches: [], drafts: [] });
     const F = () => P.floors[fi];

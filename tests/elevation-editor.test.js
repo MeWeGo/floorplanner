@@ -5,7 +5,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, wallTopSrc, constLineOf } = require('./helpers/repo');
+const { read, fnSrcOf, wallTopSrc, constLineOf, markerBlock } = require('./helpers/repo');
 
 const src = read('app.js');
 const css = read('style.css');
@@ -25,6 +25,7 @@ function makeEnv(floors = []) {
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
     const wLen = w => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
+    ${markerBlock(src, 'CURVED-WALL')}
     const visFloor = f => f;
     const groundP = () => ({ plinth: 20 }), groundFloorIdx = () => 0;
     const terrainObj = () => null, terrainZ = () => -20, groundCuts = () => [];
@@ -57,6 +58,7 @@ function makeEnv(floors = []) {
     ${fnSrc('sectionFrame')}
     ${fnSrc('archPrims')}
     ${fnSrc('railElevSvg')}
+    const scaleBarSpec = () => ({ len: 200, mid: '1 m', end: '2 m' });
     ${fnSrc('archSvg')}
     ${fnSrc('archSnapVal')}
     ${fnSrc('archApplyDrag')}

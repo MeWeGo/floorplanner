@@ -17,6 +17,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#11161e">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -47,6 +51,7 @@
         <button class="btn" id="bDxf" title="DXF olarak dışa aktar (AutoCAD, BricsCAD, LibreCAD)">📐 DXF</button>
         <button class="btn" id="bIfc" title="IFC olarak dışa aktar">🏗 IFC</button>
         <button class="btn" id="bRevit" title="Revit için dışa aktar">🏛 Revit</button>
+        <button class="btn" id="bQty" title="Metraj ve alışveriş listesi">📋 Metraj / CSV</button>
       </div>
     </div>
     <div class="sep"></div>
@@ -134,8 +139,8 @@
       <div id="hud"></div>
       <div id="shapeBar"></div>
       <div id="zoomctl">
-        <button class="btn" id="zIn">+</button>
-        <button class="btn" id="zOut">−</button>
+        <button class="btn" id="zIn" title="Yakınlaştır">+</button>
+        <button class="btn" id="zOut" title="Uzaklaştır">−</button>
         <button class="btn" id="zFit" title="Sığdır (0)">⤢</button>
       </div>
       <button class="btn" id="bInspect" type="button" title="Özellikler">ℹ️</button>
@@ -180,7 +185,17 @@
           <option value="100">1 m (100 cm)</option>
           <option value="300">3 m (300 cm)</option>
           <option value="500">5 m (500 cm)</option>
+          <option value="2.54" hidden>1 in</option>
+          <option value="15.24" hidden>6 in</option>
+          <option value="30.48" hidden>1 ft</option>
+          <option value="91.44" hidden>3 ft</option>
           <option value="custom">Özel...</option>
+        </select>
+      </label>
+      <label class="ctl-field"><span id="lblUnits">Birim</span>
+        <select id="sUnits">
+          <option value="metric">m / cm</option>
+          <option value="imperial">ft / in</option>
         </select>
       </label>
       <label id="lblGridCustom" class="ctl-field" style="display:none">

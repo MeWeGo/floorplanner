@@ -483,6 +483,16 @@ main {
   background: var(--bg);
 }
 
+/* ölçüye göre süzme (#204) */
+#libSize { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+#libSize .ls-head { display: flex; gap: 4px; }
+#libSize .ls-head .chip:first-child { flex: 1; text-align: left; }
+#libSize [hidden] { display: none; }
+#libSize .ls-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+#libSize .ls-row label { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); }
+#libSize .ls-row input { width: 100%; min-width: 0; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 4px 5px; font-size: 12px; color: var(--text); }
+#libSize .ls-row input:focus { border-color: var(--accent); outline: none; }
+
 #cats {
   display: flex;
   flex-wrap: wrap;
@@ -885,6 +895,13 @@ main {
   margin: 0 3px;
 }
 
+/* kart + kendi düğmeleri yan yana (#195: düğme içinde düğme olmaz) */
+.item-c { position: relative; display: flex; min-width: 0; }
+.item-c > .item { flex: 1; min-width: 0; }
+.item-c .delsh, .item-c .renpre { background: none; border: 0; cursor: pointer; font: inherit; }
+.item-c .delsh:focus-visible, .item-c .renpre:focus-visible { opacity: 1; }
+
+.item-c .delsh,
 .item .delsh {
   position: absolute;
   top: 3px;
@@ -903,6 +920,7 @@ main {
 }
 
 /* ön ayar kartı: ✎ yeniden adlandır, ✕'in solunda (#42) */
+.item-c .renpre,
 .item .renpre {
   position: absolute;
   top: 3px;
@@ -915,11 +933,13 @@ main {
   opacity: 0.55;
 }
 
+.item-c .renpre:hover,
 .item .renpre:hover {
   opacity: 1;
   background: var(--panel);
 }
 
+.item-c .delsh:hover,
 .item .delsh:hover {
   opacity: 1;
   background: var(--panel);
@@ -948,6 +968,12 @@ main {
 }
 
 /* Sentence-case structured section headers (no generic ALL-CAPS tracking) */
+/* kısa panel (#198): sabit eylemler + katlanır "Diğer ayarlar" */
+#props .acts-pin { padding-bottom: 6px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+#props .props-adv { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; }
+#props .props-adv > summary { cursor: pointer; padding: 6px 2px; font-weight: 600; font-size: 12px; color: var(--muted); list-style-position: inside; }
+#props .props-adv > summary:hover, #props .props-adv[open] > summary { color: var(--text); }
+
 #props h4 {
   margin: 16px 0 8px;
   padding-left: 8px;
@@ -1305,6 +1331,30 @@ footer input#iGridCustom {
   z-index: 100;
 }
 
+/* ilk açılış turu (#197): modal değil, çizim sürerken açık kalır */
+#tourBox { position: fixed; z-index: 96; width: min(300px, calc(100vw - 32px)); background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-left: 3px solid var(--accent); border-radius: 6px; padding: 12px 14px; box-shadow: 0 14px 34px rgba(0, 0, 0, 0.35); }
+#tourBox h4 { margin: 2px 0 6px; font-size: 14px; }
+#tourBox p { margin: 0 0 10px; color: var(--muted); line-height: 1.45; font-size: 12.5px; }
+#tourBox .tour-n { font-size: 11px; color: var(--accent); font-weight: 600; letter-spacing: .02em; }
+#tourBox .tour-btns { display: flex; justify-content: space-between; gap: 8px; }
+#tourRing { position: fixed; z-index: 95; pointer-events: none; border: 2px solid var(--accent); border-radius: 8px; box-shadow: 0 0 0 4px var(--accent-soft); animation: tourPulse 1.6s ease-in-out infinite; }
+@keyframes tourPulse { 50% { box-shadow: 0 0 0 9px var(--accent-soft); } }
+@media (prefers-reduced-motion: reduce) { #tourRing { animation: none; } }
+
+/* uygulama içi soru penceresi (#196): her katmanın (pencere, mobilya stüdyosu) üstünde */
+#askbg { position: fixed; inset: 0; z-index: 200; display: none; align-items: center; justify-content: center; background: rgba(5, 8, 12, 0.55); }
+#ask { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-top: 3px solid var(--accent); border-radius: 6px; width: min(440px, calc(100vw - 32px)); padding: 16px 18px; box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45); }
+#ask h3 { margin: 0 0 8px; font-size: 15px; }
+#ask p { margin: 0 0 10px; color: var(--muted); white-space: pre-line; line-height: 1.45; }
+#ask input { width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 7px 9px; color: var(--text); font: inherit; }
+#ask input:focus { border-color: var(--accent); outline: none; }
+#ask input[aria-invalid="true"] { border-color: var(--danger); }
+#ask .ask-err { color: var(--danger); min-height: 1em; margin: 4px 0 0; font-size: 12px; }
+#ask .ask-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+.btn.danger:hover:not(:disabled) { filter: brightness(1.08); }
+#modal:focus { outline: none; }
+
 #modal {
   background: var(--panel);
   border: 1px solid var(--line-strong);
@@ -1363,6 +1413,17 @@ footer input#iGridCustom {
   border-radius: 4px;
   margin-bottom: 10px;
 }
+
+/* metraj tablosu (#199) */
+.qty-wrap { max-height: 60vh; overflow: auto; }
+table.qty { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.qty th, table.qty td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; }
+table.qty thead th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; }
+table.qty .n { text-align: right; font-variant-numeric: tabular-nums; }
+table.qty tr.qty-sec th { background: var(--panel2); color: var(--text); padding-top: 8px; }
+table.qty tfoot th { border-top: 2px solid var(--line); font-size: 13px; }
+table.qty input { width: 90px; text-align: right; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; color: var(--text); font: inherit; }
+table.qty input:focus { border-color: var(--accent); outline: none; }
 
 table.kb {
   width: 100%;

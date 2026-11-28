@@ -26,6 +26,7 @@ function makeDraftEnv() {
     ${fnSrcOf(src, 'draftPathD')}
     ${fnSrcOf(src, 'draftDashArr')}
     ${constLine('draftRect')}
+    const typedCm = s => parseFloat(s);
     ${fnSrcOf(src, 'draftTypedPt')}
     return {
       mirrorObjs, draftArc, draftClosed, draftOutline, draftLen,

@@ -3,7 +3,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf, markerBlock } = require('./helpers/repo');
 
 const src = read('app.js');
 
@@ -24,6 +24,7 @@ const {
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const wLen = w => dist(w.a, w.b);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  ${markerBlock(src, 'CURVED-WALL')}
   ${constLine('ACC_TOL')}
   ${fnSrc('isAccWall')}
   ${fnSrc('accCandidate')}

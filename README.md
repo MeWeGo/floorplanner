@@ -70,6 +70,7 @@ Tools: `new_project` · `load_project` / `import_ifc` / `import_dxf` / `save_pro
 - **Adjustable-angle (hinged) walls** — fix a wall at either endpoint (`Point A` or `Point B`), define **3 (or any number of) angle positions**, add or delete positions, adjust angles via the on-canvas rotation handle (`wrot`) or numeric inputs, and **click the wall in 2D or 3D** to cycle through `Position 1 → Position 2 → Position 3`.
 - Wall endpoints stay **connected** when you drag a wall or a corner.
 - **Wall types** — every wall can be 🧱 **Solid** (default), 🪟 **Curtain Wall** (glass facade with an aluminium frame; set the **mullion spacing** or the **number of intermediate mullions**, 0 = one pane), 🛡 **Railing / Balustrade** or 🌿 **Garden Fence** (low, open post-and-rail walls for balconies, terraces and gardens; switching a wall to one lowers it to ~1 m). Draw railings directly with the **🛡 Railing** tool (**Q**) and pick a **style**: vertical bars, glass panel, horizontal bars / cable or solid parapet — stairs and ramps use the same styles for their railings. All are drawn in 2D, 3D, sections and elevations. Doors and windows still cut curtain walls normally; on a railing or fence they leave a gap (a gate).
+- **Curved walls** — select a wall and drag the round handle in its middle to bend it into an arc (up to a half circle; drag back to the line to straighten it), or type a **Curvature (cm)** in the panel. Doors and windows slide along the curve, and the wall is curved in 2D, 3D, sections, exports and room detection. **↦ Straighten** makes it straight again; mirror, scale and split keep the curve.
 - **⇔ Accordion wall** — tick it in a wall's panel and its two ends stick to the wall ends they touch. When a room or group is rotated, moved or switched to another layout, the accordion wall stretches or shrinks by itself to close the gap (and disappears when the gap closes). It looks like an ordinary wall of any type; the length label shows `⇔`.
   **Fill the gap** picks how it closes the gap: a straight wall (default) or a **fan** — a pleated leaf that sweeps around the corner the walls open from, like an opened hand fan.
 - **🪗 Bellows corridor** — tick it in a wall's panel and the wall remembers its first position (another layout's position, or another hinge position, when it has one). Move the wall somewhere else — drag it from A–B to C–D, switch the layout, or pull just one end from A to C — and the space between the first and the current position is closed like the bellows of an articulated bus: folded side panels from each old end to its new end (a fan when only one end moved) and a ribbed roof on top (switchable). 📍 *First position = here* restarts it; the length label shows `≋`. **Bellows material** picks rubber (the dark default), canvas / fabric, metal or a **translucent membrane** (only the folded sides become see-through; the roof and floor stay solid), plus an optional colour.
@@ -120,6 +121,9 @@ Tools: `new_project` · `load_project` / `import_ifc` / `import_dxf` / `save_pro
 - **Site parcel & outdoor zones (🌳)** — draw a **parcel boundary** (edge lengths, area, uniform or per-edge **setbacks**) and outdoor zones — road, path / sidewalk, driveway, lawn, patio, gravel, pond — with the **🌳 Site zone** tool; each takes an outdoor finish or your own texture, a tint and a curb height. Zones are not rooms (no effect on room areas), show on every floor as site context, sit on the ground or the terrain in 3D and can be walked on.
 
 ### 🏢 Project Tools
+- **📐 Auto-dimension** (project panel): one click adds the width and depth of every room and dimension chains (doors / windows, wall pieces, overall) on every side of the building. They are ordinary dimensions you can edit; clicking again replaces only the automatic ones.
+- **Library size filter (📏 under the search box):** show only items up to a given width, depth and height, or press **⤢ Fits the selection** to take the sizes from the selected room, wall or the gap between two walls.
+- **Sun for a real place and time:** in the 🎨 render studio, **📍 Location, date and time** puts the 3D sun where it really is — pick a city or type latitude / longitude, set the plan's north, choose a date and drag the time; **▶ Shadow study** plays the whole day.
 - **Multiple floors** — add, duplicate, rename, delete; the floor below is shown faintly for alignment.
 - **Background image** import with **on-canvas drag & corner/edge resize**, numeric `X / Y / W / H / Opacity` inputs, **position lock**, and a **scale-calibration** tool (click two known points, enter the real distance).
 - Object snap tracking: while drawing walls / rooms / dimensions or dragging wall ends and room corners, the cursor aligns with existing corners horizontally and vertically and shows a dashed guide (Shift or Snap off disables it).
@@ -156,6 +160,16 @@ Tools: `new_project` · `load_project` / `import_ifc` / `import_dxf` / `save_pro
 - Unlimited **undo / redo**, copy / paste / duplicate, box & multi-select with a **box-select scope** (All / Walls / Furniture) in the footer.
 - Starter templates: Blank · Studio 1+0 · 2+1 Apartment · Office.
 
+### 📲 Install & offline
+Open the live app in Chrome, Edge or Safari and use **Install app** (or *Add to Home Screen* on a phone): it opens in its own window and keeps working without internet — 2D and 3D included. When a new version is published, the app tells you and a **Reload** button switches to it.
+
+### 🧭 Guided tour
+The first time you open the app, a short tour shows the five basics on the real buttons — draw walls, make a room, add a door, place furniture, look at it in 3D — and moves on by itself as you do each one. Skip it any time; **❓ Help ▸ ▶ Start the guided tour** brings it back.
+
+### 📏 Units & a shorter panel
+- **Feet and inches:** pick **ft / in** in the footer's **Units** box. Lengths, areas (ft²), the panel fields (type `12'6"`, `6"`, `1.5m` …), lengths typed while drawing (a plain number is feet), grid steps (1 in – 3 ft), library sizes and the export scale bar follow it. Projects are still saved in centimetres, so a plan opens the same for everyone.
+- **Shorter properties panel:** the common actions (copy, duplicate, delete, lock, mirror) sit at the top of the panel, followed by the main fields; everything else is under **⚙ More settings**, which remembers whether you left it open.
+
 ### 💾 Storage — fully local
 | Layer | Used for |
 | :-- | :-- |
@@ -182,6 +196,7 @@ The public site needs a Google OAuth client ID once (forks and self-hosted copie
 
 ### 📤 Export
 - **PNG** and **SVG** with title block and scale bar.
+- **📋 Quantities / CSV** (⬇ Download menu): room areas and perimeters, floor finish areas, net wall surfaces (minus doors and windows), wall lengths, door / window and furniture counts — for one floor or the whole project. Type a unit price next to any line to get a total (prices are saved with the project) and download it as a CSV that opens cleanly in Excel.
 - **🖨 PDF / Print** opens a **plot setup** dialog: paper **A4–A0**, landscape / portrait, a true architectural **scale** (1:50, 1:100, 1:200, 1:500 — 1:100 prints 1 m as 10 mm) or *fit to paper*, the area to print (**whole plan**, **current view** or a **window** you drag on the canvas), centring and margins. The preview warns when the plan does not fit; print it (or save as PDF from the print dialog) or download the sheet as SVG.
 - Exports always render on **white paper** regardless of the editor theme.
 - **3D render:** while the 3D view is open, the **🖼 PNG** button renders the scene (and the **🎬** button in the 3D overlay does the same from inside the view). This is a real render, not a screenshot: the camera outlines are removed, the backdrop becomes a studio white, shadows are rebuilt at high resolution and several supersampled passes are averaged, so edges come out smooth instead of jagged. Files are named `<project>-3d-render.png`. **Shift-click** either button for a quick capture of exactly what is on screen (`-3d-view.png`). SVG and PDF always describe the **2D plan**.

@@ -15,7 +15,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { read, fnSrcOf } = require('./helpers/repo');
+const { read, fnSrcOf, constLineOf } = require('./helpers/repo');
 
 const js = read('app.js');
 const sliceFn = name => fnSrcOf(js, name);
@@ -49,7 +49,7 @@ test('a dropped bridge connection resumes probing instead of dying', () => {
   const set = sliceFn('brgSetConnected');
   assert.match(set, /brgStartProbe\(\)/, 'brgSetConnected(false) must restart the probe');
   const start = sliceFn('brgStartProbe');
-  assert.match(start, /setInterval/, 'brgStartProbe() no longer polls');
+  assert.match(start, /setTimeout/, 'brgStartProbe() no longer polls');
   assert.match(start, /if \(brgProbeTimer \|\| brgEs\) return;/, 'brgStartProbe() must be idempotent');
   // brgProbe must schedule the poll when the first attempt fails
   assert.match(sliceFn('brgProbe'), /brgStartProbe\(\)/, 'brgProbe() drops the retry when the first attempt fails');
@@ -68,6 +68,52 @@ test('the panel offers a "go back" list backed by real snapshot files', () => {
   assert.match(refresh, /L\(/, 'the saved-versions list must be bilingual');
   const restore = sliceFn('aiRestoreSnapshot');
   assert.match(restore, /\/__snapshots\/restore/, 'restore does not call the restore endpoint');
-  assert.match(restore, /confirm\(/, 'restoring must ask before replacing the plan');
+  assert.match(restore, /askConfirm\(/, 'restoring must ask before replacing the plan');
 });
 
+
+// #192: a fresh browser never contacts 127.0.0.1 at boot; once wanted the probe backs off and skips hidden tabs
+test('bridge probing is opt-in and backs off (#192)', async () => {
+  const code = [
+    "const BRIDGE_OFF = false, BRIDGE_SEEN = 'fp_bridge_rev';",
+    'const localStorage = store, document = doc;',
+    'let brgEs = null, brgProbeTimer = null, connects = 0, connectOk = false;',
+    'const setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };',
+    'const clearTimeout = () => {};',
+    'const brgConnect = async () => { connects++; return connectOk; };',
+    ...['BRIDGE_USED', 'BRIDGE_DELAYS', 'brgProbeDelay', 'brgUsedBefore'].map(n => constLineOf(js, n)),
+    'let brgWanted = false, brgFails = 0;',
+    ...['brgWant', 'brgStartProbe', 'brgProbe', 'brgStopProbe', 'aiBridgeBoot'].map(sliceFn),
+    'return { aiBridgeBoot, brgWant, brgStartProbe, brgUsedBefore, get connects() { return connects; } };',
+  ].join('\n');
+  const env = (store, doc, timers) => new Function('store', 'doc', 'timers', code)(store, doc, timers);
+  const mem = m => ({ getItem: k => (k in m ? m[k] : null) });
+  const flush = () => new Promise(r => setImmediate(r));
+
+  // fresh profile: boot makes no request and schedules nothing
+  let timers = [];
+  let b = env(mem({}), { hidden: false }, timers);
+  b.aiBridgeBoot(); await flush();
+  assert.strictEqual(b.connects, 0);
+  assert.strictEqual(timers.length, 0);
+  assert.strictEqual(b.brgUsedBefore(mem({ fp_bridge_used: '1' })), true);
+  assert.strictEqual(b.brgUsedBefore(mem({ fp_bridge_rev: '7' })), true, 'browsers that synced before keep auto-connecting');
+
+  // a browser that used the bridge probes at boot, then backs off 10 s → 1 min → 5 min (capped)
+  timers = [];
+  b = env(mem({ fp_bridge_used: '1' }), { hidden: false }, timers);
+  b.aiBridgeBoot(); await flush();
+  assert.strictEqual(b.connects, 1);
+  const seen = [];
+  for (let i = 0; i < 4; i++) { const t = timers.shift(); seen.push(t.ms); await t.fn(); await flush(); }
+  assert.deepStrictEqual(seen, [10000, 60000, 300000, 300000]);
+  assert.strictEqual(b.connects, 5);
+
+  // hidden tab: the timer fires but does not contact the bridge
+  timers = [];
+  b = env(mem({}), { hidden: true }, timers);
+  b.brgWant(); b.brgStartProbe();
+  await timers.shift().fn(); await flush();
+  assert.strictEqual(b.connects, 0, 'a hidden tab must not probe');
+  assert.strictEqual(timers.length, 1, 'the probe stays scheduled while hidden');
+});

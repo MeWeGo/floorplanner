@@ -146,6 +146,49 @@ function cleanGround(P) {
   if (Object.keys(o).length) P.ground = o; else delete P.ground;
 }
 /* GROUND-PARAM:END */
+/* SITE-SUN:BEGIN — proje konumu ve güneş konumu (#205): saf JS, mcp/server.js ile birebir aynı (tests/site-sun.test.js karşılaştırır).
+   P.site = { lat, lon, tz, north } isteğe bağlı: enlem / boylam (°), saat dilimi (UTC farkı, saat; yaz saati yok sayılır),
+   north = gerçek kuzeyin plan yukarısından (−y) saat yönünde açısı (°). Yok = kuzey plan yukarısı, konum yok.
+   sunPosition = NOAA'nın kısaltılmış güneş formülü (yaklaşık ±0.5°), bağımlılık yok. */
+const SITE_CITIES = {
+  istanbul: ['İstanbul', 'Istanbul', 41.01, 28.98, 3], ankara: ['Ankara', 'Ankara', 39.93, 32.86, 3], izmir: ['İzmir', 'Izmir', 38.42, 27.14, 3],
+  antalya: ['Antalya', 'Antalya', 36.9, 30.7, 3], trabzon: ['Trabzon', 'Trabzon', 41, 39.72, 3], diyarbakir: ['Diyarbakır', 'Diyarbakir', 37.91, 40.24, 3],
+  london: ['Londra', 'London', 51.51, -0.13, 0], berlin: ['Berlin', 'Berlin', 52.52, 13.4, 1], paris: ['Paris', 'Paris', 48.86, 2.35, 1],
+  dubai: ['Dubai', 'Dubai', 25.2, 55.27, 4], newyork: ['New York', 'New York', 40.71, -74.01, -5], losangeles: ['Los Angeles', 'Los Angeles', 34.05, -118.24, -8],
+  tokyo: ['Tokyo', 'Tokyo', 35.68, 139.69, 9], sydney: ['Sidney', 'Sydney', -33.87, 151.21, 10],
+};
+const SITE_DEF = { lat: 41.01, lon: 28.98, tz: 3, north: 0 };
+function siteP(P) {
+  const s = (P && P.site) || {}, n = (v, d) => (Number.isFinite(+v) && v !== null && v !== '' ? +v : d);
+  const has = Number.isFinite(+s.lat) && s.lat !== null && Number.isFinite(+s.lon) && s.lon !== null;
+  return { has, lat: has ? +s.lat : SITE_DEF.lat, lon: has ? +s.lon : SITE_DEF.lon, tz: n(s.tz, has ? Math.round(+s.lon / 15) || 0 : SITE_DEF.tz), north: n(s.north, 0) };
+}
+function cleanSite(P) {
+  const s = P && P.site; if (!s || typeof s !== 'object') { if (P) delete P.site; return; }
+  const o = {}, r = (v, k) => Math.round(v * k) / k, ok = v => v !== null && v !== '' && Number.isFinite(+v);
+  if (ok(s.lat) && ok(s.lon)) { o.lat = r(Math.max(-90, Math.min(90, +s.lat)), 1e4); o.lon = r(Math.max(-180, Math.min(180, +s.lon)), 1e4); }
+  if (ok(s.tz)) o.tz = r(Math.max(-12, Math.min(14, +s.tz)), 4);
+  if (ok(s.north)) { const n = r(((+s.north % 360) + 360) % 360, 10); if (n) o.north = n; }
+  if (Object.keys(o).length) P.site = o; else delete P.site;
+}
+// güneşin gerçek azimutu (kuzeyden saat yönünde) ve ufuktan yüksekliği, derece; t = UTC milisaniye
+function sunPosition(lat, lon, t) {
+  const rad = Math.PI / 180, d = t / 864e5 + 2440587.5 - 2451545;
+  const g = (357.529 + 0.98560028 * d) * rad, q = 280.459 + 0.98564736 * d;
+  const L = (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * rad, e = (23.439 - 3.6e-7 * d) * rad;
+  const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)), dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const H = ((18.697374558 + 24.06570982441908 * d) * 15 + lon) * rad - ra, la = lat * rad;
+  const alt = Math.asin(Math.sin(la) * Math.sin(dec) + Math.cos(la) * Math.cos(dec) * Math.cos(H));
+  const az = Math.atan2(-Math.sin(H), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(H));
+  return { az: ((az / rad) % 360 + 360) % 360, alt: alt / rad };
+}
+// proje konumunda yerel tarih (YYYY-AA-GG) + saat (0–24, ondalık) → plan azimutu (kuzey açısı eklenmiş), yükseklik
+function siteSun(site, date, hour) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || '')); if (!m) return null;
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3]) + (+hour - site.tz) * 36e5, p = sunPosition(site.lat, site.lon, t);
+  return { az: ((p.az + site.north) % 360 + 360) % 360, alt: p.alt, trueAz: p.az };
+}
+/* SITE-SUN:END */
 /* ZONE-PARAM:BEGIN — arsa sınırı ve dış mekân zeminleri (#150): saf JS, mcp/server.js ile birebir aynı (tests/site-zones.test.js karşılaştırır).
    Floor.zones = [{ id, zt, name?, pts, floor?, color?, curb?, setback?, sb? }] — sıradan bir tür (KINDS.zones = 'zone'), yani seçme,
    taşıma, döndürme, aynalama, kopyalama, geri alma, katman hazır gelir. zt: 'parcel' (arsa: sınır + çekme mesafesi, yüzeyi yok) ya da
@@ -3085,6 +3128,7 @@ function normalizeProject(obj) {
   obj.grid = +obj.grid || 10; obj.gridType = obj.gridType || 'square';
   obj.wallT = +obj.wallT || 20; obj.wallH = +obj.wallH || 270;
   cleanGround(obj); // 3D ground (#147)
+  cleanSite(obj); // project location + north angle (#205)
   obj.lib = Object.assign({ shapes: [] }, obj.lib || {}); obj.lib.shapes = obj.lib.shapes || [];
   // library presets (#42): saved doors / windows / furniture, kept as-is so get/set/load/save round-trip them
   obj.lib.presets = (Array.isArray(obj.lib.presets) ? obj.lib.presets : []).filter(p => p && p.id && (p.kind === 'op' || p.kind === 'furn') && +p.w > 0);
@@ -3100,7 +3144,7 @@ function normalizeProject(obj) {
     for (const z of f.zones) cleanZone(z); // site parcel / outdoor zones (#150)
     f.groups = Array.isArray(f.groups) ? f.groups : [];
     for (const o of f.ops) if (o.open == null) o.open = 0;
-    for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
+    for (const w of f.walls) { if (!w.wt) w.wt = 'solid'; cleanBulge(w); if (w.top != null) { const tp = cleanWallTop(w.top); if (tp) { w.top = tp; w.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } else delete w.top; } }
     for (const sl of f.slabs) { if (!(sl.t > 0)) sl.t = 20; sl.floor = sl.floor || 'concrete'; sl.off = +sl.off || 0; }
     for (const v of f.voids) { if (!VOID_TYPES.includes(v.type)) v.type = 'stair'; if (v.dep != null) { const d = Math.max(0, Math.min(1000, Math.round(+v.dep || 0))); if (d) v.dep = d; else delete v.dep; } } // pit depth (cm)
     if (f.lvl != null) { const n = typeof f.lvl === 'number' || (typeof f.lvl === 'string' && f.lvl.trim()) ? +f.lvl : NaN; if (Number.isFinite(n)) f.lvl = Math.max(-50000, Math.min(50000, Math.round(n))); else delete f.lvl; } // floor level (cm, ±0 = ground)
@@ -3143,6 +3187,13 @@ function cleanMullions(w, a = w) {
   if (a.mulN != null) { const n = Math.round(+a.mulN); if (!(n >= 0 && n <= 200)) throw new Error('mulN must be an integer 0..200'); w.mulN = n; delete w.mul; }
   else if (a.mul != null) { const m = Math.round(+a.mul); if (!(m >= 20 && m <= 1000)) throw new Error('mul must be 20..1000 cm'); delete w.mulN; if (m === 120) delete w.mul; else w.mul = m; }
 }
+// Eğri duvar (#202): w.bulge = a → b kirişinin ortasından normal (−uy, ux) yönünde yayın tepe noktasına uzaklık (cm); |bulge| ≤ kiriş / 2, < 0.5 = düz. app.js setBulge / cleanBulge ile aynı.
+const BULGE_MIN = 0.5;
+function setBulge(w, v) {
+  const L = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y), b = Math.round(Math.max(-L / 2, Math.min(L / 2, +v || 0)) * 10) / 10;
+  if (Math.abs(b) < BULGE_MIN) delete w.bulge; else w.bulge = b;
+}
+function cleanBulge(w) { if (!w || w.bulge == null) return; if (!Number.isFinite(+w.bulge)) { delete w.bulge; return; } setBulge(w, +w.bulge); }
 function mkWall(f, a) {
   const w = {
     id: uid(),
@@ -3156,6 +3207,7 @@ function mkWall(f, a) {
   if (a.color) w.color = String(a.color);
   if (LOW_WALL[w.wt]) { if (a.h == null) w.h = LOW_WALL[w.wt].h; if (a.t == null) w.t = LOW_WALL[w.wt].t; }
   cleanMullions(w, a);
+  if (a.bulge != null) { w.bulge = a.bulge; cleanBulge(w); }
   if (wLen(w) <= 0) throw new Error('Wall length must be > 0');
   f.walls.push(w);
   return w;
@@ -3550,6 +3602,7 @@ function summarize() {
   const p = proj();
   const out = [];
   if (groundP(p).tp.length) { const tp = groundP(p).tp, zs = tp.map(q => q.z); out.push('Terrain: ' + tp.length + ' height point(s), ' + Math.min(...zs) + ' … ' + Math.max(...zs) + ' cm relative to ±0.00, contours every ' + groundP(p).ci + ' cm' + (groundP(p).snap ? ', outdoor items stand on it' : '')); }
+  if (p.site) out.push(siteText(p));
   const gr = groundP(p); if (gr.kind !== 'auto' || gr.color || gr.scale || gr.plinth !== GROUND_PLINTH_DEF) out.push('3D ground: ' + gr.kind + (gr.color ? ', tint ' + gr.color : '') + (gr.scale ? ', texture ' + gr.scale + ' cm' : '') + ', plinth ' + gr.plinth + ' cm (ground below ±0.00)');
   out.push('Project "' + p.name + '" — schema v' + p.v + ', grid ' + p.grid + ' cm (' + p.gridType + '), default wall ' + p.wallT + ' cm × ' + p.wallH + ' cm high, ' + p.floors.length + ' floor(s)');
   if ((p.textures || []).length) out.push('Custom textures: ' + p.textures.map(t => 'tex:' + t.id + ' "' + t.name + '" ' + t.w + '×' + t.h + ' cm').join(', '));
@@ -3882,6 +3935,30 @@ tool('set_ground',
     const r = groundP(P); return '3D ground: ' + r.kind + (r.color ? ', tint ' + r.color : '') + (r.scale ? ', texture ' + r.scale + ' cm' : '') + ', plinth ' + r.plinth + ' cm';
   });
 
+const siteText = (p = P) => { const s = siteP(p); return s.has || s.north ? 'Site: ' + (s.has ? s.lat + '°, ' + s.lon + '°, UTC' + (s.tz >= 0 ? '+' : '') + s.tz : 'no location') + ', true north ' + s.north + '° clockwise from plan up' : 'Site: not set (north = plan up)'; };
+tool('set_site',
+  'Set the project location and plan north (project-wide), used by the app to put the 3D sun where it really is for a date and time. Either a city (' + Object.keys(SITE_CITIES).join(', ') + ') or lat / lon (degrees) with an optional tz (UTC offset in hours, standard time). north = angle of true north measured clockwise from the top of the plan (−y), in degrees. Pass clear: true to remove everything.',
+  {
+    city: { type: 'string', description: 'One of ' + Object.keys(SITE_CITIES).join(', ') },
+    lat: { type: 'number', description: 'Latitude, −90 … 90' },
+    lon: { type: 'number', description: 'Longitude, −180 … 180 (east positive)' },
+    tz: { type: 'number', description: 'UTC offset in hours (−12 … 14)' },
+    north: { type: 'number', description: 'True north, degrees clockwise from plan up' },
+    clear: { type: 'boolean' },
+  },
+  [],
+  a => {
+    if (a.clear) { delete P.site; return siteText(); }
+    const s = Object.assign({}, P.site);
+    if (a.city !== undefined) { const c = SITE_CITIES[a.city]; if (!c) throw new Error('Unknown city "' + a.city + '"'); s.lat = c[2]; s.lon = c[3]; s.tz = c[4]; }
+    if (a.lat !== undefined) s.lat = num(a.lat, undefined, 'lat');
+    if (a.lon !== undefined) s.lon = num(a.lon, undefined, 'lon');
+    if (a.tz !== undefined) s.tz = num(a.tz, undefined, 'tz');
+    if (a.north !== undefined) s.north = num(a.north, undefined, 'north');
+    if ((s.lat === undefined) !== (s.lon === undefined)) throw new Error('lat and lon go together');
+    P.site = s; cleanSite(P); return siteText();
+  });
+
 tool('add_zone',
   'Draw a site parcel boundary or an outdoor ground zone (not a room: it never counts in room areas). type: ' + Object.keys(ZONE_TYPES).join(', ') + '. pts = closed polygon in plan cm. A parcel can carry a uniform setback (cm) or one setback per edge (setbacks[i] = edge pts[i] → pts[i+1]); a zone gets the default finish of its type unless finish is given (an outdoor finish or tex:<id>), and an optional curb height (cm). Zones show on every floor as site context; draw them on the ground floor (default).',
   {
@@ -3992,6 +4069,7 @@ tool('add_wall',
     rs: { type: 'string', enum: ['bars', 'glass', 'cable', 'solid'], description: 'Railings only: style - "bars" (vertical balusters, default), "glass" (glass panel), "cable" (horizontal bars / cable) or "solid" (parapet).' },
     color: { type: 'string', description: 'Optional wall paint colour (#hex). Omit for the default wall colour.' },
     elev: { type: 'number', description: 'Optional base offset in cm relative to the floor level (-500..500, default 0): a wall that starts below or above its floor.' },
+    bulge: { type: 'number', description: 'Optional curvature in cm (curved wall): signed distance from the middle of the straight line a → b to the top of the arc, measured along the wall normal (-(y2-y1), x2-x1) / length. At most half the straight length (a half circle); 0 / omitted = straight. Openings on a curved wall measure d along the arc.' },
     floorIndex: floorArg,
   },
   ['x1', 'y1', 'x2', 'y2'],
@@ -4428,7 +4506,7 @@ tool('update_object',
     // sanity checks after merge
     if (found.kind === 'op' && found.o.wall && !f.walls.some(w => w.id === found.o.wall))
       throw new Error('props.wall "' + found.o.wall + '" does not exist on this floor');
-    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); if (found.o.top === null) delete found.o.top; if (found.o.top != null) { const tp = cleanWallTop(found.o.top); if (!tp) throw new Error('top must be [[t, h], …] or [[t, hP, hM], …]: t from 0 to 1 increasing, h 10–2000 cm (height above the wall base)'); found.o.top = tp; found.o.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } if (found.o.elev != null) { const e = +found.o.elev || 0; if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm'); if (e) found.o.elev = e; else delete found.o.elev; } }
+    if (found.kind === 'wall') { if (wLen(found.o) <= 0) throw new Error('Wall length must be > 0'); if (found.o.bulge === null) delete found.o.bulge; cleanBulge(found.o); if (!WALL_TYPES.includes(found.o.wt)) found.o.wt = 'solid'; cleanMullions(found.o, props); if (found.o.top === null) delete found.o.top; if (found.o.top != null) { const tp = cleanWallTop(found.o.top); if (!tp) throw new Error('top must be [[t, h], …] or [[t, hP, hM], …]: t from 0 to 1 increasing, h 10–2000 cm (height above the wall base)'); found.o.top = tp; found.o.h = Math.max(...tp.flatMap(p => p.length >= 3 ? [p[1], p[2]] : [p[1]])); } if (found.o.elev != null) { const e = +found.o.elev || 0; if (e < -WALL_ELEV_MAX || e > WALL_ELEV_MAX) throw new Error('elev must be between -' + WALL_ELEV_MAX + ' and ' + WALL_ELEV_MAX + ' cm'); if (e) found.o.elev = e; else delete found.o.elev; } }
     if (found.kind === 'room' || found.kind === 'slab' || found.kind === 'void') parsePts(found.o.pts, 3, 'pts');
     if (found.kind === 'draft') { parsePts(found.o.pts, found.o.shape === 'arc' ? 3 : 2, 'pts'); if (!DRAFT_SHAPES.includes(found.o.shape)) found.o.shape = 'pline'; }
     if (found.kind === 'furn' && 'parts' in props) cleanParts(found.o);

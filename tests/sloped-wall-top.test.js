@@ -219,7 +219,7 @@ test('(10) source and MCP wiring guards', () => {
   // archPrims passes top to face
   const archPrimsSrc = fnSrcOf(src, 'archPrims');
   assert.match(archPrimsSrc, /const\s+top\s*=\s*wallTopOn\(w\)\s*\?\s*wallTopPts\(/);
-  assert.match(archPrimsSrc, /face\(corners,[\s\S]{0,120}\btop\s*\}/);
+  assert.match(archPrimsSrc, /face\(corners,[\s\S]{0,200}\btop\s*\}/);
 
   // normalizeProject runs cleanWallTop
   const normSrc = fnSrcOf(src, 'normalizeProject');
@@ -280,6 +280,6 @@ test('(12) curtain wall attach & mullions follow sloped roof (#176)', () => {
   assert.strictEqual(detachWallTop(cw), true, 'curtain wall can detach back to flat');
   assert.strictEqual(wallTopOn(cw), false);
 
-  assert.match(fnSrcOf(src, 'build3D'), /curtainBays\(w\)[\s\S]{0,260}wallTopAt\(w,\s*x\)/);
-  assert.match(fnSrcOf(src, 'archSvg'), /if\s*\(p\.curtain\s*&&\s*p\.mulN\s*>\s*1\)[\s\S]{0,800}topAt\(ms\)/);
+  assert.match(fnSrcOf(src, 'build3D'), /mulPos\(w,\s*L,\s*true\)[\s\S]{0,260}wallTopAt\(w,\s*x\)/);
+  assert.match(fnSrcOf(src, 'archSvg'), /if\s*\(p\.curtain\s*&&\s*\(p\.mulF\s*\?\s*p\.mulF\.length\s*:\s*p\.mulN\s*>\s*1\)\)[\s\S]{0,800}topAt\(ms\)/);
 });
